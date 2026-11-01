@@ -3059,7 +3059,7 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
     },
   );
 
-  it('refuses Enter when a named-PARKED screen changes after Wake text', async () => {
+  it('keeps a named-PARKED Wake delivered when the confirming Enter is unsafe', async () => {
     const parked = 'PARKED on GPT turn inv-mgr334';
     const base = executorFor({ [manager.handle]: parked });
     let sentText = false;
@@ -3073,21 +3073,17 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
       screens: { [manager.handle]: parked }, executor, store,
       listPublishedIssueFacts: () => [],
       listTerminalEnvelopes: () => [verifiedGptCompletion],
-        ...selectedProjectEvidence,
+      ...selectedProjectEvidence,
     });
     expect(texts(result.calls)).toHaveLength(1);
-    expect(sendsTo(result.calls, manager.handle)).toHaveLength(1); // no Enter
-    expect(result.result).toMatchObject({ paneWakeAttempts: 1, paneWakeConfirmed: 0, paneWakeNotConfirmed: 1 });
+    expect(sendsTo(result.calls, manager.handle)).toHaveLength(1); // no confirming Enter
+    expect(result.result).toMatchObject({ paneWakeAttempts: 1, paneWakeConfirmed: 1, paneWakeNotConfirmed: 0 });
     const retry = await invoke({ store, screens: { [manager.handle]: parked },
       executor: executorFor({ [manager.handle]: parked }), listPublishedIssueFacts: () => [],
       listTerminalEnvelopes: () => [verifiedGptCompletion],
-        ...selectedProjectEvidence });
-    expect(texts(retry.calls)).toHaveLength(1);
-    expect(sendsTo(retry.calls, manager.handle)).toHaveLength(2);
-    expect(texts((await invoke({ store, screens: { [manager.handle]: parked },
-      executor: executorFor({ [manager.handle]: parked }), listPublishedIssueFacts: () => [],
-      listTerminalEnvelopes: () => [verifiedGptCompletion],
-        ...selectedProjectEvidence })).calls)).toHaveLength(0);
+      ...selectedProjectEvidence });
+    expect(texts(retry.calls)).toHaveLength(0);
+    expect(sendsTo(retry.calls, manager.handle)).toHaveLength(0);
   });
 
   it('refuses the due 30-minute reminder when the native pane becomes a bare shell', async () => {
@@ -3343,7 +3339,7 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
   });
 
   it.each(['issue', 'envelope'] as const)(
-    'a known safety refusal between text and Enter stays queued, unlike an ambiguous send failure: %s',
+    'a failed recheck skips the confirming Enter but does not re-arm an already delivered Wake: %s',
     async (route) => {
       const initial = route === 'issue' ? 'PARKED on GPT turn inv-mgr334' : 'done';
       const base = executorFor({ [manager.handle]: initial });
@@ -3362,29 +3358,74 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
       });
       expect(texts(first.calls)).toHaveLength(1);
       expect(sendsTo(first.calls, manager.handle)).toHaveLength(1);
-      expect(first.result).toMatchObject({ paneWakeAttempts: 1, paneWakeConfirmed: 0, paneWakeNotConfirmed: 1 });
+      expect(first.result).toMatchObject({ paneWakeAttempts: 1, paneWakeConfirmed: 1, paneWakeNotConfirmed: 0 });
       const marks = [...store.parkedWakeEvents].filter((key) =>
         key.startsWith(route === 'issue' ? 'issue:' : 'failure:'));
-      expect(marks).toHaveLength(0); // Enter was withheld on positive safety evidence.
-      const safe = await invoke({
+      expect(marks).toHaveLength(1);
+      expect(store.readParkedWakeEventStatus(marks[0]!)).toBe('sent');
+      const next = await invoke({
         store, screens: { [manager.handle]: initial },
         executor: executorFor({ [manager.handle]: initial }),
         listPublishedIssueFacts: () => route === 'issue' ? [githubFact('new')] : [],
         listTerminalEnvelopes: () => route === 'envelope' ? [event] : [],
         readOriginalHandoffReceipt: () => receipt,
       });
-      expect(texts(safe.calls)).toHaveLength(1);
-      expect(sendsTo(safe.calls, manager.handle)).toHaveLength(2);
-      const repeated = await invoke({
-        store, screens: { [manager.handle]: initial },
-        executor: executorFor({ [manager.handle]: initial }),
-        listPublishedIssueFacts: () => route === 'issue' ? [githubFact('new')] : [],
-        listTerminalEnvelopes: () => route === 'envelope' ? [event] : [],
-        readOriginalHandoffReceipt: () => receipt,
-      });
-      expect(texts(repeated.calls)).toHaveLength(0);
+      expect(texts(next.calls)).toHaveLength(0);
+      expect(sendsTo(next.calls, manager.handle)).toHaveLength(0);
     },
   );
+
+  it('Issue #2745: a sent failure Wake cannot starve two terminal Wakes across three ticks', async () => {
+    const store = new MemoryWakeStore();
+    const screens: Record<string, string> = { [manager.handle]: 'done' }; // one STOPPED pane
+    const base = executorFor(screens);
+    const executor: OrcaExecutor = (args) => {
+      const result = base(args);
+      if (result.ok && args[0] === 'terminal' && args[1] === 'send' && args.includes('--text')
+        && (args[args.indexOf('--text') + 1] ?? '').includes('terminal-inv-mgr334 ended state rate_limit')) {
+        // A successful text+Enter mutates the pane before the four-second owner recheck.
+        screens[manager.handle] = 'working\nesc interrupt';
+      }
+      return result;
+    };
+    const terminalOne: TerminalEnvelopeEvent = {
+      ...verifiedGptCompletion, path: '/tmp/opencode/synthetic-terminal-one.json',
+      invocationId: 'turn-terminal-one', observedInvocationId: 'turn-terminal-one',
+    };
+    const terminalTwo: TerminalEnvelopeEvent = {
+      ...verifiedGptCompletion, path: '/tmp/opencode/synthetic-terminal-two.json',
+      invocationId: 'turn-terminal-two', observedInvocationId: 'turn-terminal-two',
+    };
+    const step = () => invoke({
+      store, screens, executor, listPublishedIssueFacts: () => [],
+      listTerminalEnvelopes: () => [event, terminalOne, terminalTwo],
+      readOriginalHandoffReceipt: () => receipt, ...selectedProjectEvidence,
+    });
+    const wakeTexts = (calls: readonly string[][]) =>
+      texts(calls).map((row) => row[row.indexOf('--text') + 1] ?? '');
+
+    const first = await step();
+    expect(wakeTexts(first.calls)).toEqual([expect.stringContaining('terminal-inv-mgr334 ended state rate_limit')]);
+    expect(sendsTo(first.calls, manager.handle)).toHaveLength(1); // second Enter withheld; both turn wakes await safe pane
+    expect(first.result).toMatchObject({ paneWakeAttempts: 1, paneWakeConfirmed: 1, paneWakeNotConfirmed: 0 });
+    const failureMark = [...store.parkedWakeEvents].find((key) => key.startsWith('failure:'));
+    expect(failureMark).toBeDefined();
+    expect(store.readParkedWakeEventStatus(failureMark!)).toBe('sent');
+
+    screens[manager.handle] = 'done'; // pane is STOPPED again at next tick
+    const second = await step();
+    expect(wakeTexts(second.calls)).toEqual([
+      expect.stringContaining('GPT turn turn-terminal-one ended'),
+      expect.stringContaining('GPT turn turn-terminal-two ended'),
+    ]);
+    expect(sendsTo(second.calls, manager.handle)).toHaveLength(4);
+    expect(second.result).toMatchObject({ paneWakeAttempts: 2, paneWakeConfirmed: 2, paneWakeNotConfirmed: 0 });
+
+    const third = await step();
+    expect(wakeTexts(third.calls)).toHaveLength(0);
+    expect(sendsTo(third.calls, manager.handle)).toHaveLength(0);
+    expect([...store.parkedWakeEvents].filter((key) => key.startsWith('failure:'))).toHaveLength(1);
+  });
 
 });
 
