@@ -2038,6 +2038,100 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     },
   );
 
+  it('Issue #2743: admitted amendment on A restores pending on descendant B before review start', async () => {
+    const B0 = '<!-- source-revision: r01 -->\n```complexity-tier\ntier: T2\n```\n## Acceptance criteria\n- original behavior\n';
+    const B1 = B0.replace('original behavior', 'amended behavior');
+    const f = fixture('codex', B0, true);
+    const statuses = new Map<string, string>([[f.reviewed, 'success']]);
+    const writes: Array<{
+      head: string; state: string; context: string;
+      description: string; idempotencyKey: string;
+    }> = [];
+    let liveHead = f.reviewed;
+    const request = () => ({
+      ...f.request(B1),
+      fixtureCurrentPrHeadSha: liveHead,
+      fixtureRequiredStatusReader: async (head: string) => statuses.get(head),
+      fixtureRequiredStatusWriter: async (status: {
+        state: string; context: string; description: string; idempotencyKey: string;
+      }) => {
+        writes.push({ head: liveHead, ...status });
+        statuses.set(liveHead, status.state);
+      },
+    });
+    const admitted = await maybeAdmitPackReviewBodyAmendment(request(), {
+      projectId: f.projectId, storeRoot: f.storeRoot, repoSlug: f.repository,
+    });
+    expect(admitted).toMatchObject({
+      amendmentAdmission: true, headSha: f.reviewed,
+      requiredStatusState: 'pending',
+    });
+    const admittedCycle = readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })!.cycle!;
+    expect(admittedCycle.consumedRoundOrdinals).toEqual([]);
+    expect(statuses.get(f.reviewed)).toBe('pending');
+
+    liveHead = f.current;
+    expect(statuses.has(f.current)).toBe(false);
+    const started = await startPackReview({
+      ...request(),
+      headSha: f.current,
+      immediate: undefined,
+      claimMode: 'preacquired' as const,
+      surface: 'pack-gpt-review' as const,
+      reviewerOverride: 'codex' as const,
+      fixtureReviewCompareStatus: 'ahead',
+      fixturePostReviewHeadSha: f.current,
+      fixturePostReviewPrBody: `Closes #${f.issueNumber}`,
+      fixtureReviewStdout: JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] }),
+      fixtureGithubReviewId: 27430001,
+      fixtureRequiredCiPolicy: { contexts: ['CI'], checks: [] },
+      fixtureRequiredCiChecks: [{ name: 'CI', state: 'SUCCESS' }],
+      fixtureRequiredCiHeadAfterGate: f.current,
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    });
+    expect(started).toMatchObject({ ok: true, created: true, headSha: f.current });
+    expect(writes).toContainEqual({
+      head: f.current,
+      state: 'pending',
+      context: 'orchestrator-pack/pack-review',
+      description: 'review_cycle_pending: amended Issue behavior requires a new review',
+      idempotencyKey: `body-amendment:${f.prNumber}:${f.current}:${computeBoundIssueSnapshotHash(B1)}`,
+    });
+    expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle)
+      .toMatchObject({ cycleId: admittedCycle.cycleId, consumedRoundOrdinals: [1] });
+  });
+
+  it('Issue #2743: a non-descendant cannot inherit amended pending and gives a runnable nextAction', async () => {
+    const B0 = '<!-- source-revision: r01 -->\n```complexity-tier\ntier: T2\n```\n## Acceptance criteria\n- original behavior\n';
+    const B1 = B0.replace('original behavior', 'amended behavior');
+    const f = fixture('codex', B0, true);
+    let pending = 'success';
+    const initial = await maybeAdmitPackReviewBodyAmendment({
+      ...f.request(B1),
+      fixtureCurrentPrHeadSha: f.reviewed,
+      fixtureRequiredStatusReader: async () => pending,
+      fixtureRequiredStatusWriter: async (request) => { pending = request.state; },
+    }, { projectId: f.projectId, storeRoot: f.storeRoot, repoSlug: f.repository });
+    expect(initial).toMatchObject({ amendmentAdmission: true });
+    const diverged = '6'.repeat(40);
+    const blocked = await maybeAdmitPackReviewBodyAmendment({
+      ...f.request(B1),
+      fixtureCurrentPrHeadSha: diverged,
+      fixtureReviewCompareStatus: 'diverged',
+      fixtureRequiredStatusReader: async () => undefined,
+      fixtureRequiredStatusWriter: async () => { throw new Error('non-descendant must not write'); },
+    }, { projectId: f.projectId, storeRoot: f.storeRoot, repoSlug: f.repository });
+    expect(blocked).toMatchObject({
+      amendmentAdmission: false,
+      reason: 'amendment_head_not_descendant',
+      headSha: diverged,
+      nextAction: expect.stringContaining('./scripts/gh api "repos/'),
+    });
+    expect(String(blocked?.nextAction)).toContain('./scripts/gh pr view');
+    expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle)
+      .toMatchObject({ consumedRoundOrdinals: [] });
+  });
+
   it('Issue #2659: failed same-head pending write never admits an amended reviewer', async () => {
     const B0 = '<!-- source-revision: r01 -->\n```complexity-tier\ntier: T2\n```\n## Acceptance criteria\n- original\n';
     const B1 = B0.replace('- original', '- amended');
