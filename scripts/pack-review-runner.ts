@@ -5200,6 +5200,22 @@ function reviewBehaviorCriteria(body: string): string | null {
   return lines.slice(begin + 1, tail >= 0 ? tail : undefined).join('\n').trim() || null;
 }
 
+const AMENDED_REVIEW_PENDING_DESCRIPTION =
+  'review_cycle_pending: amended Issue behavior requires a new review';
+
+/** Runnable pack-gh fallback for the live head, after ancestry has been restored. */
+function amendedReviewPendingRestoreCommand(repoSlug: string, prNumber: number): string {
+  const currentHead = '$' + '{HEAD_SHA}';
+  return 'HEAD_SHA="$(./scripts/gh pr view ' + prNumber
+    + ' --repo ' + repoSlug + ' --json headRefOid -q .headRefOid)"'
+    + ' && ./scripts/gh api "repos/' + repoSlug + '/statuses/' + currentHead + '"'
+    + ' -f state=pending -f context="' + PACK_REVIEW_REQUIRED_STATUS_CONTEXT + '"'
+    + ' -f description="' + AMENDED_REVIEW_PENDING_DESCRIPTION + '"'
+    + ' && ./scripts/gh api "repos/' + repoSlug + '/commits/' + currentHead + '/status"'
+    + " --jq '.statuses[] | select(.context==\"" + PACK_REVIEW_REQUIRED_STATUS_CONTEXT
+    + "\") | {state,description}'";
+}
+
 /**
  * One amendment admission under the existing authority lock; no second store,
  * reset, shadow verdict or same-head snapshot overwrite. B1 must be terminal
@@ -5298,9 +5314,76 @@ export async function maybeAdmitPackReviewBodyAmendment(
       return failure('amendment_mismatch_non_success_unverified', describeError(error));
     }
   };
+  const amendmentPendingRequest = (headSha: string) => ({
+    state: 'pending' as const,
+    context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+    description: AMENDED_REVIEW_PENDING_DESCRIPTION,
+    idempotencyKey: 'body-amendment:' + prNumber + ':' + headSha + ':' + nextDigest,
+  });
   if (cycle.amendmentOrigin && !isFinalTerminal) {
-    return nextDigest === cycle.amendmentOrigin.amendedBodyDigest
-      ? null : confirmUnreviewedBodyNonSuccess('amendment_prior_round_not_terminal');
+    if (nextDigest !== cycle.amendmentOrigin.amendedBodyDigest) {
+      return confirmUnreviewedBodyNonSuccess('amendment_prior_round_not_terminal');
+    }
+    // No continuation round has started: only the already-admitted head or a
+    // strict descendant may inherit the amended digest and pending projection.
+    if ((cycle.consumedRoundOrdinals?.length ?? 0) !== 0
+        || livePr.headSha === authority.currentHeadSha) return null;
+    const descendant = await resolvePackReviewStrictDescendant({
+      repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
+      reviewedHeadSha: authority.currentHeadSha, currentHeadSha: livePr.headSha,
+      fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
+    });
+    if (!descendant) {
+      return {
+        ...failure('amendment_head_not_descendant'),
+        headSha: livePr.headSha,
+        nextAction: 'advance this PR to a verified strict descendant of admitted head '
+          + authority.currentHeadSha + '; then from the pack root run: '
+          + amendedReviewPendingRestoreCommand(options.repoSlug, prNumber)
+          + '; only then retry the amended review start',
+      };
+    }
+    const stillCurrent = async () => {
+      const latest = readPackReviewAuthority(prNumber, { storeRoot: options.storeRoot });
+      if (latest?.transitionSeq !== authority.transitionSeq
+          || latest.currentHeadSha !== authority.currentHeadSha
+          || latest.cycle?.cycleId !== cycle.cycleId
+          || (latest.cycle?.consumedRoundOrdinals?.length ?? 0) !== 0) return false;
+      if (process.env.OPK_VITEST_HARNESS === '1') {
+        return trim(input.fixtureCurrentPrHeadSha).toLowerCase() === livePr.headSha
+          && input.fixturePrBody === livePr.body
+          && computeBoundIssueSnapshotHash(input.fixtureIssueBody ?? '') === nextDigest;
+      }
+      const [pr, issue] = await Promise.all([
+        resolveCurrentPrTarget(input.sourceRepoRoot, options.repoSlug, prNumber),
+        resolveCurrentIssueFields(input.sourceRepoRoot, options.repoSlug, issueNumber),
+      ]);
+      return pr.headSha === livePr.headSha
+        && extractClosingIssueNumber(pr.body) === issueNumber
+        && computeBoundIssueSnapshotHash(issue.body) === nextDigest;
+    };
+    try {
+      if (!(await stillCurrent())) return failure('amendment_binding_changed_before_pending');
+      if (await readFinalCapRequiredStatus(input, options.repoSlug, livePr.headSha) !== 'pending') {
+        const writer = input.fixtureRequiredStatusWriter
+          ?? ((request: Parameters<PackReviewRequiredStatusWriter>[0]) => publishPackReviewRequiredStatus({
+            repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
+            headSha: livePr.headSha, request,
+          }));
+        await writer(amendmentPendingRequest(livePr.headSha));
+      }
+      if (await readFinalCapRequiredStatus(input, options.repoSlug, livePr.headSha) !== 'pending'
+          || !(await stillCurrent())) {
+        return { ...failure('amendment_pending_status_unverified'), headSha: livePr.headSha,
+          nextAction: 'from the pack root run: '
+            + amendedReviewPendingRestoreCommand(options.repoSlug, prNumber) };
+      }
+      return null;
+    } catch (error) {
+      return { ...failure('amendment_pending_status_unverified', describeError(error)),
+        headSha: livePr.headSha, nextAction: 'from the pack root run: '
+          + amendedReviewPendingRestoreCommand(options.repoSlug, prNumber) };
+    }
   }
   if (!isFinalTerminal || !authority.terminal) return null;
   const terminal = authority.terminal;
@@ -5433,12 +5516,7 @@ export async function maybeAdmitPackReviewBodyAmendment(
         repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
         headSha: livePr.headSha, request,
       }));
-    await writer({
-      state: 'pending',
-      context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-      description: 'review_cycle_pending: amended Issue behavior requires a new review',
-      idempotencyKey: `body-amendment:${prNumber}:${livePr.headSha}:${nextDigest}`,
-    });
+    await writer(amendmentPendingRequest(livePr.headSha));
     if (await readFinalCapRequiredStatus(input, options.repoSlug, livePr.headSha) !== 'pending'
         || !(await stillCurrent())) {
       return failure('amendment_pending_status_unverified');
@@ -8477,7 +8555,9 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         await releaseEarlyClaim('amendment_pending_status_unverified');
         return { ok: false, created: false, reused: false,
           reason: 'amendment_pending_status_unverified',
-          nextAction: 'restore and confirm current-head pending status before any amended review invocation',
+          nextAction: 'from the pack root run: '
+            + amendedReviewPendingRestoreCommand(target.repoSlug, target.prNumber)
+            + '; then retry the current-head amended review start',
           prNumber: target.prNumber, headSha: target.headSha, httpStatus: 409 };
       }
       const currentRequiredCi = await manualPackReviewRequiredCiGreen({
