@@ -1725,19 +1725,18 @@ async function sendMarkedUnitMessage(
   }
   let delivered = false;
   try {
-    if (sendCoordinator(executor, handle, message)) {
+    // This first send includes text AND Enter. A later safety failure may
+    // withhold only the confirming Enter, never re-arm an already sent Wake.
+    delivered = sendCoordinator(executor, handle, message);
+    if (delivered) {
       await sleepMs(4_000);
       if (stillSelected && !stillSelected()) {
-        // No second Enter was attempted: this is a deterministic safety refusal,
-        // not an ambiguous send failure. Preserve the queued event for next tick.
-        // The first text+Enter already submitted, so a later rearm may duplicate it.
-        clearCreated();
-        log('unit wake recipient unsafe before Enter; queued: ' + key);
-        return false;
+        log('unit wake recipient unsafe before confirming Enter; skipped: ' + key);
+      } else if (!submitCoordinator(executor, handle)) {
+        log('unit wake confirming Enter failed after delivery: ' + key);
       }
-      delivered = submitCoordinator(executor, handle);
     }
-  } catch { /* Keep attempted_unverified across ticks; delivery is ambiguous. */ }
+  } catch { /* A successful first send remains delivered even if confirmation throws. */ }
   if (!delivered) { log('unit wake delivery unverified: ' + key); return false; }
   try { for (const mark of allMarks) store.markParkedWakeEvent(mark, 'sent'); }
   catch { log('unit wake delivered but final mark unverified: ' + key); return false; }
