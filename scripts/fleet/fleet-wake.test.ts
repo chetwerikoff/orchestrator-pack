@@ -1293,7 +1293,7 @@ describe('Issue #2510 URL-bound-only saved chat alarms', () => {
       }));
 
   it.each(['first', 'second', 'thrown-first', 'thrown-second'] as const)(
-    'never routes uncertain %s bound-pane send through coordinator', async (failure) =>
+    'never routes failed %s bound-pane send/confirmation through coordinator', async (failure) =>
       isolatedBindings(async (home) => {
         writeChatBinding(saved, workers[1]!.worktreePath, { HOME: home });
         const executor: OrcaExecutor = (args) => {
@@ -1311,7 +1311,17 @@ describe('Issue #2510 URL-bound-only saved chat alarms', () => {
           readChats: async () => [chat()], listOpenPulls: () => [] });
         expect(sendsTo(result.calls, 'one')).toHaveLength(failure.includes('first') ? 1 : 2);
         expect(sendsTo(result.calls, 'coord')).toHaveLength(0);
-        expect(result.logs.join(' ')).toContain('send failed/uncertain chat banner');
+        // A failed first text+Enter is still ambiguous. A failed confirming Enter
+        // follows a successful submission and is a delivered, non-replayable Wake.
+        const bannerMark = [...store.parkedWakeEvents].find((key) => key.startsWith('banner:one:'));
+        expect(bannerMark).toBeDefined();
+        expect(store.readParkedWakeEventStatus(bannerMark!)).toBe(
+          failure.includes('first') ? 'attempted_unverified' : 'sent');
+        expect(result.logs.join(' ')).toContain(
+          failure.includes('first') ? 'send failed/uncertain chat banner' : 'sent chat banner');
+        if (failure === 'second') {
+          expect(result.logs.join(' ')).toContain('unit wake confirming Enter failed after delivery');
+        }
         const next = await tick({ config: settings, terminals: workers, screens: quiet, store,
           readChats: async () => [chat()], listOpenPulls: () => [] });
         expect(sendsTo(next.calls, 'one')).toHaveLength(0);
@@ -3157,7 +3167,9 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
     });
     const withheld = await invoke({ store });
     expect(texts(withheld.calls)).toHaveLength(0);
+    expect(sendsTo(withheld.calls, manager.handle)).toHaveLength(0);
     expect(withheld.result).toMatchObject({ paneWakeAttempts: 0 });
+    expect([...store.parkedWakeEvents].filter((key) => key.startsWith('issue:'))).toHaveLength(0);
     marker.mockRestore();
 
     const secondStore = new MemoryWakeStore();
@@ -3176,13 +3188,19 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
     const retry = await invoke({ store: secondStore });
     expect(texts(retry.calls)).toHaveLength(0);
 
-    const uncertainStore = new MemoryWakeStore();
-    const uncertain = await invoke({ store: uncertainStore, executor: executorFor({
+    const failedConfirmStore = new MemoryWakeStore();
+    const failedConfirm = await invoke({ store: failedConfirmStore, executor: executorFor({
       [manager.handle]: 'PARKED on GPT turn inv-mgr334',
     }, [manager], manager, 'live', true) });
-    expect(texts(uncertain.calls)).toHaveLength(1);
-    expect(uncertain.result).toMatchObject({ paneWakeAttempts: 1, paneWakeNotConfirmed: 1 });
-    expect(texts((await invoke({ store: uncertainStore })).calls)).toHaveLength(0);
+    expect(texts(failedConfirm.calls)).toHaveLength(1);
+    expect(sendsTo(failedConfirm.calls, manager.handle)).toHaveLength(2);
+    expect(failedConfirm.result).toMatchObject({
+      paneWakeAttempts: 1, paneWakeConfirmed: 1, paneWakeNotConfirmed: 0,
+    });
+    const sentIssueMarks = [...failedConfirmStore.parkedWakeEvents].filter((key) => key.startsWith('issue:'));
+    expect(sentIssueMarks).toHaveLength(1);
+    expect(failedConfirmStore.readParkedWakeEventStatus(sentIssueMarks[0]!)).toBe('sent');
+    expect(texts((await invoke({ store: failedConfirmStore })).calls)).toHaveLength(0);
   });
   it('AC3 gone-after-reboot: terminally failed selected Dispatch plus retained missing worker notifies coordinator without STOPPED panes', async () => {
     const coordinator: FleetTerminal = {
@@ -4196,7 +4214,7 @@ describe('Issue #2687 authorized review correction: one fresh recipient check', 
     expect(sendsTo(first.calls, coordinator.handle)[0]?.join(' ')).toContain('unknown parked producer');
   });
 
-  it('refuses coordinator alarm on native shell transition before text or Enter, then delivers once safely', async () => {
+  it('refuses a pre-send shell transition but retains delivery after text+Enter', async () => {
     for (const phase of ['before-text', 'between-text-enter'] as const) {
       const store = new MemoryWakeStore();
       let shell = false;
@@ -4215,10 +4233,15 @@ describe('Issue #2687 authorized review correction: one fresh recipient check', 
       expect(sendsTo(first.calls, coordinator.handle).filter((row) => !row.includes('--text'))).toHaveLength(0);
       expect(sendsTo(first.calls, coordinator.handle).filter((row) => row.includes('--text')))
         .toHaveLength(phase === 'before-text' ? 0 : 1);
-      expect([...store.parkedWakeEvents].filter((key) => key.startsWith('park-uncertain:'))).toHaveLength(0);
+      const uncertainMarks = [...store.parkedWakeEvents].filter((key) => key.startsWith('park-uncertain:'));
+      expect(uncertainMarks).toHaveLength(phase === 'before-text' ? 0 : 1);
+      if (phase === 'between-text-enter') {
+        expect(store.readParkedWakeEventStatus(uncertainMarks[0]!)).toBe('sent');
+        expect(first.logs.join(' ')).toContain('unit wake recipient unsafe before confirming Enter; skipped');
+      }
       const safe = await tick({ config: wakeConfig, terminals: [coordinator, worker],
         screens: { coord: 'idle', one: unknownPark }, store, ...emptyFacts });
-      expect(sendsTo(safe.calls, coordinator.handle)).toHaveLength(2);
+      expect(sendsTo(safe.calls, coordinator.handle)).toHaveLength(phase === 'before-text' ? 2 : 0);
       const repeated = await tick({ config: wakeConfig, terminals: [coordinator, worker],
         screens: { coord: 'idle', one: unknownPark }, store, ...emptyFacts });
       expect(sendsTo(repeated.calls, coordinator.handle)).toHaveLength(0);
@@ -4289,7 +4312,7 @@ describe('Issue #2687 authorized review correction: one fresh recipient check', 
   });
 
   it.each(['gpt', 'ci'] as const)(
-    'STOPPED %s revalidates before both sends, queues refusals, and permits unknown titles', async (kind) => {
+    'STOPPED %s retries only pre-send refusals and permits unknown titles', async (kind) => {
       const id = 'review-correction-event-' + kind;
       const sha = 'b'.repeat(40);
       const envelope: TerminalEnvelopeEvent = {
@@ -4338,9 +4361,14 @@ describe('Issue #2687 authorized review correction: one fresh recipient check', 
           expect(initialSends.filter((row) => !row.includes('--text'))).toHaveLength(0);
           expect(initialSends.filter((row) => row.includes('--text')))
             .toHaveLength(phase === 'before-text' ? 0 : 1);
-          expect([...store.parkedWakeEvents].filter((key) => key.startsWith('event:'))).toHaveLength(0);
+          const eventMarks = [...store.parkedWakeEvents].filter((key) => key.startsWith('event:'));
+          expect(eventMarks).toHaveLength(phase === 'before-text' ? 0 : 1);
+          if (phase === 'between-text-enter') {
+            expect(store.readParkedWakeEventStatus(eventMarks[0]!)).toBe('sent');
+            expect(first.logs.join(' ')).toContain('unit wake recipient unsafe before confirming Enter; skipped');
+          }
           const safe = await tick(base);
-          expect(sendsTo(safe.calls, worker.handle)).toHaveLength(2);
+          expect(sendsTo(safe.calls, worker.handle)).toHaveLength(phase === 'before-text' ? 2 : 0);
           const repeat = await tick(base);
           expect(sendsTo(repeat.calls, worker.handle)).toHaveLength(0);
         }
