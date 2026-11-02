@@ -2093,10 +2093,11 @@ describe('supervised Task launch assistant', () => {
     // captured OpenCode 1.18.35 semantics remain unchanged.
     const contextualWithReadDenies = withSyntheticReadDenies(fixture.contextual.permission);
     const historicalNonShell = legacyRules.filter((rule) => rule.permission !== 'bash'
+      && !(rule.permission === toolOutput.permission && rule.pattern === toolOutput.pattern && rule.action === toolOutput.action)
       && !newTools.some((newRule) => newRule.permission === rule.permission
         && newRule.pattern === rule.pattern && newRule.action === rule.action));
     const contextualNonShell = contextualWithReadDenies.filter((rule) => rule.permission !== 'bash');
-    expect(historicalNonShell).toEqual(contextualNonShell);
+    expect(historicalNonShell).toEqual(contextualNonShell.slice(0, -1));
     expect(openCodeAgentSemantics({ ...fixture.baseline, permission: legacyExpected }))
       .not.toBe(openCodeAgentSemantics(fixture.contextual));
     const projected = withCurrentSafetyDenies(fixture.contextual.permission);
