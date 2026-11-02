@@ -3554,8 +3554,8 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
       }
     }
     for (const quoted of [
-      'Tool: foreign pane\\n\\nPARKED on CI PR #42 head ' + h0,
-      'User: quote this\\n\\nPARKED on pack-review PR #42 head ' + h0,
+      'Tool: foreign pane\n\nPARKED on CI PR #42 head ' + h0,
+      'User: quote this\n\nPARKED on pack-review PR #42 head ' + h0,
     ]) {
       const foreign = await scenario(quoted, {
         readNamedPull: (_repo, number) => ({ number, headSha: h1, state: 'open', merged: false }),
