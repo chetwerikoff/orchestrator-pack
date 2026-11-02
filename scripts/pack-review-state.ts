@@ -1271,7 +1271,15 @@ export function commitPackReviewTerminal(input: {
         }
       }
       const consumedCount = cycleConsumedCount(cycle);
-      if (terminal.reviewVerdict === 'clean' && terminal.findingCount === 0) {
+      // Preserve the immutable raw terminal as "findings"; the canonical
+      // already-classified COMMENT status alone describes whether these
+      // findings contain any effective blockers. Advisory-only findings are
+      // a completed review, not a mandatory fixer or a fabricated clean run.
+      const nonBlockingLogicalFindings = isLogicalRoundCycle(cycle)
+        && terminal.reviewVerdict === 'findings'
+        && input.status === 'commented';
+      if ((terminal.reviewVerdict === 'clean' && terminal.findingCount === 0)
+          || nonBlockingLogicalFindings) {
         if (!isLogicalRoundCycle(cycle) || consumedCount >= cycle.frozenCap) {
           cycle.state = 'closed';
           cycle.closedAtUtc = nowIso(input.options);
