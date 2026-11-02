@@ -3711,15 +3711,13 @@ describe('Issue #2750 durable artifact root and permissions (AC19/AC20)', () => 
     { name: 'two-part fixture gate', env: { OPK_FM_LONG_CHILD_TEST_GATE: 'fixture-root-v1', OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT: '/synthetic/fixture', XDG_STATE_HOME: absoluteXdg }, expected: '/synthetic/fixture' },
   ];
 
-  it.each(resolverRows)('resolveDurableArtifactRoot and prAuthorDurableArtifactRoot agree: $name', ({ env, expected, throws }) => {
+  it.each(resolverRows)('resolveDurableArtifactRoot uses HOME independent of XDG: $name', ({ env, expected, throws }) => {
     if (throws) {
       expect(() => resolveDurableArtifactRoot(env)).toThrow(throws);
       expect(() => resolveDurableArtifactRoot(env)).toThrow(/nextStep: /u);
-      expect(() => prAuthorDurableArtifactRoot(env)).toThrow(throws);
       return;
     }
     expect(resolveDurableArtifactRoot(env)).toBe(expected);
-    expect(prAuthorDurableArtifactRoot(env)).toBe(expected);
     expect(resolveDurableArtifactRoot(env)).not.toContain('/tmp/opencode');
   });
 
@@ -3809,7 +3807,7 @@ describe('Issue #2750 durable artifact root and permissions (AC19/AC20)', () => 
     expect(readTerminalEnvelope(paths.envelope, { runIdentity: 'run-modes', attemptIdentity: 'attempt-modes' })?.lifecycle_outcome).toBe('success');
   });
 
-  it('shares one resolved root between the producer, the wait reader, fleet-wake and the PR-author self-reader across an emptied TMPDIR', async () => {
+  it('shares the HOME root between producer, wait reader and fleet-wake across an emptied TMPDIR', async () => {
     const root = tempDir('opk-2750-production-');
     const home = join(root, 'home');
     const xdg = join(root, 'custom-xdg');
@@ -3873,14 +3871,16 @@ describe('Issue #2750 durable artifact root and permissions (AC19/AC20)', () => 
       }),
     ]);
     expect(diagnostics).toEqual([]);
-    expect(prAuthorDurableArtifactRoot()).toBe(durable);
 
-    // PR-author self-reader: an orphaned claim written under the same root is its own candidate.
+    // The independent PR-author XDG mirror is outside #2763's allowed paths and remains unchanged.
+    const prAuthorRoot = prAuthorDurableArtifactRoot();
+    expect(prAuthorRoot).toBe(join(xdg, 'orchestrator-pack'));
+    // PR-author self-reader: an orphaned claim written under its own root is its own candidate.
     const binding = { repo: 'acme/widgets', pr: 7 };
     const orphanInvocation = 'inv-2750-orphan';
     const orphanProfileKey = configuredProfileKey(profile, cdp);
     const orphan = writeHandoffArtifacts({
-      terminalRoot: durable, dir: join(durable, 'orphan'), invocation: orphanInvocation,
+      terminalRoot: prAuthorRoot, dir: join(prAuthorRoot, 'orphan'), invocation: orphanInvocation,
       run: 'run-orphan', attempt: 'attempt-orphan', receipt: { child_cwd: realpathSync(root) },
     });
     admitStateLightTurnObservation({ profileKey: orphanProfileKey, invocationId: orphanInvocation, marker: OBSERVATION_MARKER });
@@ -3893,7 +3893,7 @@ describe('Issue #2750 durable artifact root and permissions (AC19/AC20)', () => 
       invocationId: orphanInvocation, claimOnly: true, launcherLive: false, profileKey: orphanProfileKey,
     })]);
     expect(existsSync(orphan.envelopePath)).toBe(false); // it is a candidate precisely because no terminal exists
-    // The finished, enveloped invocation is not a candidate; nothing was read from a legacy root.
+    // The HOME-root finished invocation is not an XDG-mirror PR-author candidate.
     expect(candidates.some((candidate) => candidate.invocationId === invocation)).toBe(false);
   });
 
