@@ -2791,50 +2791,96 @@ describe('Issue #2428 registered body-edit evidence identity/content read', () =
   function evidenceFixture() {
     const body = '<!-- source-revision: r12 -->\ncorrected allowed-roots';
     const url = 'https://github.com/example/target/issues/228';
-    const edit = { editedAt: '2026-10-08T20:50:00Z', deletedAt: null, diff: body };
-    const rest = { node_id: 'issue-node-228', number: 228, html_url: url, repository_url: 'https://api.github.com/repos/example/target', body };
-    const graph = { data: { repository: { nameWithOwner: 'example/target', issue: { id: rest.node_id, number: 228, url, body,
-      lastEditedAt: edit.editedAt, userContentEdits: { totalCount: 2, nodes: [edit] } } } } };
-    const input = { sourceRepoRoot: resolve(import.meta.dirname, '..'), repoSlug: 'example/target', issueNumber: 228,
-      terminalizedAt: '2026-10-08T20:40:00Z', frozenBodyHash: computeBoundIssueSnapshotHash('old body') };
-    const read = vi.fn(async (request: Parameters<typeof runProcess>[0]) => ({
-      ok: true, outcome: 'exit' as const, exitCode: 0, stdout: JSON.stringify(request.args?.includes('graphql') ? graph : rest),
+    const rest = {
+      node_id: 'issue-node-228',
+      number: 228,
+      html_url: url,
+      repository_url: 'https://api.github.com/repos/example/target',
+      body,
+    };
+    const input = {
+      sourceRepoRoot: resolve(import.meta.dirname, '..'),
+      repoSlug: 'example/target',
+      issueNumber: 228,
+      terminalizedAt: '2026-10-08T20:40:00Z',
+      frozenBodyHash: computeBoundIssueSnapshotHash('old body'),
+    };
+    const snapshots: Array<Record<string, unknown>> = [rest, rest];
+    let index = 0;
+    const read = vi.fn(async (_request: Parameters<typeof runProcess>[0]) => ({
+      ok: true, outcome: 'exit' as const, exitCode: 0,
+      stdout: JSON.stringify(snapshots[index++] ?? rest),
       stderr: '', signal: null, durationMs: 1, timedOut: false, cancelled: false,
     }));
-    return { body, rest, graph, input, read, edit };
+    return { body, rest, input, snapshots, read };
   }
-  it('binds the owning query to the selected repository, exact Issue node and unchanged canonical REST body', async () => {
+
+  it('binds two canonical REST Issue-body reads to the selected repository and exact Issue', async () => {
     const f = evidenceFixture();
-    expect(await resolveFinalCapIssueBodyRevision(f.input, f.read as typeof runProcess)).toEqual({ body: f.body, revision: 'r12', editedAt: f.edit.editedAt });
-    const inventory = JSON.parse(readFileSync(join(import.meta.dirname, 'lib/graphql-quota-github-read-inventory.json'), 'utf8')) as { rows: Array<{ id: string; query?: string }> };
-    const query = inventory.rows.find((row) => row.id === 'issue-body-edit-evidence')!.query;
-    expect(f.read.mock.calls[1]![0].args).toEqual(['api', 'graphql', '-f', `query=${query}`, '-f', 'owner=example', '-f', 'name=target', '-F', 'number=228']);
-    for (const [request] of f.read.mock.calls) expect(request.command).toBe(resolve(import.meta.dirname, 'gh'));
-    expect(f.read.mock.calls[0]![0].args).toEqual(['api', 'repos/example/target/issues/228']);
-    expect(f.read.mock.calls[2]![0].args).toEqual(f.read.mock.calls[0]![0].args);
+    // The REST reader proves corrected body bytes/revision only. The
+    // authorized post-terminal disposition is checked by the pack-review runner.
+    expect(await resolveFinalCapIssueBodyRevision(f.input, f.read as typeof runProcess))
+      .toEqual({ body: f.body, revision: 'r12' });
+    expect(f.read).toHaveBeenCalledTimes(2);
+    for (const [request] of f.read.mock.calls) {
+      expect(request.command).toBe(resolve(import.meta.dirname, 'gh'));
+      expect(request.args).toEqual(['api', 'repos/example/target/issues/228']);
+      expect(request.args).not.toContain('graphql');
+    }
   });
-  it.each(['repository', 'Issue', 'node', 'body', 'edit-content', 'deleted', 'pre-terminal', 'stale', 'history-missing'])('refuses %s evidence', async (kind) => {
+
+  it.each([
+    ['selected repository', (f: ReturnType<typeof evidenceFixture>) => {
+      f.input.repoSlug = 'example/other';
+    }],
+    ['REST repository identity', (f: ReturnType<typeof evidenceFixture>) => {
+      f.rest.repository_url = 'https://api.github.com/repos/example/other';
+    }],
+    ['selected Issue number', (f: ReturnType<typeof evidenceFixture>) => {
+      f.input.issueNumber = 229;
+    }],
+    ['REST Issue number', (f: ReturnType<typeof evidenceFixture>) => {
+      f.rest.number = 229;
+    }],
+    ['REST Issue URL', (f: ReturnType<typeof evidenceFixture>) => {
+      f.rest.html_url = 'https://github.com/example/target/issues/229';
+    }],
+    ['missing REST body', (f: ReturnType<typeof evidenceFixture>) => {
+      Object.assign(f.rest, { body: null });
+    }],
+    ['unchanged frozen body', (f: ReturnType<typeof evidenceFixture>) => {
+      f.rest.body = 'old body';
+    }],
+    ['missing corrected revision', (f: ReturnType<typeof evidenceFixture>) => {
+      f.rest.body = 'corrected allowed-roots without revision marker';
+    }],
+    ['ambiguous corrected revision', (f: ReturnType<typeof evidenceFixture>) => {
+      f.rest.body += '\n<!-- source-revision: r13 -->';
+    }],
+  ] as const)('refuses %s', async (_name, mutate) => {
     const f = evidenceFixture();
-    const issue = f.graph.data.repository.issue;
-    if (kind === 'repository') f.graph.data.repository.nameWithOwner = 'example/other';
-    if (kind === 'Issue') issue.number = 229;
-    if (kind === 'node') issue.id = 'other-node';
-    if (kind === 'body') f.rest.body = 'drifted body';
-    if (kind === 'edit-content') f.edit.diff = 'other content';
-    if (kind === 'deleted') Object.assign(f.edit, { deletedAt: f.edit.editedAt });
-    if (kind === 'pre-terminal') issue.lastEditedAt = f.edit.editedAt = f.input.terminalizedAt;
-    if (kind === 'stale') issue.lastEditedAt = '2026-10-08T20:55:00Z';
-    if (kind === 'history-missing') issue.userContentEdits.nodes = [];
-    await expect(resolveFinalCapIssueBodyRevision(f.input, f.read as typeof runProcess)).rejects.toThrow();
+    mutate(f);
+    await expect(resolveFinalCapIssueBodyRevision(f.input, f.read as typeof runProcess))
+      .rejects.toThrow();
   });
-  it('does not replace a failed tracked GraphQL read with another transport or timestamp inference', async () => {
+
+  it('refuses an Issue body change between the two canonical REST reads', async () => {
     const f = evidenceFixture();
-    f.read.mockImplementation(async (request) => {
-      if (request.args?.includes('graphql')) return { ok: false, outcome: 'exit' as const, exitCode: 1,
-        stdout: '', stderr: 'graphql_degraded_fail_fast: primary quota exhausted', signal: null, durationMs: 1, timedOut: false, cancelled: false };
-      return { ok: true, outcome: 'exit' as const, exitCode: 0, stdout: JSON.stringify(f.rest), stderr: '', signal: null, durationMs: 1, timedOut: false, cancelled: false };
-    });
-    await expect(resolveFinalCapIssueBodyRevision(f.input, f.read as typeof runProcess)).rejects.toThrow('graphql_degraded_fail_fast');
+    f.snapshots[1] = { ...f.rest, body: f.body + '\nconcurrent unreviewed body change' };
+    await expect(resolveFinalCapIssueBodyRevision(f.input, f.read as typeof runProcess))
+      .rejects.toThrow('corrected live Issue body not independently verified');
+    expect(f.read).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not substitute REST updated_at for an authorized post-terminal decision', async () => {
+    const f = evidenceFixture();
+    Object.assign(f.rest, { updated_at: '2026-10-08T20:55:00Z' });
+    f.input.terminalizedAt = '2026-10-08T21:00:00Z';
+    // No edit-time inference or GraphQL history: the separately verified
+    // terminal COMMENT and disposition COMMENT own the decision chronology.
+    const result = await resolveFinalCapIssueBodyRevision(f.input, f.read as typeof runProcess);
+    expect(result).toEqual({ body: f.body, revision: 'r12' });
+    expect(Object.keys(result).sort()).toEqual(['body', 'revision']);
     expect(f.read).toHaveBeenCalledTimes(2);
   });
 });

@@ -369,6 +369,7 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
     const transport = dynamicTransport(publications);
     const result = await startPackReview({
       ...baseStart(storeRoot, transport),
+      fixtureGithubReviewTransport: finalReviewTransport({ posts: 0 }),
       fixtureBeforeGptSourceCommentCensus: ({ identity }) => {
         publications.set(identity.slotId, { identity, payload: 'NO_FINDINGS' });
       },
@@ -655,6 +656,7 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
     const transport = dynamicTransport(publications, census);
     const result = await startPackReview({
       ...baseStart(storeRoot, transport),
+      fixtureGithubReviewTransport: finalReviewTransport({ posts: 0 }),
       fixtureReviewBySourceSlot: {
         'source-01': [{ stdout: zeroSendTerminal('wrong-source-01'), exitCode: 13 }, { stdout: sentTerminal() }],
         'source-02': [{ stdout: zeroSendTerminal('wrong-source-02'), exitCode: 13 }, { stdout: sentTerminal() }],
