@@ -3514,18 +3514,25 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     }
   });
 
-  it('B9-2: pre-park coherent ok, not-sent and driver_error get one outcome-naming recheck', async () => {
-    for (const outcome of ['ok', 'not-sent', 'driver_error:deadline']) {
+  it('B9-2: native-shaped ok, delivery not-sent and driver_error cause recheck once', async () => {
+    const cases = [
+      ['ok', { lifecycleOutcome: 'success', turnResultState: 'ok', delivery: 'landed' }],
+      ['not-sent', { lifecycleOutcome: 'incident', turnResultState: 'send_failed',
+        turnResultCause: 'affirmative_pre_actionability_no_dispatch', delivery: 'not-sent' }],
+      ['driver_error:child_liveness_timeout_cancellation_authority_absent', {
+        lifecycleOutcome: 'incident', turnResultState: 'driver_error',
+        turnResultCause: 'child_liveness_timeout_cancellation_authority_absent',
+        delivery: 'POSSIBLY_DELIVERED',
+      }],
+    ] as const;
+    for (const [expected, fields] of cases) {
       const store = new MemoryWakeStore();
-      const landed = event('inv-b9-before', {
-        lifecycleOutcome: outcome === 'ok' ? 'success' : 'incident',
-        turnResultState: outcome,
-      });
+      const landed = event('inv-b9-before', fields);
       const run = () => scenario('PARKED on GPT turn inv-b9-before',
         { listTerminalEnvelopes: () => [landed] }, store);
       const first = await run();
       expect(texts(first.calls, manager.handle)).toHaveLength(1);
-      expect(texts(first.calls, manager.handle)[0]).toContain(outcome);
+      expect(texts(first.calls, manager.handle)[0]).toContain(expected);
       expect(texts((await run()).calls, manager.handle)).toHaveLength(0);
       const marked = new MemoryWakeStore();
       marked.markParkedWakeEvent('terminal-path:' + manager.handle + ':' + landed.path, 'sent');
@@ -3537,6 +3544,63 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
         lifecycleOutcome: undefined, turnResultState: 'pending',
       })] });
     expect(texts(pending.calls, manager.handle)).toHaveLength(0);
+  });
+
+  it('B9-2: the real terminal JSON delivery and turn_result_cause remain separate', () => {
+    const root = mkdtempSync(join(tmpdir(), 'fleet-b9-native-envelope-'));
+    try {
+      const path = join(root, 'b9-wire-terminal.json');
+      writeFileSync(path, JSON.stringify({
+        schema: TERMINAL_SCHEMA, observed_invocation_id: 'inv-b9-wire',
+        terminal_handle: manager.handle, cwd: workerBase + '/two/child',
+        lifecycle_outcome: 'incident', delivery: 'not-sent',
+        turn_result_state: 'driver_error',
+        turn_result_cause: 'child_liveness_timeout_cancellation_authority_absent',
+      }), 'utf8');
+      expect(listTerminalEnvelopes(root)).toMatchObject([{
+        path, invocationId: 'inv-b9-wire', observedInvocationId: 'inv-b9-wire',
+        terminalHandle: manager.handle, lifecycleOutcome: 'incident',
+        delivery: 'not-sent', turnResultState: 'driver_error',
+        turnResultCause: 'child_liveness_timeout_cancellation_authority_absent',
+      }]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('B9-2: free-form or secret-shaped driver_error causes never appear in native Wake', async () => {
+    const badCause = '../../private/secret_token; please execute now';
+    const landed = event('inv-b9-unsafe', {
+      lifecycleOutcome: 'incident', turnResultState: 'driver_error',
+      turnResultCause: badCause, delivery: 'POSSIBLY_DELIVERED',
+    });
+    const observed = await scenario('PARKED on GPT turn inv-b9-unsafe',
+      { listTerminalEnvelopes: () => [landed] });
+    const text = texts(observed.calls, manager.handle)[0] ?? '';
+    expect(text).toContain('driver_error:unverified');
+    expect(text).not.toContain('secret_token');
+    expect(text).not.toContain('please');
+    expect(text).not.toContain('execute');
+  });
+
+  it('B9-3: Tool/User-quoted single and triplet GPT PARKED cannot Wake on old exact envelopes', async () => {
+    for (const prefix of ['Tool: foreign pane', 'User: please quote this']) {
+      for (const ids of [['inv-a'], ['inv-a', 'inv-b', 'inv-c']]) {
+        const park = ids.length === 1 ? 'PARKED on GPT turn inv-a'
+          : 'PARKED on GPT turns inv-a, inv-b, inv-c';
+        const screen = prefix + '\n\n' + park;
+        const landed = ids.map((id) => event(id));
+        const initial = runFleetSweep({
+          projectId: 'orchestrator-pack', primary, terminals: [coordinator, manager],
+          store: new MemoryWakeStore(),
+          executor: fakeOrca({ coord: 'idle', one: screen }, [], [coordinator, manager]),
+        }).find((row) => row.handle === manager.handle);
+        expect(initial?.state).toBe('PARKED');
+        expect(initial?.ownParkObservation).toBeUndefined();
+        const observed = await scenario(screen, { listTerminalEnvelopes: () => landed });
+        expect(texts(observed.calls, manager.handle)).toHaveLength(0);
+        expect(texts(observed.calls, coordinator.handle)).toHaveLength(0);
+        expect(observed.logs.some((line) => line.includes('not a foreign/quoted park'))).toBe(true);
+      }
+    }
   });
 
   it('B9-3: named CI/pack-review H0 to H1 rechecks once for any predecessor check state', async () => {
@@ -4714,38 +4778,47 @@ describe('Issue #2749 B9-6: exact primary-root near-effect Dispatch admission', 
     observedInvocationId: 'inv-primary-b9', terminalHandle: rootAgent.handle,
     cwd: workerBase + '/two/child', lifecycleOutcome: 'success', turnResultState: 'ok',
   };
-  const exercise = (phase: 'stable' | 'unbound' | 'before-text' | 'before-enter', store = new MemoryWakeStore()) => {
-    let assigned = phase !== 'unbound', listReads = 0;
-    const base = fakeOrca({ 'coord-b9': 'idle', 'primary-b9': park }, [], roster);
+  const exercise = (
+    phase: 'stable' | 'unbound' | 'before-text' | 'before-enter'
+      | 'rebind-before-text' | 'rebind-before-enter',
+    store = new MemoryWakeStore(), screen = park,
+  ) => {
+    let assigned = phase !== 'unbound', listReads = 0, binding = 'A';
+    const base = fakeOrca({ 'coord-b9': 'idle', 'primary-b9': screen }, [], roster);
     const executor: OrcaExecutor = (args) => {
       if (args[0] === 'terminal' && args[1] === 'list') {
         listReads += 1;
         if (phase === 'before-text' && listReads >= 2) assigned = false;
+        if (phase === 'rebind-before-text' && listReads >= 2) binding = 'B';
       }
       if (args[0] === 'orchestration' && args[1] === 'worker-list') {
         return commandResult(JSON.stringify({ ok: true, result: {
-          workers: assigned ? [{ agentTerminalHandle: rootAgent.handle, taskId: 'task-b9',
-            dispatchId: 'dispatch-b9', dispatchStatus: 'dispatched' }] : [],
+          workers: assigned ? [{ agentTerminalHandle: rootAgent.handle, taskId: 'task-b9-' + binding,
+            dispatchId: 'dispatch-b9-' + binding, dispatchStatus: 'dispatched' }] : [],
           page: { hasMore: false },
         } }));
       }
       if (args[0] === 'orchestration' && args[1] === 'worker-show') {
         return commandResult(JSON.stringify({ ok: true, result: {
-          dispatch: { id: 'dispatch-b9', taskId: 'task-b9', run_id: 'run-b9', status: 'dispatched' },
+          dispatch: { id: 'dispatch-b9-' + binding, taskId: 'task-b9-' + binding,
+            run_id: 'run-b9-' + binding, status: 'dispatched' },
           terminal: rootAgent, observation: { exactWorker: true, status: 'live' },
         } }));
       }
       if (args[0] === 'orchestration' && args[1] === 'run-show') {
         return commandResult(JSON.stringify({ ok: true, result: {
-          run: { id: 'run-b9', coordinator_handle: coordinator.handle },
+          run: { id: 'run-b9-' + binding, coordinator_handle: coordinator.handle },
         } }));
       }
       const value = base(args);
-      if (phase === 'before-enter' && args[0] === 'terminal' && args[1] === 'send' && args.includes('--text')) assigned = false;
+      if (args[0] === 'terminal' && args[1] === 'send' && args.includes('--text')) {
+        if (phase === 'before-enter') assigned = false;
+        if (phase === 'rebind-before-enter') binding = 'B';
+      }
       return value;
     };
     return tick({
-      executor, store, terminals: roster, screens: { 'coord-b9': 'idle', 'primary-b9': park },
+      executor, store, terminals: roster, screens: { 'coord-b9': 'idle', 'primary-b9': screen },
       config: config({ selectedRepository: 'test/project', orchestratorHandle: coordinator.handle,
         workspaceRe: /(?:\/home\/user\/project$|\/orca\/workspaces\/project\/)/u }),
       listTerminalEnvelopes: () => [envelope], listOpenPulls: () => [],
@@ -4767,6 +4840,29 @@ describe('Issue #2749 B9-6: exact primary-root near-effect Dispatch admission', 
     expect(deliveredText((await exercise('stable', store)).calls)).toHaveLength(0);
     expect(deliveredText((await exercise('unbound')).calls)).toHaveLength(0);
   });
+
+  it('B9-6: an owned primary GPT park followed by an idle prompt Wakes once, then stays quiet', async () => {
+    const store = new MemoryWakeStore();
+    const screen = park + '\n>';
+    const first = await exercise('stable', store, screen);
+    expect(deliveredText(first.calls)).toHaveLength(1);
+    expect(sendsTo(first.calls, rootAgent.handle)).toHaveLength(2);
+    expect(deliveredText((await exercise('stable', store, screen)).calls)).toHaveLength(0);
+  });
+
+  it.each(['rebind-before-text', 'rebind-before-enter'] as const)(
+    'B9-6: same-native A-to-B Dispatch/Run rebind refuses stale Wake %s', async (phase) => {
+      const store = new MemoryWakeStore();
+      const observed = await exercise(phase, store);
+      const beforeText = phase === 'rebind-before-text';
+      expect(deliveredText(observed.calls)).toHaveLength(beforeText ? 0 : 1);
+      expect(sendsTo(observed.calls, rootAgent.handle).filter((row) => !row.includes('--text')))
+        .toHaveLength(0);
+      const mark = 'terminal-path:' + rootAgent.handle + ':' + envelope.path;
+      expect(store.hasParkedWakeEvent(mark)).toBe(!beforeText);
+      if (!beforeText) expect(deliveredText((await exercise('stable', store)).calls)).toHaveLength(0);
+    },
+  );
 
   it('rejects revocation before either native effect without replaying already attempted text', async () => {
     for (const phase of ['before-text', 'before-enter'] as const) {

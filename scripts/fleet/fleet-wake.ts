@@ -618,6 +618,8 @@ export interface TerminalEnvelopeEvent {
   readonly handoffReceiptPath?: string;
   readonly lifecycleOutcome?: 'incident' | 'success';
   readonly turnResultState?: string;
+  /** Separate native turn_result_cause; do not forward raw human text to a pane. */
+  readonly turnResultCause?: string;
   /** Existing envelope `delivery` (e.g. not-sent, POSSIBLY_DELIVERED, landed): wording input only. */
   readonly delivery?: string;
 }
@@ -658,6 +660,8 @@ export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeE
           ...(envelope.lifecycle_outcome === 'incident' || envelope.lifecycle_outcome === 'success'
             ? { lifecycleOutcome: envelope.lifecycle_outcome } : {}),
           ...(typeof envelope.turn_result_state === 'string' ? { turnResultState: envelope.turn_result_state } : {}),
+          ...(typeof envelope.turn_result_cause === 'string' && envelope.turn_result_cause.length > 0
+            ? { turnResultCause: envelope.turn_result_cause } : {}),
           ...(typeof envelope.delivery === 'string' && envelope.delivery.length > 0 ? { delivery: envelope.delivery } : {}),
           ...(cwd ? { cwd } : {}),
           ...(terminalHandle ? { terminalHandle } : {}),
@@ -1212,14 +1216,25 @@ function freshSendSafePane(
     }
     const pane = freshMatches[0]!;
     if (terminalsIdentity(pane) !== terminalsIdentity(expected) || pane.state !== expected.state) return false;
+    // An A-to-B Dispatch/Run rebind on the same native terminal cannot
+    // inherit A's already-selected Wake. Both taskBindings are complete
+    // selected-project joins, and the fresh census includes the coordinator.
+    if (samePath(expected.worktreePath, options.config.primary)
+      && (!expected.taskBinding || !pane.taskBinding
+        || pane.taskBinding !== expected.taskBinding)) return false;
     if (expected.state === 'STOPPED') {
       // A changed own screen can no longer corroborate the originally STOPPED
       // event recipient, even when both snapshots classify as idle.
       return pane.wait === undefined && pane.lines.length > 0
         && JSON.stringify(pane.lines) === JSON.stringify(expected.lines);
     }
+    const screen = readFleetScreen(expected.handle, executor);
+    // A native OpenCode idle prompt may follow the final own PARKED outcome.
+    // Keep exact own-wait evidence rather than requiring PARKED to be the
+    // screen's literal last content line.
     return pane.wait === expected.wait
-      && lastFleetParkedLine(readFleetScreen(expected.handle, executor)) === expected.wait;
+      && (lastFleetParkedLine(screen) === expected.wait
+        || ownPaneOutcome(screen).wait === expected.wait);
   } catch { return false; }
 }
 
@@ -1563,6 +1578,22 @@ async function wakeOriginalTerminalFailures(
 }
 
 
+function safeTerminalCauseCode(value: string | undefined): string | undefined {
+  return value && value.length <= 80 && /^[a-z][a-z0-9_]*$/u.test(value)
+    && !/(?:token|secret|password|passwd|credential|private|api_key)/iu.test(value)
+    ? value : undefined;
+}
+
+function singleGptEndedState(event: TerminalEnvelopeEvent): string {
+  const state = event.turnResultState
+    ?? (event.lifecycleOutcome === 'incident' ? 'incident' : 'ok');
+  const outcome = state === 'driver_error'
+    ? 'driver_error:' + (safeTerminalCauseCode(event.turnResultCause) ?? 'unverified') : state;
+  // Native delivery and turn-result state are independent fields; naming
+  // not-sent does not imply a failed send was never attempted.
+  return event.delivery === 'not-sent' ? outcome + '/delivery-not-sent' : outcome;
+}
+
 function gptTerminalResolution(
   producer: NamedProducer,
   pane: FleetPaneObservation,
@@ -1617,7 +1648,7 @@ function gptTerminalResolution(
   return { deficient: false, match: {
     label: producer.label,
     terminalState: producer.kind === 'gpt'
-      ? (settled[0]!.turnResultState ?? (settled[0]!.lifecycleOutcome === 'incident' ? 'incident' : 'ok'))
+      ? singleGptEndedState(settled[0]!)
       : 'terminal-envelope-settled',
     evidence, eventId: 'gpt-exact:' + ids.join(',') + ':' + paths.join('|'), paths,
   } };
@@ -1800,6 +1831,12 @@ async function wakeNamedParkedProducers(
       store.writeParkedEpoch?.(pane.handle, epoch);
     }
     const producer = parseNamedParkedProducer(pane.wait);
+    if ((producer?.kind === 'gpt' || producer?.kind === 'gpt-multi')
+      && !pane.ownParkObservation) {
+      log('named GPT Wake withheld for ' + pane.handle
+        + ': re-check current own GPT PARKED and exact terminal envelope, not a foreign/quoted park');
+      continue;
+    }
     // A quoted/historical visible PARKED line is classification only: a
     // numbered PR recheck needs a positively own final named wait.
     const namedPrOwn = !((producer?.kind === 'ci' || producer?.kind === 'pack-review')
@@ -1839,8 +1876,13 @@ async function wakeNamedParkedProducers(
           }
         }
         const screen = readFleetScreen(pane.handle, executor);
-        if (pane.ownParkObservation && ownPaneOutcome(screen).wait !== pane.wait) return false;
-        return lastFleetParkedLine(screen) === pane.wait || ownPaneOutcome(screen).wait === pane.wait;
+        const ownWait = ownPaneOutcome(screen).wait;
+        if (pane.ownParkObservation && ownWait !== pane.wait) return false;
+        // Neither the first Send nor the confirming Enter may be authorized
+        // by a later tool/user quotation that merely ends in the same text.
+        if ((producer?.kind === 'gpt' || producer?.kind === 'gpt-multi')
+          && (!pane.ownParkObservation || ownWait !== pane.wait)) return false;
+        return lastFleetParkedLine(screen) === pane.wait || ownWait === pane.wait;
       } catch { return false; }
     };
     let uncertainty: string | undefined;
