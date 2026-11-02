@@ -151,6 +151,8 @@ function plannedFixturePrefix(prefix: string, parent: string, protectedRoot = TE
 const cleanupDirs: string[] = [];
 
 beforeEach(() => {
+  const home = process.env.HOME;
+  if (home && isAbsolute(home)) mkdirSync(join(home, '.local', 'state'), { recursive: true });
   process.env.OPK_BROWSER_TURN_STARTUP_ALLOWANCE_MS = '500';
   process.env.OPK_BROWSER_TURN_MAX_HEALTHY_HEARTBEAT_GAP_MS = '50';
   process.env.OPK_BROWSER_TURN_LIVE_CHILD_IDLE_WINDOW_MS = '150';
