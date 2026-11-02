@@ -9776,19 +9776,14 @@ const PR_AUTHOR_HANDOFF_SCHEMA = 'flow-manager-long-running-child-handoff/v1';
 const PR_AUTHOR_TERMINAL_SCHEMA = 'flow-manager-long-running-child-terminal/v1';
 
 /**
- * Mirror of the launcher's single durable root: `$XDG_STATE_HOME/orchestrator-pack`, else
- * `$HOME/.local/state/orchestrator-pack`, honoring only its existing two-part fixture gate.
- * An invalid (relative) XDG_STATE_HOME throws exactly like the launcher resolver.
+ * Mirror of the launcher's single durable root: `$HOME/.local/state/orchestrator-pack`,
+ * independent of XDG_STATE_HOME, honoring only its existing two-part fixture gate.
+ * An unavailable or nonabsolute HOME throws exactly like the launcher resolver.
  */
 export function prAuthorDurableArtifactRoot(env: NodeJS.ProcessEnv = process.env): string {
   const fixtureRoot = env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT;
   if (env.OPK_FM_LONG_CHILD_TEST_GATE === 'fixture-root-v1'
     && typeof fixtureRoot === 'string' && isAbsolute(fixtureRoot)) return resolve(fixtureRoot);
-  const xdg = env.XDG_STATE_HOME;
-  if (xdg !== undefined && xdg !== '') {
-    if (!isAbsolute(xdg)) throw new Error('durable_root_xdg_state_home_not_absolute');
-    return join(resolve(xdg), 'orchestrator-pack');
-  }
   const home = env.HOME;
   if (typeof home !== 'string' || !home.trim() || !isAbsolute(home)) throw new Error('durable_root_home_unavailable');
   return join(resolve(home), '.local', 'state', 'orchestrator-pack');

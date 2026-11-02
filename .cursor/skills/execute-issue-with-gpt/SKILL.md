@@ -108,9 +108,11 @@ binding is unavailable, omit `--session-id`, keep the runner foregrounded/observ
 terminal result directly, and do not park waiting for `workerNotification`. Required
 reviewer sources are fresh project chats owned by that runner. A findings-bearing
 logical round gets one fresh GPT fixer conversation distinct from the
-implementation conversation and every reviewer conversation; after a
-strict-descendant fix and current CI green, the existing tier/cap review authority
-continues. The manager never manufactures scheduler `ready_for_review` state or
+implementation conversation and every reviewer conversation. A code-required
+findings fix advances to a proven strict-descendant head with green required CI;
+an independently credentialed final-cap Issue-only scope correction can instead
+settle on the original head through scoped reconcile and its original cap.
+A completed review stage stays complete; smoke/CI-only changes do not reopen it. The manager never manufactures scheduler `ready_for_review` state or
 delegates required smoke to a separate smoke actor.
 
 The shared Browser-GPT runbook remains the sole owner of one-turn launch,

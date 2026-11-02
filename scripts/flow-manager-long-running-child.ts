@@ -55,23 +55,17 @@ export const REFUSAL_SCHEMA = 'flow-manager-long-running-child-refusal/v1' as co
 // fleet-wake scans terminal envelopes under this root by file name.
 export const TERMINAL_ENVELOPE_NAME_SUFFIX = 'terminal.json' as const;
 export const DURABLE_ARTIFACT_APP_DIR = 'orchestrator-pack' as const;
-const DURABLE_ROOT_NEXT_STEP = 'set XDG_STATE_HOME to an absolute private directory, or unset it so '
-  + '$HOME/.local/state/orchestrator-pack is used; make that directory 0700 and owned by you';
+const DURABLE_ROOT_NEXT_STEP = 'set HOME to an absolute directory';
 
 /**
  * The single durable root for terminal envelopes, original handoff receipts and receipt
- * locators: `$XDG_STATE_HOME/orchestrator-pack`, else `$HOME/.local/state/orchestrator-pack`.
+ * locators: `$HOME/.local/state/orchestrator-pack`, independent of XDG_STATE_HOME.
  * Only the existing two-part synthetic fixture gate may redirect it. Never a second root.
  */
 export function resolveDurableArtifactRoot(env: NodeJS.ProcessEnv = process.env): string {
   const fixtureRoot = env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT;
   if (env.OPK_FM_LONG_CHILD_TEST_GATE === 'fixture-root-v1'
     && typeof fixtureRoot === 'string' && isAbsolute(fixtureRoot)) return resolve(fixtureRoot);
-  const xdg = env.XDG_STATE_HOME;
-  if (xdg !== undefined && xdg !== '') {
-    if (!isAbsolute(xdg)) throw new Error(`durable_root_xdg_state_home_not_absolute; nextStep: ${DURABLE_ROOT_NEXT_STEP}`);
-    return join(resolve(xdg), DURABLE_ARTIFACT_APP_DIR);
-  }
   const home = env.HOME;
   if (typeof home !== 'string' || !home.trim() || !isAbsolute(home)) {
     throw new Error(`durable_root_home_unavailable; nextStep: ${DURABLE_ROOT_NEXT_STEP}`);
@@ -1527,7 +1521,7 @@ async function finalizeCandidatePath(
 
 /** Default executable remediation for each pre-child launcher refusal code (AC13). */
 const REFUSAL_NEXT_STEPS: Readonly<Record<string, string>> = {
-  durable_artifact_root_invalid: 'set XDG_STATE_HOME to an absolute private directory or unset it to use $HOME/.local/state/orchestrator-pack, then relaunch',
+  durable_artifact_root_invalid: 'set HOME to an absolute home directory, make $HOME/.local/state/orchestrator-pack private (0700) and owned by you, then relaunch',
   predecessor_handoff_unproven: 'reconcile the exact predecessor invocation through its own locator/terminal (wait --invocation-id <old> with its original Run/attempt) before any SEND; do not retry while it is unresolved',
   owner_identity_pair_required: 'pass both --owner-task-id and --owner-dispatch-id from the current upstream-admitted Task+Dispatch, or neither for a legacy direct launch',
   owner_dispatch_not_current: 'the selected assignment store records a different Dispatch for this Task: relaunch only from the currently approved Task+Dispatch owner',
