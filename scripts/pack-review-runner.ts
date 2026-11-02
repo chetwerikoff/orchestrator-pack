@@ -65,6 +65,7 @@ import {
   readPackReviewAuthority,
   recordPackReviewPublication,
   settleLogicalPackReviewFindingsByStrictDescendant,
+  settleLogicalPackReviewFindingsByRewrittenHead,
   selectPackReviewEvidence,
   selectPackReviewGptSourceCardinality,
   reconcilePackReviewTier,
@@ -747,19 +748,19 @@ export async function resolveCurrentPrHead(
   return headSha.toLowerCase();
 }
 
-export async function resolveGithubCommitIsStrictDescendant(
+async function resolveGithubCommitCompareStatus(
   repoRoot: string,
   repoSlug: string,
   reviewedHeadSha: string,
   currentHeadSha: string,
   runner: typeof runProcess = runProcess,
-): Promise<boolean> {
+): Promise<string | undefined> {
   const reviewed = trim(reviewedHeadSha).toLowerCase();
   const current = trim(currentHeadSha).toLowerCase();
   if (!/^[0-9a-f]{40}$/.test(reviewed)
       || !/^[0-9a-f]{40}$/.test(current)
       || reviewed === current) {
-    return false;
+    return undefined;
   }
 
   try {
@@ -771,13 +772,49 @@ export async function resolveGithubCommitIsStrictDescendant(
       allowEmptyStdout: false,
       timeoutMs: 30_000,
     });
-    if (!result.ok) return false;
+    if (!result.ok) return undefined;
     const parsed = JSON.parse(result.stdout) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
-    return trim((parsed as Record<string, unknown>).status).toLowerCase() === 'ahead';
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    const status = trim((parsed as Record<string, unknown>).status).toLowerCase();
+    return ['ahead', 'behind', 'diverged'].includes(status) ? status : undefined;
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+export async function resolveGithubCommitIsStrictDescendant(
+  repoRoot: string,
+  repoSlug: string,
+  reviewedHeadSha: string,
+  currentHeadSha: string,
+  runner: typeof runProcess = runProcess,
+): Promise<boolean> {
+  return await resolveGithubCommitCompareStatus(
+    repoRoot, repoSlug, reviewedHeadSha, currentHeadSha, runner,
+  ) === 'ahead';
+}
+
+async function resolvePackReviewFindingsHeadRelation(input: {
+  repoRoot: string;
+  repoSlug: string;
+  reviewedHeadSha: string;
+  currentHeadSha: string;
+  fixtureReviewCompareStatus?: string;
+}): Promise<'strict_descendant' | 'rewritten_head' | 'unverified'> {
+  const status = input.fixtureReviewCompareStatus === undefined
+    ? await resolveGithubCommitCompareStatus(
+        input.repoRoot, input.repoSlug, input.reviewedHeadSha, input.currentHeadSha,
+      )
+    : trim(input.fixtureReviewCompareStatus).toLowerCase();
+  if (packReviewFindingsSatisfiedByStrictDescendant({
+    reviewedHeadSha: input.reviewedHeadSha,
+    currentHeadSha: input.currentHeadSha,
+    reviewedHeadIsAncestor: status === 'ahead',
+  })) return 'strict_descendant';
+  if (trim(input.reviewedHeadSha).toLowerCase() !== trim(input.currentHeadSha).toLowerCase()
+      && (status === 'diverged' || status === 'behind')) return 'rewritten_head';
+  // An unavailable comparison is not evidence that ancestry was rewritten.
+  return 'unverified';
 }
 
 async function resolvePackReviewStrictDescendant(input: {
@@ -787,19 +824,7 @@ async function resolvePackReviewStrictDescendant(input: {
   currentHeadSha: string;
   fixtureReviewCompareStatus?: string;
 }): Promise<boolean> {
-  const reviewedHeadIsAncestor = input.fixtureReviewCompareStatus === undefined
-    ? await resolveGithubCommitIsStrictDescendant(
-        input.repoRoot,
-        input.repoSlug,
-        input.reviewedHeadSha,
-        input.currentHeadSha,
-      )
-    : trim(input.fixtureReviewCompareStatus).toLowerCase() === 'ahead';
-  return packReviewFindingsSatisfiedByStrictDescendant({
-    reviewedHeadSha: input.reviewedHeadSha,
-    currentHeadSha: input.currentHeadSha,
-    reviewedHeadIsAncestor,
-  });
+  return await resolvePackReviewFindingsHeadRelation(input) === 'strict_descendant';
 }
 
 export async function resolveCurrentPrTarget(
@@ -9114,18 +9139,23 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         && authority.terminal.targetSha !== target.headSha
         && authority.cycle.state === 'open_findings') {
       const reviewedHeadSha = authority.terminal.targetSha;
-      const strictDescendant = await resolvePackReviewStrictDescendant({
+      const headRelation = await resolvePackReviewFindingsHeadRelation({
         repoRoot: target.sourceRepoRoot,
         repoSlug: target.repoSlug,
         reviewedHeadSha,
         currentHeadSha: target.headSha,
         fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
       });
-      if (strictDescendant) {
+      if (headRelation === 'strict_descendant') {
         authority = settleLogicalPackReviewFindingsByStrictDescendant({
           prNumber: target.prNumber, expectedTransitionSeq: authority.transitionSeq,
           reviewedHeadSha, currentHeadSha: target.headSha,
           reviewedHeadIsAncestor: true, options: authorityOptions,
+        });
+      } else if (headRelation === 'rewritten_head') {
+        authority = settleLogicalPackReviewFindingsByRewrittenHead({
+          prNumber: target.prNumber, expectedTransitionSeq: authority.transitionSeq,
+          reviewedHeadSha, currentHeadSha: target.headSha, options: authorityOptions,
         });
       }
     }
@@ -9375,7 +9405,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         created: false,
         reused: true,
         reason: 'prior_round_findings_unresolved',
-        nextAction: 'advance the PR to a proven strict descendant of the reviewed findings head before starting the next required round',
+        nextAction: 'advance the PR to a different head (a rebase is allowed), confirm its comparison with the findings head, then restart PR-led pack review to review the whole new head',
         prNumber: target.prNumber,
         headSha: target.headSha,
         cycleId: authority.cycle.cycleId,
