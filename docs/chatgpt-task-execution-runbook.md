@@ -798,12 +798,13 @@ The runner uses **REST Issue body bytes**, not GraphQL `userContentEdits` or
 mutable Issue `updated_at`, for the corrected revision. It recredentials the
 original three exact-run GitHub source COMMENTs, their source receipts and the
 canonical findings REVIEW ID, actor, reviewed commit and run marker. An OWNER,
-MEMBER or COLLABORATOR disposition must be **created after the canonical
-REVIEW's `submitted_at`** (GitHub REVIEWS expose `submitted_at`, while ordinary
-issue COMMENTs expose `created_at`); a later edit to an older COMMENT does not
-qualify. Within the exact round/run/head section, the author must bind
-`Terminal REVIEW: `<id>``, `Reviewed Issue digest: `<sha256:...>``,
-and `Corrected Issue revision: `<rNN>``, then resolve every blocking
+MEMBER or COLLABORATOR disposition must be **created strictly after** both the original
+terminal-findings source COMMENT's REST `created_at` and the canonical REVIEW's
+`submitted_at` (GitHub REVIEWS expose `submitted_at`, not Issue-COMMENT
+`created_at`). Compare the source and disposition REST COMMENT creation times;
+a later edit to an older COMMENT does not qualify. Within the exact round/run/head
+section, the author binds `Terminal REVIEW: <id>`, `Reviewed Issue digest:
+<sha256:...>`, and `Corrected Issue revision: <rNN>`, then resolves every blocking
 scope finding by the original code, canonical fingerprint and path. Only the
 actual REST `allowed-roots`/denylist may authorize those paths. A title change,
 bare FIXED, missing or pre-terminal disposition, wrong identity, concurrent
