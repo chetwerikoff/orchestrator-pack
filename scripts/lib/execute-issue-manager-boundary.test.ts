@@ -1090,7 +1090,7 @@ describe('Issue #2544: unavailable observation and Task-owned receipt recovery',
   const explicit = (f: ReturnType<typeof fixture>) => ({
     runIdentity, attemptIdentity, invocationId: f.invocationId,
     handoffReceiptPath: f.receiptPath, terminalEnvelopePath: f.envelopePath,
-    deadlineMs: 30,
+    terminalEnvelopeRoot: f.root, deadlineMs: 30,
   });
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -1281,7 +1281,7 @@ describe('Issue #2544: unavailable observation and Task-owned receipt recovery',
       rmSync(missing.receiptPath);
       await runWait({
         runIdentity, attemptIdentity,
-        terminalEnvelopePath: missing.envelopePath, handoffReceiptPath: missing.receiptPath,
+        terminalEnvelopePath: missing.envelopePath, handoffReceiptPath: missing.receiptPath, terminalEnvelopeRoot: missing.root,
         deadlineMs: 30,
       });
       expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
@@ -1293,7 +1293,7 @@ describe('Issue #2544: unavailable observation and Task-owned receipt recovery',
       matching.saveTerminal(); // terminal names the absolute receipt
       await runWait({
         runIdentity, attemptIdentity,
-        terminalEnvelopePath: matching.envelopePath,
+        terminalEnvelopePath: matching.envelopePath, terminalEnvelopeRoot: matching.root,
         handoffReceiptPath: relative(process.cwd(), matching.receiptPath),
         deadlineMs: 30,
       });
@@ -1312,7 +1312,7 @@ describe('Issue #2544: unavailable observation and Task-owned receipt recovery',
       }), { mode: 0o600 });
       await runWait({
         runIdentity, attemptIdentity,
-        terminalEnvelopePath: historical.envelopePath,
+        terminalEnvelopePath: historical.envelopePath, terminalEnvelopeRoot: historical.root,
         handoffReceiptPath: historical.receiptPath,
         deadlineMs: 30,
       });
@@ -1377,7 +1377,7 @@ describe('Issue #2544: unavailable observation and Task-owned receipt recovery',
       await runWait(indexed(legacy));
       await runWait({
         runIdentity, attemptIdentity, handoffReceiptPath: legacy.receiptPath,
-        terminalEnvelopePath: legacy.envelopePath, deadlineMs: 30,
+        terminalEnvelopePath: legacy.envelopePath, terminalEnvelopeRoot: legacy.root, deadlineMs: 30,
       });
       expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0])).envelope.delivery).toBe('landed');
     } finally {
