@@ -12,7 +12,7 @@ import { lastFleetParkedLine, ownPaneOutcome } from '../fleet/fleet-sweep.ts';
 import type { OrcaJsonResponse } from '../orca-runtime/native.ts';
 import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
 import { runSupervisedWorkerStart, type SupervisedWorkerStartResult } from './supervised-worker-start.ts';
-import { installManagerPushGuard } from './manager-push-guard.ts';
+import { installManagerPushGuard, restoreManagerPushGuardForClaude } from './manager-push-guard.ts';
 import {
   currentWorkerAssignment, publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath,
   type DelegatedIntegrationMarker, type WorkerAssignment,
@@ -6410,6 +6410,33 @@ describe('Issue #2732 r04 AC2 verified published patch.diff application', () => 
     expect(remoteRef(world, 'refs/heads/altered')).toBe('');
     expect(remoteRef(world, 'refs/heads/wrong-endpoint')).toBe('');
   }));
+  it('restores only the Claude-family worktree original hooks and keeps sibling B5 selected', withWorld({
+    prePush: '#!/bin/sh\\nexit 0\\n',
+  }, (world) => {
+    const sibling = join(world.base, 'manager-sibling');
+    git(world.primary, 'worktree', 'add', '-q', '--no-track', '-b', 'manager-sibling', sibling, 'origin/trunk');
+    const siblingInstalled = installManagerPushGuard({
+      worktreePath: sibling, defaultBranch: 'trunk', endpointMatchesRepository: () => true,
+      placementSeedOid: world.seed,
+    });
+    expect(siblingInstalled.ok).toBe(true);
+    const siblingHooks = git(sibling, 'config', '--worktree', '--get', 'core.hooksPath');
+    const original = git(world.manager, 'config', '--worktree', '--get', 'core.hooksPath');
+    expect(original).toContain('opk-manager-push-guard');
+    const failedOriginal = git(world.manager, 'config', '--worktree', 'opkManagerPushGuard.originalHooksPath', original);
+    expect(failedOriginal).toBe('');
+    const refused = restoreManagerPushGuardForClaude(world.manager);
+    expect(refused.ok).toBe(false);
+    expect(git(world.manager, 'config', '--worktree', '--get', 'core.hooksPath')).toBe(original);
+    git(world.manager, 'config', '--worktree', '--unset', 'opkManagerPushGuard.originalHooksPath');
+    expect(restoreManagerPushGuardForClaude(world.manager)).toMatchObject({ ok: true });
+    expect(gitTry(world.manager, 'config', '--worktree', '--get', 'core.hooksPath').status).not.toBe(0);
+    expect(gitTry(world.manager, 'config', '--worktree', '--get', 'opkManagerPushGuard.installed').status).not.toBe(0);
+    expect(git(sibling, 'config', '--worktree', '--get', 'core.hooksPath')).toBe(siblingHooks);
+    expect(gitTry(world.primary, 'config', '--get', 'extensions.worktreeConfig').out.trim()).toBe('true');
+    expect(restoreManagerPushGuardForClaude(world.manager)).toMatchObject({ ok: true });
+  }));
+
 });
 
 describe('Issue #2732 r04 AC2 parent-pinned Python Ruff reproduction', () => {
