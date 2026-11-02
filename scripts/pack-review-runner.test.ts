@@ -2967,6 +2967,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       }));
       expect(statusesByHead.get(reviewedHead)).toBe('success');
       liveHead = HEAD;
+      // Synthetic REST PR and the independent current-head fixture must
+      // describe the same actual H2 PR; a stale H1 REST row must fail closed.
+      f.transports.pr.head.sha = HEAD;
       const target = {
         ...f.input, fixtureCurrentPrHeadSha: HEAD,
         fixturePrState: 'OPEN', fixturePrBody: 'Closes #' + issueNumber,
@@ -3197,7 +3200,15 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     mutate(f);
     const before = readPackReviewAuthority(prNumber, f.options);
     const result = await reconcileStalePackReviewRuns(f.input);
-    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'same_head_resolution_unproven', nextAction: expect.any(String) }));
+    // Once the original same-head decision has already passed but the Issue
+    // mutates during status observation, refuse at the later publication guard.
+    const expectedReason = _name === 'current body drift'
+      ? 'status_not_published' : 'same_head_resolution_unproven';
+    expect(result.results).toContainEqual(expect.objectContaining({
+      settled: false, reason: expectedReason, nextAction: expect.any(String),
+      ...(_name === 'current body drift'
+        ? { detail: 'final_cap_head_or_authority_changed_before_status' } : {}),
+    }));
     expect(readPackReviewAuthority(prNumber, f.options)).toEqual(before);
     expect(f.statuses.some((request) => request.state === 'success')).toBe(false);
   });
@@ -3216,7 +3227,8 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     if (kind === 'source-coverage') {
       raw.reviewRound!.settledSourceCount = 2;
       Object.assign(raw.reviewRound!.sourceSlots[2]!, { terminalClass: 'profile_busy:profile_lease_contended',
-        terminalResult: { schema: 'turn-result/v1', state: 'profile_busy', cause: 'profile_lease_contended', send_count: 0, scope: 'profile', invocation_id: 'fixture-2428-3' } });
+        terminalResult: { schema: 'turn-result/v1', state: 'profile_busy', cause: 'profile_lease_contended', send_count: 0, scope: 'profile',
+          invocation_id: raw.reviewRound!.sourceSlots[2]!.invocationId } });
       delete raw.reviewRound!.sourceSlots[2]!.payload;
     }
     // Deliberately malformed/adversarial fixture evidence; never a live runtime record.
@@ -3245,7 +3257,10 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     f.input.fixtureCurrentPrHeadSha = HEAD;
     f.input.fixtureReviewCompareStatus = 'diverged';
     const result = await reconcileStalePackReviewRuns(f.input);
-    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'same_head_resolution_unproven' }));
+    // A moved-head ancestry failure is distinct from same-head disposition.
+    expect(result.results).toContainEqual(expect.objectContaining({
+      settled: false, reason: 'final_cap_strict_descendant_required',
+    }));
     // An unproven descendant is observed as a candidate only; authority keeps
     // the original reviewed head and terminal instead of adopting the divergence.
     expect(readPackReviewAuthority(prNumber, f.options)?.currentHeadSha).toBe(reviewedHead);
