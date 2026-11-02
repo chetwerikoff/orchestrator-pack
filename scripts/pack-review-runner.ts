@@ -3119,6 +3119,7 @@ async function runGptSourceBatch(options: {
       && slot.payload)
     && (!options.sameRoundEligibleSlotIds || options.sameRoundEligibleSlotIds.has(slot.slotId)));
   const firstOrdinal = Math.min(...toStart.map((slot) => slot.ordinal));
+  const lastOrdinal = Math.max(...toStart.map((slot) => slot.ordinal));
   const retainedStarts = options.round.sourceSlots.flatMap((slot) => {
     const started = Date.parse(slot.admissionStartedAtUtc ?? '');
     return slot.invocationId && Number.isFinite(started) ? [started] : [];
@@ -3127,12 +3128,19 @@ async function runGptSourceBatch(options: {
   const firstDue = retainedStarts.length === 0 ? batchNow
     : Math.max(batchNow, Math.max(...retainedStarts) + admissionInterval);
   let credentialedSourceCount = 0;
+  // Reserve retry deadlines after independently spaced first admissions.
+  let nextRetryDue = firstDue + (lastOrdinal - firstOrdinal + 1) * admissionInterval;
   const admit = async (
     slotId: string, _invocationId: string, bind: (startedAt: number) => Promise<boolean>,
+    retry = false,
   ): Promise<boolean> => {
     const ordinal = options.round.sourceSlots.find((slot) => slot.slotId === slotId)?.ordinal;
     if (!ordinal || !Number.isFinite(firstOrdinal)) return false;
-    const remaining = firstDue + (ordinal - firstOrdinal) * admissionInterval - Date.now();
+    const due = retry
+      ? Math.max(nextRetryDue, Date.now() + admissionInterval)
+      : firstDue + (ordinal - firstOrdinal) * admissionInterval;
+    if (retry) nextRetryDue = due + admissionInterval;
+    const remaining = due - Date.now();
     if (remaining > 0) {
       await new Promise<void>((resolveWait) => setTimeout(resolveWait, remaining));
     }
@@ -3320,7 +3328,7 @@ async function runGptSourceBatch(options: {
         && isRetryablePackReviewZeroSendCollision(invocation.result, invocationId))) break;
       attemptOrdinal = 2;
       invocationId = randomUUID();
-      if (!(await admit(slotId, invocationId, markInvocationStarted))) {
+      if (!(await admit(slotId, invocationId, markInvocationStarted, true))) {
         const retained = getPackReviewRun(options.run.id, { projectId: options.projectId, storeRoot: options.storeRoot });
         return { slot: retained?.reviewRound?.sourceSlots.find((slot) => slot.slotId === slotId) ?? currentSlot, payload: undefined };
       }
@@ -4547,8 +4555,16 @@ function isOnlyDispositionScopeCorrection(
   if (oldDenylist.length !== newDenylist.length
       || oldDenylist.some((root, index) => root !== newDenylist[index])) return false;
   const oldRoots = oldScope.allowed_roots ?? [];
-  const introduced = (newScope.allowed_roots ?? []).filter((root) => !oldRoots.includes(root));
-  return introduced.length > 0 && introduced.every((root) => dispositionRoots.includes(root));
+  const newRoots = newScope.allowed_roots ?? [];
+  const dispositionAdditions = [...new Set(dispositionRoots)];
+  const introduced = newRoots.filter((root) => !oldRoots.includes(root));
+  // This exception authorizes additions, not removal/reordering of reviewed
+  // roots or unrelated new roots outside the exact dispositions.
+  return introduced.length > 0
+    && newRoots.length === oldRoots.length + dispositionAdditions.length
+    && oldRoots.every((root, index) => newRoots[index] === root)
+    && introduced.length === dispositionAdditions.length
+    && dispositionAdditions.every((root) => introduced.includes(root));
 }
 async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRunsInput, options: {
   projectId: string; storeRoot: string; repoSlug: string;
@@ -4665,8 +4681,10 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
     throw new Error('canonical terminal COMMENT review actor/run/head/verdict not credentialed');
   }
   const reviewedAt = Date.parse(review.submittedAt);
-  if (!Number.isFinite(reviewedAt) || reviewedAt < Date.parse(run.completedAtUtc)) {
-    throw new Error('terminal REVIEW submitted_at is absent or precedes the terminal');
+  // Normal delivery posts the REVIEW before recording the local terminal.
+  // The post-terminal decision is ordered by GitHub REVIEW and COMMENT times.
+  if (!Number.isFinite(reviewedAt)) {
+    throw new Error('terminal REVIEW submitted_at is unavailable');
   }
 
   const runner = process.env.OPK_VITEST_HARNESS === '1'
@@ -4828,7 +4846,14 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
     runId: run.id, cycleId: cycle.cycleId, logicalRoundOrdinal: round.roundOrdinal,
     correctedBodyDigest: computeBoundIssueSnapshotHash(revision.body),
     publicationDigest: sha256Bytes(stableJson({
-      comment, revision, reviewId: review.id, reviewedAt: review.submittedAt, terminalDigest: terminal.digest,
+      // Do not bind publication to mutable REST reactions/metadata.
+      comment: {
+        id: comment.id, issueUrl: comment.issue_url,
+        authorLogin: trim(githubEvidenceObject(comment.user).login).toLowerCase(),
+        authorAssociation: comment.author_association,
+        createdAt: comment.created_at, body: comment.body,
+      },
+      revision, reviewId: review.id, reviewedAt: review.submittedAt, terminalDigest: terminal.digest,
     })),
   };
 }
@@ -10798,8 +10823,8 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         const runs = listPackReviewRuns({ projectId, storeRoot });
         if (claimLease) await claimLease.release('run_started', runs);
         return {
-          ok: verified || acceptedUnpublished, created: true, reused: false,
-          reason: acceptedUnpublished ? 'completed' : reason,
+          ok: verified, created: true, reused: false,
+          reason,
           ...(supplemental
             ? (verified && receipt ? receipt : {
                 nextAction: 'observe the exact-head original GPT journal and reviewer COMMENT; use same-run recovery without another Send or required-status projection',
