@@ -835,6 +835,10 @@ function evaluateNewRow(input: {
   if (!isCommandSafe(proofCommand, reviewTargetRoot)) {
     return buildUnverified(rowIndex, row, 'unsafe-or-undeclared-command');
   }
+  if (listAllowlistedNodeScriptRelPaths(proofCommand, reviewTargetRoot)
+    .some((rel) => ECHO_ONLY_PRODUCER_STUBS.has(normalizePath(rel)))) {
+    return buildUnverified(rowIndex, row, 'non-genuine-proof');
+  }
 
   const independentCommand = buildIndependentProducerCommand(proofCommand, block, reviewTargetRoot, selectedTarget);
   if (
