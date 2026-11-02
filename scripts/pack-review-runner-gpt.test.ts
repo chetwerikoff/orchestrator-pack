@@ -4840,6 +4840,33 @@ describe('Issue #2496 r03 genuine GPT source delivery and status observation', (
     delete process.env.PACK_GPT_BROWSER_CHAT_URL;
     const statuses: string[] = [];
     let observed: string | undefined;
+    // Explicit synthetic GitHub surfaces: an original COMMENT and a canonical
+    // REVIEW must both exist and match the immutable run, even in Vitest.
+    const sourceComments: PackGptSourceGithubComment[] = [];
+    const sourceTransport: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => 'browser-gpt-bot',
+      listComments: async () => [...sourceComments],
+      getComment: async (id) => {
+        const found = sourceComments.find((comment) => comment.id === id);
+        if (!found) throw new Error('synthetic original source missing');
+        return found;
+      },
+    };
+    const reviews: GithubReviewSummary[] = [];
+    const reviewTransport: GithubReviewTransport = {
+      resolveActorLogin: async () => 'pack-review-bot',
+      listReviews: async () => [...reviews],
+      postReview: async ({ body, commitId }) => {
+        const id = prNumber * 10 + 11 + reviews.length;
+        const url = `https://github.com/chetwerikoff/orchestrator-pack/pull/${prNumber}#pullrequestreview-${id}`;
+        reviews.push({
+          id, body, commitId, state: 'COMMENTED', userLogin: 'pack-review-bot',
+          submittedAt: new Date().toISOString(), url,
+        });
+        return { id, url };
+      },
+      dismissReview: async () => { throw new Error('synthetic REVIEW dismissal not authorized'); },
+    };
     const input = {
       projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: repoRoot,
       prNumber, headSha: HEAD_A, reviewerOverride: 'gpt' as const,
@@ -4850,7 +4877,20 @@ describe('Issue #2496 r03 genuine GPT source delivery and status observation', (
       fixtureIssueNumber: prNumber,
       fixtureIssueTitle: "[T2] Same head status", fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
       claimMode: 'preacquired' as const,
-      fixtureGithubReviewId: 249601,
+      fixtureGptSourceCommentTransport: sourceTransport,
+      fixtureGithubReviewTransport: reviewTransport,
+      fixtureBeforeGptSourceCommentCensus: async ({ identity }: { identity: PackGptSourceIdentity }) => {
+        if (sourceComments.some((comment) => comment.body.includes(`invocation=${identity.invocationId}`))) return;
+        const ordinal = Number(identity.slotId.slice(-2));
+        const id = prNumber * 10 + ordinal;
+        const createdAt = new Date().toISOString();
+        sourceComments.push({
+          id, body: formatPackGptSourceCommentEnvelope(identity, 'NO_FINDINGS'),
+          actorLogin: 'browser-gpt-bot', createdAt, updatedAt: createdAt,
+          url: `https://github.com/chetwerikoff/orchestrator-pack/pull/${prNumber}#issuecomment-${id}`,
+          issueUrl: `https://api.github.com/repos/chetwerikoff/orchestrator-pack/issues/${prNumber}`,
+        });
+      },
       fixtureReviewBySourceSlot: {
         'source-01': [{ stdout: successfulCleanReviewPayload('inv-2496-gpt-source-01') }],
         'source-02': [{ stdout: successfulCleanReviewPayload('inv-2496-gpt-source-02') }],
@@ -4872,6 +4912,21 @@ describe('Issue #2496 r03 genuine GPT source delivery and status observation', (
       getObserved: () => observed,
     };
   }
+
+  it.each(['source', 'review'] as const)(
+    'Issue #2748: missing modeled original %s GitHub evidence cannot confirm success in harness',
+    async (missing) => {
+      const f = fixture(249606);
+      const result = await startPackReview({
+        ...f.input,
+        ...(missing === 'source'
+          ? { fixtureGptSourceCommentTransport: undefined }
+          : { fixtureGithubReviewTransport: undefined }),
+      });
+      expect(result.publicationVerified).not.toBe(true);
+      expect(f.statuses).not.toContain('success');
+    },
+  );
 
   it('gpt-verified-delivery-and-notification-only-nonblocking', async () => {
     const f = fixture(249601);
