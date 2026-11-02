@@ -4275,7 +4275,7 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
       if (joined === 'git worktree prune --expire=now' && cwd === '/tmp/primary') {
         return { ok: true, stdout: '' };
       }
-      if (joined.startsWith('orca worktree create ')
+      if (joined.startsWith('orca worktree create '))
         return { ok: true, stdout: okEnvelope({ worktree: { id: 'repo::fresh-manager', path: root } }) };
       if (joined === 'git worktree list --porcelain')
         return { ok: true, stdout: [
