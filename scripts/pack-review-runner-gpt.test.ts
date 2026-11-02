@@ -5223,6 +5223,31 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
     expect(f.statusStates).toEqual(['success']);
   });
 
+  it('Issue #2748: ordinary verdict read retries two transient exact-head 409s without another source send', async () => {
+    const f = seed(3);
+    let reads = 0;
+    const result = await reconcileStalePackReviewRuns({
+      ...f.input,
+      fixtureRequiredStatusReader: async () => {
+        reads += 1;
+        if (reads <= 2) throw new Error('HTTP 409: temporary GitHub status outage');
+        return f.statusStates.at(-1);
+      },
+    });
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: f.runId, recovered: true, statusReconciled: true,
+        reason: 'gpt_source_comments_recovered_and_delivered',
+      }),
+    ]));
+    expect(reads).toBeGreaterThanOrEqual(3);
+    expect(f.statusStates).toEqual(['success']);
+    expect(f.reviewBodies).toHaveLength(1);
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.cycle?.consumedRoundOrdinals)
+      .toEqual([1]);
+  });
+
   it('prefers a credentialed 3/3 census even after degraded-quorum grace', async () => {
     const f = seed(3);
     f.expireGrace();
