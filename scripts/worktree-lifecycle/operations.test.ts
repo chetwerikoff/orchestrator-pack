@@ -293,7 +293,7 @@ describe('Issue #2754 AC3 native vanished-registration pruning', () => {
     }
     writeFileSync(join(live, 'untracked.txt'), 'must survive\n');
     writeFileSync(join(live, 'proof.txt'), 'dirty content\n');
-    run(repo, ['worktree', 'lock', locked, '--reason', 'manual retention']);
+    run(repo, ['worktree', 'lock', '--reason', 'manual retention', locked]);
     rmSync(locked, { recursive: true, force: true });
     rmSync(vanished, { recursive: true, force: true });
     const beforeForeign = run(foreign, ['worktree', 'list', '--porcelain']);
