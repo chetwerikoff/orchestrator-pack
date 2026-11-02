@@ -87,8 +87,8 @@ write and again before merge. SUCCESS needs no repair; NOT_READY or unknown
 authority, non-review current-head CI failure or absence of any same-PR smoke PASS, unresolved finding, dependency wait, draft/conflict,
 head/base drift, or assignment/marker drift remains blocked.
 
-After merge, use the ordinary adoption and exact-target cleanup path, but delegated mode
-never uses the direct-user cleanup override. Independently derive local adoption from the live
+After merge, use the ordinary adoption and exact-target cleanup path, but delegated mode never
+uses the direct-user cleanup override. Independently derive local adoption from the live
 Issue, PR body including `## Operator adoption`, changed paths/content, current
 migration/runbooks, and live machine state. Prose is a hint, not proof. Read back the actual
 primary ancestry and selected merged-PR worktree/branch cleanup. Independent runtime-consumer
@@ -384,6 +384,18 @@ when it did not, or treat an unrelated failure as failed merge/adoption/selected
 cleanup. The authorized pre-merge smoke PASS is not evidence of post-merge consumer
 process freshness. There is no mandatory second Issue live-check, pack Verify-effect,
 OpenCode/Browser-GPT canary, or `effect_verified` completion decision here.
+
+**Retired Verify-effect references (historical only, not instructions).** These are literal labels from the superseded procedure, not an active heading, command, branch, test requirement, or completion gate. Do not run them or infer any effect result. Step 10's three observed merge/adoption/cleanup facts remain the sole completion test:
+
+```text
+## Verify effect — mandatory after Step 7
+scripts/merge-adoption-effect.ts
+effect_verified
+effect_unverified(<reason>)
+**Non-pack selected cards:** execute only the named target live check, if any
+**Pack only (`TARGET_REPOSITORY=PACK_REPOSITORY`):**
+Do not run the pack verifier or substitute pack process/registry evidence
+```
 
 ## Step 8 — Sibling advisory
 
