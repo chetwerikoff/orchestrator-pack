@@ -3479,6 +3479,128 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     ...overrides,
   });
 
+
+  it('B9-1: STOPPED-first shared handle/path marks suppress later PARKED, re-park and STOPPED replay', async () => {
+    const landed = event('inv-b9-one');
+    for (const status of ['sent', 'attempted_unverified'] as const) {
+      const store = new MemoryWakeStore();
+      const shared = 'terminal-path:' + manager.handle + ':' + landed.path;
+      if (status === 'sent') {
+        const stopped = await scenario('done', { listTerminalEnvelopes: () => [landed] }, store);
+        expect(texts(stopped.calls, manager.handle)).toHaveLength(1);
+      } else {
+        store.markParkedWakeEvent(shared, 'attempted_unverified');
+      }
+      expect(store.readParkedWakeEventStatus(shared)).toBe(status);
+      const next = (screen: string) => scenario(screen, { listTerminalEnvelopes: () => [landed] }, store);
+      for (const screen of ['PARKED on GPT turn inv-b9-one', 'done',
+        'PARKED on GPT turn inv-b9-one waiting again', 'PARKED on GPT turn inv-b9-one']) {
+        expect(texts((await next(screen)).calls, manager.handle)).toHaveLength(0);
+      }
+      const newPath = event('inv-b9-next');
+      const another = await scenario('PARKED on GPT turn inv-b9-next',
+        { listTerminalEnvelopes: () => [landed, newPath] }, store);
+      expect(texts(another.calls, manager.handle)).toHaveLength(1);
+      expect(texts((await scenario('PARKED on GPT turn inv-b9-next',
+        { listTerminalEnvelopes: () => [landed, newPath] }, store)).calls, manager.handle)).toHaveLength(0);
+    }
+  });
+
+  it('B9-2: pre-park coherent ok, not-sent and driver_error get one outcome-naming recheck', async () => {
+    for (const outcome of ['ok', 'not-sent', 'driver_error:deadline']) {
+      const store = new MemoryWakeStore();
+      const landed = event('inv-b9-before', {
+        lifecycleOutcome: outcome === 'ok' ? 'success' : 'incident',
+        turnResultState: outcome,
+      });
+      const run = () => scenario('PARKED on GPT turn inv-b9-before',
+        { listTerminalEnvelopes: () => [landed] }, store);
+      const first = await run();
+      expect(texts(first.calls, manager.handle)).toHaveLength(1);
+      expect(texts(first.calls, manager.handle)[0]).toContain(outcome);
+      expect(texts((await run()).calls, manager.handle)).toHaveLength(0);
+      const marked = new MemoryWakeStore();
+      marked.markParkedWakeEvent('terminal-path:' + manager.handle + ':' + landed.path, 'sent');
+      expect(texts((await scenario('PARKED on GPT turn inv-b9-before',
+        { listTerminalEnvelopes: () => [landed] }, marked)).calls, manager.handle)).toHaveLength(0);
+    }
+    const pending = await scenario('PARKED on GPT turn inv-b9-before',
+      { listTerminalEnvelopes: () => [event('inv-b9-before', {
+        lifecycleOutcome: undefined, turnResultState: 'pending',
+      })] });
+    expect(texts(pending.calls, manager.handle)).toHaveLength(0);
+  });
+
+  it('B9-3: named CI/pack-review H0 to H1 rechecks once for any predecessor check state', async () => {
+    const h0 = 'a'.repeat(40), h1 = 'b'.repeat(40);
+    for (const kind of ['CI', 'pack-review']) {
+      for (const h0State of ['completed', 'cancelled', 'pending'] as const) {
+        const wait = 'PARKED on ' + kind + ' PR #42 head ' + h0;
+        const store = new MemoryWakeStore();
+        const overrides: Partial<Parameters<typeof scenario>[1]> = {
+          readNamedPull: (_repo, number) => ({ number, headSha: h1, state: 'open', merged: false }),
+          checkRunsFinishedAt: () => h0State === 'completed' ? 17 : undefined,
+          readPackReviewStage: () => h0State === 'completed'
+            ? { state: 'success', description: 'old-head only' } : undefined,
+        };
+        const first = await scenario(wait, overrides, store);
+        const sent = texts(first.calls, manager.handle);
+        expect(sent).toHaveLength(1);
+        expect(sent[0]).toContain('head moved to ' + h1);
+        expect(sent[0]).toContain('re-read PR #42 CI and re-park on the current head');
+        expect(sent[0]).not.toMatch(/green|cancelled|checks-completed/u);
+        expect(texts((await scenario(wait, overrides, store)).calls, manager.handle)).toHaveLength(0);
+        expect([...store.parkedWakeEvents].some((key) => key.includes('head-moved:42:' + h0))).toBe(true);
+      }
+    }
+    for (const condition of ['closed', 'missing', 'pending-current'] as const) {
+      const checked = await scenario('PARKED on CI PR #42 head ' + h0, {
+        readNamedPull: () => condition === 'missing' ? undefined
+          : ({ number: 42, headSha: condition === 'pending-current' ? h0 : h1,
+            state: condition === 'closed' ? 'closed' : 'open', merged: false }),
+        checkRunsFinishedAt: () => undefined,
+      });
+      expect(texts(checked.calls, manager.handle)).toHaveLength(0);
+    }
+  });
+
+  it('B9-3: revalidates moved head before first text and before confirming Enter', async () => {
+    const h0 = 'a'.repeat(40), h1 = 'b'.repeat(40), h2 = 'c'.repeat(40);
+    const wait = 'PARKED on CI PR #42 head ' + h0;
+    for (const phase of ['before-text', 'before-enter'] as const) {
+      let head = h1, listReads = 0;
+      const native = fakeOrca({ coord: 'idle', one: wait }, [], [coordinator, manager]);
+      const executor: OrcaExecutor = (args) => {
+        if (phase === 'before-text' && args[0] === 'terminal' && args[1] === 'list' && ++listReads === 2) head = h2;
+        const value = native(args);
+        if (phase === 'before-enter' && args[0] === 'terminal' && args[1] === 'send' && args.includes('--text')) head = h2;
+        return value;
+      };
+      const store = new MemoryWakeStore();
+      const observed = await scenario(wait, { executor,
+        readNamedPull: (_repo, number) => ({ number, headSha: head, state: 'open', merged: false }),
+        checkRunsFinishedAt: () => undefined }, store);
+      expect(texts(observed.calls, manager.handle)).toHaveLength(phase === 'before-text' ? 0 : 1);
+      expect(sendsTo(observed.calls, manager.handle).filter((row) => !row.includes('--text'))).toHaveLength(0);
+      expect(store.hasParkedWakeEvent('event:' + manager.handle + ':head-moved:42:' + h0))
+        .toBe(phase === 'before-enter');
+    }
+  });
+
+  it('B9-4: GPT first token with prose, punctuation, em dash and self-wake correlates only its producer', async () => {
+    for (const wait of ['PARKED on GPT turn inv-b9-parser waiting for terminal',
+      'PARKED on GPT turn inv-b9-parser.', 'PARKED on GPT turn inv-b9-parser,',
+      'PARKED on GPT turn inv-b9-parser — waiting',
+      'PARKED on GPT turn inv-b9-parser (self-wake armed)']) {
+      expect(parseNamedParkedProducer(wait)?.id).toBe('inv-b9-parser');
+      const landed = await scenario(wait, { listTerminalEnvelopes: () => [event('inv-b9-parser')] });
+      expect(texts(landed.calls, manager.handle)).toHaveLength(1);
+      const foreign = await scenario(wait, { listTerminalEnvelopes: () => [event('inv-b9-parser-suffix')] });
+      expect(texts(foreign.calls, manager.handle)).toHaveLength(0);
+    }
+    expect(parseNamedParkedProducer('PARKED on GPT turns a, b, c')?.kind).toBe('gpt-multi');
+  });
+
   it('F1 one positively owned unknown final park alarms coordinator exactly once, with inert redaction', async () => {
     const store = new MemoryWakeStore();
     const response = 'Parked on exact-head CI run 39709787057 / job 119598115677';
@@ -3556,7 +3678,8 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     expect(sends(singlePending.calls)).toHaveLength(0);
     const singleFailure = await scenario(single, { listTerminalEnvelopes: () =>
       [event('inv-a', { lifecycleOutcome: 'incident', turnResultState: 'rate_limit' })] });
-    expect(texts(singleFailure.calls, manager.handle)).toHaveLength(0);
+    expect(texts(singleFailure.calls, manager.handle)).toHaveLength(1);
+    expect(texts(singleFailure.calls, manager.handle)[0]).toContain('rate_limit');
 
     const parked = 'PARKED on GPT turns inv-a, inv-b, inv-c';
     const store = new MemoryWakeStore();
