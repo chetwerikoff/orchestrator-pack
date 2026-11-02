@@ -1739,6 +1739,7 @@ function formatGithubReviewBody(run: PackReviewRunRecord, payload: ReviewPayload
     '',
   ];
   const coverage = derivePackReviewGptCoverage(run.reviewRound);
+  const effective = run.reviewRound ? projectPackReviewEffectiveFindings(run) : null;
   if (run.reviewRound?.cardinality === 3 && run.reviewRound.settledSourceCount === 2) {
     lines.push('Sources: 2/3 (degraded after timeout)', '');
   } else if (coverage?.kind === 'partial') {
@@ -1782,6 +1783,22 @@ function formatGithubReviewBody(run: PackReviewRunRecord, payload: ReviewPayload
       lines.push('');
     }
   }
+  if (effective?.mode === 'triaged') {
+    lines.push('## Persisted effective-finding groups', '',
+      'All original findings above remain immutable; dispositions affect only effective blocking/fixer intake.', '');
+    for (const group of effective.groups) {
+      lines.push(`- ${group.groupId} [${group.decision}] code=${group.code}; slots=${group.slotIds.join(',')}; occurrences=${group.members.join(',')}; reason=${group.reason}`,
+        ...(group.codeEvidence ? [`  - Exact-head evidence: ${group.codeEvidence}`] : []));
+    }
+    lines.push('', '## FIX_NOW fixer packet (deduplicated)', '');
+    if (effective.fixNow.length === 0) lines.push('No effective blocking FIX_NOW groups; do not launch a fixer.', '');
+    else for (const group of effective.fixNow) {
+      lines.push(`- FIX_NOW ${group.groupId} — ${group.code}; ${group.reason}; source slots: ${group.slotIds.join(',')}`);
+    }
+    lines.push('');
+  } else if (payload.findings.length > 0 && run.reviewRound) {
+    lines.push('Triage: not verified; original source union and blocking decisions apply.', '');
+  }
   lines.push('---', '_Automated review by orchestrator-pack pack-owned runner_');
   return lines.join('\n');
 }
@@ -1803,7 +1820,9 @@ async function postGithubReview(options: {
   dismissedReviewIds: Array<number | string>;
 }> {
   const event = selectGithubReviewEvent(options.payload);
-  const body = formatGithubReviewBody(options.run, options.payload);
+  const currentRun = getPackReviewRun(options.run.id,
+    { projectId: options.projectId, storeRoot: options.storeRoot }) ?? options.run;
+  const body = formatGithubReviewBody(currentRun, options.payload);
   const reconciled = await reconcileGithubCommentReview({
     run: options.run,
     body,
