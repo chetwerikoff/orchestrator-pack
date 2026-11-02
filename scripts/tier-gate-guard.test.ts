@@ -259,7 +259,7 @@ describe('current substantive Issue floor', () => {
           '--repo-root', packRoot, '--trusted-base-root', targetRoot, '--review-target-root', targetRoot,
           '--manifest-path', manifestPath, '--snapshot-file', captured.snapshotPath,
           '--bound-snapshot-pr-number', '2769', '--bound-snapshot-issue-number', '2751',
-          '--project-id', projectId, '--pr-head-sha', prHeadSha,
+          '--project-id', projectId, '--explicit-issue', '2751', '--pr-head-sha', prHeadSha,
           '--changed-paths-file', changedPathsFile],
         env: cliEnv, inheritParentEnv: false,
       });
