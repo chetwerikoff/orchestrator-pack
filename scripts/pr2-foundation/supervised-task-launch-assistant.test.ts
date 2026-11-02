@@ -6028,15 +6028,101 @@ function withWorld(options: Parameters<typeof pushWorld>[0], body: (world: PushW
   };
 }
 
+describe('Issue #2754 AC5 production dirty manager restore (read-only Git)', () => {
+  it.each(['same-task', 'new-task'] as const)(
+    'preserves branch, HEAD, tracked and untracked bytes for a verified %s handover',
+    withWorld({ install: false }, async (world) => {
+      const tracked = join(world.manager, 'src', 'app.ts');
+      const untracked = join(world.manager, 'operator-recovery.diff');
+      writeFileSync(tracked, TS_BEFORE + '// preserved operator edit\n');
+      writeFileSync(untracked, 'operator-only untracked bytes\n');
+      const before = {
+        head: git(world.manager, 'rev-parse', 'HEAD'),
+        branch: git(world.manager, 'symbolic-ref', '--quiet', '--short', 'HEAD'),
+        status: git(world.manager, 'status', '--porcelain=v1', '--untracked-files=all'),
+        tracked: readFileSync(tracked),
+        untracked: readFileSync(untracked),
+      };
+      const prior: WorkerAssignment = {
+        schema: 'orchestrator-pack/worker-assignment/v1',
+        projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+        issueNumber: 2754, taskId: 'task-old', assignmentId: 'prior-2754',
+        generation: 1, kind: 'local', provider: 'orca', bindingKey: 'dispatch-old',
+        role: 'orchestrator', createdAtUtc: '2026-11-02T00:00:00.000Z',
+      };
+      const currentTask = mode === 'same-task' ? 'task-old' : 'task-new';
+      const worktreeId = 'repo::manager';
+      const calls: string[][] = [];
+      const execute = async (
+        args: readonly string[], _timeoutMs?: number, _env?: Readonly<NodeJS.ProcessEnv>, cwd?: string,
+      ) => {
+        calls.push([...args]);
+        if (args[0] === 'orca') {
+          const operation = args.slice(1, 3).join(' ');
+          let result: Record<string, unknown>;
+          if (operation === 'worktree show') {
+            result = { worktree: { id: worktreeId, path: world.manager } };
+          } else if (operation === 'orchestration task-list') {
+            result = { runId: 'run-1', tasks: [{ id: currentTask }] };
+          } else if (operation === 'orchestration dispatch-show') {
+            result = { dispatch: { id: 'dispatch-old', status: 'failed' } };
+          } else if (operation === 'orchestration worker-show') {
+            result = {
+              dispatch: { id: 'dispatch-old', status: 'failed' },
+              worker: { agent_terminal_handle: 'old-handle', worktree_id: worktreeId },
+              observation: { exactWorker: false, status: 'missing' }, terminal: null,
+              terminalResource: {
+                terminalHandle: 'old-handle', worktreeId,
+                originDispatchId: 'dispatch-old', ownerDispatchId: 'dispatch-old',
+              },
+            };
+          } else {
+            return { ok: false, stdout: '', stderr: 'unexpected synthetic Orca call: ' + operation };
+          }
+          return { ok: true, stdout: okEnvelope(result), stderr: '' };
+        }
+        if (args[0] === 'git' && args[1] === 'remote' && args[2] === 'get-url') {
+          return { ok: true, stdout: 'git@github.com:chetwerikoff/orchestrator-pack.git\n', stderr: '' };
+        }
+        const result = runProcessSync({
+          command: args[0]!, args: args.slice(1), cwd: cwd ?? world.manager, env: GIT_ENV,
+        });
+        return { ok: result.ok, stdout: result.stdout, stderr: result.stderr };
+      };
+      const prepared = await prepareWorktreeWithOrca({
+        repository: 'chetwerikoff/orchestrator-pack', issueNumber: 2754,
+        taskId: currentTask, managerTaskRunId: 'run-1', managerRefresh: true,
+        worktreeSelector: 'id:' + worktreeId, defaultBranch: 'trunk',
+        reuseAssignment: prior,
+      }, execute);
+      expect(prepared).toMatchObject({
+        status: 'ok',
+        value: { id: worktreeId, path: world.manager, setupWitness: 'proven_reuse' },
+        evidence: { previousDispatchId: 'dispatch-old', reuse: 'dirty_preserved' },
+      });
+      expect(git(world.manager, 'rev-parse', 'HEAD')).toBe(before.head);
+      expect(git(world.manager, 'symbolic-ref', '--quiet', '--short', 'HEAD')).toBe(before.branch);
+      expect(git(world.manager, 'status', '--porcelain=v1', '--untracked-files=all')).toBe(before.status);
+      expect(readFileSync(tracked)).toEqual(before.tracked);
+      expect(readFileSync(untracked)).toEqual(before.untracked);
+      expect(calls.some((args) => args[0] === 'git' &&
+        ['checkout', 'fetch', 'merge', 'reset', 'stash', 'clean', 'worktree'].includes(args[1]!))).toBe(false);
+      expect(calls.some((args) => args[0] === 'orca' &&
+        ['worker-start', 'terminal', 'dispatch-start'].includes(args[2]!))).toBe(false);
+    }),
+  );
+});
+
 describe('Issue #2754 AC7 same-second distinct-worktree B5 snapshot race', () => {
   it('both managers observe pre-install siblings before either writes; retain each own hook', withWorld({
     install: false, prePush: '#!/bin/sh\necho original-hook >&2\nexit 0\n',
+    preCommit: '#!/bin/sh\necho original-precommit >&2\nexit 0\n',
   }, async (world) => {
     const second = join(world.base, 'manager-second');
     git(world.primary, 'worktree', 'add', '-q', '-b', 'manager-second', second, 'origin/trunk');
-    // Remove unrelated shared-config contention: both installations still race
-    // their own effective hooks against the same before/after sibling snapshots.
-    git(world.primary, 'config', 'extensions.worktreeConfig', 'true');
+    // Start with the shared extension OFF: both installers must tolerate
+    // independently activated sibling config.worktree and keep original hooks.
+    expect(gitTry(world.primary, 'config', '--get', 'extensions.worktreeConfig').status).not.toBe(0);
     const signal = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
     const view = new Int32Array(signal);
     const moduleUrl = new URL('./manager-push-guard.ts', import.meta.url).href;
@@ -6095,6 +6181,22 @@ describe('Issue #2754 AC7 same-second distinct-worktree B5 snapshot race', () =>
       expect(existsSync(join(secondHooks, 'pre-push'))).toBe(true);
       expect(git(world.primary, 'config', '--get', 'extensions.worktreeConfig')).toBe('true');
       expect(gitTry(world.primary, 'config', '--get', 'core.hooksPath').status).not.toBe(0);
+      const firstCommit = gitTry(world.manager, 'commit', '--allow-empty', '-m', 'manager-one-hook');
+      const secondCommit = gitTry(second, 'commit', '--allow-empty', '-m', 'manager-two-hook');
+      expect(firstCommit.status, firstCommit.out).toBe(0);
+      expect(secondCommit.status, secondCommit.out).toBe(0);
+      expect(firstCommit.out).toContain('original-precommit');
+      expect(secondCommit.out).toContain('original-precommit');
+      // A failed reinstall must roll back this worktree alone, not deactivate
+      // the sibling or its shared extensions.worktreeConfig.
+      const rollback = installManagerPushGuard({
+        worktreePath: world.manager, defaultBranch: 'wrong-default',
+        endpointMatchesRepository: () => true,
+      });
+      expect(rollback).toMatchObject({ ok: false, cause: 'manager_push_guard_default_branch_changed' });
+      expect(git(world.manager, 'config', '--worktree', '--get', 'core.hooksPath')).toBe(firstHooks);
+      expect(git(second, 'config', '--worktree', '--get', 'core.hooksPath')).toBe(secondHooks);
+      expect(git(world.primary, 'config', '--get', 'extensions.worktreeConfig')).toBe('true');
     } finally {
       Atomics.store(view, 1, 1);
       Atomics.notify(view, 1, 2);
