@@ -3106,38 +3106,27 @@ async function runGptSourceBatch(options: {
   const admissionInterval = harness && !options.input.fixtureGptAdmissionReadObservation
     ? 0
     : PACK_REVIEW_GPT_SOURCE_ADMISSION_INTERVAL_MS;
-  // Resume pacing from the last retained admission, including recovered slots.
-  let previousAdmission = options.round.sourceSlots
-    .filter((slot) => slot.invocationId && slot.admissionStartedAtUtc)
-    .sort((a, b) => Date.parse(b.admissionStartedAtUtc!) - Date.parse(a.admissionStartedAtUtc!))[0];
-  let admissionTail = Promise.resolve();
+  // Retained admissions fix the original round timeline. Each slot waits only
+  // for its own scheduled start; a hung predecessor bind/send cannot hold it.
+  const retainedStarts = options.round.sourceSlots.flatMap((slot) => {
+    const started = Date.parse(slot.admissionStartedAtUtc ?? '');
+    return slot.invocationId && Number.isFinite(started)
+      ? [started - (slot.ordinal - 1) * admissionInterval] : [];
+  });
+  const roundStartMs = retainedStarts.length > 0 ? Math.min(...retainedStarts) : Date.now();
   let credentialedSourceCount = 0;
   const admit = async (
-    slotId: string, invocationId: string, bind: (startedAt: number) => Promise<boolean>,
+    slotId: string, _invocationId: string, bind: (startedAt: number) => Promise<boolean>,
   ): Promise<boolean> => {
-    let release!: () => void;
-    const predecessor = admissionTail;
-    admissionTail = new Promise<void>((resolveRelease) => { release = resolveRelease; });
-    await predecessor;
-    try {
-      if (previousAdmission && admissionInterval > 0) {
-        const remaining = Date.parse(previousAdmission.admissionStartedAtUtc!) + admissionInterval - Date.now();
-        if (remaining > 0) {
-          await new Promise<void>((resolveWait) => setTimeout(resolveWait, remaining));
-        }
-      }
-      const startedAt = Date.now();
-      if (!(await bind(startedAt))) return false;
-      previousAdmission = {
-        slotId, invocationId, lifecycle: 'invocation_started',
-        ordinal: options.round.sourceSlots.find((slot) => slot.slotId === slotId)!.ordinal,
-        admissionStartedAtUtc: new Date(startedAt).toISOString(),
-        ...(resolveLaunchBinding() ?? {}),
-      };
-      return true;
-    } finally {
-      release();
+    const ordinal = options.round.sourceSlots.find((slot) => slot.slotId === slotId)?.ordinal;
+    if (!ordinal) return false;
+    const remaining = roundStartMs + (ordinal - 1) * admissionInterval - Date.now();
+    if (remaining > 0) {
+      await new Promise<void>((resolveWait) => setTimeout(resolveWait, remaining));
     }
+    // Bind only this slot through the existing durable slot update. Do not
+    // serialize on another slot's bind, source census, or terminal observation.
+    return bind(Date.now());
   };
   const sourceTransport = options.input.fixtureGptSourceCommentTransport
     ?? (process.env.OPK_VITEST_HARNESS === '1'
@@ -3258,8 +3247,7 @@ async function runGptSourceBatch(options: {
       const retained = getPackReviewRun(options.run.id, { projectId: options.projectId, storeRoot: options.storeRoot });
       return { slot: retained?.reviewRound?.sourceSlots.find((slot) => slot.slotId === slotId) ?? currentSlot, payload: undefined };
     }
-    // The persisted admission is serialized; the invocation's potentially long
-    // browser work must run outside that gate to preserve parallel generation.
+    // The persisted slot binding is independent of sibling launch and send work.
     if (options.input.fixtureAfterGptInvocationBound) {
       await options.input.fixtureAfterGptInvocationBound({ slotId, attemptOrdinal, invocationId, round });
     }
