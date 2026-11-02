@@ -291,6 +291,13 @@ function validatePackReviewTriageResultInternal(
       return found;
     });
     const originalBlocking = originals.some(isOriginallyBlockingPackReviewFinding);
+    // Triaging an advisory-only group as FIX_NOW would silently promote it.
+    if (!originalBlocking && value.decision === 'FIX_NOW') {
+      throw new Error('triage cannot promote original advisory findings');
+    }
+    if (/[\r\n\x00-\x1f]/.test(value.reason)) {
+      throw new Error('triage reason must be a single physical line');
+    }
     const protectedBlocking = originals.some((finding: Record<string, unknown>) =>
       isOriginallyBlockingPackReviewFinding(finding) && protectedTriageHarm(finding));
     const reason = value.reason.trim();
