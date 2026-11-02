@@ -6434,16 +6434,15 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
         },
       });
       expect(r2.result, JSON.stringify(r2.result)).toMatchObject({
-        created: true, headSha: HEAD, runnerReason: 'gpt_sources_waiting_for_grace:0/3',
+        created: true, headSha: HEAD, runnerReason: 'gpt_sources_incomplete_after_grace:0/2',
       });
       r2Id = String(r2.result.runId);
       expect(r2Id).not.toBe(f.original.id);
       expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
 
-      // The two persisted gates have different authorities. In both orders,
-      // reconcile must refuse zero-send terminalization after only one expires:
-      // (1) dead-PID heartbeat/updatedAt stale gate, (2) earliest finite source
-      // admission (createdAt fallback) 0/3 grace. No immediate recovery shortcut.
+      // A fresh T2 is exactly 2/2 and has no legacy 2/3 degraded grace.
+      // Source admission alone never terminalizes: a dead-owner stale check
+      // remains authoritative even when the source grace clock is older.
       const activeR2 = getPackReviewRun(r2Id, f.options)!;
       const admissions = activeR2.reviewRound!.sourceSlots
         .map((slot) => Date.parse(slot.admissionStartedAtUtc ?? ''))
@@ -6471,29 +6470,25 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
 
       vi.setSystemTime(new Date(firstBoundary));
-      const afterOneGate = await f.reconcile({ runId: r2Id });
-      expect(afterOneGate.results.some((row) => row.runId === r2Id && row.terminalized)).toBe(false);
-      expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
+      const afterFirstDeadline = await f.reconcile({ runId: r2Id });
       if (firstGate === 'stale') {
-        // This ordinary reconcile may return before producing a graceExpired
-        // diagnostic; prove the persisted admission deadline is still pending
-        // and no required status reconciliation or terminalization occurred.
-        expect(Date.now()).toBeLessThan(zeroSendBoundary);
-        expect(afterOneGate.results.find((row) => row.runId === r2Id)).toMatchObject({
-          terminalized: false, statusReconciled: false,
-        });
+        // Tiered T2 0/2 does not wait for the old 2/3 grace deadline.
+        expect(afterFirstDeadline.results.find((row) => row.runId === r2Id && row.terminalized))
+          .toMatchObject({ terminalized: true, statusReconciled: true });
+      } else {
+        // Source deadline alone cannot prove the runner is dead.
+        expect(afterFirstDeadline.results.some((row) => row.runId === r2Id && row.terminalized))
+          .toBe(false);
+        expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
+        vi.setSystemTime(new Date(staleBoundary - 1));
+        const justBeforeStale = await f.reconcile({ runId: r2Id });
+        expect(justBeforeStale.results.some((row) => row.runId === r2Id && row.terminalized))
+          .toBe(false);
+        vi.setSystemTime(new Date(staleBoundary));
+        const atStale = await f.reconcile({ runId: r2Id });
+        expect(atStale.results.find((row) => row.runId === r2Id && row.terminalized))
+          .toMatchObject({ terminalized: true, statusReconciled: true });
       }
-
-      vi.setSystemTime(new Date(settleBoundary - 1));
-      const justBefore = await f.reconcile({ runId: r2Id });
-      expect(justBefore.results.some((row) => row.runId === r2Id && row.terminalized)).toBe(false);
-      expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
-
-      vi.setSystemTime(new Date(settleBoundary));
-      const atBothGates = await f.reconcile({ runId: r2Id });
-      expect(atBothGates.results.find((row) => row.runId === r2Id && row.terminalized)).toMatchObject({
-        terminalized: true, statusReconciled: true,
-      });
     } finally {
       vi.useRealTimers();
     }
@@ -6522,7 +6517,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       expect(r3.result).toMatchObject({ created: false, runnerReason: 'gpt_rate_limit_history_unsafe' });
       expect(f.reviews).toHaveLength(0);
       expect(listPackReviewRuns(f.options)).toHaveLength(2);
-      expect(f.freshStarts).toHaveLength(3);
+      expect(f.freshStarts).toHaveLength(2);
     } else {
       expect(r3.result, JSON.stringify(r3.result)).toMatchObject({
         created: true, reused: false, headSha: HEAD, publicationVerified: true,
@@ -6531,7 +6526,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       expect(String(r3.result.runId)).not.toBe(f.original.id);
       expect(listPackReviewRuns(f.options)).toHaveLength(3);
       expect(f.reviews).toHaveLength(1);
-      expect(f.freshStarts).toHaveLength(6);
+      expect(f.freshStarts).toHaveLength(4);
       expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })
         ?.cycle?.consumedRoundOrdinals).toEqual([1]);
     }
