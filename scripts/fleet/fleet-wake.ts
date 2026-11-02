@@ -1853,23 +1853,8 @@ async function wakeNamedParkedProducers(
       store.writeParkedEpoch?.(pane.handle, epoch);
     }
     const producer = parseNamedParkedProducer(pane.wait);
-    if ((producer?.kind === 'gpt' || producer?.kind === 'gpt-multi')
-      && !pane.ownParkObservation) {
-      log('named GPT Wake withheld for ' + pane.handle
-        + ': re-check current own GPT PARKED and exact terminal envelope, not a foreign/quoted park');
-      continue;
-    }
-    // A quoted/historical visible PARKED line is classification only: a
-    // numbered PR recheck needs a positively own final named wait.
-    const namedPrOwn = !((producer?.kind === 'ci' || producer?.kind === 'pack-review')
-      && producer.number && !pane.ownParkObservation);
-    if (!namedPrOwn) {
-      log('named PR Wake withheld for ' + pane.handle
-        + ': re-check current own PARKED on PR #' + producer!.number + ', not a foreign/quoted park line');
-      continue; // Quoted named waits cannot reach a 30-minute Reminder either.
-    }
     let match: ProducerResolution | undefined;
-    // Re-observe this same native pane AND its actual last own PARKED line
+    // Re-observe this same native pane and its final PARKED line
     // immediately before text and again before Enter. A recycled handle or
     // newly bare shell cannot receive a stale parked event/reminder.
     const stillParkedOwner = (): boolean => {
@@ -1900,14 +1885,7 @@ async function wakeNamedParkedProducers(
           }
         }
         const screen = readFleetScreen(pane.handle, executor);
-        const ownWait = ownPaneOutcome(screen).wait;
-        if (pane.ownParkObservation && ownWait !== pane.wait) return false;
-        // Neither the first Send nor the confirming Enter may be authorized
-        // by a later tool/user quotation that merely ends in the same text.
-        if ((producer?.kind === 'gpt' || producer?.kind === 'gpt-multi'
-          || ((producer?.kind === 'ci' || producer?.kind === 'pack-review') && producer.number))
-          && (!pane.ownParkObservation || ownWait !== pane.wait)) return false;
-        return lastFleetParkedLine(screen) === pane.wait || ownWait === pane.wait;
+        return lastFleetParkedLine(screen) === pane.wait || ownPaneOutcome(screen).wait === pane.wait;
       } catch { return false; }
     };
     let uncertainty: string | undefined;
@@ -1937,7 +1915,7 @@ async function wakeNamedParkedProducers(
       } else {
         uncertainty = 'process provenance unverified';
       }
-    } else if (producer && namedPrOwn) {
+    } else if (producer) {
       match = resolveParkEvent(pane.wait, terminals, options);
       if (!match && (producer.kind === 'ci' || producer.kind === 'pack-review') && producer.number) {
         log('named PR Wake pending/unverified for ' + pane.handle
