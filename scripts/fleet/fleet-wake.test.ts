@@ -4678,3 +4678,89 @@ describe('Issue #2731 B4: CI assignment precedence, per-effect recheck and unrea
     expect(store.readParkedEpoch('gone')).toBeUndefined();
   });
 });
+
+
+describe('Issue #2749 B9-6: exact primary-root near-effect Dispatch admission', () => {
+  const rootAgent: FleetTerminal = {
+    handle: 'primary-b9', title: 'OpenCode manager', worktreePath: primary,
+    branch: 'refs/heads/primary-b9', incarnationId: 'b9-inc', agentIdentity: 'opencode', status: 'running',
+  };
+  const coordinator: FleetTerminal = {
+    handle: 'coord-b9', title: 'Cursor coordinator', worktreePath: primary,
+    incarnationId: 'coordinator-inc', status: 'running',
+  };
+  const park = 'PARKED on GPT turn inv-primary-b9';
+  const roster = [coordinator, rootAgent];
+  const envelope: TerminalEnvelopeEvent = {
+    path: '/tmp/opencode/inv-primary-b9-terminal.json', invocationId: 'inv-primary-b9',
+    observedInvocationId: 'inv-primary-b9', terminalHandle: rootAgent.handle,
+    cwd: workerBase + '/two/child', lifecycleOutcome: 'success', turnResultState: 'ok',
+  };
+  const exercise = (phase: 'stable' | 'unbound' | 'before-text' | 'before-enter', store = new MemoryWakeStore()) => {
+    let assigned = phase !== 'unbound', listReads = 0;
+    const base = fakeOrca({ 'coord-b9': 'idle', 'primary-b9': park }, [], roster);
+    const executor: OrcaExecutor = (args) => {
+      if (args[0] === 'terminal' && args[1] === 'list') {
+        listReads += 1;
+        if (phase === 'before-text' && listReads >= 2) assigned = false;
+      }
+      if (args[0] === 'orchestration' && args[1] === 'worker-list') {
+        return commandResult(JSON.stringify({ ok: true, result: {
+          workers: assigned ? [{ agentTerminalHandle: rootAgent.handle, taskId: 'task-b9',
+            dispatchId: 'dispatch-b9', dispatchStatus: 'dispatched' }] : [],
+          page: { hasMore: false },
+        } }));
+      }
+      if (args[0] === 'orchestration' && args[1] === 'worker-show') {
+        return commandResult(JSON.stringify({ ok: true, result: {
+          dispatch: { id: 'dispatch-b9', taskId: 'task-b9', run_id: 'run-b9', status: 'dispatched' },
+          terminal: rootAgent, observation: { exactWorker: true, status: 'live' },
+        } }));
+      }
+      if (args[0] === 'orchestration' && args[1] === 'run-show') {
+        return commandResult(JSON.stringify({ ok: true, result: {
+          run: { id: 'run-b9', coordinator_handle: coordinator.handle },
+        } }));
+      }
+      const value = base(args);
+      if (phase === 'before-enter' && args[0] === 'terminal' && args[1] === 'send' && args.includes('--text')) assigned = false;
+      return value;
+    };
+    return tick({
+      executor, store, terminals: roster, screens: { 'coord-b9': 'idle', 'primary-b9': park },
+      config: config({ selectedRepository: 'test/project', orchestratorHandle: coordinator.handle,
+        workspaceRe: /(?:\/home\/user\/project$|\/orca\/workspaces\/project\/)/u }),
+      listTerminalEnvelopes: () => [envelope], listOpenPulls: () => [],
+      readCurrentAssignments: () => [], readPackReviewRuns: () => [],
+      readGit: selectedProjectGit, canonicalPath: (path) => path,
+      resolveSelectedReviewProject: () => ({
+        projectId: 'orchestrator-pack', repository: 'test/project', primaryRoot: primary,
+      }),
+    });
+  };
+  const deliveredText = (calls: readonly string[][]) =>
+    sendsTo(calls, rootAgent.handle).filter((row) => row.includes('--text'));
+
+  it('binds the primary PARKED recipient under a matching workspace regex; unchanged next tick is silent', async () => {
+    const store = new MemoryWakeStore();
+    const first = await exercise('stable', store);
+    expect(deliveredText(first.calls)).toHaveLength(1);
+    expect(sendsTo(first.calls, rootAgent.handle)).toHaveLength(2);
+    expect(deliveredText((await exercise('stable', store)).calls)).toHaveLength(0);
+    expect(deliveredText((await exercise('unbound')).calls)).toHaveLength(0);
+  });
+
+  it('rejects revocation before either native effect without replaying already attempted text', async () => {
+    for (const phase of ['before-text', 'before-enter'] as const) {
+      const store = new MemoryWakeStore();
+      const observed = await exercise(phase, store);
+      expect(deliveredText(observed.calls)).toHaveLength(phase === 'before-text' ? 0 : 1);
+      expect(sendsTo(observed.calls, rootAgent.handle).filter((row) => !row.includes('--text'))).toHaveLength(0);
+      const mark = 'terminal-path:' + rootAgent.handle + ':' + envelope.path;
+      expect(store.hasParkedWakeEvent(mark)).toBe(phase === 'before-enter');
+      if (phase === 'before-enter') {
+        expect(deliveredText((await exercise('stable', store)).calls)).toHaveLength(0);
+      }
+    }
+  });
+});
