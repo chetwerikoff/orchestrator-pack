@@ -24,6 +24,7 @@ import {
   isRetryablePackReviewZeroSendCollision,
   parseArgs,
   reconcileStalePackReviewRuns,
+  frozenSavedGptSourceIdentity,
   maybeAdmitPackReviewBodyAmendment,
   observeGptPackReviewAttempt,
   resolveCurrentPrHead,
@@ -33,6 +34,8 @@ import {
 import type { CarryoverReplayResult } from './pack-review-carryover.js';
 import {
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+  PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
+  PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION,
   commitPackReviewTerminal,
   initializePackReviewAuthority,
   readPackReviewAuthority,
@@ -7884,7 +7887,7 @@ describe('Issue #2761: blocking triage requires independent causal evidence', ()
       inheritParentEnv: true, timeoutMs: 10_000,
     });
     expect(shown.ok).toBe(true);
-    expect(shown.stdout.split('\\n')[0]).toContain("native-entrypoint-preflight.ts");
+    expect(shown.stdout.split(/\r?\n/)[0]).toContain("native-entrypoint-preflight.ts");
     for (const decision of ['REJECT', 'DEFER'] as const) {
       expect(() => validatePackReviewTriageResult(run, [{
         members: [{ slotId: 'source-01', index: 0 }], decision,
@@ -7907,5 +7910,54 @@ describe('Issue #2761: blocking triage requires independent causal evidence', ()
       decision: 'DEFER', slotIds: ['source-01'],
       members: ['source-01:0'],
     })]);
+  });
+});
+
+describe('Issue #2761: legacy unversioned source-accounting recovery identity', () => {
+  function roundWithSources(
+    version: string,
+    count: number,
+    usable: number,
+  ): PackReviewGptRoundRecord {
+    return {
+      schema: 'pack-review-gpt-round/v1', reviewer: 'gpt',
+      tier: 'T2', accountingVersion: version, roundOrdinal: 1,
+      cardinality: count, issueNumber: 2761,
+      boundIssueSnapshotDigest: 'b'.repeat(64),
+      sourceSlots: Array.from({ length: count }, (_, index) => ({
+        slotId: 'source-' + String(index + 1).padStart(2, '0'),
+        ordinal: index + 1,
+        lifecycle: index < usable ? 'terminal' as const : 'planned' as const,
+        ...(index < usable ? {
+          terminalClass: 'complete_clean',
+          terminalResult: { source_comment_authority: 'credentialed_github' },
+          payload: { findings: [] },
+        } : {}),
+      })),
+    };
+  }
+  it.each([0, 1])('preserves prelogical missing-run-version source identity for %i/3', (usable) => {
+    const round = roundWithSources(PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION, 3, usable);
+    const run = { reviewRound: round, accountingVersion: undefined } as PackReviewRunRecord;
+    expect(frozenSavedGptSourceIdentity(run)).toBe(true);
+    expect(frozenSavedGptSourceIdentity({ ...run, reviewRound: {
+      ...round, cardinality: 2, sourceSlots: round.sourceSlots.slice(0, 2),
+    } })).toBe(false);
+  });
+  it('retains strict version equality for logical/tiered generations', () => {
+    const oldLogical = roundWithSources(PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, 3, 0);
+    expect(frozenSavedGptSourceIdentity({
+      reviewRound: oldLogical, accountingVersion: undefined,
+    } as PackReviewRunRecord)).toBe(false);
+    const tiered = roundWithSources(PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION, 2, 1);
+    expect(frozenSavedGptSourceIdentity({
+      reviewRound: tiered, accountingVersion: undefined,
+    } as PackReviewRunRecord)).toBe(false);
+    expect(frozenSavedGptSourceIdentity({
+      reviewRound: tiered, accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+    } as PackReviewRunRecord)).toBe(false);
+    expect(frozenSavedGptSourceIdentity({
+      reviewRound: tiered, accountingVersion: PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
+    } as PackReviewRunRecord)).toBe(true);
   });
 });
