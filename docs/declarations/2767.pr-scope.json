@@ -1,0 +1,35 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2767,
+  "declared_paths": [
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.test.ts",
+    "scripts/pack-review-state.ts"
+  ],
+  "denylist": [
+    ".cache/**",
+    ".config/**",
+    ".env",
+    ".env.local",
+    ".git/**",
+    ".local/**",
+    ".opencode/**",
+    ".orchestrator-pack/**",
+    "credentials/**",
+    "local.config.json",
+    "node_modules/**",
+    "packages/core/**",
+    "runtime-state/**",
+    "secrets/**",
+    "state/**",
+    "vendor/**"
+  ],
+  "allowed_roots": [
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.test.ts",
+    "scripts/pack-review-state.ts"
+  ],
+  "source_revision": "c9f581e8cae90e7224588567b13bdac4d117efb5"
+}
