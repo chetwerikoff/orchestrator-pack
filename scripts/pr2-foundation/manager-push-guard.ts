@@ -678,6 +678,8 @@ export interface ManagerPushGuardInstallRequest {
   readonly endpointMatchesRepository: (url: string) => boolean;
   /** Verified clean same-invocation placement tip; absent on reuse/provider placement. */
   readonly placementSeedOid?: string;
+  /** Optional synchronous test-only observation at the exact pre-effect sibling snapshot. */
+  readonly afterSiblingSnapshot?: () => void;
 }
 
 export type ManagerPushGuardInstallResult =
@@ -783,6 +785,9 @@ export function installManagerPushGuard(request: ManagerPushGuardInstallRequest)
       'git worktree list failed; repair the repository registry before installing the push guard', evidence);
   }
   const before = snapshotHooks(roots);
+  // A deterministic fixture can synchronize two worktrees after both have
+  // observed their pre-effect sibling snapshots. Production leaves this unset.
+  request.afterSiblingSnapshot?.();
   const extension = git(worktree, ['config', '--file', commonConfig, '--get', 'extensions.worktreeConfig']);
   const extensionWasOn = extension.ok && trimmed(extension.stdout) === 'true';
   if (!extensionWasOn) {
