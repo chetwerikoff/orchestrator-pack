@@ -250,8 +250,22 @@ describe('fleet sweep on real OpenCode screens', () => {
   it('reports POLLING on the second sweep while a wrapped sleep command is running', () => {
     const screen = runningSleepScreen();
     const store = new MemoryPollingStore();
+    // The native spinner is on the command line, one content line before the
+    // final wrapped argument. The ctrl+p commands status bar is not activity.
+    expect(isBusyScreen(screen)).toBe(true);
     expect(classifyFleetPane(screen, 'p1', store)).toBe('busy');
     expect(classifyFleetPane(screen, 'p1', store)).toBe('POLLING');
+  });
+
+  it('B9-5: later own content clears a stale wrapped spinner despite idle OpenCode chrome', () => {
+    const wrapped = runningSleepScreen();
+    const completed = wrapped.replace('  ┃  description\n',
+      '  ┃  description\n  ┃  Assistant: completed and waiting\n');
+    expect(completed).not.toBe(wrapped);
+    expect(isBusyScreen(completed)).toBe(false);
+    const store = new MemoryPollingStore();
+    expect(classifyFleetPane(completed, 'p1', store)).toBe('STOPPED');
+    expect(store.marks.has('p1')).toBe(false);
   });
 
   it('keeps a pane busy when the only sleep is stale scrollback behind newer work', () => {
