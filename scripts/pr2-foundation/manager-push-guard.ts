@@ -794,12 +794,17 @@ export function installManagerPushGuard(request: ManagerPushGuardInstallRequest)
     // Git ignores config.worktree until the extension is on; enabling it would silently activate any dormant setting
     // there and change which hooks the manager or a sibling runs, or where it pushes.
     const dormant = dormantWorktreeConfigFiles(common);
-    if (dormant.length > 0) {
+    // A sibling installer can enable the shared extension between our first
+    // read and its worktree-local config write. Re-read that native setting:
+    // a now-enabled extension means those entries are active, not dormant.
+    const enabledBySibling = trimmed(git(worktree, ['config', '--file', commonConfig,
+      '--get', 'extensions.worktreeConfig']).stdout) === 'true';
+    if (dormant.length > 0 && !enabledBySibling) {
       return refuse('manager_push_guard_dormant_worktree_config',
         `config.worktree already holds settings (hooks, push URL or others) in ${dormant.join(', ')} while extensions.worktreeConfig is off; enabling per-worktree config would activate them and change what the manager or a sibling runs or pushes to. Move those settings into the shared config or remove them, then rerun the supervised launch`,
         { ...evidence, dormant });
     }
-    if (!git(worktree, ['config', '--file', commonConfig, 'extensions.worktreeConfig', 'true']).ok) {
+    if (!enabledBySibling && !git(worktree, ['config', '--file', commonConfig, 'extensions.worktreeConfig', 'true']).ok) {
       return refuse('manager_push_guard_worktree_config_unavailable',
         'enable extensions.worktreeConfig manually (git config extensions.worktreeConfig true) after checking tooling compatibility, then rerun the supervised launch', evidence);
     }
@@ -816,7 +821,11 @@ export function installManagerPushGuard(request: ManagerPushGuardInstallRequest)
     // Another linked worktree may have installed its own guard while this install ran.
     // Never disable the shared extension while any worktree still selects worktree-local hooks.
     const anyActiveLocalHooks = roots.some((root) => worktreeConfig(root, 'core.hooksPath') !== null);
-    if (!extensionWasOn && !anyActiveLocalHooks) {
+    // A sibling may be writing its config before its final hooksPath selection.
+    // Never disable the extension beneath such an in-flight sibling install.
+    const anySiblingWorktreeConfig = dormantWorktreeConfigFiles(common)
+      .some((file) => file !== join(admin, 'config.worktree'));
+    if (!extensionWasOn && !anyActiveLocalHooks && !anySiblingWorktreeConfig) {
       git(worktree, ['config', '--file', commonConfig, '--unset', 'extensions.worktreeConfig']);
     }
   };
