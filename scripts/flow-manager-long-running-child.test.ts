@@ -2837,6 +2837,20 @@ describe('Issue #2750 owner-wait pair validation', () => {
 const OWNER_PROJECT = 'proj-2750';
 const OWNER_TASK = 'task-2750';
 const OWNER_DISPATCH = 'dispatch-2750';
+const OWNER_HANDLE = 'term-owner-2750';
+
+/** A native `worker-show` result for a live, dispatched Dispatch whose worker terminal is `handle`. */
+function nativeDispatch(overrides: {
+  dispatchId?: string; taskId?: string; status?: string; observation?: string; exactWorker?: boolean; handle?: string;
+} = {}): Record<string, unknown> {
+  return {
+    dispatch: { id: overrides.dispatchId ?? OWNER_DISPATCH, taskId: overrides.taskId ?? OWNER_TASK, status: overrides.status ?? 'dispatched' },
+    observation: { status: overrides.observation ?? 'live', exactWorker: overrides.exactWorker ?? true },
+    terminal: { handle: overrides.handle ?? OWNER_HANDLE },
+  };
+}
+const liveDispatchWitness = (overrides: Parameters<typeof nativeDispatch>[0] = {}) =>
+  vi.fn(async (_dispatchId: string) => nativeDispatch(overrides));
 const WITNESS_BOOT = 'boot-aaaaaaaa';
 const WITNESS_NAMESPACE = 'pid:[4026531836]';
 const WITNESS_STARTTICKS = '123456';
@@ -3021,7 +3035,8 @@ function ownerWaitOptions(
     runIdentity: fx.run, attemptIdentity: fx.attempt, invocationId: fx.invocation,
     ownerTaskId: OWNER_TASK, ownerDispatchId: OWNER_DISPATCH, terminalEnvelopeRoot: fx.root, deadlineMs: 1,
     ownerWaitDependencies: {
-      launcherProbe: deadProbe(), githubReaders: githubReaders(), ownerEnv: fx.ownerEnv, ...deps,
+      launcherProbe: deadProbe(), githubReaders: githubReaders(), ownerEnv: fx.ownerEnv,
+      dispatchWitness: liveDispatchWitness(), invokingTerminalHandle: OWNER_HANDLE, ...deps,
     },
     ...extra,
   };
@@ -3171,7 +3186,7 @@ describe('Issue #2750 owner-wait reaper matrix (AC1-AC3)', () => {
       const onDisk = readTerminalEnvelope(fx.envelopePath, { runIdentity: fx.run, attemptIdentity: fx.attempt })!;
       expectUncertaintyEnvelope(fx, onDisk);
       expect(out.envelope).toEqual(onDisk);
-      expect(onDisk.diagnostics).toMatchObject({ owner_wait: { owner: 'assignment_current', launcher: evidence } });
+      expect(onDisk.diagnostics).toMatchObject({ owner_wait: { owner: 'assignment_and_native_dispatch_current', launcher: evidence } });
       expect(envelopeArtifacts(fx)).toEqual([basename(fx.envelopePath)]); // no stage file survives
       if (process.platform !== 'win32') expect(statSync(fx.envelopePath).mode & 0o777).toBe(0o600);
       if (evidence !== 'host_rebooted') expect(launcherProbe.stat).toHaveBeenCalledWith(4242); // boot mismatch decides without /proc
@@ -3188,7 +3203,7 @@ describe('Issue #2750 owner-wait reaper matrix (AC1-AC3)', () => {
   describe('diagnostic-only waits (no signal, no envelope)', () => {
     const rows: ReadonlyArray<{
       name: string; reason: RegExp; fixture?: Parameters<typeof ownerWaitFixture>[1];
-      probe?: () => ReturnType<typeof witnessProbe>; nextStep?: RegExp;
+      probe?: () => ReturnType<typeof witnessProbe>; nextStep?: RegExp; deps?: OwnerWaitDependencies;
     }> = [
       { name: 'launcher alive', probe: () => witnessProbe(), reason: /^launcher_alive:launcher_live$/u, nextStep: /never signals a PID/u },
       {
@@ -3204,12 +3219,19 @@ describe('Issue #2750 owner-wait reaper matrix (AC1-AC3)', () => {
       { name: 'Task replaced by another Dispatch (not_current)', fixture: { store: 'replaced' }, reason: /^owner_not_current:task_dispatch_replaced$/u },
       { name: 'assignment store absent (unverified)', fixture: { store: 'absent' }, reason: /^owner_not_current:assignment_store_absent$/u },
       { name: 'Task unknown to the selected store (unverified)', fixture: { store: 'other-task' }, reason: /^owner_not_current:task_not_in_selected_store$/u },
+      { name: 'stale store row: native Dispatch no longer live', deps: { dispatchWitness: liveDispatchWitness({ observation: 'exited' }) }, reason: /^owner_not_current:native_dispatch_not_live$/u },
+      { name: 'stale store row: native Dispatch settled', deps: { dispatchWitness: liveDispatchWitness({ status: 'completed' }) }, reason: /^owner_not_current:native_dispatch_not_live$/u },
+      { name: 'native Dispatch unreadable', deps: { dispatchWitness: vi.fn(async () => undefined) }, reason: /^owner_not_current:native_dispatch_unreadable$/u },
+      { name: 'native Dispatch bound to another Task', deps: { dispatchWitness: liveDispatchWitness({ taskId: 'task-other' }) }, reason: /^owner_not_current:native_dispatch_foreign$/u },
+      { name: 'copied active pair from a foreign terminal', deps: { invokingTerminalHandle: 'term-foreign' }, reason: /^owner_not_current:invoking_terminal_not_dispatch_worker$/u },
+      { name: 'invoking terminal unknown (no ORCA_TERMINAL_HANDLE)', deps: { invokingTerminalHandle: undefined }, reason: /^owner_not_current:invoking_terminal_unknown$/u },
+      { name: 'invoking terminal differs from the original launching terminal', fixture: { receipt: { launching_terminal_handle: 'term-original' } }, reason: /^owner_not_current:invoking_terminal_not_original_launcher_terminal$/u },
     ];
 
-    it.each(rows)('$name', async ({ fixture, probe, reason, nextStep }) => {
+    it.each(rows)('$name', async ({ fixture, probe, reason, nextStep, deps }) => {
       const fx = ownerWaitFixture('diag', fixture);
       const launcherProbe = (probe ?? deadProbe)();
-      const out = await captureWait(ownerWaitOptions(fx, { launcherProbe }, pageInputs(fx)));
+      const out = await captureWait(ownerWaitOptions(fx, { launcherProbe, ...deps }, pageInputs(fx)));
       expectDiagnosticOnly(fx, out);
       expect(out.owner_wait.reason).toMatch(reason);
       if (nextStep) expect(out.owner_wait.nextStep).toMatch(nextStep);
@@ -3290,6 +3312,53 @@ describe('Issue #2750 owner-wait reaper matrix (AC1-AC3)', () => {
       expect(launcherProbe.stat).not.toHaveBeenCalled();
       expect(existsSync(fx.envelopePath)).toBe(false);
       expect(kill).not.toHaveBeenCalled();
+    });
+
+    it('publishes nothing when the Dispatch is replaced while the original Page read is pending', async () => {
+      const fx = ownerWaitFixture('revoked-during-read');
+      seedObservation(fx, 'sent');
+      const pageReader: OwnerWaitPageReader = async () => {
+        writeAssignmentStore(fx.ownerEnv, [{ taskId: OWNER_TASK, dispatchId: 'dispatch-replacement' }]);
+        return { state: 'page_finished', evidence: 'stable_finished_generation' };
+      };
+      const out = await captureWait(ownerWaitOptions(fx, { pageReader }, pageInputs(fx)));
+      expectDiagnosticOnly(fx, out);
+      expect(out.owner_wait.reason).toBe('owner_not_current:task_dispatch_replaced');
+      expect(kill).not.toHaveBeenCalled();
+    });
+
+    it('publishes nothing when the native Dispatch stops while the GitHub read is pending', async () => {
+      const fx = ownerWaitFixture('native-stopped-during-read', { baseline: issueBaselineFor('native-stopped-during-read') });
+      let live = true;
+      const dispatchWitness = vi.fn(async () => nativeDispatch(live ? {} : { observation: 'exited' }));
+      const readers = githubReaders({ issueBodySha256: async () => { live = false; return ISSUE_BODY_AFTER; } });
+      const out = await captureWait(ownerWaitOptions(fx, { dispatchWitness, githubReaders: readers }));
+      expectDiagnosticOnly(fx, out);
+      expect(out.owner_wait.reason).toBe('owner_not_current:native_dispatch_not_live');
+      expect(dispatchWitness).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps an owner-bound explicit-path wait diagnostic-only unless the original locator binds those exact paths', async () => {
+      const bound = ownerWaitFixture('explicit-bound');
+      const explicitOptions = (fx: OwnerWaitFixture, receiptPath = fx.receiptPath, envelopePath = fx.envelopePath) => {
+        const { terminalEnvelopeRoot: _root, ...base } = ownerWaitOptions(fx);
+        return { ...base, terminalEnvelopeRoot: fx.root, handoffReceiptPath: receiptPath, terminalEnvelopePath: envelopePath } as WaitOptions;
+      };
+      const ok = await captureWait(explicitOptions(bound));
+      expect(ok.owner_wait).toMatchObject({ effect: 'published' });
+
+      const unbound = ownerWaitFixture('explicit-no-locator');
+      rmSync(unbound.locatorPath);
+      const noLocator = await captureWait(explicitOptions(unbound));
+      expectDiagnosticOnly(unbound, noLocator);
+      expect(noLocator.owner_wait.reason).toBe('explicit_paths_not_bound_to_locator');
+
+      const copied = ownerWaitFixture('explicit-copied');
+      const copiedReceipt = join(copied.root, 'copied-handoff.json');
+      writeFileSync(copiedReceipt, readFileSync(copied.receiptPath), { mode: 0o600 });
+      const other = await captureWait(explicitOptions(copied, copiedReceipt));
+      expect(other.owner_wait.reason).toBe('explicit_paths_not_bound_to_locator');
+      expect(existsSync(copied.envelopePath)).toBe(false);
     });
 
     it('rejects a foreign Run/attempt and a locator selector of another invocation', async () => {
@@ -3595,7 +3664,8 @@ describe('Issue #2750 owner-wait reaper matrix (AC1-AC3)', () => {
       expectUncertaintyEnvelope(fx, onDisk);
       for (const output of outputs) expect(output.envelope).toEqual(onDisk); // identical winner envelope
       expect(envelopeArtifacts(fx)).toEqual([basename(fx.envelopePath)]); // one file, no stage leftovers
-      expect(kill).not.toHaveBeenCalled();
+      // Only the assignment-lock owner liveness probe (signal 0, this process) may run; no real signal.
+      expect(kill.mock.calls.every(([pid, signal]) => signal === 0 && pid === process.pid)).toBe(true);
     });
 
     it('never replaces a launcher terminal committed while the owner-wait reaper is mid-flight', async () => {
@@ -3833,9 +3903,14 @@ describe('Issue #2750 durable artifact root and permissions (AC19/AC20)', () => 
     const xdg = join(root, 'xdg');
     mkdirSync(home, { recursive: true, mode: 0o700 });
     const durable = ensureDurableArtifactRoot(join(xdg, 'orchestrator-pack'));
+    // A synthetic read-only `orca` on PATH answers worker-show for the live original Dispatch.
+    const fakeBin = join(root, 'bin');
+    mkdirSync(fakeBin, { recursive: true });
+    writeFileSync(join(fakeBin, 'orca'), `#!/bin/sh\nprintf '%s' '${JSON.stringify({ ok: true, result: nativeDispatch() })}'\n`, { mode: 0o700 });
     const env = {
       HOME: home, XDG_STATE_HOME: xdg, TMPDIR: join(root, 'emptied-tmp'), OPK_BASE_DIR: join(root, 'opk-base'),
       OPK_PROJECT_ID: OWNER_PROJECT, CHATGPT_BROWSER_TURN_STATE_DIR: join(root, 'state'),
+      PATH: fakeBin, ORCA_TERMINAL_HANDLE: OWNER_HANDLE,
     };
     // A genuinely dead launcher: a real short-lived process whose PID is gone from /proc.
     const gone = await runProcess({

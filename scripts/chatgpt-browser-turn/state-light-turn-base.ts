@@ -5536,7 +5536,6 @@ async function runTurnCore(
           Math.min(invocationDeadlineMs, preDispatchCutoffMs),
         ));
       }
-      await recordGithubEffectBaseline();
       assertFreshOwner();
       const sendAction = async () => await dispatchStateLightSendAndObserveDelivery({
         page, browser, composer, sendButton, hasSendButton: true, marker,
@@ -5550,6 +5549,9 @@ async function runTurnCore(
       // Recapture S only while no Send was attempted; later retries keep the first SEND SHA.
       const freshSendHeadFailure = sendCount === 0 && !sendAttempted ? await capturePrAuthorSendHead() : null;
       if (freshSendHeadFailure) return freshSendHeadFailure;
+      // Baseline = the final refreshed pre-SEND head (or Issue digest), at the actual dispatch boundary.
+      await recordGithubEffectBaseline();
+      assertFreshOwner();
       try {
         delivery = await sendAction();
       } catch (error) {
@@ -5696,7 +5698,6 @@ async function runTurnCore(
           };
         }
       }
-      await recordGithubEffectBaseline();
       let recoveryReclickArmed = false;
       const dispatchExisting = async (clickWaitMs: number) =>
         await dispatchStateLightSendAndObserveDelivery({
@@ -5742,6 +5743,7 @@ async function runTurnCore(
       // Recapture S only while no Send was attempted; later retries keep the first SEND SHA.
       const existingSendHeadFailure = sendCount === 0 && !sendAttempted ? await capturePrAuthorSendHead() : null;
       if (existingSendHeadFailure) return existingSendHeadFailure;
+      await recordGithubEffectBaseline();
       let delivery = await dispatchExisting(sendWaitMs);
       let repeated = false;
       if (hasSendButton && delivery.sendCount === 0 && delivery.witness === 'unproven'

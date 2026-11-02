@@ -278,9 +278,15 @@ current-assignment reads corroborate that original Task+Dispatch as currently
 approved, (iii) the original launcher is positively dead (same-namespace exit
 or a distinct replacement startticks), and (iv) no terminal exists. It never
 signals or displaces a live launcher: a live, unknown or past-deadline launcher
-is reported nonterminal with an owner-reconciliation `nextStep`. Copied flag
-strings, a historical receipt, a path or a PID alone are not current authority;
-Task and Dispatch freshness stays upstream. Without that authority, continue
+is reported nonterminal with an owner-reconciliation `nextStep`. Current
+authority means: exactly one selected-store assignment for that Task+Dispatch,
+a native `worker-show` Dispatch that is `dispatched` and `live`, and an invoking
+terminal equal to that Dispatch's worker terminal (and to the original launching
+terminal when recorded). It is re-verified inside the assignment fence at the
+publication itself; prepared-only cancel uses the same check. A Task-only wait
+stays diagnostic. An explicit-path wait publishes only when the original locator
+binds exactly those paths. Copied flag strings, a historical receipt, a path or
+a PID alone are not current authority. Without that authority, continue
 with the original invocation's Page and exact GitHub reconciliation; do not
 infer success or retry. Wait reads the original keyed locator, handoff and
 terminal beneath the same resolved durable root, including from a different cwd:

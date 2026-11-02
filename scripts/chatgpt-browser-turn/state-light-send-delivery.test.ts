@@ -5,7 +5,10 @@ import { EventEmitter } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import {
+  WORKER_ASSIGNMENT_SCHEMA, WORKER_ASSIGNMENT_STORE_SCHEMA, resolveWorkerAssignmentStorePath, workerAssignmentKey,
+} from '../lib/worker-assignment-store.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -3884,6 +3887,23 @@ describe('Issue #2718 PR-author PRE-SEND gate in the production turn', () => {
     expect(reads).toBeGreaterThanOrEqual(4);
   });
 
+  it('records the GitHub effect baseline from the final pre-SEND head refresh, not the earlier gate read', async () => {
+    fixture.launch('inv-baseline', { admit: false });
+    const receiptPath = join(fixture.root, 'term', 'inv-baseline.receipt.json');
+    vi.stubEnv('OPK_FM_LONG_CHILD_HANDOFF_RECEIPT', receiptPath);
+    const head = (sha: string): PrAuthorHeadObservation => ({
+      state: 'open', sha, headRepo: 'acme/widgets', headRef: 'feature', baseRepo: 'acme/widgets',
+    });
+    let reads = 0;
+    // The gate read sees A; the final dispatch-boundary refresh sees B; later polls keep B.
+    const readHead = vi.fn(async () => { reads += 1; return head(reads === 1 ? 'a'.repeat(40) : 'b'.repeat(40)); });
+    const { press, result } = await runBoundTurn('inv-baseline', readHead, true);
+    expect(result.send_count).toBe(1);
+    expect(press).toHaveBeenCalledTimes(1);
+    const receipt = JSON.parse(readFileSync(receiptPath, 'utf8')) as { github_effect_baseline?: { head_sha?: string } };
+    expect(receipt.github_effect_baseline).toMatchObject({ head_sha: 'b'.repeat(40) });
+  });
+
   it('refuses conversation_busy/pr_author_occupied naming the holder, with zero composer mutation or SEND', async () => {
     fixture.launch('inv-holder');
     fixture.claim('inv-holder');
@@ -3925,8 +3945,28 @@ describe('Issue #2718 PR-author PRE-SEND gate in the production turn', () => {
 });
 
 describe('Issue #2750 AC7 prepared-phase exact-owner cancellation race', () => {
-  const OWNER = { task: 'task-2750', dispatch: 'dispatch-2750' };
+  const OWNER = { task: 'task-2750', dispatch: 'dispatch-2750', handle: 'term-owner-2750' };
   let root: string;
+  let ownerEnv: NodeJS.ProcessEnv;
+  /** The selected assignment store currently binds `taskId` to `dispatchId`. */
+  function bindAssignment(taskId: string, dispatchId: string): void {
+    const file = resolveWorkerAssignmentStorePath('orchestrator-pack', ownerEnv);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify({
+      schema: WORKER_ASSIGNMENT_STORE_SCHEMA, revision: 1,
+      assignments: { [workerAssignmentKey(taskId, dispatchId)]: {
+        schema: WORKER_ASSIGNMENT_SCHEMA, projectId: 'orchestrator-pack', repository: 'acme/widgets', issueNumber: 2750,
+        taskId, assignmentId: 'assignment-2750', generation: 1, kind: 'local', provider: 'orca',
+        bindingKey: dispatchId, role: 'worker', createdAtUtc: '2026-11-02T00:00:00.000Z',
+      } },
+    }) + '\n');
+  }
+  const nativeDispatch = (overrides: { status?: string; observation?: string; handle?: string } = {}) => ({
+    dispatch: { id: OWNER.dispatch, taskId: OWNER.task, status: overrides.status ?? 'dispatched' },
+    observation: { status: overrides.observation ?? 'live', exactWorker: true },
+    terminal: { handle: overrides.handle ?? OWNER.handle },
+  });
+  let ownerDeps: { env: NodeJS.ProcessEnv; dispatchWitness: (id: string) => Promise<Record<string, unknown> | undefined>; invokingTerminalHandle?: string };
   let profile: string;
   const cdp = 'http://127.0.0.1:9222';
   let profileKey: string;
@@ -3939,6 +3979,9 @@ describe('Issue #2750 AC7 prepared-phase exact-owner cancellation race', () => {
     vi.stubEnv('OPK_FM_LONG_CHILD_TEST_GATE', 'fixture-root-v1');
     vi.stubEnv('OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT', join(root, 'term'));
     mkdirSync(join(root, 'term', 'browser-gpt-receipts'), { recursive: true, mode: 0o700 });
+    ownerEnv = { HOME: root, OPK_BASE_DIR: join(root, 'opk-base'), OPK_PROJECT_ID: 'orchestrator-pack' };
+    bindAssignment(OWNER.task, OWNER.dispatch);
+    ownerDeps = { env: ownerEnv, dispatchWitness: async () => nativeDispatch(), invokingTerminalHandle: OWNER.handle };
   });
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -3982,7 +4025,7 @@ describe('Issue #2750 AC7 prepared-phase exact-owner cancellation race', () => {
     const writes: string[] = [];
     process.stdout.write = ((chunk: unknown) => { writes.push(String(chunk)); return true; }) as typeof process.stdout.write;
     try {
-      const code = await runStateLightCancellation(argv);
+      const code = await runStateLightCancellation(argv, { preparedOwner: ownerDeps });
       return { code, out: JSON.parse(writes.at(-1) ?? '{}') as Record<string, unknown> };
     } finally {
       process.stdout.write = previous;
@@ -4073,6 +4116,22 @@ describe('Issue #2750 AC7 prepared-phase exact-owner cancellation race', () => {
     expect(code).toBe(13);
     expect(out).toMatchObject({ state: 'driver_error', cause: 'cancel_locator_unverified' });
     expect(phase('inv-foreign').phase).toBe('prepared');
+  });
+
+  it.each([
+    ['Dispatch replaced in the selected store', () => { bindAssignment(OWNER.task, 'dispatch-replacement'); }, 'task_dispatch_replaced'],
+    ['stale store row: native Dispatch exited', () => { ownerDeps.dispatchWitness = async () => nativeDispatch({ observation: 'exited' }); }, 'native_dispatch_not_live'],
+    ['stale store row: native Dispatch settled', () => { ownerDeps.dispatchWitness = async () => nativeDispatch({ status: 'completed' }); }, 'native_dispatch_not_live'],
+    ['native Dispatch unreadable', () => { ownerDeps.dispatchWitness = async () => undefined; }, 'native_dispatch_unreadable'],
+    ['copied archived pair from a foreign terminal', () => { ownerDeps.invokingTerminalHandle = 'term-foreign'; }, 'invoking_terminal_not_dispatch_worker'],
+  ])('a matching archived receipt without current owner authority (%s) cannot cancel', async (_name, arrange, evidence) => {
+    seed('inv-stale-owner');
+    arrange();
+    const { code, out } = await cancel(preparedArgv('inv-stale-owner'));
+    expect(code).toBe(13);
+    expect(out).toMatchObject({ state: 'driver_error', cause: 'cancel_owner_not_current', owner_evidence: evidence });
+    expect(String(out.next_action)).toContain('do not resend');
+    expect(phase('inv-stale-owner').phase).toBe('prepared');
   });
 
   it('a different profile/CDP derives a foreign profile key and cannot cancel', async () => {

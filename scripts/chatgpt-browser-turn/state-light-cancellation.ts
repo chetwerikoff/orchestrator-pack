@@ -63,6 +63,12 @@ export interface BrowserTurnCancellationDependencies {
     readonly incomplete: boolean;
   }>;
   readonly stop?: (page: any) => Promise<StopOwnedGenerationOutcome>;
+  /** Prepared-only owner authority inputs (tests inject; production reads the store, Orca and env). */
+  readonly preparedOwner?: {
+    readonly env?: NodeJS.ProcessEnv;
+    readonly dispatchWitness?: (dispatchId: string) => Promise<Record<string, unknown> | undefined>;
+    readonly invokingTerminalHandle?: string;
+  };
 }
 
 export function isSupportedChatGptConversationUrl(value: string): boolean {
@@ -286,7 +292,7 @@ export async function runStateLightCancellation(
   argv: readonly string[],
   dependencies: BrowserTurnCancellationDependencies = {},
 ): Promise<number> {
-  if (argv.includes('--prepared-only')) return await runPreparedOnlyCancellation(argv);
+  if (argv.includes('--prepared-only')) return await runPreparedOnlyCancellation(argv, dependencies);
   let receiptPath: string | undefined;
   let cdp = '';
   for (let index = 0; index < argv.length; index += 1) {
@@ -338,6 +344,10 @@ const PREPARED_CANCEL_ARGUMENTS_NEXT_STEP =
 const PREPARED_CANCEL_RACE_NEXT_STEP =
   'The turn may already be dispatching or sent: run the original owner wait / reconcile the exact '
   + 'invocation; do not resend.';
+const PREPARED_CANCEL_OWNER_NEXT_STEP =
+  'Cancellation was not applied: run it from the original Task+Dispatch worker terminal while that '
+  + 'Dispatch is current and live (worker-show / current assignment); otherwise run the original owner '
+  + 'wait; do not resend.';
 const PREPARED_CANCEL_UNVERIFIED_NEXT_STEP =
   'Cancellation was not applied. Verify the exact original invocation id, Run/attempt identity and '
   + 'current owner Task/Dispatch, then retry; otherwise run the original owner wait; do not resend.';
@@ -355,7 +365,17 @@ function preparedCancelFailure(cause: string, nextAction: string, extra: Record<
  * prepared -> not_sent mutation. No CDP connect, Stop or Send is ever issued;
  * exit 0 only for a confirmed cancel-before-dispatch winner (or its repeat).
  */
-async function runPreparedOnlyCancellation(argv: readonly string[]): Promise<number> {
+type PreparedOwnerEffect = <T>(input: {
+  readonly taskId: string; readonly dispatchId: string; readonly originalTerminalHandle?: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly dispatchWitness?: (dispatchId: string) => Promise<Record<string, unknown> | undefined>;
+  readonly invokingTerminalHandle?: string;
+}, action: () => T | Promise<T>) => Promise<{ readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly evidence: string; readonly actionEntered: boolean }>;
+
+async function runPreparedOnlyCancellation(
+  argv: readonly string[], dependencies: BrowserTurnCancellationDependencies = {},
+): Promise<number> {
   const values = new Map<string, string>();
   const valueFlags = new Set([
     '--invocation-id', '--run-identity', '--attempt-identity', '--owner-task-id',
@@ -381,16 +401,21 @@ async function runPreparedOnlyCancellation(argv: readonly string[]): Promise<num
   const identity = { invocation_id: invocationId, owner_task_id: ownerTaskId, owner_dispatch_id: ownerDispatchId };
 
   let profileKey: string;
+  let withVerifiedOwnerEffect: PreparedOwnerEffect;
+  let originalTerminalHandle: string | undefined;
   try {
     // Locator-only read of the launcher module: this cancel path never reaches the launcher's
     // browser probes, so it is loaded by resolved URL rather than as a Browser-turn graph edge.
-    const { readInvocationReceiptLocator } = await import(PREPARED_CANCEL_LOCATOR_MODULE) as {
+    const launcher = await import(PREPARED_CANCEL_LOCATOR_MODULE) as {
       readonly readInvocationReceiptLocator: (input: {
         readonly invocationId: string; readonly runIdentity: string; readonly attemptIdentity: string;
         readonly ownerTaskId: string; readonly ownerDispatchId: string;
       }) => { readonly receipt: { readonly invocation_id?: string; readonly owner_task_id?: string;
-        readonly owner_dispatch_id?: string } };
+        readonly owner_dispatch_id?: string; readonly launching_terminal_handle?: string } };
+      readonly withVerifiedOwnerEffect: PreparedOwnerEffect;
     };
+    const { readInvocationReceiptLocator } = launcher;
+    withVerifiedOwnerEffect = launcher.withVerifiedOwnerEffect;
     const bound = readInvocationReceiptLocator({
       invocationId,
       runIdentity: values.get('--run-identity')!,
@@ -403,6 +428,7 @@ async function runPreparedOnlyCancellation(argv: readonly string[]): Promise<num
       || bound.receipt.owner_dispatch_id !== ownerDispatchId) {
       return preparedCancelFailure('cancel_owner_mismatch', PREPARED_CANCEL_UNVERIFIED_NEXT_STEP, identity);
     }
+    originalTerminalHandle = bound.receipt.launching_terminal_handle;
     profileKey = configuredProfileKey(values.get('--profile')!, values.get('--cdp')!);
   } catch {
     return preparedCancelFailure('cancel_locator_unverified', PREPARED_CANCEL_UNVERIFIED_NEXT_STEP, identity);
@@ -416,31 +442,51 @@ async function runPreparedOnlyCancellation(argv: readonly string[]): Promise<num
     });
   }
 
+  // Historical locator/receipt equality only correlates; the mutation itself runs under positive
+  // current Task+Dispatch authority (store + live native Dispatch + invoking worker terminal), fenced.
   let alreadyCancelled = false;
-  try {
-    mutateStateLightTurnObservation(profileKey, invocationId, (current) => {
-      if (current.phase === 'not_sent'
-        && current.transition_reason === 'cancelled_before_dispatch'
-        && (current.send_count ?? 0) === 0) {
-        alreadyCancelled = true;
-        return current;
-      }
-      if (current.phase !== 'prepared'
-        || (current.send_count ?? 0) !== 0
-        || current.send_witness !== 'none') {
-        throw new Error('cancel_not_prepared');
-      }
-      return {
-        ...current,
-        phase: 'not_sent',
-        send_count: 0,
-        send_witness: 'numeric_send_count',
-        transitioned_at: new Date().toISOString(),
-        transition_reason: 'cancelled_before_dispatch',
-      };
+  let mutationError: unknown;
+  const owner = dependencies.preparedOwner ?? {};
+  const fenced = await withVerifiedOwnerEffect({
+    taskId: ownerTaskId, dispatchId: ownerDispatchId,
+    ...(originalTerminalHandle ? { originalTerminalHandle } : {}),
+    ...(owner.env ? { env: owner.env } : {}),
+    ...(owner.dispatchWitness ? { dispatchWitness: owner.dispatchWitness } : {}),
+    ...(owner.invokingTerminalHandle ? { invokingTerminalHandle: owner.invokingTerminalHandle } : {}),
+  }, () => {
+    try {
+      mutateStateLightTurnObservation(profileKey, invocationId, (current) => {
+        if (current.phase === 'not_sent'
+          && current.transition_reason === 'cancelled_before_dispatch'
+          && (current.send_count ?? 0) === 0) {
+          alreadyCancelled = true;
+          return current;
+        }
+        if (current.phase !== 'prepared'
+          || (current.send_count ?? 0) !== 0
+          || current.send_witness !== 'none') {
+          throw new Error('cancel_not_prepared');
+        }
+        return {
+          ...current,
+          phase: 'not_sent',
+          send_count: 0,
+          send_witness: 'numeric_send_count',
+          transitioned_at: new Date().toISOString(),
+          transition_reason: 'cancelled_before_dispatch',
+        };
+      });
+    } catch (error) {
+      mutationError = error;
+    }
+  });
+  if (!fenced.ok && !fenced.actionEntered) {
+    return preparedCancelFailure('cancel_owner_not_current', PREPARED_CANCEL_OWNER_NEXT_STEP, {
+      ...identity, configured_profile_key: profileKey, owner_evidence: fenced.evidence,
     });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+  }
+  if (!fenced.ok || mutationError !== undefined) {
+    const message = mutationError instanceof Error ? mutationError.message : String(mutationError ?? '');
     const cause = message === 'cancel_not_prepared' || message === 'observation_mutation_busy'
       ? message : 'cancel_mutation_unconfirmed';
     return preparedCancelFailure(cause, PREPARED_CANCEL_RACE_NEXT_STEP, {

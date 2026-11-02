@@ -42,7 +42,10 @@ import { observationRecordPath, readStateLightTurnObservation, type StateLightTu
 import { loadChromium, normalizeConversationUrl } from './chatgpt-browser-turn/ui-adapter.ts';
 import { releaseCdpBrowser } from './chatgpt-browser-turn/browser-session.ts';
 import { recoveryMarkerCardinality } from './chatgpt-browser-turn/state-light-turn-recovery.ts';
-import { listCurrentWorkerAssignmentRecords, resolveWorkerAssignmentStorePath } from './lib/worker-assignment-store.ts';
+import {
+  listCurrentWorkerAssignmentRecords, resolveWorkerAssignmentStorePath, withCurrentWorkerAssignmentFence,
+  type WorkerAssignmentRecord,
+} from './lib/worker-assignment-store.ts';
 
 export const COMPLETION_MODE = 'browser-turn-result-v1' as const;
 export const HANDOFF_SCHEMA = 'flow-manager-long-running-child-handoff/v1' as const;
@@ -1638,6 +1641,104 @@ export function observeOwnerCurrency(
   return { state: 'unverified', evidence: 'task_not_in_selected_store' };
 }
 
+/** Read-only native Orca Dispatch witness (`orca orchestration worker-show --dispatch <id> --json` result). */
+export type OwnerDispatchWitness = (dispatchId: string) => Promise<Record<string, unknown> | undefined>;
+
+export async function defaultOwnerDispatchWitness(dispatchId: string): Promise<Record<string, unknown> | undefined> {
+  try {
+    const result = await runProcess({
+      command: 'orca', args: ['orchestration', 'worker-show', '--dispatch', dispatchId, '--json'],
+      timeoutMs: 15_000, inheritParentEnv: true,
+    });
+    if (!result.ok) return undefined;
+    const receipt = JSON.parse(result.stdout) as { ok?: unknown; result?: unknown };
+    return receipt.ok === true && receipt.result && typeof receipt.result === 'object'
+      ? receipt.result as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export interface OwnerAuthorityInput {
+  readonly taskId: string;
+  readonly dispatchId: string;
+  /** The original receipt's launching terminal, when it recorded one. */
+  readonly originalTerminalHandle?: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly dispatchWitness?: OwnerDispatchWitness;
+  /** The invoking process's own Orca terminal; defaults to ORCA_TERMINAL_HANDLE. */
+  readonly invokingTerminalHandle?: string;
+}
+
+export type OwnerAuthority =
+  | { readonly ok: true; readonly evidence: string; readonly file: string; readonly record: WorkerAssignmentRecord }
+  | { readonly ok: false; readonly evidence: string };
+
+/**
+ * Effectful owner authority: the selected assignment store holds exactly this Task+Dispatch, the
+ * native Dispatch is live and dispatched for that Task, and the invoking process is that Dispatch's
+ * own worker terminal. Historical receipt strings or a lingering store row alone never qualify.
+ */
+export async function verifyCurrentInvokingOwner(input: OwnerAuthorityInput): Promise<OwnerAuthority> {
+  const env = input.env ?? process.env;
+  const projectId = env.OPK_PROJECT_ID?.trim() || 'orchestrator-pack';
+  let file: string;
+  try { file = resolveWorkerAssignmentStorePath(projectId, env); }
+  catch { return { ok: false, evidence: 'assignment_store_path_unresolved' }; }
+  if (!existsSync(file)) return { ok: false, evidence: 'assignment_store_absent' };
+  const records = listCurrentWorkerAssignmentRecords(file);
+  if (!records) return { ok: false, evidence: 'assignment_store_unreadable' };
+  const matches = records.filter((record) => record.taskId === input.taskId && record.bindingKey === input.dispatchId);
+  if (matches.length !== 1) {
+    return { ok: false, evidence: records.some((record) => record.taskId === input.taskId)
+      ? 'task_dispatch_replaced' : 'task_not_in_selected_store' };
+  }
+  const invoking = input.invokingTerminalHandle?.trim() || launchingTerminalHandle(env);
+  if (!invoking) return { ok: false, evidence: 'invoking_terminal_unknown' };
+  if (input.originalTerminalHandle && input.originalTerminalHandle !== invoking) {
+    return { ok: false, evidence: 'invoking_terminal_not_original_launcher_terminal' };
+  }
+  let witness: Record<string, unknown> | undefined;
+  try { witness = await (input.dispatchWitness ?? defaultOwnerDispatchWitness)(input.dispatchId); }
+  catch { witness = undefined; }
+  const dispatch = witness?.dispatch as { id?: unknown; taskId?: unknown; status?: unknown } | undefined;
+  const observation = witness?.observation as { status?: unknown; exactWorker?: unknown } | undefined;
+  const terminal = witness?.terminal as { handle?: unknown } | undefined;
+  if (!witness) return { ok: false, evidence: 'native_dispatch_unreadable' };
+  if (dispatch?.id !== input.dispatchId || dispatch.taskId !== input.taskId) {
+    return { ok: false, evidence: 'native_dispatch_foreign' };
+  }
+  if (dispatch.status !== 'dispatched' || observation?.status !== 'live' || observation.exactWorker !== true) {
+    return { ok: false, evidence: 'native_dispatch_not_live' };
+  }
+  if (terminal?.handle !== invoking) return { ok: false, evidence: 'invoking_terminal_not_dispatch_worker' };
+  return { ok: true, evidence: 'assignment_and_native_dispatch_current', file, record: matches[0]! };
+}
+
+const OWNER_FENCE_ATTEMPTS = 40;
+const OWNER_FENCE_RETRY_MS = 25;
+
+/**
+ * Re-verify owner authority immediately before one bounded effect, then run it inside the existing
+ * assignment fence so a reassignment either wins first (effect refused) or waits for it.
+ */
+export async function withVerifiedOwnerEffect<T>(
+  input: OwnerAuthorityInput, action: () => T | Promise<T>,
+): Promise<{ readonly ok: true; readonly value: T } | { readonly ok: false; readonly evidence: string; readonly actionEntered: boolean }> {
+  const authority = await verifyCurrentInvokingOwner(input);
+  if (!authority.ok) return { ok: false, evidence: authority.evidence, actionEntered: false };
+  // The fence never waits on its lock; a short bounded retry lets concurrent same-owner effects
+  // serialize (the loser then observes the winner) instead of failing as busy.
+  for (let attempt = 1; ; attempt += 1) {
+    const fenced = await withCurrentWorkerAssignmentFence(authority.file, authority.record, action);
+    if (fenced.ok) return { ok: true, value: fenced.value };
+    if (fenced.reason !== 'assignment_store_busy' || fenced.actionEntered || attempt >= OWNER_FENCE_ATTEMPTS) {
+      return { ok: false, evidence: fenced.reason, actionEntered: fenced.actionEntered };
+    }
+    await delay(OWNER_FENCE_RETRY_MS);
+  }
+}
+
 type PredecessorDisposition = 'none' | 'settled_noop' | 'retire_owned_target';
 
 export type LaunchPreSpawnValidation =
@@ -2329,6 +2430,8 @@ export interface OwnerWaitDependencies {
   readonly githubReaders?: GithubEffectReaders;
   readonly pageReader?: OwnerWaitPageReader;
   readonly ownerEnv?: NodeJS.ProcessEnv;
+  readonly dispatchWitness?: OwnerDispatchWitness;
+  readonly invokingTerminalHandle?: string;
 }
 
 type OwnerWaitOutcome =
@@ -2359,11 +2462,17 @@ async function ownerWaitReap(input: {
   if (!receipt.owner_task_id?.trim() || !receipt.owner_dispatch_id?.trim() || !receipt.invocation_id?.trim()) {
     return none('original_receipt_not_managed', OWNER_RECONCILE_STEP);
   }
-  const owner = observeOwnerCurrency(input.ownerTaskId, input.ownerDispatchId, input.deps.ownerEnv ?? process.env);
-  if (owner.state !== 'current') {
-    return none(`owner_not_current:${owner.evidence}`,
-      'run this wait from the currently approved original Task+Dispatch owner (worker-show / current assignment), or reconcile the exact invocation on GitHub');
-  }
+  const authorityInput: OwnerAuthorityInput = {
+    taskId: input.ownerTaskId, dispatchId: input.ownerDispatchId,
+    ...(receipt.launching_terminal_handle ? { originalTerminalHandle: receipt.launching_terminal_handle } : {}),
+    ...(input.deps.ownerEnv ? { env: input.deps.ownerEnv } : {}),
+    ...(input.deps.dispatchWitness ? { dispatchWitness: input.deps.dispatchWitness } : {}),
+    ...(input.deps.invokingTerminalHandle ? { invokingTerminalHandle: input.deps.invokingTerminalHandle } : {}),
+  };
+  const notOwner = (evidence: string) => none(`owner_not_current:${evidence}`,
+    'run this wait from the original Task+Dispatch worker terminal while that Dispatch is current and live (worker-show / current assignment), or reconcile the exact invocation on GitHub');
+  const owner = await verifyCurrentInvokingOwner(authorityInput);
+  if (!owner.ok) return notOwner(owner.evidence);
   const launcher = observeOriginalLauncher(receipt, input.deps.launcherProbe);
   if (launcher.state !== 'dead') {
     return none(`launcher_${launcher.state}:${launcher.evidence}`, launcher.state === 'alive'
@@ -2446,19 +2555,48 @@ async function ownerWaitReap(input: {
       github_effect: github,
     }),
   };
+  // Owner authority is re-proven after the awaited Page/GitHub reads, and the exclusive create runs
+  // inside the assignment fence: a Dispatch replaced meanwhile publishes nothing.
+  let fenced: Awaited<ReturnType<typeof withVerifiedOwnerEffect<'created'>>>;
   try {
-    atomicCreateJson(input.terminalEnvelopePath, envelope as unknown as Record<string, unknown>, 'envelope');
-    return { effect: 'published', envelope };
-  } catch {
-    const winner = readTerminalEnvelope(input.terminalEnvelopePath, {
-      runIdentity: input.runIdentity, attemptIdentity: input.attemptIdentity,
+    fenced = await withVerifiedOwnerEffect(authorityInput, () => {
+      atomicCreateJson(input.terminalEnvelopePath, envelope as unknown as Record<string, unknown>, 'envelope');
+      return 'created' as const;
     });
-    if (winner && winner.launcher_started_at === receipt.launcher_started_at
-      && winner.handoff_committed_at === receipt.handoff_committed_at
-      && (winner.observed_invocation_id === undefined || winner.observed_invocation_id === invocationId)) {
-      return { effect: 'occupied_by_winner', envelope: winner };
-    }
-    return none('terminal_publication_uncertain', 'an unreadable or foreign terminal occupies the original path: reconcile the exact invocation manually; never republish');
+  } catch {
+    fenced = { ok: false, evidence: 'terminal_create_failed', actionEntered: true };
+  }
+  if (fenced.ok) return { effect: 'published', envelope };
+  if (!fenced.actionEntered) return notOwner(fenced.evidence);
+  const winner = readTerminalEnvelope(input.terminalEnvelopePath, {
+    runIdentity: input.runIdentity, attemptIdentity: input.attemptIdentity,
+  });
+  if (winner && winner.launcher_started_at === receipt.launcher_started_at
+    && winner.handoff_committed_at === receipt.handoff_committed_at
+    && (winner.observed_invocation_id === undefined || winner.observed_invocation_id === invocationId)) {
+    return { effect: 'occupied_by_winner', envelope: winner };
+  }
+  return none('terminal_publication_uncertain', 'an unreadable or foreign terminal occupies the original path: reconcile the exact invocation manually; never republish');
+}
+
+/** Explicit owner-wait paths may reach the reaper only when the original keyed locator names exactly them. */
+function explicitPathsBoundToLocator(
+  options: { readonly invocationId?: string; readonly runIdentity: string; readonly attemptIdentity: string;
+    readonly ownerTaskId?: string; readonly ownerDispatchId?: string; readonly terminalEnvelopeRoot?: string },
+  handoffReceiptPath: string, terminalEnvelopePath: string,
+): boolean {
+  if (!options.invocationId) return false;
+  try {
+    const bound = readInvocationReceiptLocator({
+      invocationId: options.invocationId, runIdentity: options.runIdentity, attemptIdentity: options.attemptIdentity,
+      ...(options.ownerTaskId ? { ownerTaskId: options.ownerTaskId } : {}),
+      ...(options.ownerDispatchId ? { ownerDispatchId: options.ownerDispatchId } : {}),
+      ...(options.terminalEnvelopeRoot ? { terminalEnvelopeRoot: options.terminalEnvelopeRoot } : {}),
+    });
+    return resolve(bound.locator.handoff_receipt_path) === resolve(handoffReceiptPath)
+      && resolve(bound.locator.terminal_envelope_path) === resolve(terminalEnvelopePath);
+  } catch {
+    return false;
   }
 }
 
@@ -2585,6 +2723,12 @@ export async function runWait(options: {
     ownerWait = {
       effect: 'none', reason: 'owner_dispatch_required',
       nextStep: 'rerun this wait with both the original --owner-task-id and --owner-dispatch-id; a Task-only wait is diagnostic-only',
+    };
+  } else if (!envelope && taskBound && handoff && initialReceipt && !indexed
+    && !explicitPathsBoundToLocator(options, handoffReceiptPath, terminalEnvelopePath)) {
+    ownerWait = {
+      effect: 'none', reason: 'explicit_paths_not_bound_to_locator',
+      nextStep: 'rerun the owner wait by --invocation-id (indexed original locator); explicit paths whose original locator does not bind the same receipt and terminal stay diagnostic-only',
     };
   } else if (!envelope && taskBound && handoff && initialReceipt) {
     ownerWait = await ownerWaitReap({
