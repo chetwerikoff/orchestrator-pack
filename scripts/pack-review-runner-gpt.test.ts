@@ -1824,7 +1824,7 @@ describe('GPT plural source round (Issue #1276)', () => {
         'source-02': [{ stdout: successfulCleanReviewPayload('inv-plural-source-02') }],
         'source-03': [{ stdout: successfulCleanReviewPayload('inv-plural-source-03') }],
       },
-      fixtureIssueTitle: "[T1] Existing source cardinality", fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
+      fixtureIssueTitle: "[T3] Existing three-source cardinality", fixtureIssueBody: '```complexity-tier\ntier: T3\n```',
       fixtureIssueNumber: 1276,
       claimMode: 'preacquired',
     });
@@ -1854,7 +1854,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixturePostReviewHeadSha: HEAD_A,
       fixtureReviewStdout: cleanTerminalPayload(),
-      fixtureIssueTitle: "[T1] Source confirmation", fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
+      fixtureIssueTitle: "[T3] Three-source confirmation", fixtureIssueBody: '```complexity-tier\ntier: T3\n```',
       fixtureIssueNumber: 1276,
       claimMode: 'preacquired',
       ...overrides,
