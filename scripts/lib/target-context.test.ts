@@ -9,6 +9,7 @@ import { resolvePackWorkerReportRequest, type ReportDeps } from '../pack-worker-
 import { resolveWakeSupervisorStateRoot } from '../pr2-foundation/wake-supervisor-state-root.ts';
 import { publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath } from './worker-assignment-store.ts';
 import { ensureProjectStateBinding } from './project-state-binding.ts';
+import { isCommandSafe } from './reverify-command-resolution.ts';
 import { readWorkerSmokeReceipt } from './worker-smoke-receipt.ts';
 import {
   TargetContextError,
@@ -144,6 +145,33 @@ describe('target context', () => {
       .toBe('card-missing');
   });
 
+  it('admits only the exact validated selected-card boundary under the target primary root', () => {
+    const target = fixture({ projectId: 'synthetic-boundary', repository: 'example/synthetic-boundary' });
+    const command = 'node scripts/verify-boundary.mjs';
+    mkdirSync(join(target.primaryRoot, 'scripts'), { recursive: true });
+    writeFileSync(join(target.primaryRoot, 'scripts', 'verify-boundary.mjs'), 'console.log("verified")\n');
+    writeFileSync(join(target.primaryRoot, 'scripts', 'unlisted.mjs'), 'console.log("unlisted")\n');
+    writeFileSync(target.cardPath, JSON.stringify({
+      ...target.card,
+      contractEvidenceProducer: { name: 'target-status', boundaryCommand: command },
+    }), 'utf8');
+    const selected = resolveTargetContext({ projectId: 'synthetic-boundary', env: target.env });
+    const other = fixture({ projectId: 'other-boundary', repository: 'example/other-boundary' });
+    const unrelated = resolveTargetContext({ projectId: 'other-boundary', env: other.env });
+
+    expect(isCommandSafe(command, target.primaryRoot)).toBe(false);
+    expect(isCommandSafe(command, target.primaryRoot, selected)).toBe(true);
+    expect(isCommandSafe(command, target.primaryRoot, unrelated)).toBe(false);
+    for (const untrusted of [
+      'node scripts/unlisted.mjs',
+      'node scripts/verify-boundary.mjs other-argument',
+      'node scripts/verify-boundary.mjs; echo unsafe',
+      'node ../verify-boundary.mjs',
+      'sh -c node scripts/verify-boundary.mjs',
+    ]) {
+      expect(isCommandSafe(untrusted, target.primaryRoot, selected), untrusted).toBe(false);
+    }
+  });
   it('normalizes requiredCi workflow/job selectors, rejects ambiguous grammar and normalized duplicates, and exposes check read-back', async () => {
     const valid = fixture();
     writeFileSync(valid.cardPath, JSON.stringify({

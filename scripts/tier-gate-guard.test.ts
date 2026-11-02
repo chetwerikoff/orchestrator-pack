@@ -11,6 +11,7 @@ import { runProcessSync } from './kernel/subprocess.ts';
 import { checkContractEvidence } from './contract-evidence-validator.mjs';
 import { runContractEvidenceReverify } from './lib/contract-evidence-reverify.ts';
 import { isPrHeadNetworkSandboxAvailable } from './lib/reverify-sandbox.ts';
+import { captureBoundIssueSnapshot } from './lib/reverify-bound-issue-snapshot.ts';
 
 const valid = `## Prerequisite
 None.
@@ -163,7 +164,7 @@ describe('current substantive Issue floor', () => {
     const cardPath = join(env.XDG_CONFIG_HOME, 'orchestrator-pack', 'projects', projectId + '.json');
     const producerDir = 'tests/fixtures/contract-evidence-reverify/producers';
     const proofCommand = 'node ' + producerDir + '/genuine-new-proof.mjs';
-    const boundaryCommand = 'node ' + producerDir + '/emit-reverify-status.mjs';
+    const boundaryCommand = 'node scripts/verify-boundary.mjs';
     const runGit = (...args: string[]) => {
       const output = runProcessSync({ command: 'git', args, cwd: targetRoot, inheritParentEnv: true });
       if (!output.ok) throw new Error('synthetic git setup failed: ' + String(output.stderr || output.error));
@@ -171,9 +172,11 @@ describe('current substantive Issue floor', () => {
     try {
       mkdirSync(targetRoot, { recursive: true });
       mkdirSync(join(targetRoot, producerDir), { recursive: true });
+      mkdirSync(join(targetRoot, 'scripts'), { recursive: true });
       for (const filename of ['genuine-new-proof.mjs', 'emit-reverify-status.mjs', 'echo-expected.mjs', 'structured-value.mjs']) {
         copyFileSync(join(packRoot, producerDir, filename), join(targetRoot, producerDir, filename));
       }
+      copyFileSync(join(packRoot, producerDir, 'emit-reverify-status.mjs'), join(targetRoot, 'scripts', 'verify-boundary.mjs'));
       const manifestPath = 'tests/external-output-references/capture-manifest.json';
       mkdirSync(dirname(join(targetRoot, manifestPath)), { recursive: true });
       writeFileSync(join(targetRoot, manifestPath), JSON.stringify({
@@ -239,6 +242,37 @@ describe('current substantive Issue floor', () => {
         expect(verified.rows[0]).toMatchObject({ status: 'unverified', reason: 'producer-unreachable' });
       }
 
+      // Exercise the production CLI selector independently of OPK_PROJECT_ID; a library-only call misses this handoff.
+      const snapshotStore = join(temp, 'bound-snapshots');
+      const prHeadSha = 'a'.repeat(40);
+      const captured = captureBoundIssueSnapshot({
+        projectId, prNumber: 2769, prHeadSha, issueNumber: 2751,
+        issueBody: targetIssue, storeDirOverride: snapshotStore,
+      });
+      const changedPathsFile = join(temp, 'changed-paths.txt');
+      writeFileSync(changedPathsFile, '', 'utf8');
+      const cliEnv: NodeJS.ProcessEnv = { ...env, OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR: snapshotStore };
+      delete cliEnv.OPK_PROJECT_ID;
+      const cliReverify = runProcessSync({
+        command: process.execPath,
+        args: ['--experimental-strip-types', join(packRoot, 'scripts', 'invoke-contract-evidence-reverify.ts'),
+          '--repo-root', packRoot, '--trusted-base-root', targetRoot, '--review-target-root', targetRoot,
+          '--manifest-path', manifestPath, '--snapshot-file', captured.snapshotPath,
+          '--bound-snapshot-pr-number', '2769', '--bound-snapshot-issue-number', '2751',
+          '--project-id', projectId, '--pr-head-sha', prHeadSha,
+          '--changed-paths-file', changedPathsFile],
+        env: cliEnv, inheritParentEnv: false,
+      });
+      expect(cliReverify.exitCode, cliReverify.stderr).toBe(0);
+      const cliResult = JSON.parse(cliReverify.stdout);
+      expect(cliResult).toMatchObject({ candidateOnly: true, neverBlocks: true, runOutcome: 'rows-evaluated' });
+      expect(cliResult.rows).toHaveLength(1);
+      expect(cliResult.rows[0].reason).not.toBe('unsupported-producer');
+      if (isPrHeadNetworkSandboxAvailable()) {
+        expect(cliResult.rows[0]).toMatchObject({ status: 'verified', verificationMode: 'live', producerVerified: true });
+      } else {
+        expect(cliResult.rows[0]).toMatchObject({ status: 'unverified', reason: 'producer-unreachable' });
+      }
       putCard({ ...card, contractEvidenceProducer: undefined });
       expect(checkTierGateGuard(targetIssue, floorOptions).errors.join('\n')).toContain('not declared by the selected project card');
       expect(checkContractEvidence(targetIssue, floorOptions).errors.join('\n'))
