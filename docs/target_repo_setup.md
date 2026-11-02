@@ -349,12 +349,17 @@ the current assignment and selected Git worktree, then use an approved
 exact-bound stop and request coordinator authorization for another attempt.
 Never reset, clean, stash or refresh the retained dirty worktree.
 
-For a selected **vanished** temporary worktree registration only, inspect
-`git -C "$REPO_ROOT" worktree list --porcelain`, distinguish a truly missing
-directory from a locked/live/dirty worktree, and use native
-`git -C "$REPO_ROOT" worktree prune --expire=now` on that same repository. If location
-or retention is ambiguous, stop for operator inspection; do not delete a
-registered worktree directory or a bespoke registry entry.
+An ordinary fresh worktree launch **does not prune** repository registrations.
+First inspect `git -C "$REPO_ROOT" worktree list --porcelain`: a temporarily
+unmounted, dirty or retained worktree can look `prunable` without being
+disposable. Only an exact selected-name vanished temporary registration with
+an available parent and a single matching effect in
+`git -C "$REPO_ROOT" worktree prune --dry-run --verbose --expire=now` can
+proceed to native `git -C "$REPO_ROOT" worktree prune --expire=now` against
+that selected repository. Multiple missing entries, unavailable directory
+mounts or mismatched dry-run results require operator inspection: recover the
+mount or lock the retained checkout, then make a deliberate native prune
+decision. Never remove a registration directory directly or clean dirty bytes.
 
 A bound external-pane stop is **not** `orca terminal stop --worktree`.
 The existing scoped entrypoint exposes a read-only, fresh-instance
@@ -394,9 +399,13 @@ supported sequence. Make pinned-handle recovery/closure an explicit operator
 choice, never a reboot autostart.
 
 For manager work, resolve the actual executor family first: **Claude Code**
-uses the local route without effective B5; on an existing worktree with
-recorded B5 keys, recover its original `core.hooksPath` exactly (or unset it
-if originally absent) and leave siblings' hooks alone. Non-Claude manager
+uses the local route without effective B5. On a reused worktree, a previous
+non-Claude manager's effective B5 **remains installed through the final
+Dispatch/assignment/terminal/process admission**; only after that successful
+admission and just before Claude's native start are its recorded original
+`core.hooksPath` and guard keys restored (or the original hook path unset if
+originally absent). If admission refuses, no guard retirement is permitted.
+Preserve siblings' hooks. Non-Claude manager
 worktrees retain independent B5 hooks. If the binding is ambiguous, inspect
 `git -C "$WORKTREE_PATH" config --worktree --get core.hooksPath` and
 `git -C "$WORKTREE_PATH" config --worktree --get opkManagerPushGuard.originalHooksPath`
@@ -413,8 +422,14 @@ launches must export `PACK_EXECUTOR_OPENCODE_BIN` as the validated absolute
 installed `opencode` executable; verify probes and spawn use that exact
 binary, not a PATH-first mise version. The pack overlay also denies
 `codex`, `codex exec`, `agent-launch`, `bsk`, browser-skill and secret
-read tools even under inherited broad allows. Native permission effects
-must be observed where available; synthetic fixture maps are not proof.
+read tools even under inherited broad allows. An inherited wildcard Bash
+allow is **not safe** against shell wrappers (`env -i`, `command`, variable
+assignment, `sh -c`), so affected OpenCode agents now deny **all Bash tool
+invocations**, including otherwise benign shell commands, until a real native
+executable-level restriction is demonstrated. Use permitted non-shell tools
+or an operator-approved executor alternative, never a Bash bypass. Native
+permission effects must be observed where available; synthetic fixture maps
+are not proof.
 
 **AC15 remains disabled**: do not add a B5 declaration-only exception on
 the strength of a merely executed CI job. A repository administrator must
