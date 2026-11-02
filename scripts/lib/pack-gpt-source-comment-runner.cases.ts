@@ -412,6 +412,8 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
       ...threeSourceStart(storeRoot, transport),
       fixtureGithubReviewTransport: finalReviewTransport(review),
       fixtureRequiredStatusWriter: async (request) => { statusWrites.push(request); },
+      fixtureRequiredStatusReader: async (headSha) => headSha === HEAD
+        ? (statusWrites.at(-1) as { state?: string } | undefined)?.state : undefined,
       fixtureWorkerNotifier: async (request) => {
         workerWrites.push(request);
         return { state: 'delivered' as const, reason: 'fixture' };
@@ -426,7 +428,7 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
       },
     });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok, JSON.stringify({ reason: result.reason, publicationReason: result.publicationReason })).toBe(true);
     expect(review.posts).toBe(1);
     expect(statusWrites).toHaveLength(2);
     expect(statusWrites.map((request) => (request as { state?: string }).state)).toEqual(['pending', 'failure']);
@@ -564,6 +566,8 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
       ...threeSourceStart(storeRoot, transport),
       fixtureGithubReviewTransport: finalReviewTransport(review),
       fixtureRequiredStatusWriter: async (request: unknown) => { statusWrites.push(request); },
+      fixtureRequiredStatusReader: async (headSha: string) => headSha === HEAD
+        ? (statusWrites.at(-1) as { state?: string } | undefined)?.state : undefined,
       fixtureWorkerNotifier: async (request: unknown) => {
         workerWrites.push(request);
         return { state: 'delivered' as const, reason: 'fixture' };
@@ -595,7 +599,7 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
     expect(beforeRecovery?.reviewVerdict).toBeUndefined();
 
     const second = await startPackReview(common);
-    expect(second.ok).toBe(true);
+    expect(second.ok, JSON.stringify({ reason: second.reason, publicationReason: second.publicationReason })).toBe(true);
     expect(String(second.reason ?? '')).not.toBe('reply_recovery_required');
     expect(invocationLogCount(invocationLog)).toBe(3);
     expect(review.posts).toBe(1);
@@ -664,10 +668,14 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
 
     const publications = new Map<string, PublishedSource>();
     const census = { listCalls: 0 };
+    const statusWrites: unknown[] = [];
     const transport = dynamicTransport(publications, census);
     const result = await startPackReview({
       ...threeSourceStart(storeRoot, transport),
       fixtureGithubReviewTransport: finalReviewTransport({ posts: 0 }),
+      fixtureRequiredStatusWriter: async (request) => { statusWrites.push(request); },
+      fixtureRequiredStatusReader: async (headSha) => headSha === HEAD
+        ? (statusWrites.at(-1) as { state?: string } | undefined)?.state : undefined,
       fixtureReviewBySourceSlot: {
         'source-01': [{ stdout: zeroSendTerminal('wrong-source-01'), exitCode: 13 }, { stdout: sentTerminal() }],
         'source-02': [{ stdout: zeroSendTerminal('wrong-source-02'), exitCode: 13 }, { stdout: sentTerminal() }],
@@ -678,7 +686,7 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
       },
     });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok, JSON.stringify({ reason: result.reason, publicationReason: result.publicationReason })).toBe(true);
     expect(invocationLogCount(invocationLog)).toBe(3);
     expect(census.listCalls).toBeGreaterThanOrEqual(3);
     const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
