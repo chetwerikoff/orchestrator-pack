@@ -8,22 +8,22 @@
     "scripts/pack-review-state.ts"
   ],
   "denylist": [
-    ".cache/**",
-    ".config/**",
+    ".cache/",
+    ".config/",
     ".env",
     ".env.local",
-    ".git/**",
-    ".local/**",
-    ".opencode/**",
-    ".orchestrator-pack/**",
-    "credentials/**",
+    ".git/",
+    ".local/",
+    ".opencode/",
+    ".orchestrator-pack/",
+    "credentials/",
     "local.config.json",
-    "node_modules/**",
-    "packages/core/**",
-    "runtime-state/**",
-    "secrets/**",
-    "state/**",
-    "vendor/**"
+    "node_modules/",
+    "packages/core/",
+    "runtime-state/",
+    "secrets/",
+    "state/",
+    "vendor/"
   ],
   "allowed_roots": [
     "scripts/pack-review-runner.test.ts",
@@ -31,5 +31,5 @@
     "scripts/pack-review-state.test.ts",
     "scripts/pack-review-state.ts"
   ],
-  "source_revision": "c9f581e8cae90e7224588567b13bdac4d117efb5"
+  "source_revision": "10301c9fd79efd82c2a2ae4125a67050608dd27b"
 }
