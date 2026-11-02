@@ -363,7 +363,9 @@ Issue-bound assignment and the exact native Run/Task/Dispatch/worktree/terminal
 read-backs, not a title, stale handle or guessed path:
 
 ```bash
-node --experimental-strip-types scripts/pr2-foundation/supervised-worker-start.ts stop-external \
+node --experimental-strip-types "$PACK_ROOT/scripts/lib/Invoke-TypeScriptCli.ts" \
+  --repo-root "$PACK_ROOT" --script "$PACK_ROOT/scripts/pr2-foundation/supervised-worker-start.ts" -- \
+  stop-external \
   --project "$PROJECT_ID" --issue-number "$ISSUE_NUMBER" --role "$ROLE" \
   --run-id "$RUN_ID" --task-id "$TASK_ID" --dispatch-id "$DISPATCH_ID" \
   --assignment-id "$ASSIGNMENT_ID" --assignment-generation "$ASSIGNMENT_GENERATION" \
