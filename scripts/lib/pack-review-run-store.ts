@@ -2564,7 +2564,19 @@ export function claimPackReviewGptTriageAttempt(
       && run.reviewRound?.settledSourceCount !== undefined
       && run.reviewCycleId && run.logicalRoundOrdinal
       && run.accountingVersion === run.reviewRound.accountingVersion
-      && run.reviewRound.sourceSlots.every((slot) => slot.lifecycle === 'terminal'));
+      && run.reviewRound.sourceSlots.filter((slot) => slot.lifecycle === 'terminal'
+        && (slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings'))
+        .length === run.reviewRound.settledSourceCount
+      // A historical/T3 after-grace 2/3 may leave the third slot unresolved.
+      // The frozen credentialed quorum, not the third slot's lifecycle, binds triage.
+      && run.reviewRound.sourceSlots.filter((slot) => slot.lifecycle === 'terminal'
+        && (slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings'))
+        .every((slot) => {
+          const terminal = slot.terminalResult;
+          return terminal && typeof terminal === 'object'
+            && !Array.isArray(terminal)
+            && (terminal as Record<string, unknown>).source_comment_authority === 'credentialed_github';
+        }));
   }, (run) => {
     const census = packReviewTriageCensus(run);
     if (!census) throw new Error('triage source census disappeared under store lock');
