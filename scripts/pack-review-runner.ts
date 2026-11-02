@@ -4471,50 +4471,35 @@ async function readFinalCapGithubJson(
   return args.join(' ') === 'api user --jq .login' ? { login: stdout.trim() } : JSON.parse(stdout) as unknown;
 }
 
-/** The inventory owns the query; REST and content-edit history must attest the same live body. */
+/** Read the corrected live Issue over REST, without claiming that updated_at
+ * or GraphQL edit history proves when (or by whom) a body was edited. The
+ * subsequent authorized disposition COMMENT is the post-terminal witness. */
 export async function resolveFinalCapIssueBodyRevision(input: {
   sourceRepoRoot: string; repoSlug: string; issueNumber: number; terminalizedAt: string; frozenBodyHash: string;
-}, runner: typeof runProcess = runProcess): Promise<{ body: string; revision: string; editedAt: string }> {
-  const [owner, name] = input.repoSlug.split('/');
-  if (!owner || !name || !/^[^/\s]+\/[^/\s]+$/.test(input.repoSlug)) throw new Error('Issue repository identity missing');
-  const inventory = JSON.parse(readFileSync(join(resolveTrustedRunnerPaths().trustedPackRoot,
-    'scripts/lib/graphql-quota-github-read-inventory.json'), 'utf8')) as { rows: Array<{ id: string; query?: string }> };
-  const rows = inventory.rows.filter((row) => row.id === 'issue-body-edit-evidence');
-  const query = rows.length === 1 ? rows[0]?.query : undefined;
-  if (!query) throw new Error('registered Issue body-edit query unavailable');
+}, runner: typeof runProcess = runProcess): Promise<{ body: string; revision: string }> {
+  if (!/^[^/\s]+\/[^/\s]+$/.test(input.repoSlug)
+      || !Number.isFinite(Date.parse(input.terminalizedAt))) {
+    throw new Error('original Issue/terminal identity invalid');
+  }
   const endpoint = `repos/${input.repoSlug}/issues/${input.issueNumber}`;
   const before = githubEvidenceObject(await readFinalCapGithubJson(input, ['api', endpoint], runner));
-  const graph = githubEvidenceObject(await readFinalCapGithubJson(input, [
-    'api', 'graphql', '-f', `query=${query}`, '-f', `owner=${owner}`, '-f', `name=${name}`, '-F', `number=${input.issueNumber}`,
-  ], runner));
-  if (graph.errors !== undefined) throw new Error('Issue body-edit query returned errors');
-  const repository = githubEvidenceObject(githubEvidenceObject(graph.data).repository);
-  const issue = githubEvidenceObject(repository.issue);
-  const edits = githubEvidenceObject(issue.userContentEdits);
-  const nodes = Array.isArray(edits.nodes) ? edits.nodes : [];
-  const edit = nodes.length === 1 ? githubEvidenceObject(nodes[0]) : {};
   const after = githubEvidenceObject(await readFinalCapGithubJson(input, ['api', endpoint], runner));
   const expectedUrl = `https://github.com/${input.repoSlug}/issues/${input.issueNumber}`.toLowerCase();
-  for (const rest of [before, after]) {
-    if (rest.number !== input.issueNumber || !trim(rest.node_id) || issue.id !== rest.node_id
-        || trim(rest.html_url).toLowerCase() !== expectedUrl
-        || trim(rest.repository_url).toLowerCase() !== `https://api.github.com/repos/${input.repoSlug}`.toLowerCase()
-        || typeof rest.body !== 'string' || rest.body !== issue.body) throw new Error('Issue identity or current body drift');
+  for (const issue of [before, after]) {
+    if (issue.number !== input.issueNumber
+        || trim(issue.html_url).toLowerCase() !== expectedUrl
+        || trim(issue.repository_url).toLowerCase()
+          !== `https://api.github.com/repos/${input.repoSlug}`.toLowerCase()
+        || typeof issue.body !== 'string') {
+      throw new Error('live REST Issue identity or body unavailable');
+    }
   }
-  const terminalizedAt = Date.parse(input.terminalizedAt);
-  const editedAt = Date.parse(trim(edit.editedAt));
-  if (trim(repository.nameWithOwner).toLowerCase() !== input.repoSlug.toLowerCase()
-      || issue.number !== input.issueNumber || trim(issue.url).toLowerCase() !== expectedUrl
-      || typeof issue.body !== 'string' || edit.diff !== issue.body || edit.deletedAt !== null
-      || !Number.isInteger(edits.totalCount) || Number(edits.totalCount) < 2
-      || edit.editedAt !== issue.lastEditedAt || !Number.isFinite(terminalizedAt)
-      || !Number.isFinite(editedAt) || editedAt <= terminalizedAt
-      || computeBoundIssueSnapshotHash(issue.body) === input.frozenBodyHash) {
-    throw new Error('post-terminal live Issue-body revision not proven');
+  if (before.body !== after.body || computeBoundIssueSnapshotHash(before.body as string) === input.frozenBodyHash) {
+    throw new Error('corrected live Issue body not independently verified');
   }
-  const revisions = [...issue.body.matchAll(/<!--\s*source-revision:\s*(r\d+)\s*-->/g)];
+  const revisions = [...(before.body as string).matchAll(/<!--\s*source-revision:\s*(r\d+)\s*-->/g)];
   if (revisions.length !== 1) throw new Error('live Issue revision identity missing or ambiguous');
-  return { body: issue.body, revision: revisions[0]![1]!, editedAt: trim(edit.editedAt) };
+  return { body: before.body as string, revision: revisions[0]![1]! };
 }
 
 async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRunsInput, options: {
