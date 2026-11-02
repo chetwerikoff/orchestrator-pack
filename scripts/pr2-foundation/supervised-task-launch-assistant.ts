@@ -1858,6 +1858,7 @@ async function observeManagerWorktreeIdentity(
   id: string,
   path: string,
   execute: ChildExecutor,
+  requireManagerDefaultBranch: boolean = true,
 ): Promise<EdgeResult<ManagerWorktreeIdentity>> {
   if (request.worktreeSelector && !selectorMatchesObservedWorktree(request.worktreeSelector, id, path)) {
     return worktreeContinue<ManagerWorktreeIdentity>(
@@ -1913,14 +1914,14 @@ async function observeManagerWorktreeIdentity(
   const branch = branchRef.slice('refs/heads/'.length);
   const owners = entries.filter((entry) => entry.branch === branchRef);
   const defaultBranch = managerDefaultBranch(request);
-  if (!defaultBranch) {
+  if (!defaultBranch && requireManagerDefaultBranch) {
     return worktreeContinue<ManagerWorktreeIdentity>(
       'manager_worktree_default_branch_unresolved',
       { worktreeId: id },
       'resolve the selected project default branch before manager worktree refresh',
     );
   }
-  if (!branch || branch === defaultBranch || owners.length !== 1) {
+  if (!branch || (defaultBranch && branch === defaultBranch) || owners.length !== 1) {
     return worktreeContinue<ManagerWorktreeIdentity>(
       'manager_worktree_branch_not_distinct',
       { worktreeId: id, branch: branch || 'unknown', ownerCount: owners.length },
@@ -2293,7 +2294,9 @@ async function reuseTerminalOwnedWorktree(
       return refusal('manager_pr_resume_task_unproven');
     }
   }
-  const identity = await observeManagerWorktreeIdentity(request, id, path, execute);
+  // Executor-class reuse does not require manager-only default-branch refresh
+  // metadata: exact native ownership and unique local branch remain mandatory.
+  const identity = await observeManagerWorktreeIdentity(request, id, path, execute, Boolean(request.managerRefresh));
   if (identity.status !== 'ok') return identity;
 
   const status = await execute(['git', 'status', '--porcelain=v1', '--untracked-files=all'],
