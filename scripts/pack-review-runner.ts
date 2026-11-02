@@ -3106,26 +3106,34 @@ async function runGptSourceBatch(options: {
   const admissionInterval = harness && !options.input.fixtureGptAdmissionReadObservation
     ? 0
     : PACK_REVIEW_GPT_SOURCE_ADMISSION_INTERVAL_MS;
-  // Retained admissions fix the original round timeline. Each slot waits only
-  // for its own scheduled start; a hung predecessor bind/send cannot hold it.
+  // Give this batch independent admission deadlines. Resume must pace
+  // new/replacement starts from the most recent retained source start, but a
+  // week-old first source cannot cause both later slots to fire simultaneously.
+  const toStart = options.round.sourceSlots.filter((slot) =>
+    !(slot.lifecycle === 'terminal'
+      && (slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings')
+      && slot.payload)
+    && (!options.sameRoundEligibleSlotIds || options.sameRoundEligibleSlotIds.has(slot.slotId)));
+  const firstOrdinal = Math.min(...toStart.map((slot) => slot.ordinal));
   const retainedStarts = options.round.sourceSlots.flatMap((slot) => {
     const started = Date.parse(slot.admissionStartedAtUtc ?? '');
-    return slot.invocationId && Number.isFinite(started)
-      ? [started - (slot.ordinal - 1) * admissionInterval] : [];
+    return slot.invocationId && Number.isFinite(started) ? [started] : [];
   });
-  const roundStartMs = retainedStarts.length > 0 ? Math.min(...retainedStarts) : Date.now();
+  const batchNow = Date.now();
+  const firstDue = retainedStarts.length === 0 ? batchNow
+    : Math.max(batchNow, Math.max(...retainedStarts) + admissionInterval);
   let credentialedSourceCount = 0;
   const admit = async (
     slotId: string, _invocationId: string, bind: (startedAt: number) => Promise<boolean>,
   ): Promise<boolean> => {
     const ordinal = options.round.sourceSlots.find((slot) => slot.slotId === slotId)?.ordinal;
-    if (!ordinal) return false;
-    const remaining = roundStartMs + (ordinal - 1) * admissionInterval - Date.now();
+    if (!ordinal || !Number.isFinite(firstOrdinal)) return false;
+    const remaining = firstDue + (ordinal - firstOrdinal) * admissionInterval - Date.now();
     if (remaining > 0) {
       await new Promise<void>((resolveWait) => setTimeout(resolveWait, remaining));
     }
-    // Bind only this slot through the existing durable slot update. Do not
-    // serialize on another slot's bind, source census, or terminal observation.
+    // A predecessor's pending bind/census/send never holds this slot's start.
+    // The existing durable per-slot update still guards duplicate invocation.
     return bind(Date.now());
   };
   const sourceTransport = options.input.fixtureGptSourceCommentTransport
