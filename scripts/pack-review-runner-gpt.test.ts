@@ -51,6 +51,7 @@ import {
   terminalizePackReviewStaleRun,
   updatePackReviewRun,
   validatePackReviewTriageResult,
+  projectPackReviewEffectiveFindings,
   type PackReviewRunRecord,
   type PackReviewGptRoundRecord,
 } from './lib/pack-review-run-store.js';
@@ -7843,6 +7844,117 @@ describe('Issue #2719 CLI and manager interpretation of primary and secondary re
     for (const record of [settled, { ...settled, schema: PACK_GPT_REVIEW_RESULT_SCHEMA }]) {
       expect(classifyExecuteIssueManagerRecord(record, reviewContext)).toMatchObject({ exitCode: 0 });
     }
+  });
+});
+
+
+describe('Issue #2761 normal source-settling Opus triage', () => {
+  const help = [
+    '--print', '--output-format', '--json-schema', '--model', '--effort',
+    '--setting-sources', '--strict-mcp-config', '--permission-mode', '--allowedTools',
+  ].join(' ');
+  const groups = [
+    {
+      members: [{ slotId: 'source-01', index: 0 }, { slotId: 'source-02', index: 0 }],
+      decision: 'FIX_NOW', reason: 'Same reachable bug reported twice',
+    },
+    {
+      members: [{ slotId: 'source-03', index: 0 }],
+      decision: 'DEFER', reason: 'Originally advisory cosmetic issue',
+    },
+  ];
+  async function settled(opusGroups: unknown, options: { noSchemaFlag?: boolean; clean?: boolean } = {}) {
+    const storeRoot = tempRoot('opk-2761-triage-settle-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot,capture);
+    selectProjectCard(storeRoot);
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    const calls: Array<{ args: readonly string[]; cwd: string; input: string; timeoutMs: number }> = [];
+    const fence = String.fromCharCode(96).repeat(3);
+    const output = await startPackReview({
+      projectId: 'orchestrator-pack', storeRoot,
+      sourceRepoRoot: repoRoot, prNumber: 1276, headSha: HEAD_A,
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixturePrState: 'OPEN',
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixturePostReviewHeadSha: HEAD_A,
+      fixtureIssueTitle: '[T3] Synthetic source triage',
+      fixtureIssueBody: fence + 'complexity-tier\ntier: T3\n' + fence,
+      fixtureIssueNumber: 1276,
+      claimMode: 'preacquired',
+      fixtureReviewBySourceSlot: options.clean ? {
+        'source-01': [{ stdout: successfulCleanReviewPayload('inv-source-01') }],
+        'source-02': [{ stdout: successfulCleanReviewPayload('inv-source-02') }],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
+      } : {
+        'source-01': [{ stdout: findingsPayload('duplicate') }],
+        'source-02': [{ stdout: findingsPayload('duplicate') }],
+        'source-03': [{ stdout: findingsPayload('cosmetic', 'warning') }],
+      },
+      fixtureOpusTriageHelp: options.noSchemaFlag ? help.replace('--json-schema','') : help,
+      fixtureOpusTriageConfinementVerified: true,
+      fixtureOpusTriageProcess: async (request) => {
+        calls.push(request);
+        return {
+          outcome: 'exit', ok: true, exitCode: 0, signal: null,
+          stdout: JSON.stringify({
+            type: 'result', is_error: false, structured_output: { groups: opusGroups },
+          }),
+          stderr: '', timedOut: false, cancelled: false,
+        };
+      },
+    });
+    const run = getPackReviewRun(String(output.runId),{projectId:'orchestrator-pack',storeRoot});
+    return { output,run,calls,storeRoot,capture };
+  }
+
+  it('groups duplicate blocking sources, persists once and appends a single deferred TODO', async () => {
+    const test = await settled(groups);
+    expect(test.calls).toHaveLength(1);
+    expect(test.calls[0]?.args).toEqual([
+      '--print', '--output-format', 'json', '--json-schema', expect.any(String),
+      '--model', 'claude-opus-5-5', '--effort', 'medium',
+      '--setting-sources', 'user', '--strict-mcp-config',
+      '--permission-mode', 'dontAsk', '--allowedTools', 'Read', 'Grep', 'Glob',
+    ]);
+    expect(test.calls[0]?.timeoutMs).toBe(900_000);
+    expect(test.run?.gptTriageAttempt).toBeDefined();
+    expect(test.run?.gptTriage?.groups).toHaveLength(2);
+    const projection = projectPackReviewEffectiveFindings(test.run!);
+    expect(projection).toMatchObject({
+      mode: 'triaged', blocking: true, effectiveBlockingGroupCount: 1,
+    });
+    expect(projection.fixNow).toEqual([expect.objectContaining({
+      members: ['source-01:0','source-02:0'],slotIds: ['source-01','source-02'],
+    })]);
+    expect(test.run?.findings).toHaveLength(3);
+    expect(readFileSync(test.capture,'utf8')).toContain('duplicate');
+    const todo = path.join(test.storeRoot,'.local','state','orchestrator-session',
+      'orchestrator-pack','review-todo.md');
+    expect(readFileSync(todo,'utf8').trim().split('\n')).toHaveLength(1);
+  });
+
+  it('keeps original source union when output mapping or installed help is invalid', async () => {
+    for (const scenario of [
+      { opusGroups: [{ members: [{ slotId: 'source-01',index:0 }],
+        decision: 'REJECT',reason:'No independent proof' }] },
+      { opusGroups: groups,noSchemaFlag: true },
+    ]) {
+      const test = await settled(scenario.opusGroups,{noSchemaFlag:scenario.noSchemaFlag});
+      expect(test.run?.gptTriageAttempt).toBeDefined();
+      expect(test.run?.gptTriage).toBeUndefined();
+      expect(projectPackReviewEffectiveFindings(test.run!)).toMatchObject({
+        mode: 'plain', blocking:true,effectiveBlockingGroupCount:2,
+      });
+      expect(test.calls).toHaveLength(scenario.noSchemaFlag ? 0 : 1);
+    }
+  });
+
+  it('does not claim or invoke triage for an empty settled source union', async () => {
+    const test = await settled(groups,{clean:true});
+    expect(test.calls).toHaveLength(0);
+    expect(test.run?.gptTriageAttempt).toBeUndefined();
   });
 });
 
