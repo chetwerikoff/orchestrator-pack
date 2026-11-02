@@ -6163,7 +6163,9 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
     const unresolved = (detail: string): Record<string, unknown> => ({
       prNumber, headSha: publicationHead, finalCapSettlement: true,
       settled: false, reason: 'status_not_published', detail,
-      nextAction: 'retry current-head status projection with PR-led start or scoped reconcile; do not consume another round',
+      nextAction: detail.includes('status_read_failed') || detail.includes('status_confirmation_failed')
+        ? 'recheck GitHub availability and rerun scoped exact-head reconcile; no new review, status POST or round'
+        : 'retry current-head status projection with PR-led start or scoped reconcile; do not consume another round',
     });
     if (!(await validCurrent())) return unresolved('final_cap_head_or_authority_changed_before_status');
     let confirmed: boolean;
