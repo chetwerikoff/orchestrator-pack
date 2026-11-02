@@ -211,7 +211,7 @@ function protectedTriageHarm(finding: Record<string, unknown>): boolean {
  * Unavailable Git, wrong head, ambiguous paths, and missing lines all fail closed.
  */
 function verifiedExactHeadTriageCodeLine(run: PackReviewRunRecord, evidence: string): boolean {
-  const match = /^([A-Za-z0-9._+@/-]+):([1-9][0-9]*)\\s+([^\\r\\n]{6,240})$/.exec(evidence);
+  const match = /^([A-Za-z0-9._+@/-]+):([1-9][0-9]*)\s+([^\r\n]{6,240})$/.exec(evidence);
   if (!match || !/^[a-f0-9]{40}$/i.test(run.targetSha)
       || !run.sourceRepoRoot || match[1]!.startsWith('/')
       || match[1]!.split('/').some((part) => !part || part === '.' || part === '..')) return false;
@@ -225,7 +225,7 @@ function verifiedExactHeadTriageCodeLine(run: PackReviewRunRecord, evidence: str
       timeoutMs: 10_000,
     });
     if (!result.ok || result.stdout.length > 1_000_000) return false;
-    const original = result.stdout.split(/\\r?\\n/)[lineNumber - 1]?.trim();
+    const original = result.stdout.split(/\r?\n/)[lineNumber - 1]?.trim();
     const expected = match[3]!.trim();
     return Boolean(original && expected && original.includes(expected));
   } catch {
