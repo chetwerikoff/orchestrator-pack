@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
+import { Worker } from 'node:worker_threads';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6026,6 +6027,81 @@ function withWorld(options: Parameters<typeof pushWorld>[0], body: (world: PushW
     try { await body(world); } finally { rmSync(world.base, { recursive: true, force: true }); }
   };
 }
+
+describe('Issue #2754 AC7 same-second distinct-worktree B5 snapshot race', () => {
+  it('both managers observe pre-install siblings before either writes; retain each own hook', withWorld({
+    install: false, prePush: '#!/bin/sh\necho original-hook >&2\nexit 0\n',
+  }, async (world) => {
+    const second = join(world.base, 'manager-second');
+    git(world.primary, 'worktree', 'add', '-q', '-b', 'manager-second', second, 'origin/trunk');
+    // Remove unrelated shared-config contention: both installations still race
+    // their own effective hooks against the same before/after sibling snapshots.
+    git(world.primary, 'config', 'extensions.worktreeConfig', 'true');
+    const signal = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
+    const view = new Int32Array(signal);
+    const moduleUrl = new URL('./manager-push-guard.ts', import.meta.url).href;
+    const script = `
+      const { parentPort, workerData } = require('node:worker_threads');
+      (async () => {
+        const { installManagerPushGuard } = await import(workerData.moduleUrl);
+        const shared = new Int32Array(workerData.signal);
+        const value = installManagerPushGuard({
+          worktreePath: workerData.path, defaultBranch: 'trunk',
+          placementSeedOid: workerData.seed, endpointMatchesRepository: () => true,
+          afterSiblingSnapshot: () => {
+            Atomics.add(shared, 0, 1);
+            parentPort.postMessage({ type: 'snapshot' });
+            const deadline = Date.now() + 15000;
+            while (Atomics.load(shared, 1) === 0 && Date.now() < deadline) {
+              Atomics.wait(shared, 1, 0, 200);
+            }
+            if (Atomics.load(shared, 1) === 0) throw new Error('sibling snapshot barrier expired');
+          },
+        });
+        parentPort.postMessage({ type: 'result', value });
+      })().catch((error) => parentPort.postMessage({ type: 'error', message: String(error) }));
+    `;
+    const workers = [world.manager, second].map((path) => new Worker(script, {
+      eval: true, execArgv: ['--experimental-strip-types'],
+      workerData: { path, seed: world.seed, signal, moduleUrl },
+    }));
+    try {
+      const results = await Promise.all(workers.map((target) => new Promise<{
+        readonly ok: boolean; readonly cause?: string;
+      }>((resolveResult, reject) => {
+        target.on('message', (message: { type: string; value?: { ok: boolean; cause?: string }; message?: string }) => {
+          if (message.type === 'snapshot') {
+            if (Atomics.load(view, 0) === 2) {
+              Atomics.store(view, 1, 1);
+              Atomics.notify(view, 1, 2);
+            }
+          } else if (message.type === 'result' && message.value) resolveResult(message.value);
+          else if (message.type === 'error') reject(new Error(message.message ?? 'worker error'));
+        });
+        target.on('error', reject);
+        target.on('exit', (code) => {
+          if (code !== 0) reject(new Error('B5 snapshot worker exited: ' + code));
+        });
+      }))));
+      expect(Atomics.load(view, 0)).toBe(2);
+      expect(results).toEqual([{ ok: true, evidence: expect.any(Object) },
+        { ok: true, evidence: expect.any(Object) }]);
+      const firstHooks = git(world.manager, 'config', '--worktree', '--get', 'core.hooksPath');
+      const secondHooks = git(second, 'config', '--worktree', '--get', 'core.hooksPath');
+      expect(firstHooks).not.toBe(secondHooks);
+      expect(firstHooks).toBe(join(git(world.manager, 'rev-parse', '--absolute-git-dir'), 'opk-manager-push-guard', 'hooks'));
+      expect(secondHooks).toBe(join(git(second, 'rev-parse', '--absolute-git-dir'), 'opk-manager-push-guard', 'hooks'));
+      expect(existsSync(join(firstHooks, 'pre-push'))).toBe(true);
+      expect(existsSync(join(secondHooks, 'pre-push'))).toBe(true);
+      expect(git(world.primary, 'config', '--get', 'extensions.worktreeConfig')).toBe('true');
+      expect(gitTry(world.primary, 'config', '--get', 'core.hooksPath').status).not.toBe(0);
+    } finally {
+      Atomics.store(view, 1, 1);
+      Atomics.notify(view, 1, 2);
+      await Promise.all(workers.map((worker) => worker.terminate()));
+    }
+  }), 45_000);
+});
 
 describe('Issue #2732 manager-only pre-push guard installation', () => {
   it('selects the guard for the manager worktree only and keeps primary/worker hooks and pushes', withWorld({
