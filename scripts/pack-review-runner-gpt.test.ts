@@ -6505,6 +6505,22 @@ describe('Issue #2659 ARCH23:01 old cooldown history versus a newer partial sour
     }, options);
     vi.setSystemTime(new Date('2026-10-12T00:20:00.000Z'));
 
+    // Independently model the exact original canonical REVIEW, not a journal ACK.
+    const reviews: GithubReviewSummary[] = [];
+    const reviewTransport: GithubReviewTransport = {
+      resolveActorLogin: async () => 'pack-review-bot',
+      listReviews: async () => [...reviews],
+      postReview: async ({ body, commitId }) => {
+        const id = prNumber * 10 + 11 + reviews.length;
+        const url = `https://github.com/${repository}/pull/${prNumber}#pullrequestreview-${id}`;
+        reviews.push({
+          id, body, commitId, state: 'COMMENTED', userLogin: 'pack-review-bot',
+          submittedAt: new Date().toISOString(), url,
+        });
+        return { id, url };
+      },
+      dismissReview: async () => { throw new Error('synthetic REVIEW dismissal not authorized'); },
+    };
     const launches: string[] = [];
     const attempts: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
     const result = await startPackReview({
@@ -6516,6 +6532,7 @@ describe('Issue #2659 ARCH23:01 old cooldown history versus a newer partial sour
       fixtureRepoSlug: repository, fixtureIssueNumber: prNumber,
       fixtureIssueTitle: '[T2] Same-head cooldown recovery', fixtureIssueBody: issueBody,
       fixtureGptSourceCommentTransport: sourceTransport,
+      fixtureGithubReviewTransport: reviewTransport,
       fixtureGptAttemptObserver: async () => ({
         state: 'continuation_eligible' as const, replacementEligible: false,
         initialLaunchSlotIds: ['source-02', 'source-03'],
@@ -6554,6 +6571,7 @@ describe('Issue #2659 ARCH23:01 old cooldown history versus a newer partial sour
       fixturePrState: 'OPEN', fixturePrBody: 'Closes #' + prNumber,
       fixtureIssueNumber: prNumber, fixtureIssueTitle: '[T2] Amended B1 behavior',
       fixtureIssueBody: B1,
+      fixtureGithubReviewTransport: reviewTransport,
       fixtureRequiredStatusReader: async () => publicStatus,
       fixtureRequiredStatusWriter: async (request: { state: string }) => {
         publicStatus = request.state;
@@ -6717,6 +6735,21 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
         return comment;
       },
     };
+    const reviews: GithubReviewSummary[] = [];
+    const reviewTransport: GithubReviewTransport = {
+      resolveActorLogin: async () => 'pack-review-bot',
+      listReviews: async () => [...reviews],
+      postReview: async ({ body, commitId }) => {
+        const id = prNumber * 10 + 11 + reviews.length;
+        const url = `https://github.com/${repository}/pull/${prNumber}#pullrequestreview-${id}`;
+        reviews.push({
+          id, body, commitId, state: 'COMMENTED', userLogin: 'pack-review-bot',
+          submittedAt: new Date().toISOString(), url,
+        });
+        return { id, url };
+      },
+      dismissReview: async () => { throw new Error('synthetic REVIEW dismissal not authorized'); },
+    };
     const firstSource = await resolvePackGptSourceComment({
       identity: { repository, prNumber, headSha: HEAD_A, runId, slotId: 'source-01', invocationId: originalSource01 },
       transport: sourceTransport,
@@ -6797,6 +6830,7 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       fixturePrState: 'OPEN', fixtureRepoSlug: repository,
       fixtureIssueNumber: prNumber, fixtureIssueTitle: "Independent linked Issue", fixtureIssueBody: issueBody,
       fixtureGptSourceCommentTransport: sourceTransport,
+      fixtureGithubReviewTransport: reviewTransport,
       // Supplying an observation-reader fixture keeps the real 30s admission interval.
       // Admission itself must not consult the unreadable state-light observation.
       fixtureGptAdmissionReadObservation: () => { throw new Error('synthetic state-light unavailable'); },
