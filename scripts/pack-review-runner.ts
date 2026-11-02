@@ -52,6 +52,8 @@ import {
   PACK_REVIEW_AUTHORITY_PHASES,
   PACK_REVIEW_CAP_MAP_VERSION,
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+  PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION,
+  PACK_REVIEW_LEGACY_CAP_MAP_VERSION,
   PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
   PACK_REVIEW_GPT_SOURCE_ADMISSION_INTERVAL_MS,
   acknowledgePackReviewReset,
@@ -1555,8 +1557,17 @@ function frozenLogicalGptSourceIdentity(run: PackReviewRunRecord): boolean {
 /** Older distinct-head and legacy saved versions retain their original exact slot policy. */
 function frozenSavedGptSourceIdentity(run: PackReviewRunRecord): boolean {
   const round = run.reviewRound;
-  if (!round || run.accountingVersion !== round.accountingVersion
-      || run.logicalRoundOrdinal !== undefined && run.logicalRoundOrdinal !== round.roundOrdinal) return false;
+  if (!round) return false;
+  // Prelogical runs were saved before run-level accountingVersion existed;
+  // their omitted round version normalizes to the distinct-head generation.
+  // Only that closed historical family permits an omitted run version. Logical
+  // and tiered rounds still require strict run/round version equality.
+  const legacyUnversioned = run.accountingVersion === undefined
+    && (round.accountingVersion === PACK_REVIEW_CAP_MAP_VERSION
+      || round.accountingVersion === PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION
+      || round.accountingVersion === PACK_REVIEW_LEGACY_CAP_MAP_VERSION);
+  if ((!legacyUnversioned && run.accountingVersion !== round.accountingVersion)
+      || (run.logicalRoundOrdinal !== undefined && run.logicalRoundOrdinal !== round.roundOrdinal)) return false;
   try {
     return round.cardinality === selectPackReviewGptSourceCardinality({
       reviewer: 'gpt', tier: round.tier, roundOrdinal: round.roundOrdinal,
