@@ -6,6 +6,7 @@
     "docs/chatgpt-task-execution-runbook.md",
     "docs/orchestration-runbook.md",
     "scripts/gh-wrapper.test.ts",
+    "scripts/lib/pack-gpt-source-comment-runner.cases.ts",
     "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner.test.ts",
     "scripts/pack-review-runner.ts"
@@ -21,9 +22,10 @@
     "docs/chatgpt-task-execution-runbook.md",
     "docs/orchestration-runbook.md",
     "scripts/gh-wrapper.test.ts",
+    "scripts/lib/pack-gpt-source-comment-runner.cases.ts",
     "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner.test.ts",
     "scripts/pack-review-runner.ts"
   ],
-  "source_revision": "c7b83c185fd391679f3ed95d70b7a7bf6cbe8dc3"
+  "source_revision": "d9634c3a98d2ce3febf2e173fa066123f92d189a"
 }
