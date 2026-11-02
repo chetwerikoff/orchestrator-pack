@@ -41,7 +41,7 @@ import {
 } from '../pr2-foundation/supervised-task-launch-assistant.ts';
 import { runSupervisedWorkerStart } from '../pr2-foundation/supervised-worker-start.ts';
 import type { ChatErrorBanner, ProjectChat } from './chat-error-banners.ts';
-import { FileFleetStateStore, formatFleetSweep, runFleetSweep, visibleOpenCodePermission, type FleetPaneObservation, type FleetTerminal, type OrcaCommandResult, type OrcaExecutor } from './fleet-sweep.ts';
+import { FileFleetStateStore, formatFleetSweep, lastFleetParkedLine, runFleetSweep, visibleOpenCodePermission, type FleetPaneObservation, type FleetTerminal, type OrcaCommandResult, type OrcaExecutor } from './fleet-sweep.ts';
 import { runLaunch, readTerminalEnvelope } from '../flow-manager-long-running-child.ts';
 import { configuredProfileKey } from '../chatgpt-browser-turn/storage-common.ts';
 import type { PackReviewRunRecord } from '../lib/pack-review-run-store.ts';
@@ -3488,6 +3488,70 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
   });
 
 
+  // Retain the native OpenCode frame, prior tool output and model/status chrome from a
+  // genuine captured pane. The *final response paragraph* then contains Tool and
+  // command lines before its final PARKED; ownPaneOutcome cannot claim ownership.
+  const nativeManagerFinalPark = (wait: string): string => realOpenCodePane('tool').replace(
+    '     PR #225 merged; Issue #221 review continues next.',
+    [
+      '     Tool: inspected selected producer result',
+      '     $ OPK_PROJECT_ID=orchestrator-pack scripts/gh pr view 42 --json headRefOid',
+      '     command: node --experimental-strip-types scripts/pr-scope-runner.ts',
+      '     ' + wait,
+    ].join('\n'),
+  );
+
+  it('Issue #2759: native OpenCode manager final GPT park and ok envelope wake once in two ticks', async () => {
+    const wait = 'PARKED on GPT turn inv-2759-native-gpt';
+    const screen = nativeManagerFinalPark(wait);
+    const observed = runFleetSweep({
+      projectId: 'orchestrator-pack', primary, terminals: [coordinator, manager],
+      store: new MemoryWakeStore(),
+      executor: fakeOrca({ coord: 'idle', one: screen }, [], [coordinator, manager]),
+    }).find((pane) => pane.handle === manager.handle);
+    expect(screen).toContain('  ┃  $ OPK_PROJECT_ID=leopoker scripts/gh api');
+    expect(screen).toContain('     Tool: inspected selected producer result');
+    expect(screen).toContain('     command: node --experimental-strip-types');
+    expect(lastFleetParkedLine(screen)).toBe(wait);
+    expect(observed).toMatchObject({ state: 'PARKED', wait });
+    expect(observed?.ownParkObservation).toBeUndefined();
+    const landed = event('inv-2759-native-gpt', {
+      cwd: manager.worktreePath, lifecycleOutcome: 'success', turnResultState: 'ok', delivery: 'landed',
+    });
+    const store = new MemoryWakeStore();
+    const run = () => scenario(screen, { listTerminalEnvelopes: () => [landed] }, store);
+    const first = await run(), repeat = await run();
+    expect([...texts(first.calls, manager.handle), ...texts(repeat.calls, manager.handle)])
+      .toEqual([expect.stringContaining('ended state ok')]);
+    expect(first.result).toMatchObject({ paneWakeAttempts: 1, paneWakeConfirmed: 1 });
+    expect(repeat.result).toMatchObject({ paneWakeAttempts: 0, paneWakeConfirmed: 0 });
+    expect(store.readParkedWakeEventStatus('terminal-path:' + manager.handle + ':' + landed.path)).toBe('sent');
+  });
+
+  it('Issue #2759: native OpenCode manager final CI PR head park wakes once for completed matching head', async () => {
+    const head = 'c'.repeat(40), wait = 'PARKED on CI PR #42 head ' + head;
+    const screen = nativeManagerFinalPark(wait);
+    const observed = runFleetSweep({
+      projectId: 'orchestrator-pack', primary, terminals: [coordinator, manager],
+      store: new MemoryWakeStore(),
+      executor: fakeOrca({ coord: 'idle', one: screen }, [], [coordinator, manager]),
+    }).find((pane) => pane.handle === manager.handle);
+    expect(lastFleetParkedLine(screen)).toBe(wait);
+    expect(observed).toMatchObject({ state: 'PARKED', wait });
+    expect(observed?.ownParkObservation).toBeUndefined();
+    const store = new MemoryWakeStore();
+    const run = () => scenario(screen, {
+      readNamedPull: (_repository, number) => ({ number, headSha: head, state: 'open', merged: false }),
+      checkRunsFinishedAt: (_repository, sha) => sha === head ? 1_730_000_000_000 : undefined,
+    }, store);
+    const first = await run(), repeat = await run();
+    expect([...texts(first.calls, manager.handle), ...texts(repeat.calls, manager.handle)])
+      .toEqual([expect.stringContaining('ended state checks-completed')]);
+    expect(first.result).toMatchObject({ paneWakeAttempts: 1, paneWakeConfirmed: 1 });
+    expect(repeat.result).toMatchObject({ paneWakeAttempts: 0, paneWakeConfirmed: 0 });
+    expect(store.hasParkedWakeEvent('event:' + manager.handle + ':ci:42:' + head + ':1730000000000')).toBe(true);
+  });
+
   it('B9-1: STOPPED-first shared handle/path marks suppress later PARKED, re-park and STOPPED replay', async () => {
     const landed = event('inv-b9-one');
     for (const status of ['sent', 'attempted_unverified'] as const) {
@@ -3581,7 +3645,7 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     expect(text).not.toContain('execute');
   });
 
-  it('B9-3: Tool/User-quoted single and triplet GPT PARKED cannot Wake on old exact envelopes', async () => {
+  it('B9-3: final-line GPT parks following Tool/User context wake exact settled envelopes once', async () => {
     for (const prefix of ['Tool: foreign pane', 'User: please quote this']) {
       for (const ids of [['inv-a'], ['inv-a', 'inv-b', 'inv-c']]) {
         const park = ids.length === 1 ? 'PARKED on GPT turn inv-a'
@@ -3595,37 +3659,33 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
         }).find((row) => row.handle === manager.handle);
         expect(initial?.state).toBe('PARKED');
         expect(initial?.ownParkObservation).toBeUndefined();
-        const observed = await scenario(screen, { listTerminalEnvelopes: () => landed });
-        expect(texts(observed.calls, manager.handle)).toHaveLength(0);
-        expect(texts(observed.calls, coordinator.handle)).toHaveLength(0);
-        expect(observed.logs.some((line) => line.includes('not a foreign/quoted park'))).toBe(true);
+        expect(lastFleetParkedLine(screen)).toBe(park);
+        const store = new MemoryWakeStore();
+        const run = () => scenario(screen, { listTerminalEnvelopes: () => landed }, store);
+        expect(texts((await run()).calls, manager.handle)).toHaveLength(1);
+        expect(texts((await run()).calls, manager.handle)).toHaveLength(0);
       }
     }
   });
 
-  it('B9-3: Tool/User-quoted CI/pack-review never reaches 30-minute Reminder; own unmatched park still does', async () => {
+  it('B9-3: final-line CI/pack-review after Tool/User context gets due 30-minute Reminder', async () => {
     const h = 'a'.repeat(40);
     const readNamedPull = (_repo: string, number: number) => ({
       number, headSha: h, state: 'open' as const, merged: false,
     });
     for (const kind of ['CI', 'pack-review'] as const) {
       const own = 'PARKED on ' + kind + ' PR #42 head ' + h;
-      for (const prefix of ['Tool: foreign pane', 'User: quote this'] as const) {
-        const quoted = prefix + '\n\n' + own;
+      for (const screen of ['Tool: foreign pane\n\n' + own, 'User: quote this\n\n' + own, own]) {
         const store = new MemoryWakeStore();
         const options = { readNamedPull, now: () => 0 };
-        const initial = await scenario(quoted, options, store);
-        const elapsed = await scenario(quoted, { ...options, now: () => 1_800_000 }, store);
+        const initial = await scenario(screen, options, store);
+        const elapsed = await scenario(screen, { ...options, now: () => 1_800_000 }, store);
         expect(sendsTo(initial.calls, manager.handle)).toHaveLength(0);
-        expect(sendsTo(elapsed.calls, manager.handle)).toHaveLength(0);
-        expect(elapsed.logs.some((line) => line.includes('not a foreign/quoted park line'))).toBe(true);
+        expect(texts(elapsed.calls, manager.handle)).toHaveLength(1);
+        expect(texts(elapsed.calls, manager.handle)[0]).toContain('Reminder: parked 30 min');
+        const repeat = await scenario(screen, { ...options, now: () => 1_800_000 }, store);
+        expect(texts(repeat.calls, manager.handle)).toHaveLength(0);
       }
-      const store = new MemoryWakeStore();
-      expect(texts((await scenario(own, { readNamedPull, now: () => 0 }, store)).calls, manager.handle))
-        .toHaveLength(0);
-      const reminder = await scenario(own, { readNamedPull, now: () => 1_800_000 }, store);
-      expect(texts(reminder.calls, manager.handle)).toHaveLength(1);
-      expect(texts(reminder.calls, manager.handle)[0]).toContain('Reminder: parked 30 min');
     }
   });
 
@@ -3674,11 +3734,14 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
       'Tool: foreign pane\n\nPARKED on CI PR #42 head ' + h0,
       'User: quote this\n\nPARKED on pack-review PR #42 head ' + h0,
     ]) {
-      const foreign = await scenario(quoted, {
-        readNamedPull: (_repo, number) => ({ number, headSha: h1, state: 'open', merged: false }),
-      });
-      expect(texts(foreign.calls, manager.handle)).toHaveLength(0);
-      expect(foreign.logs.some((line) => line.includes('re-check current own PARKED'))).toBe(true);
+      const store = new MemoryWakeStore();
+      const overrides = {
+        readNamedPull: (_repo: string, number: number) => ({ number, headSha: h1, state: 'open' as const, merged: false }),
+      };
+      const first = await scenario(quoted, overrides, store);
+      expect(texts(first.calls, manager.handle)).toHaveLength(1);
+      expect(texts(first.calls, manager.handle)[0]).toContain('head moved to ' + h1);
+      expect(texts((await scenario(quoted, overrides, store)).calls, manager.handle)).toHaveLength(0);
     }
     for (const condition of ['closed', 'missing', 'pending-current'] as const) {
       const checked = await scenario('PARKED on CI PR #42 head ' + h0, {
