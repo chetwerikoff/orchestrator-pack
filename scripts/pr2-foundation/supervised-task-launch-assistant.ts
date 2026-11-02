@@ -1088,7 +1088,7 @@ export async function runSupervisedTaskLaunchAssistant(
     ...(providerMode ? { providerTopLevel: true } : {}),
     ...(input.workClass === 'manager' ? { managerRefresh: true } : {}),
     ...(input.workClass === 'merge' ? { primaryReuseRoot: input.primaryRoot } : {}),
-    ...(input.workClass === 'manager' && input.taskId?.trim() ? { managerTaskRunId: input.runId?.trim() } : {}),
+    ...(input.workClass === 'manager' && input.runId?.trim() ? { managerTaskRunId: input.runId.trim() } : {}),
     ...(input.workClass !== 'merge' && input.worktreeSelector && earlyCurrent
       ? { reuseAssignment: earlyCurrent } : {}),
     });
@@ -2373,7 +2373,9 @@ export async function prepareWorktreeWithOrca(
     const id = text(worktree?.id);
     const path = text(worktree?.path);
     if (!id || !path) return worktreeContinue('worktree_prepare_failed_or_unknown');
-    if (!request.managerRefresh) {
+    if (!request.managerRefresh || request.reuseAssignment) {
+      // An explicitly bound, quiescent manager restoration must preserve dirty
+      // HEAD/tracked/untracked bytes, not enter the clean-only refresh path.
       return reuseTerminalOwnedWorktree(request, id, path, execute);
     }
     return refreshManagerWorktree(request, id, path, execute);
