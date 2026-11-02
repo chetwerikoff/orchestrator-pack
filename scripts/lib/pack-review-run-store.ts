@@ -14,6 +14,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import type { PackReviewer, PackReviewerResolutionSource } from './resolve-pack-reviewer.ts';
 import { TURN_STATES } from '../chatgpt-browser-turn/contracts.ts';
 import {
@@ -205,6 +206,33 @@ function protectedTriageHarm(finding: Record<string, unknown>): boolean {
   return /security|auth(?:orization|entication)?|scope.?(?:violation|escape)|permission|unauthori[sz]ed|secret|credential|data.?(?:loss|corrupt)|lost.?data|destruct|false.?(?:success|green|completion|merge)|falsely.?(?:green|success|merged)|incorrect.?(?:completion|success)|green.?(?:status|check).?(?:false|wrong|despite)|hung|hang.?forever|no.?recovery|deadlock|stuck.?(?:unit|worker)|integrity|safety/.test(text);
 }
 
+/** A model-supplied path:line assertion is never its own proof.
+ * Read the immutable reviewed commit object, not the mutable working tree.
+ * Unavailable Git, wrong head, ambiguous paths, and missing lines all fail closed.
+ */
+function verifiedExactHeadTriageCodeLine(run: PackReviewRunRecord, evidence: string): boolean {
+  const match = /^([A-Za-z0-9._+@/-]+):([1-9][0-9]*)\\s+([^\\r\\n]{6,240})$/.exec(evidence);
+  if (!match || !/^[a-f0-9]{40}$/i.test(run.targetSha)
+      || !run.sourceRepoRoot || match[1]!.startsWith('/')
+      || match[1]!.split('/').some((part) => !part || part === '.' || part === '..')) return false;
+  const lineNumber = Number(match[2]);
+  if (!Number.isSafeInteger(lineNumber) || lineNumber > 100_000) return false;
+  try {
+    const result = runProcessSync({
+      command: 'git',
+      args: ['-C', run.sourceRepoRoot, '--no-pager', 'show', `${run.targetSha}:${match[1]}`],
+      inheritParentEnv: false,
+      timeoutMs: 10_000,
+    });
+    if (!result.ok || result.stdout.length > 1_000_000) return false;
+    const original = result.stdout.split(/\\r?\\n/)[lineNumber - 1]?.trim();
+    const expected = match[3]!.trim();
+    return Boolean(original && expected && original.includes(expected));
+  } catch {
+    return false;
+  }
+}
+
 function triageGroupId(run: PackReviewRunRecord, members: readonly string[]): string {
   return 'g-' + createHash('sha256').update(
     JSON.stringify([run.id,run.targetSha,[...members].sort()])).digest('hex').slice(0,20);
@@ -267,7 +295,7 @@ export function validatePackReviewTriageResult(
     const reason = value.reason.trim();
     const codeEvidence = value.codeEvidence;
     const verifiedCode = typeof codeEvidence === 'string'
-      && /^[^\s:]+:\d+\s+[^\r\n]{6,240}$/.test(codeEvidence);
+      && verifiedExactHeadTriageCodeLine(run,codeEvidence);
     if (originalBlocking && value.decision !== 'FIX_NOW') {
       if (!verifiedCode || (value.decision === 'DEFER'
           && (protectedBlocking || value.lowImpact !== true))) {
