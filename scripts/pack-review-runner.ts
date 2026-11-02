@@ -253,6 +253,10 @@ interface StartInput {
   fixtureReviewBySourceSlot?: FixtureReviewBySourceSlot;
   fixtureGptSourceCommentTransport?: PackGptSourceCommentTransport;
   fixtureGptAdmissionReadObservation?: typeof readStateLightTurnObservation;
+  /** Offline-only stall before the durable per-slot bind, testing sibling independence. */
+  fixtureBeforeGptInvocationBound?: (event: {
+    slotId: string; attemptOrdinal: number; invocationId: string;
+  }) => void | Promise<void>;
   fixtureAfterGptInvocationBound?: (event: {
     slotId: string;
     attemptOrdinal: number;
@@ -3177,6 +3181,9 @@ async function runGptSourceBatch(options: {
     let attemptOrdinal = (currentSlot.attemptOrdinal ?? 0) + 1;
     let invocationId = randomUUID();
     const markInvocationStarted = async (admissionStartedAt: number): Promise<boolean> => {
+      if (harness && options.input.fixtureBeforeGptInvocationBound) {
+        await options.input.fixtureBeforeGptInvocationBound({ slotId, attemptOrdinal, invocationId });
+      }
       const launchBinding = resolveLaunchBinding();
       const priorSlot = round.sourceSlots.find((slot) => slot.slotId === slotId);
       // Zero-send rate-limit retries must keep their browser identity. Other
