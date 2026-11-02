@@ -563,6 +563,7 @@ function buildIndependentProducerCommand(
       return explicit;
     }
   }
+  if (isTarget) return null; // No pack-derived fallback for a target-card producer.
 
   const trimmed = proofCommand.trim();
   if (trimmed.startsWith('npm test --')) {
@@ -835,6 +836,14 @@ function evaluateNewRow(input: {
     return buildUnverified(rowIndex, row, 'unsafe-or-undeclared-command');
   }
 
+  const independentCommand = buildIndependentProducerCommand(proofCommand, block, reviewTargetRoot, selectedTarget);
+  if (
+    !independentCommand
+    || areNewRowCommandsSemanticallyIdentical(independentCommand, proofCommand, reviewTargetRoot)
+  ) {
+    return buildUnverified(rowIndex, row, 'non-genuine-proof');
+  }
+
   const expected = block.expected ?? '';
   const datum = block.datum ?? block.selector ?? '';
   const selector = datum.includes(':') ? `$.${datum.split(':').pop()}` : `$.${datum}`;
@@ -853,14 +862,6 @@ function evaluateNewRow(input: {
     return buildUnverified(rowIndex, row, 'producer-unreachable');
   }
   if (producerRunFailed(run)) {
-    return buildUnverified(rowIndex, row, 'non-genuine-proof');
-  }
-
-  const independentCommand = buildIndependentProducerCommand(proofCommand, block, reviewTargetRoot, selectedTarget);
-  if (
-    !independentCommand
-    || areNewRowCommandsSemanticallyIdentical(independentCommand, proofCommand, reviewTargetRoot)
-  ) {
     return buildUnverified(rowIndex, row, 'non-genuine-proof');
   }
 
