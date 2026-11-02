@@ -4436,21 +4436,23 @@ describe('Issue #2689 r03 exact native terminal -> canonical Issue assignment ->
       worktreePath, branch: 'refs/heads/issue-2689-manager', status: 'running',
       agentIdentity: 'opencode',
     };
+    const opencodeExecutable = '/opt/opencode/1.18.35/bin/opencode';
     const env = {
       ...process.env, OPK_BASE_DIR: root,
       PACK_EXECUTOR_MANAGER_AGENT: 'opencode',
       PACK_EXECUTOR_MANAGER_MODEL: 'fixture-opencode-model',
       PACK_EXECUTOR_MANAGER_EFFORT: 'fixture-opencode-effort',
+      PACK_EXECUTOR_OPENCODE_BIN: opencodeExecutable,
     };
     const opencodeProbeResult = (args: readonly string[]) => {
-      if (args[0] === 'opencode' && args[1] === 'models' && args.includes('--verbose')) return {
+      if (args[0] === opencodeExecutable && args[1] === 'models' && args.includes('--verbose')) return {
         ok: true, stdout: ['fixture-opencode-model', '{', '  "variants": {',
           '    "fixture-opencode-effort": {}', '  }', '}', ''].join('\n'), stderr: '',
       };
-      if (args[0] === 'opencode' && args[1] === 'models') return {
+      if (args[0] === opencodeExecutable && args[1] === 'models') return {
         ok: true, stdout: 'fixture-opencode-model\n', stderr: '',
       };
-      if (args[0] === 'opencode' && args.includes('--help')) return {
+      if (args[0] === opencodeExecutable && args.includes('--help')) return {
         ok: true, stdout: '', stderr: 'Usage: opencode --agent AGENT\n',
       };
       if (args[0] === process.execPath) return { ok: true, stdout: '', stderr: '' };
@@ -4525,6 +4527,7 @@ describe('Issue #2689 r03 exact native terminal -> canonical Issue assignment ->
             actor: 'orchestrator', nextAction: { kind: 'reconcile_worktree_setup' } };
         },
         finalizeProfile: async (profile) => ({ status: 'ok', value: profile }),
+        installManagerPushGuard: () => ({ status: 'ok', value: true }),
         runSupervisedStart: (args) => runSupervisedWorkerStart({
           ...args,
           inspect: async (argv) => ({ ok: true, stdout: JSON.stringify({ ok: true,
@@ -4543,7 +4546,7 @@ describe('Issue #2689 r03 exact native terminal -> canonical Issue assignment ->
       };
       const launched = await runSupervisedTaskLaunchAssistant({
         repository, projectId: 'orchestrator-pack', workClass: 'manager',
-        runId: 'run-2689', taskId, issueNumber: issue,
+        runId: 'run-2689', taskId, issueNumber: issue, defaultBranch: 'main',
         worktreeSelector: 'path:' + worktreePath, existingTerminal: handle,
         startMode: 'exact_terminal_worktree', env,
       }, deps);

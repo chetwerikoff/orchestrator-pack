@@ -5,6 +5,7 @@
     "docs/orchestration-runbook.md",
     "docs/target_repo_setup.md",
     "scripts/executor-profile-policy.ts",
+    "scripts/fleet/fleet-wake.test.ts",
     "scripts/orca-runtime/adapter.ts",
     "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/orca-runtime/task-adapter.ts",
@@ -40,6 +41,7 @@
     "docs/orchestration-runbook.md",
     "docs/target_repo_setup.md",
     "scripts/executor-profile-policy.ts",
+    "scripts/fleet/fleet-wake.test.ts",
     "scripts/orca-runtime/adapter.ts",
     "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/orca-runtime/task-adapter.ts",
@@ -51,5 +53,5 @@
     "scripts/worktree-lifecycle/operations.test.ts",
     "scripts/worktree-lifecycle/operations.ts"
   ],
-  "source_revision": "143e5e6c20d048d84eeb3eb1922bb4206fb0e99c"
+  "source_revision": "16377c878350870dbc2ab4a278331fa100ffd5f6"
 }
