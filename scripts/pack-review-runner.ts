@@ -7593,9 +7593,9 @@ export async function reconcileStalePackReviewRuns(
       }
       if (activeStale && recoveryCoverage?.kind === 'empty'
           && run.reviewRound?.reviewer === 'gpt') {
-        // Unlike an unfinished terminal, an active 0/3 orphan must prove both
-        // that each attempt stopped before send AND that GitHub has no source
-        // comment for any invoked identity. An incomplete census is a veto.
+        // Unlike an unfinished terminal, an active zero-source orphan must
+        // prove every attempt stopped before send and no original GitHub source
+        // comment exists. An incomplete census is a veto.
         const beforeZero = getPackReviewRun(run.id, { projectId, storeRoot });
         let currentHead = '';
         try {
@@ -7607,7 +7607,10 @@ export async function reconcileStalePackReviewRuns(
         const virtualFailed = beforeZero
           ? { ...beforeZero, status: 'failed' as const, failureReason: failedReason }
           : null;
-        const authorized = recovery.graceExpired
+        // Newly tiered T1/T2 require full coverage and have no partial-source
+        // grace to wait out. Historical three-slot rounds retain that guard;
+        // the dead-runner stale boundary is still mandatory for every version.
+        const authorized = (run.reviewRound.cardinality < 3 || recovery.graceExpired)
           && recovery.reason === `gpt_sources_incomplete_after_grace:0/${run.reviewRound.cardinality}`
           && beforeZero && isPackReviewRunStale(beforeZero)
           && currentHead === beforeZero.targetSha.toLowerCase()
