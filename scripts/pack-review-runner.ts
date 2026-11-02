@@ -52,6 +52,7 @@ import {
   PACK_REVIEW_AUTHORITY_PHASES,
   PACK_REVIEW_CAP_MAP_VERSION,
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+  PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
   PACK_REVIEW_GPT_SOURCE_ADMISSION_INTERVAL_MS,
   acknowledgePackReviewReset,
   beginPackReviewBodyAmendmentContinuation,
@@ -1528,6 +1529,25 @@ function gptRoundDiagnostics(round: PackReviewGptRoundRecord | undefined): {
   return { harvestIncidents, nonHarvestIncompleteSources };
 }
 
+function logicalGptSourceAccounting(version: string | undefined): boolean {
+  return version === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+    || version === PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION;
+}
+
+/** Source-accounting generation is a frozen run/round fact, not a logical cap-map revision. */
+function frozenLogicalGptSourceIdentity(run: PackReviewRunRecord): boolean {
+  const round = run.reviewRound;
+  return Boolean(round
+    && logicalGptSourceAccounting(run.accountingVersion)
+    && run.accountingVersion === round.accountingVersion
+    && run.logicalRoundOrdinal === round.roundOrdinal
+    && round.cardinality === selectPackReviewGptSourceCardinality({
+      reviewer: 'gpt', tier: round.tier, roundOrdinal: round.roundOrdinal,
+      accountingVersion: round.accountingVersion,
+    })
+    && round.sourceSlots.length === round.cardinality);
+}
+
 function gptUsableSourceCount(round: PackReviewGptRoundRecord | undefined): number {
   return round?.sourceSlots.filter((slot) => (
     slot.lifecycle === 'terminal'
@@ -2239,7 +2259,7 @@ async function findJournaledDeliveryResumeCandidate(options: {
     if (!payload) continue;
     const classification = classifyPackReviewPayload(payload);
     const intermediate = !classification.blocking
-      && candidate.accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+      && logicalGptSourceAccounting(candidate.accountingVersion)
       && Number.isInteger(candidate.logicalRoundOrdinal)
       && Number.isInteger(candidate.logicalRoundCap)
       && Number(candidate.logicalRoundOrdinal) < Number(candidate.logicalRoundCap);
@@ -4366,8 +4386,7 @@ async function commitRecoveredGptAuthority(options: {
   const rank = { T1: 1, T2: 2, T3: 3 } as const;
   const historicalTierCompatible = authority.cycle?.frozenTier === round.tier
     || (authority.cycle?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
-      && options.run.accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
-      && round.accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+      && frozenLogicalGptSourceIdentity(options.run)
       && options.run.logicalRoundOrdinal === round.roundOrdinal
       && Number(options.run.logicalRoundCap) <= authority.cycle.frozenCap
       && rank[authority.cycle.frozenTier] > rank[round.tier]);
@@ -5166,7 +5185,7 @@ async function verifyOrdinaryRequiredSuccessBinding(
   options: { repoSlug: string; sourceRepoRoot: string; storeRoot: string },
 ): Promise<boolean> {
   try {
-    if (run.accountingVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION) return true;
+    if (!logicalGptSourceAccounting(run.accountingVersion)) return true;
     const authority = readPackReviewAuthority(run.prNumber, { storeRoot: options.storeRoot });
     const cycle = authority?.cycle;
     const round = run.reviewRound;
@@ -5252,7 +5271,7 @@ async function observePackReviewVerdictDelivery(options: {
   const classification = classifyPackReviewPayload(payload);
   const intermediate = !classification.blocking
     && (outstandingPackReviewCycle(run, options.storeRoot)
-      || (run.accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+      || (logicalGptSourceAccounting(run.accountingVersion)
         && Number.isInteger(run.logicalRoundOrdinal) && Number.isInteger(run.logicalRoundCap)
         && Number(run.logicalRoundOrdinal) < Number(run.logicalRoundCap)));
   const requiredStatusState = intermediate ? 'pending' as const : classification.requiredStatus;
@@ -6142,7 +6161,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
           || priorRun.canonicalRepository?.toLowerCase() !== options.repoSlug.toLowerCase()
           || priorRun.targetSha !== terminal.targetSha || priorRun.headSha !== terminal.targetSha
           || priorRun.reviewCycleId !== cycle.cycleId
-          || priorRun.accountingVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+          || !logicalGptSourceAccounting(priorRun.accountingVersion)
           || priorRun.logicalRoundOrdinal !== cycle.frozenCap
           || priorRun.logicalRoundCap !== cycle.frozenCap || !priorRun.completedAtUtc) {
         throw new Error('last terminal findings project/PR/head/cycle/ordinal binding missing');
@@ -6210,7 +6229,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         if (round.reviewer !== 'gpt' || priorRun.resolvedReviewer !== 'gpt'
             || round.issueNumber !== issueNumber || round.boundIssueSnapshotDigest !== frozen.snapshotHash
             || round.roundOrdinal !== cycle.frozenCap
-            || round.accountingVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+            || !frozenLogicalGptSourceIdentity(priorRun)
             || round.tier !== cycle.frozenTier) {
           throw new Error('last GPT findings round or snapshot digest mismatch');
         }
@@ -9440,7 +9459,9 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
       : logicalAccounting
         ? (authority.cycle?.consumedRoundOrdinals?.length ?? 0) + 1
       : (authority.cycle?.consumedHeadShas.length ?? 0) + 1;
-    const accountingVersion = authority.cycle?.capMapVersion;
+    const accountingVersion = reviewer === 'gpt' && logicalAccounting && !supplementalMode
+      ? PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION
+      : authority.cycle?.capMapVersion;
     const cardinality = selectPackReviewGptSourceCardinality({
       reviewer: reviewer ?? 'codex',
       tier: authoritative.tier,
@@ -9526,13 +9547,16 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
       && resolve(candidate.trustedPackRoot) === resolve(trusted.trustedPackRoot)
       && candidate.headSha.toLowerCase() === target.headSha.toLowerCase()
       && candidate.resolvedReviewer === 'gpt'
-      && candidate.accountingVersion === accountingVersion
+      && frozenLogicalGptSourceIdentity(candidate)
       && candidate.reviewCycleId === authority.cycle?.cycleId
       && candidate.logicalRoundOrdinal === roundOrdinal
       && incumbentFrozenTierMatches(candidate)
       && candidate.reviewRound?.roundOrdinal === roundOrdinal
-      && candidate.reviewRound?.accountingVersion === accountingVersion
-      && candidate.reviewRound?.cardinality === cardinality
+      && candidate.reviewRound?.accountingVersion === candidate.accountingVersion
+      && candidate.reviewRound?.cardinality === selectPackReviewGptSourceCardinality({
+        reviewer: 'gpt', tier: candidate.reviewRound.tier, roundOrdinal,
+        accountingVersion: candidate.accountingVersion,
+      })
       && candidate.reviewRound?.issueNumber === authoritative.issueNumber
       && candidate.reviewRound?.boundIssueSnapshotDigest === authoritative.snapshotDigest
       && (candidate.boundIssueSnapshotDigest === undefined
