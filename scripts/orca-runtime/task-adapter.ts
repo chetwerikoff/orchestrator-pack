@@ -892,7 +892,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
           const show = this.#run<unknown>(
             ['terminal', 'show', '--terminal', ownership.identity.id], options,
           );
-          if (show.ok || !['not_found', 'terminal_not_found', 'terminal_missing']
+          if (show.ok || !['not_found', 'terminal_not_found', 'terminal_missing', 'terminal_handle_stale']
             .includes(String(show.error?.code ?? '').trim().toLowerCase())) {
             return runtimeFailure('spawn_worker', 'launch_task_terminal_identity_unproven');
           }
