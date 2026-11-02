@@ -438,7 +438,7 @@ function ruffReproductionFailure(cwd: string, parent: string, commit: string, pu
     const uvFailure = (operation: string, failed: ReturnType<typeof run>): string =>
       `${operation}: ${trimmed(failed.stderr) || trimmed(failed.stdout) || 'uv execution failed'}; retry the push`;
     if (!version.ok) return uvFailure(`locked ruff ${pin} resolution failed`, version);
-    if (reported !== pin) return `locked ruff ${pin} expected, got ${reported ?? 'no version'}; retry the push`;
+    if (reported !== pin) return `locked ruff ${pin} is unavailable (reported ${reported ?? 'no version'}); retry the push`;
     const formatted = run(['format', '--no-cache', '.']);
     if (!formatted.ok) return uvFailure('ruff format failed on the parent tree', formatted);
     const fixed = run(['check', '--fix', '--no-cache', '.']);
