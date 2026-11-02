@@ -199,9 +199,10 @@ export function isOriginallyBlockingPackReviewFinding(finding: unknown): boolean
 }
 
 function protectedTriageHarm(finding: Record<string, unknown>): boolean {
-  const fields = ['title','body','description','category','code','quality','signature','type','severity'];
-  const text = fields.map((name) => String(finding[name] ?? '')).join(' ').toLowerCase();
-  return /security|auth(?:orization|entication)?|scope.?(?:violation|escape)|permission|unauthori[sz]ed|secret|credential|data.?(?:loss|corrupt)|destruct|false.?success|falsely.?green|incorrect.?completion|hung|no.?recovery|deadlock|stuck.?unit|integrity|safety/.test(text);
+  // Source findings commonly put the actual impact in summary/details rather
+  // than title/body; adversarial labels alone cannot downgrade protected harm.
+  const text = JSON.stringify(finding).toLowerCase();
+  return /security|auth(?:orization|entication)?|scope.?(?:violation|escape)|permission|unauthori[sz]ed|secret|credential|data.?(?:loss|corrupt)|lost.?data|destruct|false.?(?:success|green|completion|merge)|falsely.?(?:green|success|merged)|incorrect.?(?:completion|success)|green.?(?:status|check).?(?:false|wrong|despite)|hung|hang.?forever|no.?recovery|deadlock|stuck.?(?:unit|worker)|integrity|safety/.test(text);
 }
 
 function triageGroupId(run: PackReviewRunRecord, members: readonly string[]): string {
@@ -2532,7 +2533,7 @@ export function persistPackReviewGptTriageResult(
 }
 
 function onePhysicalTodoField(value: string, limit = 180): string {
-  return String(value).replace(/[\r\n\t\x00-\x1f\x7f]/g,' ')
+  return String(value).replace(/[|\r\n\t\x00-\x1f\x7f]/g,' ')
     .replace(/\s+/g,' ').trim().slice(0,limit);
 }
 
@@ -2562,7 +2563,7 @@ export function appendPackReviewDeferredTodos(
       let existing = existsSync(todoPath) ? readFileSync(todoPath,'utf8') : '';
       for (const group of projection.deferred) {
         const identity = `runId=${run.id} groupId=${group.groupId}`;
-        if (existing.includes(identity)) {skipped++;continue;}
+        if (existing.split('\n').some((line) => line.includes(` | ${identity} |`))) {skipped++;continue;}
         const date = (options.now ?? new Date()).toISOString().slice(0,10);
         const line = [
           date, `repo=${onePhysicalTodoField(run.canonicalRepository ?? '',120)}`,
