@@ -35,7 +35,7 @@ import { loadReverifyAllowlistConfig } from './reverify-allowlist-config.ts';
 import { runSandboxedAllowlistedCommand } from './reverify-sandbox.ts';
 import { runProcessSync } from '../kernel/subprocess.ts';
 import { parseRemoteSlug } from './git-origin-slug.mjs';
-import { resolveTargetContext, type ContractEvidenceProducer } from './target-context.ts';
+import { resolveTargetContext, type TargetContext } from './target-context.ts';
 
 export { DEFAULT_REVERIFY_MANIFEST_PATH };
 
@@ -295,9 +295,10 @@ function runTrustedCommand(command: string, options: {
   timeoutMs: number;
   forceUnreachable?: boolean;
   sandboxMode: 'trusted-base' | 'pr-head-new';
+  selectedContext?: TargetContext;
 }): CommandRunResult {
   const resolutionRoot = options.resolutionRoot ?? options.cwd;
-  const resolved = resolveAllowlistedCommand(command, { repoRoot: resolutionRoot });
+  const resolved = resolveAllowlistedCommand(command, { repoRoot: resolutionRoot, selectedContext: options.selectedContext });
   if (!resolved) {
     return {
       ok: false,
@@ -475,10 +476,11 @@ function commandExercisesDeclaredProducer(
   command: string,
   declaredProducer: string,
   repoRoot: string,
-  selectedTarget?: ContractEvidenceProducer,
+  selectedContext?: TargetContext,
 ): boolean {
+  const selectedTarget = selectedContext?.contractEvidenceProducer;
   const trimmed = command.trim();
-  if (!trimmed || !isCommandSafe(trimmed, repoRoot)) {
+  if (!trimmed || !isCommandSafe(trimmed, repoRoot, selectedContext)) {
     return false;
   }
   const producer = canonicalProducer(declaredProducer);
@@ -541,8 +543,9 @@ function buildIndependentProducerCommand(
   proofCommand: string,
   block: Record<string, string>,
   repoRoot: string,
-  selectedTarget?: ContractEvidenceProducer,
+  selectedContext?: TargetContext,
 ): string | null {
+  const selectedTarget = selectedContext?.contractEvidenceProducer;
   const producer = canonicalProducer(block.producer ?? '');
   const isTarget = !(producerRegistry.repoOwned ?? []).includes(producer) && !isExternalProducer(producer);
   const explicit = (block['producer-command'] ?? '').trim();
@@ -557,8 +560,8 @@ function buildIndependentProducerCommand(
       return null;
     }
     if (
-      isCommandSafe(explicit, repoRoot)
-      && commandExercisesDeclaredProducer(explicit, block.producer ?? '', repoRoot, selectedTarget)
+      isCommandSafe(explicit, repoRoot, selectedContext)
+      && commandExercisesDeclaredProducer(explicit, block.producer ?? '', repoRoot, selectedContext)
     ) {
       return explicit;
     }
@@ -807,9 +810,10 @@ function evaluateNewRow(input: {
   reviewTargetRoot: string;
   timeoutMs: number;
   forceProducerUnreachable?: boolean;
-  selectedTarget?: ContractEvidenceProducer;
+  selectedContext?: TargetContext;
 }): ReverifyRowResult {
-  const { row, rowIndex, markdown, trustedBaseRoot, reviewTargetRoot, timeoutMs, forceProducerUnreachable, selectedTarget } = input;
+  const { row, rowIndex, markdown, trustedBaseRoot, reviewTargetRoot, timeoutMs, forceProducerUnreachable, selectedContext } = input;
+  const selectedTarget = selectedContext?.contractEvidenceProducer;
   const producer = canonicalProducer(row.producer ?? '');
   if (canonicalBindingIdProducer(row) !== producer || isExternalProducer(producer)) {
     return buildUnverified(rowIndex, row, 'unsupported-producer');
@@ -840,7 +844,7 @@ function evaluateNewRow(input: {
     return buildUnverified(rowIndex, row, 'non-genuine-proof');
   }
 
-  const independentCommand = buildIndependentProducerCommand(proofCommand, block, reviewTargetRoot, selectedTarget);
+  const independentCommand = buildIndependentProducerCommand(proofCommand, block, reviewTargetRoot, selectedContext);
   if (
     !independentCommand
     || areNewRowCommandsSemanticallyIdentical(independentCommand, proofCommand, reviewTargetRoot)
@@ -875,6 +879,7 @@ function evaluateNewRow(input: {
     timeoutMs,
     forceUnreachable: forceProducerUnreachable,
     sandboxMode: 'pr-head-new',
+    selectedContext,
   });
   if (independentRun.blocked) {
     return buildUnverified(rowIndex, row, blockedUnverifiedReason(independentRun));
@@ -1112,7 +1117,7 @@ export function runContractEvidenceReverify(input: ReverifyRunInput): ReverifyRu
   }
   const corpusRoot = path.dirname(input.manifestPath).replace(/\\/g, '/');
   const rows: ReverifyRowResult[] = [];
-  let selectedTarget: ContractEvidenceProducer | undefined;
+  let selectedContext: TargetContext | undefined;
   // The selected card must bind to the repository actually under review, not
   // merely to a valid but unrelated primary checkout.
   try {
@@ -1122,7 +1127,7 @@ export function runContractEvidenceReverify(input: ReverifyRunInput): ReverifyRu
       cwd: reviewTargetRoot, inheritParentEnv: false,
     });
     if (origin.ok && parseRemoteSlug(origin.stdout)?.toLowerCase() === context.repository) {
-      selectedTarget = context.contractEvidenceProducer;
+      selectedContext = context;
     }
   } catch {
     // Pack-owned producers retain their current behavior without target selection.
@@ -1152,7 +1157,7 @@ export function runContractEvidenceReverify(input: ReverifyRunInput): ReverifyRu
           reviewTargetRoot,
           timeoutMs,
           forceProducerUnreachable: input.forceProducerUnreachable,
-          selectedTarget,
+          selectedContext,
         }),
       );
       continue;

@@ -743,7 +743,7 @@ export function checkContractEvidence(markdown, options = {}) {
         if (
           independent !== selectedTarget.contractEvidenceProducer.boundaryCommand
           || independent === proof
-          || !isCommandSafe(independent, selectedTarget.primaryRoot)
+          || !isCommandSafe(independent, selectedTarget.primaryRoot, selectedTarget)
           || !isCommandSafe(proof, selectedTarget.primaryRoot)
         ) {
           errors.push(`${rowLabel}: target producer proof must use a safe executable proof-command and an independent producer-command exactly matching the selected card's boundaryCommand; repair the card/emission and safe proof, then retry`);

@@ -192,6 +192,7 @@ function main() {
   const prModifiedPaths = readLines(changedPathsFile);
 
   const result = runContractEvidenceReverify({
+    projectId: String(opts.projectId),
     repoRoot,
     trustedBaseRoot,
     reviewTargetRoot,
