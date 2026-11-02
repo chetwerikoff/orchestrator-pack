@@ -1552,6 +1552,19 @@ function frozenLogicalGptSourceIdentity(run: PackReviewRunRecord): boolean {
     && round.sourceSlots.length === round.cardinality);
 }
 
+/** Older distinct-head and legacy saved versions retain their original exact slot policy. */
+function frozenSavedGptSourceIdentity(run: PackReviewRunRecord): boolean {
+  const round = run.reviewRound;
+  if (!round || run.accountingVersion !== round.accountingVersion
+      || run.logicalRoundOrdinal !== undefined && run.logicalRoundOrdinal !== round.roundOrdinal) return false;
+  try {
+    return round.cardinality === selectPackReviewGptSourceCardinality({
+      reviewer: 'gpt', tier: round.tier, roundOrdinal: round.roundOrdinal,
+      accountingVersion: round.accountingVersion,
+    }) && round.sourceSlots.length === round.cardinality;
+  } catch { return false; }
+}
+
 function gptUsableSourceCount(round: PackReviewGptRoundRecord | undefined): number {
   return round?.sourceSlots.filter((slot) => (
     slot.lifecycle === 'terminal'
@@ -3581,7 +3594,7 @@ function provenFirstAttemptZeroSendCensus(
   missingFirstAttemptIdentities: readonly string[],
 ): boolean {
   const round = run.reviewRound;
-  if (!round || round.reviewer !== 'gpt' || !frozenLogicalGptSourceIdentity(run)
+  if (!round || round.reviewer !== 'gpt' || !frozenSavedGptSourceIdentity(run)
     || round.settledSourceCount !== undefined
     || gptUsableSourceCount(round) !== 0 || hasPersistedPackReviewVerdict(run)
     || run.reviewVerdict !== undefined || run.journalOutcome !== undefined
@@ -3696,7 +3709,7 @@ async function recoverablePostedRateLimitSlots(input: {
   const { run } = input;
   const round = run.reviewRound;
   if (!round || !hasFailedRateLimitSource(run) || round.reviewer !== 'gpt'
-    || !frozenLogicalGptSourceIdentity(run)
+    || !frozenSavedGptSourceIdentity(run)
     || new Set(round.sourceSlots.map((slot) => slot.slotId)).size !== round.cardinality
     || round.settledSourceCount !== undefined || gptUsableSourceCount(round) === 0
     || hasPersistedPackReviewVerdict(run) || !hasCredentialedGptSourceAuthority(run)) return null;
@@ -3826,7 +3839,7 @@ function originalRateLimitZeroJudgment(
   if (run.status !== 'failed'
     || !run.failureReason?.startsWith('gpt_source_non_complete:')
     || noJudgmentBudgetOutcome(run, storeRoot) === null
-    || round?.reviewer !== 'gpt' || !frozenLogicalGptSourceIdentity(run)) return false;
+    || round?.reviewer !== 'gpt' || !frozenSavedGptSourceIdentity(run)) return false;
   let witnessedRateLimit = false;
   for (const slot of round.sourceSlots) {
     if (slot.lifecycle === 'planned' || slot.terminalClass === 'pre_launch_interrupted') continue;
