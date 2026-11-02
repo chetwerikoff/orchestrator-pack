@@ -494,7 +494,7 @@ function commandExercisesDeclaredProducer(
   }
   // The card is the sole authority for the target producer's actual boundary.
   // Neither a proof command nor a NEW row can nominate another entrypoint.
-  if (selectedTarget?.name === producer) {
+  if (selectedTarget?.name === producer && !(producerRegistry.repoOwned ?? []).includes(producer)) {
     return trimmed === selectedTarget.boundaryCommand;
   }
   const boundaries = listDeclaredProducerBoundaryRelPaths(producer);
