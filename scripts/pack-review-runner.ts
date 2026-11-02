@@ -8543,9 +8543,9 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
   }) : null;
   // A dead original GPT runner can have its credentialed journal, COMMENT and
   // exact-head required status settled by the incumbent pre-start reconciler.
-  // A fresh explicit invocation must acknowledge only that original run,
+  // Both explicit and default GPT starts acknowledge only that recovered run,
   // without engaging another reviewer or borrowing a projected stage status.
-  if (explicitReviewer && reviewer === 'gpt' && preStartReconciliation) {
+  if (reviewer === 'gpt' && preStartReconciliation) {
     for (const settled of preStartReconciliation.results) {
       if (settled.recovered !== true || settled.statusReconciled !== true) continue;
       const original = getPackReviewRun(String(settled.runId), { projectId, storeRoot });
