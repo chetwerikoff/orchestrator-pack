@@ -3875,9 +3875,9 @@ describe('Issue #2750 durable artifact root and permissions (AC19/AC20)', () => 
     ]);
     expect(diagnostics).toEqual([]);
 
-    // The independent PR-author XDG mirror is outside #2763's allowed paths and remains unchanged.
+    // PR-author root agrees with HOME even when XDG_STATE_HOME is OpenCode scratch state.
     const prAuthorRoot = prAuthorDurableArtifactRoot();
-    expect(prAuthorRoot).toBe(join(xdg, 'orchestrator-pack'));
+    expect(prAuthorRoot).toBe(join(home, '.local', 'state', 'orchestrator-pack'));
     // PR-author self-reader: an orphaned claim written under its own root is its own candidate.
     const binding = { repo: 'acme/widgets', pr: 7 };
     const orphanInvocation = 'inv-2750-orphan';
