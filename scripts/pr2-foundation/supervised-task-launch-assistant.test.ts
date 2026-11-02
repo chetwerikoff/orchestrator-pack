@@ -31,6 +31,7 @@ import {
   runOpenCodePrimaryProbe,
   runExistingOpenCodeResume,
   runSupervisedTaskLaunchAssistant,
+  observeQuiescentRestoreCensus,
   LAUNCH_STARTUP_OBSERVATION_WINDOW_MS,
   CANONICAL_MERGE_LAUNCH_COMMAND,
   repoCanonicalKey,
@@ -58,6 +59,115 @@ import {
   withMergeExecutorProfileDefaults,
 } from '../executor-profile-policy.ts';
 import { overlayExecutorProfileEnv, readExecutorProfileStore } from '../executor-profile-store.ts';
+
+describe('Issue #2754 AC5 serialized worktree restoration', () => {
+  it('requires complete native census and empty Linux process descendants; retained terminal fails even if exited', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2754-restore-'));
+    const foreign = join(root, 'foreign');
+    mkdirSync(foreign);
+    const base = runtimeAdapter();
+    const native = (workers: readonly RuntimeWorker[]): RuntimeAdapter => ({
+      ...base, listWorkersAsync: async () => ({ status: 'ok', value: workers }),
+    });
+    const foreignWorker: RuntimeWorker = { ...worker, workspacePath: foreign };
+    const atTarget: RuntimeWorker = { ...worker, workspacePath: root };
+    try {
+      const empty = await observeQuiescentRestoreCensus(native([]), root, () => [], 'linux');
+      expect(empty).toMatchObject({ status: 'ok', value: { terminalFingerprint: '' } });
+      const foreignOnly = await observeQuiescentRestoreCensus(native([foreignWorker]), root, () => [], 'linux');
+      expect(foreignOnly.status).toBe('ok');
+      const retained = await observeQuiescentRestoreCensus(native([atTarget]), root, () => [], 'linux');
+      expect(retained).toMatchObject({ status: 'continue', cause: 'worktree_restore_target_terminal_retained' });
+      const process = await observeQuiescentRestoreCensus(native([]), root,
+        () => [{ pid: 15, ppid: 1, starttime: '1', cwd: root }], 'linux');
+      expect(process).toMatchObject({ status: 'continue', cause: 'worktree_restore_target_process_retained' });
+      const unreadable = await observeQuiescentRestoreCensus(native([]), root,
+        () => { throw new Error('/proc unreadable'); }, 'linux');
+      expect(unreadable).toMatchObject({ status: 'continue', cause: 'worktree_restore_process_census_unavailable' });
+      const absent = await observeQuiescentRestoreCensus(base, root, () => [], 'linux');
+      expect(absent).toMatchObject({ status: 'continue', cause: 'worktree_restore_census_unsupported' });
+      const platform = await observeQuiescentRestoreCensus(native([]), root, () => [], 'win32');
+      expect(platform).toMatchObject({ status: 'continue', cause: 'worktree_restore_census_unsupported' });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it.each(['same-task', 'new-task'] as const)('admits only a twice-observed exact gone Dispatch and unchanged quiescence: %s', async (mode) => {
+    const oldTask = mode === 'same-task' ? 'task-1' : 'task-old';
+    const prior: WorkerAssignment = {
+      schema: 'orchestrator-pack/worker-assignment/v1',
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 2754, taskId: oldTask, assignmentId: 'prior-assignment',
+      generation: 1, kind: 'local', provider: 'orca', bindingKey: 'dispatch-old',
+      role: 'orchestrator', createdAtUtc: '2026-11-02T00:00:00.000Z',
+    };
+    const observations: DispatchObservation[] = mode === 'same-task'
+      ? [{ kind: 'present', dispatchId: 'dispatch-old', status: 'failed' },
+        { kind: 'present', dispatchId: 'dispatch-old', status: 'failed' }]
+      : [{ kind: 'absent' }, { kind: 'present', dispatchId: 'dispatch-old', status: 'failed' },
+        { kind: 'absent' }, { kind: 'present', dispatchId: 'dispatch-old', status: 'failed' }];
+    let started = 0;
+    let censuses = 0;
+    const result = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), issueNumber: 2754 }, {
+      ...deps({ currentAssignment: prior, dispatch: observations,
+        onSupervised: () => { started += 1; } }),
+      proveManagerTaskMembership: async (_runId, taskId) => ({ status: 'ok', value: { taskId } }),
+      proveTerminalGone: async (assignment) => ({
+        taskId: assignment.taskId, dispatchId: assignment.bindingKey,
+        dispatchState: 'failed', worktreeId: 'repo::exact-worktree', workerAbsent: true,
+      }),
+      resolveRestoreWorktree: async () => ({ status: 'ok', value: {
+        id: 'repo::exact-worktree', path: '/tmp/exact-worktree',
+      } }),
+      observeRestoreQuiescence: async () => {
+        censuses += 1;
+        return { status: 'ok', value: { terminalFingerprint: 'same foreign inventory' } };
+      },
+      prepareWorktree: async () => ({ status: 'ok', value: {
+        id: 'repo::exact-worktree', selector: 'id:manager-worktree',
+        path: '/tmp/exact-worktree', setupWitness: 'proven_reuse',
+      } }),
+    });
+    expect(result.outcome).toBe('ready');
+    expect(censuses).toBe(2);
+    expect(started).toBe(1);
+  });
+
+  it('rejects changed all-workspace census after preparation without any terminal spawn', async () => {
+    const prior: WorkerAssignment = {
+      schema: 'orchestrator-pack/worker-assignment/v1',
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 2754, taskId: 'task-old', assignmentId: 'prior-assignment',
+      generation: 1, kind: 'local', provider: 'orca', bindingKey: 'dispatch-old',
+      role: 'orchestrator', createdAtUtc: '2026-11-02T00:00:00.000Z',
+    };
+    let census = 0;
+    let spawned = 0;
+    const result = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), issueNumber: 2754 }, {
+      ...deps({ currentAssignment: prior, adapter: runtimeAdapter({ onSpawn: () => { spawned += 1; } }),
+        dispatch: [{ kind: 'absent' }, { kind: 'present', dispatchId: 'dispatch-old', status: 'failed' },
+          { kind: 'absent' }, { kind: 'present', dispatchId: 'dispatch-old', status: 'failed' }] }),
+      proveManagerTaskMembership: async (_runId, taskId) => ({ status: 'ok', value: { taskId } }),
+      proveTerminalGone: async (assignment) => ({
+        taskId: assignment.taskId, dispatchId: assignment.bindingKey,
+        dispatchState: 'failed', worktreeId: 'repo::exact-worktree', workerAbsent: true,
+      }),
+      resolveRestoreWorktree: async () => ({ status: 'ok', value: {
+        id: 'repo::exact-worktree', path: '/tmp/exact-worktree',
+      } }),
+      observeRestoreQuiescence: async () => ({ status: 'ok', value: {
+        terminalFingerprint: ++census === 1 ? 'before' : 'changed',
+      } }),
+      prepareWorktree: async () => ({ status: 'ok', value: {
+        id: 'repo::exact-worktree', selector: 'id:manager-worktree',
+        path: '/tmp/exact-worktree', setupWitness: 'proven_reuse',
+      } }),
+    });
+    expect(result).toMatchObject({ outcome: 'continue',
+      stage: 'dispatch_admission_final', observedCause: 'worktree_restore_terminal_inventory_changed' });
+    expect(census).toBe(2);
+    expect(spawned).toBe(0);
+  });
+});
 
 describe('production manager Run observation command seam', () => {
   it.each([
