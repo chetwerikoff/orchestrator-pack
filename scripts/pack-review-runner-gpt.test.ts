@@ -1831,7 +1831,7 @@ describe('GPT plural source round (Issue #1276)', () => {
 
     expect(result.ok).toBe(true);
     const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
-    expect(run?.reviewRound).toMatchObject({ tier: 'T1', roundOrdinal: 1, cardinality: 3 });
+    expect(run?.reviewRound).toMatchObject({ tier: 'T3', roundOrdinal: 1, cardinality: 3 });
     expect(run?.reviewRound?.sourceSlots).toHaveLength(3);
     expect(run?.reviewRound?.sourceSlots.every((slot) => slot.lifecycle === 'terminal')).toBe(true);
   });
@@ -2220,6 +2220,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
           issueUrl: 'https://api.github.com/repos/chetwerikoff/orchestrator-pack/issues/1276',
         });
       },
+      fixtureRequiredStatusReader: async () => statusStates.at(-1),
       fixtureRequiredStatusWriter: async (request) => {
         statusStates.push(request.state);
       },
@@ -3363,7 +3364,7 @@ describe('Issue #1393 legacy aggregate compatibility and runner harvest matrix',
       fixturePrState: 'OPEN',
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixturePostReviewHeadSha: HEAD_A,
-      fixtureIssueTitle: "[T1] Source slot recovery", fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
+      fixtureIssueTitle: "[T3] Source slot recovery", fixtureIssueBody: '```complexity-tier\ntier: T3\n```',
       fixtureIssueNumber: 1276,
       claimMode: 'preacquired',
       ...overrides,
@@ -4106,6 +4107,7 @@ describe('Issue #2451 zero-judgment budget and wrapper projection', () => {
     const options = { projectId: 'orchestrator-pack', storeRoot };
     const round = plannedStoredGptRound();
     round.tier = 'T2';
+    round.accountingVersion = PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
     round.sourceSlots = round.sourceSlots.map((slot) => ({
       ...slot, lifecycle: 'terminal' as const, invocationId: `inv-${slot.ordinal}`,
       attemptOrdinal: 1,
@@ -4119,8 +4121,8 @@ describe('Issue #2451 zero-judgment budget and wrapper projection', () => {
       canonicalRepository: 'chetwerikoff/orchestrator-pack',
       trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
       accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
-      reviewCycleId: 'cycle-2451', logicalRoundOrdinal: 1, logicalRoundCap: 2,
-      automaticBudgetDisposition: 'consume', reviewRound: round,
+      reviewCycleId: 'cycle-2451', logicalRoundOrdinal: 1, logicalRoundCap: 1,
+      resolvedReviewer: 'gpt', automaticBudgetDisposition: 'consume', reviewRound: round,
     }).run;
     const failed = setPackReviewRunTerminal(created.id, 'failed', {
       failureReason: 'gpt_source_non_complete:source-01:connect_over_cdp_failed',
@@ -5044,7 +5046,7 @@ describe('Issue #2496 r03 genuine GPT source delivery and status observation', (
     });
     const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot: f.storeRoot });
     expect(run?.reviewRound?.reviewer).toBe('gpt');
-    expect(run?.reviewRound?.sourceSlots).toHaveLength(3);
+    expect(run?.reviewRound?.sourceSlots).toHaveLength(2);
     expect(run?.deliveryOutcomes.workerNotification?.state).toBe('failed');
     expect(f.statuses).toEqual(['pending', 'success']);
     expect(reader).toHaveBeenCalledWith(HEAD_A);
@@ -5127,7 +5129,7 @@ describe('Issue #2496 r03 genuine GPT source delivery and status observation', (
     const priorAttempts = priorRun?.reviewRound?.sourceSlots.map((slot) => ({
       slotId: slot.slotId, invocationId: slot.invocationId, attemptOrdinal: slot.attemptOrdinal,
     }));
-    expect(priorAttempts).toHaveLength(3);
+    expect(priorAttempts).toHaveLength(2);
     const noNewSourceInvocations = vi.fn(() => { throw new Error('journaled status resume must never resend GPT sources'); });
     const recovered = await startPackReview({
       ...f.input,
@@ -6753,7 +6755,7 @@ describe('Issue #2659 ARCH23:01 old cooldown history versus a newer partial sour
     });
     expect(b1Result, JSON.stringify(b1Result)).toMatchObject({
       ok: true, created: true, status: 'up_to_date',
-      coverage: { kind: 'complete', completedSourceCount: 3, cardinality: 3 },
+      coverage: { kind: 'complete', completedSourceCount: 2, cardinality: 2 },
     });
     expect(b1Result.runId).not.toBe(original.id);
     expect(b1Result.runId).not.toBe(successor.id);
