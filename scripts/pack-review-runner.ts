@@ -8927,6 +8927,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
   let claimLease: ClaimLease | null = null;
   let run: PackReviewRunRecord | null = null;
   let worktree = '';
+  let settledSourceHeartbeat: ReturnType<typeof setInterval> | undefined;
   let terminal = false;
   let retainClaimDirectory = false;
   let terminalPersistenceAttempted = false;
@@ -10759,6 +10760,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
       try { heartbeatPackReviewRun(run!.id, { projectId, storeRoot }); } catch { /* fail closed at terminal write */ }
     }, HEARTBEAT_INTERVAL_MS);
     heartbeat.unref();
+    if (gptRound) settledSourceHeartbeat = heartbeat;
 
     let result: ProcessResult;
     let resolvedReviewer: PackReviewer | null = reviewer;
@@ -10845,7 +10847,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         resolvedReviewer = invocation.resolvedReviewer;
       }
     } finally {
-      clearInterval(heartbeat);
+      if (!gptRound) clearInterval(heartbeat);
     }
     void resolvedReviewer;
     writeRunLogs(storeRoot, run.id, result.stdout, result.stderr);
@@ -11768,6 +11770,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
       httpStatus: 500,
     };
   } finally {
+    if (settledSourceHeartbeat) clearInterval(settledSourceHeartbeat);
     try {
       if (worktree && run) {
         if (process.env.OPK_VITEST_HARNESS === '1' && input.fixtureBeforeReviewWorktreeCleanup) {
