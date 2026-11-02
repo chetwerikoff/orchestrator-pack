@@ -5249,6 +5249,28 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
       .toEqual([1]);
   });
 
+  it('Issue #2748: ordinary 409 retry refuses changed closing-Issue bytes on the same head', async () => {
+    const f = seed(3);
+    let reads = 0;
+    const input = { ...f.input };
+    input.fixtureRequiredStatusReader = async () => {
+      reads += 1;
+      if (reads === 1) {
+        input.fixtureIssueBody = f.input.fixtureIssueBody + '\nUnreviewed body amendment';
+        throw new Error('HTTP 409: synthetic status read interruption');
+      }
+      return f.statusStates.at(-1);
+    };
+    const result = await reconcileStalePackReviewRuns(input);
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({ runId: f.runId, statusReconciled: false }),
+    ]));
+    expect(reads).toBeGreaterThanOrEqual(2);
+    expect(f.reviewBodies).toHaveLength(1);
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.cycle?.consumedRoundOrdinals)
+      .toEqual([1]);
+  });
   it('prefers a credentialed 3/3 census even after degraded-quorum grace', async () => {
     const f = seed(3);
     f.expireGrace();

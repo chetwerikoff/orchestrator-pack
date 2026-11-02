@@ -2950,6 +2950,26 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(readPackReviewAuthority(prNumber, f.options)?.transitionSeq).toBe(settled?.transitionSeq);
   });
 
+  it('Issue #2748: completed B1 same-head resolution rejects rollback to frozen B0', async () => {
+    const f = fixture();
+    const initial = await reconcileStalePackReviewRuns(f.input);
+    expect(initial.results).toContainEqual(expect.objectContaining({
+      settled: true, reason: 'final_cap_same_head_issue_resolution_settled',
+    }));
+    const frozen = '<!-- source-revision: r12 -->\n```allowed-roots\nsrc/**\n```\n';
+    f.transports.issue.body = frozen;
+    f.input.fixtureIssueBody = frozen;
+    const outcome = await startPackReview({
+      ...f.input, headSha: reviewedHead, fixtureRepoSlug: repository,
+      fixturePostReviewHeadSha: reviewedHead,
+      fixturePostReviewPrBody: `Closes #${issueNumber}`, claimMode: 'preacquired',
+    });
+    expect(outcome).toMatchObject({
+      ok: false, reason: 'stage_complete_issue_body_unverified', requiredStatusState: 'error',
+    });
+    expect(f.statuses.at(-1)?.state).toBe('error');
+    expect(readPackReviewAuthority(prNumber, f.options)?.cycle?.reviewStageComplete).toBe(true);
+  });
   it.each(['scoped reconcile', 'PR-led start'] as const)(
     'completed same-head Issue resolution projects unchanged B1 to descendant without a new review via %s',
     async (entrypoint) => {
@@ -3194,6 +3214,17 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     ['current body drift', (f) => { f.transports.issue.body += '\nnew revision'; }],
     ['wrong disposition revision', (f) => { f.transports.comment.body = f.transports.comment.body.replace('The live r12 Issue', 'The live r11 Issue'); }],
     ['no corrected root in Issue', (f) => { f.transports.issue.body = revisedBody.replace('tests/spot/test_field_benchmark_r13.py', 'other.py'); }],
+    ['same-r12 extra unreviewed allowed root', (f) => {
+      f.transports.issue.body = f.transports.issue.body.replace(
+        'tests/spot/test_field_benchmark_r13.py\n',
+        'tests/spot/test_field_benchmark_r13.py\nscripts/unreviewed/**\n',
+      );
+      f.input.fixtureIssueBody = f.transports.issue.body;
+    }],
+    ['same-r12 unrelated Issue prose', (f) => {
+      f.transports.issue.body += '\nUnreviewed body text under the same revision label.';
+      f.input.fixtureIssueBody = f.transports.issue.body;
+    }],
   ];
   it.each(unsafeCases)('refuses %s through production scoped reconcile', async (_name, mutate) => {
     const f = fixture();

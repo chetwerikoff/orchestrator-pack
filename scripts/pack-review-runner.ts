@@ -4517,6 +4517,35 @@ export async function resolveFinalCapIssueBodyRevision(input: {
   return { body: before.body as string, revision: revisions[0]![1]! };
 }
 
+/** #2428 same-head dispositions authorize the stated scope correction, not
+ * other edits under a reusable source-revision label. */
+function isOnlyDispositionScopeCorrection(
+  frozenBody: string, correctedBody: string, dispositionRoots: string[],
+): boolean {
+  const withoutScopeFences = (body: string): string | null => {
+    const allowed = [...body.matchAll(/^```allowed-roots[ \t]*\r?\n[\s\S]*?^```[ \t]*(?:\r?\n|$)/gm)];
+    const denied = [...body.matchAll(/^```denylist[ \t]*\r?\n[\s\S]*?^```[ \t]*(?:\r?\n|$)/gm)];
+    const revisions = [...body.matchAll(/<!--\s*source-revision:\s*r\d+\s*-->/g)];
+    if (allowed.length !== 1 || denied.length > 1 || revisions.length !== 1) return null;
+    let remainder = body.replace(revisions[0]![0], '<!-- scope-revision -->');
+    remainder = remainder.replace(allowed[0]![0], '<!-- allowed-roots -->\n');
+    if (denied.length) remainder = remainder.replace(denied[0]![0], '');
+    return remainder;
+  };
+  const before = withoutScopeFences(frozenBody);
+  const after = withoutScopeFences(correctedBody);
+  if (before === null || before !== after || dispositionRoots.length === 0) return false;
+  const oldScope = parseIssueBody(frozenBody);
+  const newScope = parseIssueBody(correctedBody);
+  const oldDenylist = oldScope.denylist ?? [];
+  const newDenylist = newScope.denylist ?? [];
+  if (oldDenylist.some((root) => !newDenylist.includes(root))
+      || newDenylist.some((root) => !oldDenylist.includes(root)
+        && !REPOSITORY_DENYLIST.some((protectedRoot) => protectedRoot === root))) return false;
+  const oldRoots = oldScope.allowed_roots ?? [];
+  const introduced = (newScope.allowed_roots ?? []).filter((root) => !oldRoots.includes(root));
+  return introduced.length > 0 && introduced.every((root) => dispositionRoots.includes(root));
+}
 async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRunsInput, options: {
   projectId: string; storeRoot: string; repoSlug: string;
 }, authority: PackReviewAuthorityDocument, run: PackReviewRunRecord, candidateHeadSha?: string) {
@@ -4748,6 +4777,22 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
     throw new Error('missing exactly one authorized, post-terminal, fully bound scope disposition');
   }
   const comment = candidates[0]!;
+  const section = comment.body.split(/(?=^##\s)/m).find((part) =>
+    part.startsWith(`## R${round.roundOrdinal} dispositions`)
+      && part.includes('`' + run.id + '`') && part.includes('`' + run.targetSha + '`'));
+  const bullets = section?.split(/(?=^-\s)/m).slice(1) ?? [];
+  const dispositionRoots = blockers.map((finding) => {
+    const code = finding.body?.match(/^type: [^\n]+\ncode: ([^\n]+)\nseverity:/)?.[1];
+    const bullet = bullets.find((row) => row.includes('`' + code + '`')
+      && row.includes('`' + trim(finding.fingerprint) + '`'));
+    return bullet?.match(/The live r\d+ Issue now includes(?: only)? `([^`]+)` in `allowed-roots`/)?.[1] ?? '';
+  });
+  if (!snapshot.snapshotPath || dispositionRoots.some((root) => !root)
+      || !isOnlyDispositionScopeCorrection(
+        readFileSync(snapshot.snapshotPath, 'utf8'), revision.body, dispositionRoots,
+      )) {
+    throw new Error('corrected Issue has unrelated changes beyond the exact disposition scope roots');
+  }
   const reread = githubEvidenceObject(await readFinalCapGithubJson(input, [
     'api', `repos/${options.repoSlug}/issues/comments/${String(comment.id)}`,
   ], runner));
@@ -5032,9 +5077,42 @@ async function observePackReviewVerdictDelivery(options: {
     try {
       const head = await options.readHead();
       const authority = readPackReviewAuthority(options.prNumber, { storeRoot: options.storeRoot });
-      return head.toLowerCase() === options.headSha.toLowerCase()
-        && authority?.currentHeadSha.toLowerCase() === options.headSha.toLowerCase()
-        && authority.terminal?.runId === options.runId;
+      if (head.toLowerCase() !== options.headSha.toLowerCase()
+          || authority?.currentHeadSha.toLowerCase() !== options.headSha.toLowerCase()
+          || authority.terminal?.runId !== options.runId) return false;
+      // Legacy runs retain their pre-existing publication contract. Logical
+      // rounds must still be bound to the same immutable closing Issue.
+      if (run.accountingVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION) return true;
+      const cycle = authority.cycle;
+      const round = run.reviewRound;
+      const digest = run.boundIssueSnapshotDigest ?? round?.boundIssueSnapshotDigest;
+      if (!cycle || cycle.cycleId !== run.reviewCycleId
+          || cycle.frozenCap !== run.logicalRoundCap
+          || authority.terminal.logicalRoundOrdinal !== run.logicalRoundOrdinal
+          || run.targetSha.toLowerCase() !== options.headSha.toLowerCase()
+          || run.prNumber !== options.prNumber
+          || run.canonicalRepository?.toLowerCase() !== options.repoSlug.toLowerCase()
+          || !digest || (round && (round.roundOrdinal !== run.logicalRoundOrdinal
+            || round.boundIssueSnapshotDigest !== digest))) return false;
+      let issueNumber = round?.issueNumber ?? options.input.fixtureIssueNumber;
+      if (process.env.OPK_VITEST_HARNESS !== '1') {
+        const pr = await resolveCurrentPrTarget(options.sourceRepoRoot, options.repoSlug, options.prNumber);
+        const closing = extractClosingIssueNumber(pr.body);
+        if (pr.headSha.toLowerCase() !== options.headSha.toLowerCase()
+            || !closing || (issueNumber !== undefined && closing !== issueNumber)) return false;
+        issueNumber = closing;
+      } else if (options.input.fixturePrBody) {
+        const closing = extractClosingIssueNumber(options.input.fixturePrBody);
+        if (!closing || (issueNumber !== undefined && closing !== issueNumber)) return false;
+        issueNumber = closing;
+      }
+      if (!issueNumber || (round && round.issueNumber !== issueNumber)
+          || (options.input.fixtureIssueNumber !== undefined
+            && options.input.fixtureIssueNumber !== issueNumber)) return false;
+      const body = process.env.OPK_VITEST_HARNESS === '1'
+        ? options.input.fixtureIssueBody
+        : (await resolveCurrentIssueFields(options.sourceRepoRoot, options.repoSlug, issueNumber)).body;
+      return typeof body === 'string' && computeBoundIssueSnapshotHash(body) === digest;
     } catch { return false; }
   };
   if (!(await current())) return unresolved('status_not_published:head_or_authority_changed');
@@ -8929,7 +9007,10 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
               target.sourceRepoRoot, target.repoSlug, target.issueNumber,
             )).body;
           if (body === undefined) return false;
-          if (originalDigestMatches && computeBoundIssueSnapshotHash(body) === bound) return true;
+          // A completed #2428 same-head correction accepted B1, not its B0
+          // review-preflight body. Reverting to B0 must never use this shortcut.
+          if (authority.cycle?.settlementKind !== 'same_head_issue_resolution'
+              && originalDigestMatches && computeBoundIssueSnapshotHash(body) === bound) return true;
           if (!scopeOnlyIncident
               && (authority.cycle?.settlementKind !== 'same_head_issue_resolution'
                 || authority.terminal.reviewVerdict !== 'findings')) return false;
