@@ -26,8 +26,9 @@ existing coordinator-only liveness-unverified warning if available.
 
 The exact supported final park forms are:
 
-- `PARKED on GPT turn <inv>` (the incumbent optional trailing punctuation and
-  `(self-wake armed)` suffix are retained for this single-turn form);
+- `PARKED on GPT turn <inv>` (the ID is the **first whitespace-delimited token**;
+  optional terminal `.`/`,`, trailing explanation such as `— waiting`, and
+  `(self-wake armed)` do not enter its exact-match ID);
 - `PARKED on GPT turns inv-a, inv-b, inv-c` (exactly three distinct IDs);
 - `PARKED on pack-review PR #N head <sha40>`;
 - `PARKED on PR #N review #M head <sha40>`;
@@ -55,14 +56,21 @@ question, `done`, `finished` or an unmarked status inventory cannot
 establish the new own-outcome alarm. When ownness is unproven, retain ordinary
 STOPPED/POLLING/busy paths, not a fabricated blocked verdict.
 
-**GPT completion.** A single turn is eligible only with its independently parsed
-`TERMINAL_SCHEMA` artifact containing byte-exact `observed_invocation_id`,
-explicit settled non-failure `lifecycle_outcome=success` or
-`turn_result_state=ok` without a contradictory non-ok/incident,
-and `terminal_handle` equal to the selected current same-incarnation native
-launching pane. A triplet completes only with **three distinct** such exact
-observed-ID/launching-handle/settled events; a non-ok triplet member still
-allows only one advisory re-check, not success. The `invocationId` fallback,
+**GPT terminal re-check.** An exact single turn is eligible with its independently
+parsed `TERMINAL_SCHEMA` artifact containing byte-exact
+`observed_invocation_id`, a coherent ended result (`ok`, `not-sent`,
+`driver_error:<cause>` or another positively terminal non-contradictory
+outcome), and `terminal_handle` equal to the selected current
+same-incarnation native launching pane. An unmarked terminal **already present
+before the first own PARKED** triggers an outcome-naming advisory on the next
+tick; non-`ok` never asserts success. The existing
+`terminal-path:<handle>:<path>` `sent`/`attempted_unverified` mark prevents
+repeat sends across STOPPED-first delivery, PARKED/STOPPED transitions and
+identical re-parks, including original-owner incident notification. Only a
+distinct envelope path creates another terminal event; marks do not establish
+external harvest. A triplet resolves only with **three distinct** exact
+observed-ID/launching-handle/settled events and remains one advisory re-check,
+not three success verdicts. The `invocationId` fallback,
 artifact basename/path, attempt identity, workspace regex and remote URL are
 not direct completion evidence. The incumbent STOPPED-pane terminal-envelope
 GPT-completion advisory uses the same exact observed ID, settled non-failure,
@@ -92,11 +100,29 @@ coordinator evidence-uncertain alarm. Positive alarm association requires
 either exact observed ID **and** exact native launching handle, or a validated
 original run/attempt/handoff receipt binding that invocation to the current
 Task/Dispatch/assignment's native launcher; receipts **never repair** missing
-direct-completion fields. Fully corroborated completed events Wake once.
-A coherent single non-ok event is **not** a single-success Wake. Separately,
-the incumbent original-receipt/current-native-owner-bound non-ok
+direct-completion fields. Fully corroborated completed events Wake once unless the recipient/path
+already has an attempted or sent mark. A coherent single non-`ok` terminal
+event Wakes only to re-check its **recorded ended state**, never as a green or
+successful completion assertion. Separately, the incumbent
+original-receipt/current-native-owner-bound non-`ok`
 `wakeOriginalTerminalFailures` route can Wake after just one failed triplet
-member; its mark is independent and never means the triplet completed.
+member; it shares the same recipient/path suppression without certifying
+triplet completion.
+
+**Named PR head changes.** For own `PARKED on CI PR #N head H0` or
+`PARKED on pack-review PR #N head H0`, only an open, unmerged
+selected-repository PR #N with a current head H1 is a match. If H1 differs,
+send at most one marked **head-moved** advisory naming H1 and requiring a
+re-read of PR #N CI followed by a re-park on the current head. A completed,
+cancelled, pending or unknown H0 run cannot prove H1 green and never selects
+another recipient. Confirm the same live H1, exact own named park and native
+binding before text+Enter and again before the confirming Enter; a missed
+first effect is not marked delivered and an attempted first effect cannot be
+rearmed merely because the second was withheld. When H0 remains the head,
+the incumbent exact-head CI and pack-review producer rules apply. The
+PR-less `PARKED on CI on <sha40>` form retains its original semantics.
+The separate #2731 STOPPED current-head CI fallback remains available for
+Issue-linked readable-zero-assignment and Issue-less unambiguous pull owners.
 
 **Time and PID.** A strict UTC park remains PARKED through real
 `runFleetSweep` and final-line revalidation, and Wakes at/after its exact
@@ -296,7 +322,15 @@ node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
 
 The selected project card supplies the primary checkout and matching rules. Use
 `--json` for machine-readable output and `--lines <n>` to change the displayed
-tail. The sweep itself makes no Orca mutation.
+tail. The sweep itself makes no Orca mutation. An OpenCode idle prompt with
+model, context percentage, `esc interrupt` and `ctrl+p commands` status chrome
+is **STOPPED** unless actual current-work evidence is observed; the
+diagnostic `agent_unverified` reason remains a separate liveness statement.
+A primary-root agent-titled pane counts as a unit **only** with the exact current
+selected coordinator and `worker-list` → `worker-show` → `run-show`
+Dispatch/Run/native join, even if `WORKSPACE_RE` matches the primary path.
+Title-only, foreign, ambiguous or stale primary candidates are excluded;
+non-primary workspace selection is unchanged.
 
 ## Install one project instance
 
@@ -389,8 +423,12 @@ causes an immediate coordinator alarm; a matching producer event sends
 a direct re-check Wake to its pane, and an unresolved park receives its
 existing Reminder on elapsed 30-minute slots. `suspected_bare_shell`
 is the one exception: send no Wake text to the shell and alarm the
-coordinator once for that pane's state change. The plain named-PARKED route uses per-(pane,event) marks; the separate
-Issue-directed and original-owner not-ok envelope routes require exact live
+coordinator once for that pane's state change. The plain named-PARKED route uses per-(pane,event) marks, plus a shared
+(handle,envelope-path) mark for exact GPT terminal outcomes; a pre-marked path
+does not rearm when the pane re-parks. Named CI/pack-review Wake never claims
+a superseded or unknown current head is green. Missing exact head, pane or
+Dispatch/Run evidence is a logged recheck hint, not another coordinator alarm.
+The separate Issue-directed and original-owner not-ok envelope routes require exact live
 ownership. Failed reads suppress only routes lacking their required evidence,
 not other independently safe recipient sends.
 
@@ -457,8 +495,13 @@ fleet alarm, first process orchestration mail, then run the full `fleet-sweep`.
 Give every `STOPPED` or `POLLING` pane its next step in the same turn. A question a
 unit typed in its own pane is addressed to the coordinator and must be answered.
 For `PARKED` panes, independently re-check the named dependency on
-Wake or Reminder. Never resume, resend or merge solely because the fleet
-notifier reported an event. Treat bare-shell coordinator alarms as
+Wake or Reminder. A named obsolete PR head means re-read the current PR/head,
+not that earlier or current checks are green. A previously marked GPT envelope
+path must not be treated as a fresh Wake; an unmarked already-terminal single
+GPT envelope can be rechecked next tick even on non-`ok`. Idle OpenCode
+status chrome alone is STOPPED; primary-root units require current exact
+Dispatch/Run binding regardless of workspace pattern. Never resume, resend or
+merge solely because the fleet notifier reported an event. Treat bare-shell coordinator alarms as
 operator investigation, never as permission to type into a shell.
 
 ## Stop or uninstall
