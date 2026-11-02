@@ -1,0 +1,31 @@
+diff --git a/docs/declarations/2751.pr-scope.json b/docs/declarations/2751.pr-scope.json
+index 52be0c3a1..a1f4dff67 100644
+--- a/docs/declarations/2751.pr-scope.json
++++ b/docs/declarations/2751.pr-scope.json
+@@ -4,7 +4,9 @@
+   "declared_paths": [
+     "scripts/contract-evidence-validator.mjs",
+     "scripts/draft-discipline.mjs",
++    "scripts/invoke-contract-evidence-reverify.ts",
+     "scripts/lib/contract-evidence-reverify.ts",
++    "scripts/lib/reverify-command-resolution.ts",
+     "scripts/lib/target-context.test.ts",
+     "scripts/lib/target-context.ts",
+     "scripts/lib/tier-gate-core.ts",
+@@ -29,7 +31,9 @@
+     "scripts/contract-evidence-validator.mjs",
+     "scripts/contract-evidence.mjs",
+     "scripts/draft-discipline.mjs",
++    "scripts/invoke-contract-evidence-reverify.ts",
+     "scripts/lib/contract-evidence-reverify.ts",
++    "scripts/lib/reverify-command-resolution.ts",
+     "scripts/lib/target-context.test.ts",
+     "scripts/lib/target-context.ts",
+     "scripts/lib/tier-gate-core.ts",
+@@ -38,5 +42,5 @@
+     "scripts/tier-gate-guard.ts",
+     "scripts/worker-smoke.test.ts"
+   ],
+-  "source_revision": "da54ce4a1fc7efbb7ee09be7d1d10a4a02de3438"
++  "source_revision": "9d6cadd6f68919d2ffa0e13de4fab06d5e93488a"
+ }
