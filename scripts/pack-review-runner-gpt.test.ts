@@ -1955,6 +1955,61 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     },
   );
 
+  it('Issue #2748: source-02/03 bind at 30s intervals while source-01 bind remains unresolved', async () => {
+    const storeRoot = tempRoot('opk-gpt-blocked-bind-2748-');
+    harnessEnv(storeRoot, path.join(storeRoot, 'github-review.json'));
+    selectProjectCard(storeRoot);
+    delete process.env.PACK_GPT_BROWSER_PROJECT_URL;
+    process.env.PACK_GPT_BROWSER_PROFILE = path.join(storeRoot, 'browser-profile');
+    process.env.PACK_GPT_BROWSER_CDP = 'http://127.0.0.1:9222';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    let unblockFirst!: () => void;
+    const firstBindHeld = new Promise<void>((resolve) => { unblockFirst = resolve; });
+    let firstBindEntered = false;
+    const trace: Array<{ slotId: string; invocationId: string; at: number }> = [];
+    const fixtureAttempts: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
+    const pending = startPackReview(pluralStart(storeRoot, path.join(storeRoot, 'github-review.json'), {
+      fixtureGptAdmissionReadObservation: () => { throw new Error('must not read an admission predecessor'); },
+      fixtureReviewBySourceSlot: fixtureAttempts,
+      fixtureBeforeGptInvocationBound: async ({ slotId }: { slotId: string }) => {
+        if (slotId === 'source-01') {
+          firstBindEntered = true;
+          await firstBindHeld;
+        }
+      },
+      fixtureAfterGptInvocationBound: ({ slotId, invocationId }: { slotId: string; invocationId: string }) => {
+        trace.push({ slotId, invocationId, at: Date.now() });
+        fixtureAttempts[slotId] = [{ stdout: successfulCleanReviewPayload(invocationId), exitCode: 0 }];
+      },
+    }));
+    await vi.waitFor(() => expect(firstBindEntered).toBe(true));
+    const started = Date.now();
+    expect(trace).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(trace).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() => expect(trace.map((entry) => entry.slotId)).toEqual(['source-02']));
+    expect(trace[0]!.at - started).toBeGreaterThanOrEqual(30_000);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.waitFor(() => expect(trace.map((entry) => entry.slotId)).toEqual(['source-02', 'source-03']));
+    expect(trace[1]!.at - trace[0]!.at).toBeGreaterThanOrEqual(30_000);
+    expect(trace[1]!.at - trace[0]!.at).toBeLessThan(31_000);
+    expect(new Set(trace.map((entry) => entry.invocationId)).size).toBe(2);
+    const runId = listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })[0]!.id;
+    const stored = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot })!;
+    expect(stored.reviewRound!.sourceSlots[0]!.lifecycle).toBe('planned');
+    expect(stored.reviewRound!.sourceSlots.slice(1).every((slot) => slot.invocationId)).toBe(true);
+    expect(readPackReviewAuthority(1276, { storeRoot })?.cycle?.consumedRoundOrdinals).toEqual([]);
+    unblockFirst();
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    const settled = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot })!;
+    expect(settled.reviewRound?.sourceSlots.map((slot) => slot.lifecycle)).toEqual(['terminal', 'terminal', 'terminal']);
+    expect(settled.reviewRound?.sourceSlots.map((slot) => slot.attemptOrdinal)).toEqual([1, 1, 1]);
+    expect(new Set(settled.reviewRound!.sourceSlots.map((slot) => slot.invocationId)).size).toBe(3);
+  });
+
   it.each([true, false].flatMap((published) => [true, false].map((sendAttempted) => ({ published, sendAttempted }))))(
     'censuses attempted zero-count sources without a second send (published $published, attempt flag $sendAttempted)', async ({ published, sendAttempted }) => {
     const storeRoot = tempRoot('opk-gpt-attempted-zero-census-');
