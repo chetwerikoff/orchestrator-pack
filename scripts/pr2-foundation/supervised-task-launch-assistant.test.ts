@@ -6411,7 +6411,7 @@ describe('Issue #2732 r04 AC2 verified published patch.diff application', () => 
     expect(remoteRef(world, 'refs/heads/wrong-endpoint')).toBe('');
   }));
   it('restores only the Claude-family worktree original hooks and keeps sibling B5 selected', withWorld({
-    prePush: '#!/bin/sh\\nexit 0\\n',
+    prePush: '#!/bin/sh\nexit 0\n',
   }, (world) => {
     const sibling = join(world.base, 'manager-sibling');
     git(world.primary, 'worktree', 'add', '-q', '--no-track', '-b', 'manager-sibling', sibling, 'origin/trunk');
