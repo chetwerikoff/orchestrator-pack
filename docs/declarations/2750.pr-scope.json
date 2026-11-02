@@ -1,0 +1,45 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2750,
+  "declared_paths": [
+    "docs/browser-gpt-turn-runbook.md",
+    "docs/chatgpt-task-execution-runbook.md",
+    "docs/flow-manager-long-running-child-runbook.md",
+    "scripts/chatgpt-browser-turn.ts",
+    "scripts/chatgpt-browser-turn/state-light-cancellation.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/browser-gpt-turn-runbook.md",
+    "docs/chatgpt-task-execution-runbook.md",
+    "docs/flow-manager-long-running-child-runbook.md",
+    "scripts/chatgpt-browser-turn.ts",
+    "scripts/chatgpt-browser-turn/state-light-cancellation.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts"
+  ],
+  "source_revision": "f36fbbb2343431d7bcb5f4765d4c28cad260d375"
+}
