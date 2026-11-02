@@ -735,9 +735,10 @@ For every required logical round:
 - the former requirement “`PACK_GPT_BROWSER_PROJECT_URL` is present” is retired;
   the selected card supplies the project URL and `PACK_GPT_BROWSER_CHAT_URL` is absent;
 - the runner launches source slots `source-01..03` as independent fresh
-  ChatGPT project chats, with its existing admission spacing and invocation
-  identities; the implementation conversation, fixer conversations, and sibling
-  reviewer conversations are never reused as reviewer sources;
+  ChatGPT project chats, at 30-second admission-start intervals, without waiting
+  for a predecessor's bind or send settlement. Resumed rounds reuse their retained
+  admission timestamps and invocation identities. The implementation, fixer,
+  and sibling reviewer conversations are never reused as sources;
 - reviewer-authored runner-bound GitHub source comments plus canonical runner
   state are the progression authority. The manager observes/consumes them and
   never republishes or paraphrases them into a replacement review authority.
@@ -793,21 +794,34 @@ allowed root must admit the path, and neither the live Issue denylist nor the
 repository denylist may deny it. SHA-green CI does not supersede a denylist
 retained in a later live Issue revision.
 
-The registered `issue-body-edit-evidence` query in the tracked GitHub inventory
-provides the latest undeleted content-edit body and timestamp; that body must
-equal the canonical REST Issue body before and after the read, differ from the
-frozen snapshot, and have been edited after the terminal run completed. A title
-or comment timestamp, bare FIXED text, missing/deleted history, wrong publisher
-or identity, body drift or non-green CI refuses with
-`final_cap_strict_descendant_required` and names the allowed remedy. No alternate
-transport or evidence receipt is created.
+The runner uses **REST Issue body bytes**, not GraphQL `userContentEdits` or
+mutable Issue `updated_at`, for the corrected revision. It recredentials the
+original three exact-run GitHub source COMMENTs, their source receipts and the
+canonical findings REVIEW ID, actor, reviewed commit and run marker. An OWNER,
+MEMBER or COLLABORATOR disposition must be **created after the canonical
+REVIEW's `submitted_at`** (GitHub REVIEWS expose `submitted_at`, while ordinary
+issue COMMENTs expose `created_at`); a later edit to an older COMMENT does not
+qualify. Within the exact round/run/head section, the author must bind
+`Terminal REVIEW: `<id>``, `Reviewed Issue digest: `<sha256:...>``,
+and `Corrected Issue revision: `<rNN>``, then resolve every blocking
+scope finding by the original code, canonical fingerprint and path. Only the
+actual REST `allowed-roots`/denylist may authorize those paths. A title change,
+bare FIXED, missing or pre-terminal disposition, wrong identity, concurrent
+Issue-body drift or non-green CI refuses with `same_head_resolution_unproven`.
+This refusal must not suggest that a same-head metadata correction inherently
+requires a code commit; actual code fixes still use a strict descendant.
 
 Eligible settlement goes through the existing state transition, preserves the
 terminal findings, frozen cycle/cap and source identities, records settlement
 kind `same_head_issue_resolution`, and publishes the existing required status.
 A failed publication is retried by scoped reconcile without another logical
-round; successful repeated reconcile remains idempotent. Changed heads retain
-the existing observation and proven strict-descendant path.
+round; successful repeated reconcile remains idempotent. A transient GitHub
+required-status read failure is retried up to three times with a short backoff,
+never by issuing another reviewer or status POST. Persistent read failure is
+unverified/non-success: recheck GitHub availability and rerun scoped exact-head
+reconcile. Changed heads retain existing observation and proven strict-descendant
+paths; completed same-head corrections must still match their accepted full-body
+publication digest, not simply their criteria diff.
 
 A completed `reviewStageComplete` remains completed. A later smoke
 fix does not reopen pack review.
