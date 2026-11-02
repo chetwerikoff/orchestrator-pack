@@ -2764,10 +2764,12 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
         targetSha: reviewedHead, reviewVerdict: 'clean', findingCount: 0, findingsDigest: fingerprint([]),
         automaticBudgetDisposition: 'consume', logicalRoundOrdinal: 1 },
     });
-    const mapped = mapGptReplyToReviewPayload(JSON.stringify({ findings: [
+    const sourcePayload = JSON.stringify({ findings: [
       { ...witnessSource.findings[0], type: settings.scopeType ?? 'scope', path: scopePath,
-        summary: settings.summary ?? witnessSource.findings[0]!.summary, ...(settings.details ? { details: settings.details } : {}) }, witnessSource.findings[1],
-    ] }));
+        summary: settings.summary ?? witnessSource.findings[0]!.summary,
+        ...(settings.details ? { details: settings.details } : {}) }, witnessSource.findings[1],
+    ] });
+    const mapped = mapGptReplyToReviewPayload(sourcePayload);
     const [blocker, deferred] = mapped.findings;
     if (!blocker || !deferred) throw new Error('observed source payload lost its two findings');
     const sourceSignature = settings.dispositionSignature ?? blocker.fingerprint;
@@ -2776,20 +2778,44 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, reviewCycleId: authority.cycle!.cycleId,
       logicalRoundOrdinal: 2, logicalRoundCap: 2, now: new Date(terminalAt),
     }).run;
+    const sourceProofs = [1, 2, 3].map((ordinal) => {
+      const slotId = `source-${String(ordinal).padStart(2, '0')}`;
+      const invocationId = `24280000-0000-4000-8000-${String(ordinal).padStart(12, '0')}`;
+      const identity = { repository, prNumber, headSha: reviewedHead, runId: run.id, slotId, invocationId };
+      const body = formatPackGptSourceCommentEnvelope(identity, ordinal === 1 ? sourcePayload : 'NO_FINDINGS');
+      const comment: PackGptSourceGithubComment = {
+        id: 6068301800 + ordinal, body, actorLogin: 'chetwerikoff',
+        createdAt: terminalAt, updatedAt: terminalAt,
+        url: `https://github.com/${repository}/pull/${prNumber}#issuecomment-${6068301800 + ordinal}`,
+        issueUrl: `https://api.github.com/repos/${repository}/issues/${prNumber}`,
+      };
+      return { identity, comment, receipt: {
+        ...identity, commentId: comment.id, commentUrl: comment.url, actorLogin: comment.actorLogin,
+        createdAt: comment.createdAt, updatedAt: comment.updatedAt,
+        bodySha256: createHash('sha256').update(body, 'utf8').digest('hex'),
+      } };
+    });
+    const sourceTransport: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => 'chetwerikoff',
+      listComments: async () => sourceProofs.map((item) => item.comment),
+      getComment: async (id) => {
+        const match = sourceProofs.find((item) => item.comment.id === id);
+        if (!match) throw new Error('original exact source comment missing');
+        return match.comment;
+      },
+    };
     const findings = [{ ...blocker, sourceSlotId: 'source-01' }, { ...deferred, sourceSlotId: 'source-01' }];
     updatePackReviewRun(run.id, { reviewRound: {
       schema: 'pack-review-gpt-round/v1', reviewer: 'gpt', tier: 'T3', accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
       roundOrdinal: 2, cardinality: 3, issueNumber, boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(frozenBody),
       sourceSlots: [1, 2, 3].map((ordinal) => {
         const slotId = `source-${String(ordinal).padStart(2, '0')}`;
-        const invocationId = `fixture-2428-${ordinal}`;
+        const invocationId = sourceProofs[ordinal - 1]!.identity.invocationId;
         return { slotId, ordinal, lifecycle: 'terminal' as const, invocationId, attemptOrdinal: 1,
           terminalClass: ordinal === 1 ? 'complete_findings' : 'complete_clean',
           payload: ordinal === 1 ? { verdict: 'findings', findingCount: 2, findings: [blocker, deferred] } : { verdict: 'clean', findingCount: 0, findings: [] },
           terminalResult: { schema: 'turn-result/v1', state: 'ok', cause: 'github_source_comment_credentialed', scope: 'none', send_count: 1, invocation_id: invocationId, source_comment_authority: 'credentialed_github',
-            source_comment_receipt: { repository, prNumber, headSha: reviewedHead, runId: run.id, slotId, invocationId,
-              commentId: 6068301800 + ordinal, commentUrl: `https://github.com/${repository}/pull/${prNumber}#issuecomment-${6068301800 + ordinal}`,
-              actorLogin: 'chetwerikoff', createdAt: terminalAt, updatedAt: terminalAt, bodySha256: 'a'.repeat(64) } } };
+            source_comment_receipt: sourceProofs[ordinal - 1]!.receipt } };
       }),
     } }, options);
     setPackReviewRunTerminal(run.id, 'changes_requested', { reviewVerdict: 'findings', findingCount: 2, findings }, { ...options, now: new Date(terminalAt) });
@@ -2799,24 +2825,37 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
         targetSha: reviewedHead, reviewVerdict: 'findings', findingCount: 2, findingsDigest: fingerprint(findings),
         automaticBudgetDisposition: 'consume', logicalRoundOrdinal: 2 },
     });
+    const reviewId = 6068701800;
+    updatePackReviewRun(run.id, { githubReviewId: reviewId, githubReviewEvent: 'COMMENT' }, options);
+    const review: GithubReviewSummary = {
+      id: reviewId, state: 'COMMENTED', userLogin: 'chetwerikoff',
+      submittedAt: '2026-10-08T20:45:00Z', commitId: reviewedHead,
+      url: `https://github.com/${repository}/pull/${prNumber}#pullrequestreview-${reviewId}`,
+      body: `## Pack review — findings\n\nRun: \`${run.id}\`\nHead: \`${reviewedHead}\`\n\n### scope finding\n${blocker.body}\n`,
+    };
+    const reviewTransport: GithubReviewTransport = {
+      resolveActorLogin: async () => 'chetwerikoff',
+      listReviews: async () => [review],
+      postReview: async () => { throw new Error('offline review POST forbidden'); },
+      dismissReview: async () => { throw new Error('offline review dismissal forbidden'); },
+    };
     // Captured witness R2 ordinary bullet shape; earlier R1 FIXED text must not authorize R2.
     const comment = { id: 6068301792, issue_url: `https://api.github.com/repos/${repository}/issues/${prNumber}`,
       html_url: `https://github.com/${repository}/pull/${prNumber}#issuecomment-6068301792`,
-      user: { login: 'chetwerikoff' }, author_association: 'OWNER', created_at: '2026-10-08T20:19:17Z', updated_at: '2026-10-08T20:51:48Z',
-      body: `R1 FIXED in code.\n\n## R2 dispositions — run \`${run.id}\`, head \`${reviewedHead}\`\n\n- **FIXED — blocking scope finding \`${code}\`** (source signature \`${sourceSignature}\`). The live r12 Issue now includes only \`${allowedRoot}\` in \`allowed-roots\`, under the operator amendment note.${allowedRoot === scopePath ? '' : ` This root covers \`${scopePath}\`.`} No code or behavior change was made for this disposition.\n- **DEFER — non-blocking \`field:ambiguous-complete-window-undercount\`**.`,
+      user: { login: 'chetwerikoff' }, author_association: 'OWNER',
+      created_at: '2026-10-08T20:50:00Z', updated_at: '2026-10-08T20:51:48Z',
+      body: `R1 FIXED in code.\n\n## R2 dispositions — run \`${run.id}\`, head \`${reviewedHead}\`\n\nTerminal REVIEW: \`${reviewId}\`\nReviewed Issue digest: \`${computeBoundIssueSnapshotHash(frozenBody)}\`\nCorrected Issue revision: \`r12\`\n\n- **FIXED — blocking scope finding \`${code}\`** (source signature \`${sourceSignature}\`). The live r12 Issue now includes only \`${allowedRoot}\` in \`allowed-roots\`, under the operator amendment note.${allowedRoot === scopePath ? '' : ` This root covers \`${scopePath}\`.`} No code or behavior change was made for this disposition.\n- **DEFER — non-blocking \`field:ambiguous-complete-window-undercount\`**.`,
     };
     const issue = { node_id: 'fixture-issue-node', number: issueNumber, html_url: `https://github.com/${repository}/issues/${issueNumber}`,
       repository_url: `https://api.github.com/repos/${repository}`, body: liveBody };
-    const graphIssue = { id: issue.node_id, number: issueNumber, url: issue.html_url, body: liveBody, lastEditedAt: editedAt,
-      userContentEdits: { totalCount: 2, nodes: [{ editedAt, deletedAt: null, diff: liveBody }] } };
     const statuses: Array<{ state: string; context: string }> = [];
-    const transports = { issue, graphIssue, comment, pr: { number: prNumber, url: `https://api.github.com/repos/${repository}/pulls/${prNumber}`,
-      head: { sha: reviewedHead }, base: { ref: 'main' }, state: 'open', body: `Closes #${issueNumber}` } };
+    const transports = { issue, comment, review, sourceProofs,
+      pr: { number: prNumber, url: `https://api.github.com/repos/${repository}/pulls/${prNumber}`,
+        head: { sha: reviewedHead }, base: { ref: 'main' }, state: 'open', body: `Closes #${issueNumber}` } };
     const read = vi.fn(async (request: Parameters<typeof runProcess>[0]) => {
       const args = request.args ?? [];
       const endpoint = args.find((arg) => String(arg).startsWith('repos/')) ?? (args.includes('user') ? 'user' : undefined);
-      const response = args.includes('graphql') ? { data: { repository: { nameWithOwner: repository, issue: transports.graphIssue } } }
-        : endpoint === `repos/${repository}/pulls/${prNumber}` ? transports.pr
+      const response = endpoint === `repos/${repository}/pulls/${prNumber}` ? transports.pr
         : endpoint === `repos/${repository}/issues/${issueNumber}` ? transports.issue
         : endpoint?.endsWith('/comments') ? [[transports.comment]]
         : endpoint?.includes('/issues/comments/') ? transports.comment
@@ -2827,6 +2866,11 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     });
     const input = { ...options, sourceRepoRoot: process.cwd(), repoSlug: repository, prNumber, immediate: true,
       fixtureCurrentPrHeadSha: reviewedHead, fixtureReviewCompareStatus: 'identical',
+      fixturePrState: 'OPEN', fixturePrBody: `Closes #${issueNumber}`,
+      fixtureIssueNumber: issueNumber, fixtureIssueTitle: '[T3] Synthetic scope-only resolution',
+      fixtureIssueBody: liveBody,
+      fixtureGptSourceCommentTransport: sourceTransport,
+      fixtureGithubReviewTransport: reviewTransport,
       fixtureSameHeadIssueResolutionRunner: read as typeof runProcess,
       fixtureRequiredCiPolicy: { contexts: ['CI', 'orchestrator-pack/pack-review'] },
       fixtureRequiredCiChecks: [{ name: 'CI', state: 'SUCCESS' }, { name: 'orchestrator-pack/pack-review', state: 'FAILURE' }],
