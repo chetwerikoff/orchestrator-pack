@@ -94,6 +94,14 @@ after that turn ends. When the PR head changes during the turn, the result is
 inspect the PR. One project card per repository is assumed; a SEND by an
 orphaned child after its turn deadline is a named residual, not prevented.
 
+A `conversation_busy` / `conversation_incident_active` record whose exact
+producer PID has exited releases only its conversation custody, and only when
+the next turn's read-only view of that conversation Page is positively idle
+(not generating, last reply finished). The incident, its output identity and
+its possible delivery stay recorded: the original output still refuses with
+`destination_bound_to_unresolved_delivery`. A live, ownerless, generating or
+unreadable holder keeps blocking. Release grants no resend.
+
 The adapter returns after launcher handoff is proven; that is not proof of a
 model reply or workflow-level completion.
 

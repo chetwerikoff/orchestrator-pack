@@ -67,6 +67,8 @@ import {
   normalizeConversationUrl,
   openGateBCharacterizationPage,
   openTurnPage,
+  readAssistantTurnCompletionReady,
+  readAssistantTurnGenerating,
   resolveCanonicalFreshConversation,
   runtimeWitnessSurfaceAvailable,
   sendTurn,
@@ -275,10 +277,85 @@ function ensureProfileWall(profileKey: string, cause: TurnState): { identity: st
   }
 }
 
+type ReadableIncident = ReturnType<typeof listReadableIncidents>[number];
+/** Optional additive incident field (AC5); kept outside the shared record contract type. */
+const CUSTODY_RELEASE_FIELD = 'conversation_custody_released';
+
+function conversationCustodyReleased(record: CommonIncidentRecordV1): boolean {
+  const value = (record as CommonIncidentRecordV1 & { readonly [CUSTODY_RELEASE_FIELD]?: { at?: unknown } })[CUSTODY_RELEASE_FIELD];
+  return typeof value?.at === 'string';
+}
+
+function ownerPidProvablyDead(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException | undefined)?.code === 'ESRCH';
+  }
+}
+
+/**
+ * AC5: conversation custody whose exact recorded producer is positively dead. A live,
+ * reused, ownerless or foreign-kind holder never qualifies; release still needs an idle Page.
+ */
+function deadProducerConversationCustody(profileKey: string, conversationId: string): ReadableIncident[] {
+  let incidents: ReadableIncident[];
+  try {
+    incidents = listReadableIncidents(profileKey);
+  } catch {
+    return [];
+  }
+  return incidents.filter(({ record }) => record.kind === 'active_owner'
+    && record.conversation_id === conversationId
+    && !conversationCustodyReleased(record)
+    && record.owner !== undefined
+    && record.owner.pid !== process.pid
+    && ownerPidProvablyDead(record.owner.pid));
+}
+
+/** Read-only, positive idle proof on the exact conversation Page; anything unreadable is not idle. */
+async function conversationPageProvablyIdle(page: any, conversationId: string, waitMs: number): Promise<boolean> {
+  if (waitMs <= 0) return false;
+  try {
+    if (normalizeConversationUrl(String(page.url())) !== conversationId) return false;
+    if (await readAssistantTurnGenerating(page, waitMs)) return false;
+    return await readAssistantTurnCompletionReady(page, waitMs);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Retire only the stale conversation custody of each still-unchanged dead-producer record.
+ * The incident, its output identity and its delivery phase stay on disk and keep blocking.
+ */
+function releaseDeadIdleConversationCustody(
+  profileKey: string,
+  conversationId: string,
+  candidates: readonly ReadableIncident[],
+  invocationId: string,
+): void {
+  const current = new Map(deadProducerConversationCustody(profileKey, conversationId)
+    .map((entry) => [entry.identity, entry.record.evidence_token]));
+  for (const { identity, record } of candidates) {
+    if (current.get(identity) !== record.evidence_token) continue;
+    try {
+      updateIncident(profileKey, identity, {
+        [CUSTODY_RELEASE_FIELD]: { at: new Date().toISOString(), by_invocation_id: invocationId },
+      } as unknown as Partial<CommonIncidentRecordV1>);
+    } catch {
+      // Unreleased custody keeps blocking; nothing is erased.
+    }
+  }
+}
+
 function blockerBeforeSend(
   profileKey: string,
   outputIdentity: string,
   conversationId?: string,
+  pendingCustody: ReadonlySet<string> = new Set(),
 ): { state: TurnState; scope: FailureScope; cause: string; incidentId?: string; generation?: number } | null {
   const listed = statusList(profileKey);
   if (listed.state === 'profile_blocked') {
@@ -315,7 +392,9 @@ function blockerBeforeSend(
     };
   }
   if (conversationId) {
-    const conversationBlock = actionableIncidents.find(({ record }) => record.conversation_id === conversationId);
+    const conversationBlock = actionableIncidents.find(({ identity, record }) => record.conversation_id === conversationId
+      && !conversationCustodyReleased(record)
+      && !pendingCustody.has(identity));
     if (conversationBlock) {
       return {
         state: 'conversation_busy',
@@ -441,7 +520,11 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     const conversationId = config.chatUrl ? normalizeConversationUrl(config.chatUrl) : undefined;
 
     reclaimSafePreSend(profileKey);
-    const initialBlocker = blockerBeforeSend(profileKey, destination.identity, conversationId);
+    // AC5: dead-producer conversation custody is admitted only provisionally; it is
+    // released at the final boundary only after a positive idle proof of the exact Page.
+    const deadCustody = conversationId ? deadProducerConversationCustody(profileKey, conversationId) : [];
+    const pendingCustody = new Set(deadCustody.map(({ identity }) => identity));
+    const initialBlocker = blockerBeforeSend(profileKey, destination.identity, conversationId, pendingCustody);
     if (initialBlocker) {
       return emitTurnAndCode(turnResult(
         initialBlocker.state,
@@ -458,7 +541,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     }
 
     reservation = reserveDestination(profileKey, destination.finalPath);
-    const racedBlocker = blockerBeforeSend(profileKey, reservation.identity, conversationId);
+    const racedBlocker = blockerBeforeSend(profileKey, reservation.identity, conversationId, pendingCustody);
     if (racedBlocker) {
       safeReleaseDestination(reservation);
       reservation = null;
@@ -492,6 +575,10 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     const expectedBinding = runtimeCapabilityBinding(profileKey, config.cdp);
     const capabilityAtSchedule = capabilityStatus(profileKey, expectedBinding);
     const lockKey = conversationId ? `conversation:${conversationId}` : `fresh:${randomUUID()}`;
+    for (const { record } of deadCustody) {
+      // Only a provably dead holder's lock is removable; a live or unreadable lock stays.
+      if (record.lock_key === lockKey) clearDomainLock(profileKey, lockKey);
+    }
     scheduleLock = acquireDomainLock(profileKey, lockKey, 120_000, {
       admissionRetryDeadlineMs: segmentBudget.endsAtMs,
     });
@@ -537,6 +624,10 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       return emitTurnAndCode(turnResult('driver_error', 'invocation', 'pre_send_witness_unavailable', invocationId, profileKey));
     }
 
+    if (conversationId && deadCustody.length > 0
+      && await conversationPageProvablyIdle(turnPage, conversationId, segmentBudget.clampOperationWaitMs())) {
+      releaseDeadIdleConversationCustody(profileKey, conversationId, deadCustody, invocationId);
+    }
     const finalBlocker = blockerBeforeSend(profileKey, reservation.identity, conversationId);
     if (finalBlocker) {
       await closeOwnedTurnPage(opened, { retainPage: false });

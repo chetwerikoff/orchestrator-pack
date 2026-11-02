@@ -3096,9 +3096,12 @@ async function runTurnWithMocks1060(
     onBeforeSend?: () => void | Promise<void>;
     beforeDriverOnBeforeSend?: () => void | Promise<void>;
     deleteIncidentFails?: boolean;
+    /** AC5 read-only conversation Page state; defaults to not provably idle. */
+    pageIdle?: 'idle' | 'generating' | 'unready';
   } = {},
 ): Promise<{ exitCode: number; stdout: string }> {
   vi.resetModules();
+  const pageIdle = options.pageIdle ?? 'unready';
   const witnessQueue = Array.isArray(options.witness)
     ? [...options.witness]
     : [options.witness ?? 'available'];
@@ -3121,6 +3124,8 @@ async function runTurnWithMocks1060(
       loadChromium: vi.fn(() => ({ connectOverCDP: vi.fn(async () => stubBrowser) })),
       openTurnPage: vi.fn(async () => ({ page: stubPage, owned: true, provisionalId: randomUUID() })),
       runtimeWitnessSurfaceAvailable: vi.fn(async () => witnessQueue.shift() ?? 'available'),
+      readAssistantTurnGenerating: vi.fn(async () => pageIdle === 'generating'),
+      readAssistantTurnCompletionReady: vi.fn(async () => pageIdle === 'idle'),
       sendTurn: vi.fn(async (_page, _text, _config, _provisionalId, onBeforeSend) => {
         if (options.beforeDriverOnBeforeSend) await options.beforeDriverOnBeforeSend();
         if (onBeforeSend) await onBeforeSend();
@@ -3527,6 +3532,76 @@ describe('Issue #2750 AC16 ownerless fresh-orphan age fallback', () => {
     const recent = orphan(t0, { created_at: new Date(t0).toISOString() });
     expect(await turnAt(t0 + 1, 'recent-with-expired.txt')).toMatchObject(BLOCKED);
     expect(listed(recent)).toBe(true);
+  });
+});
+
+describe('Issue #2750 AC5 dead-producer idle conversation custody', () => {
+  const CONVERSATION = 'https://chatgpt.com/c/fixture-conv';
+  const turnResult = (stdout: string): Record<string, unknown> => JSON.parse(
+    stdout.trim().split(/\r?\n/u).filter(Boolean).at(-1)!,
+  );
+  /** A PID that has positively exited (ESRCH), not a reused or foreign live process. */
+  function deadPid(): number {
+    for (let pid = 4_194_000; pid > 4_000_000; pid -= 1) {
+      try {
+        process.kill(pid, 0);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ESRCH') return pid;
+      }
+    }
+    throw new Error('no_unused_pid_fixture');
+  }
+  /** One mixed-purpose record: stale conversation occupancy AND unresolved possible delivery. */
+  function mixedIncident(originalOutput: string, owner: { pid: number } | null = { pid: deadPid() }): string {
+    return writeIncident(profileKey, {
+      kind: 'active_owner', phase: 'possible_delivery', generation: 1, invocation_id: 'inv-original-2750',
+      output_identity: destinationIdentity(originalOutput).identity, conversation_id: CONVERSATION,
+      lock_key: `conversation:${CONVERSATION}`,
+      ...(owner ? { owner: { pid: owner.pid, started_at: new Date().toISOString(), nonce: randomUUID() } } : {}),
+    }).identity;
+  }
+  const record = (identity: string): Record<string, unknown> | undefined => listReadableIncidents(profileKey)
+    .find((incident) => incident.identity === identity)?.record as Record<string, unknown> | undefined;
+  const turn = async (output: string, pageIdle: 'idle' | 'generating' | 'unready') => turnResult(
+    (await runTurnWithMocks1060(turnArgvFor1060(output), { pageIdle })).stdout,
+  );
+  const BUSY = { state: 'conversation_busy', cause: 'conversation_incident_active' };
+
+  it('releases only the stale custody of a dead producer on a positively idle Page; the delivery blocker stays', async () => {
+    const original = join(root, 'ac5-original.txt');
+    const identity = mixedIncident(original);
+    expect(await turn(join(root, 'ac5-distinct.txt'), 'idle')).toMatchObject({ state: 'ok', cause: 'completed' });
+    const kept = record(identity)!;
+    expect(kept).toMatchObject({
+      kind: 'active_owner', phase: 'possible_delivery', conversation_id: CONVERSATION,
+      output_identity: destinationIdentity(original).identity,
+    });
+    expect(kept.conversation_custody_released).toMatchObject({ at: expect.any(String) });
+    // The original output and its uncertain delivery are not erased or granted resend rights.
+    expect(await turn(original, 'idle')).toMatchObject({
+      state: 'recovery_required', cause: 'destination_bound_to_unresolved_delivery', incident_id: identity,
+    });
+    // A later distinct turn passes ordinary admission without a fresh Page proof.
+    expect(await turn(join(root, 'ac5-later.txt'), 'unready')).toMatchObject({ state: 'ok', cause: 'completed' });
+    expect(record(identity)).toBeDefined();
+  });
+
+  it.each([
+    ['generating Page', 'generating'],
+    ['unknown/unready Page', 'unready'],
+  ] as const)('a dead producer whose conversation Page is a %s keeps conversation_busy custody', async (_name, pageIdle) => {
+    const identity = mixedIncident(join(root, `ac5-${pageIdle}-original.txt`));
+    expect(await turn(join(root, `ac5-${pageIdle}-distinct.txt`), pageIdle)).toMatchObject({ ...BUSY, incident_id: identity });
+    expect(record(identity)).not.toHaveProperty('conversation_custody_released');
+  });
+
+  it.each([
+    ['live producer', (): { pid: number } | null => ({ pid: process.ppid })],
+    ['ownerless/foreign record', (): { pid: number } | null => null],
+  ] as const)('a %s is never released even on an idle Page', async (_name, owner) => {
+    const identity = mixedIncident(join(root, 'ac5-holder-original.txt'), owner());
+    expect(await turn(join(root, 'ac5-holder-distinct.txt'), 'idle')).toMatchObject({ ...BUSY, incident_id: identity });
+    expect(record(identity)).not.toHaveProperty('conversation_custody_released');
   });
 });
 
