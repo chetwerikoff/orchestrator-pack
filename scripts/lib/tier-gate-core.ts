@@ -48,7 +48,7 @@ export interface TierGateGuardResult {
 
 export function checkTierGateGuard(
   text: string,
-  options: { repoRoot?: string; draftPath?: string } = {},
+  options: { repoRoot?: string; draftPath?: string; projectId?: string; env?: Readonly<NodeJS.ProcessEnv> } = {},
 ): TierGateGuardResult {
   const floor = checkNeverSkippedFloors(text, options);
   const fence = parseComplexityTierFence(text);
