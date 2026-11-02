@@ -1041,7 +1041,11 @@ export async function runSupervisedTaskLaunchAssistant(
     const oldDispatch = earlyCurrent.taskId === taskId ? early : await deps.observeDispatch(earlyCurrent.taskId);
     const gone = earlyCurrent.taskId === taskId ? earlyGone : await deps.proveTerminalGone(earlyCurrent);
     const selected = await deps.resolveRestoreWorktree(input.worktreeSelector!);
+    // AC5 permits only a failed, abandoned or revoked (native cancelled) predecessor.
+    // General terminal-gone observations also include completed Dispatches, but
+    // those must never re-enter dirty-worktree restoration and replay work.
     if (oldDispatch.status !== 'ok' || oldDispatch.value.kind !== 'present'
+      || !['failed', 'abandoned', 'cancelled'].includes(oldDispatch.value.status ?? '')
       || oldDispatch.value.dispatchId !== earlyCurrent.bindingKey || !gone
       || gone.taskId !== earlyCurrent.taskId || gone.dispatchId !== earlyCurrent.bindingKey
       || gone.dispatchState !== oldDispatch.value.status || !gone.workerAbsent
@@ -1191,6 +1195,7 @@ export async function runSupervisedTaskLaunchAssistant(
       && current.generation === earlyCurrent.generation
       && current.taskId === earlyCurrent.taskId && current.bindingKey === earlyCurrent.bindingKey;
     if (!unchangedAssignment || old.status !== 'ok' || old.value.kind !== 'present'
+      || !['failed', 'abandoned', 'cancelled'].includes(old.value.status ?? '')
       || old.value.dispatchId !== earlyCurrent.bindingKey || !gone
       || gone.taskId !== earlyCurrent.taskId || gone.dispatchId !== earlyCurrent.bindingKey
       || gone.dispatchState !== old.value.status || !gone.workerAbsent
