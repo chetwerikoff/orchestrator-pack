@@ -4554,6 +4554,7 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
         repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug, prNumber: run.prNumber,
       });
   if (!sourceTransport) throw new Error('original GitHub source transport unavailable');
+  let latestTerminalFindingsCommentMs = Number.NEGATIVE_INFINITY;
   for (const slot of round.sourceSlots) {
     const invocationId = trim(slot.invocationId);
     const identity = gptSourceIdentity({
@@ -4569,6 +4570,16 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
         || stableJson(observed.payload) !== stableJson(slot.payload)) {
       throw new Error('original exact-run GitHub source COMMENT/actor/receipt mismatch at ' + slot.slotId);
     }
+    if (slot.terminalClass === 'complete_findings') {
+      const createdAt = Date.parse(observed.receipt.createdAt);
+      if (!Number.isFinite(createdAt)) {
+        throw new Error('original terminal-findings COMMENT created_at unavailable');
+      }
+      latestTerminalFindingsCommentMs = Math.max(latestTerminalFindingsCommentMs, createdAt);
+    }
+  }
+  if (!Number.isFinite(latestTerminalFindingsCommentMs)) {
+    throw new Error('original terminal-findings COMMENT missing');
   }
 
   // GitHub REVIEW is the canonical terminal COMMENT event. The review REST
@@ -4685,7 +4696,8 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
           !== `https://api.github.com/repos/${options.repoSlug}/issues/${run.prNumber}`.toLowerCase()
         || !['OWNER', 'MEMBER', 'COLLABORATOR'].includes(trim(comment.author_association))
         || !Number.isInteger(comment.id) || typeof comment.body !== 'string'
-        || !Number.isFinite(createdAt) || createdAt <= reviewedAt) return false;
+        || !Number.isFinite(createdAt) || createdAt <= latestTerminalFindingsCommentMs
+        || createdAt <= reviewedAt) return false;
     const sections = comment.body.split(/(?=^##\s)/m).filter((section) => {
       const heading = section.split('\n')[0] ?? '';
       return heading.startsWith(`## R${round.roundOrdinal} dispositions`)
