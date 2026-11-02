@@ -1734,6 +1734,6 @@ describe('Issue #2761 immutable GPT source occurrence triage', () => {
       members: [{ slotId: 'source-01', index: 0 }, { slotId: 'source-02', index: 0 }],
       decision: 'REJECT', reason: 'Claimed impossible by a malicious triage reply',
       codeEvidence: 'src/fictional.ts:12 if (false) return true;',
-    }])).toThrow(/blocking downgrade lacks verified exact-head evidence/);
+    }])).toThrow(/blocking downgrade lacks independent causal or low-harm proof/);
   });
 });
