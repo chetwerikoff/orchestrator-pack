@@ -6262,7 +6262,22 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
     if (authority.currentHeadSha === reviewedHeadSha) {
       try {
         const proof = await resolveSameHeadIssueResolution(input, options, authority, priorRun);
-        verifiedFinalIssue = { issueNumber: priorRun.reviewRound!.issueNumber,
+        // The proof read and state transition are separate operations. Confirm
+        // the current closing-Issue body again immediately before committing
+        // completion; a superseding edit cannot become an accepted digest.
+        const closingIssueNumber = priorRun.reviewRound!.issueNumber;
+        const currentBody = process.env.OPK_VITEST_HARNESS === '1'
+          ? input.fixtureIssueBody
+          : (await resolveCurrentIssueFields(
+              input.sourceRepoRoot, options.repoSlug, closingIssueNumber,
+            )).body;
+        if (typeof currentBody !== 'string'
+            || computeBoundIssueSnapshotHash(currentBody) !== proof.correctedBodyDigest
+            || await readCheckedReviewPrHead(input, options.repoSlug, prNumber, reviewedHeadSha)
+              !== reviewedHeadSha.toLowerCase()) {
+          throw new Error('same-head corrected Issue body or current PR head changed before settlement');
+        }
+        verifiedFinalIssue = { issueNumber: closingIssueNumber,
           digest: proof.correctedBodyDigest };
         if (completedFinalFindings && authority.publication?.status === 'succeeded'
             && (authority.publication.terminalRunId !== priorRun.id
