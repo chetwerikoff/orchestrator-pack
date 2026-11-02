@@ -2011,6 +2011,66 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     expect(new Set(settled.reviewRound!.sourceSlots.map((slot) => slot.invocationId)).size).toBe(3);
   });
 
+
+  it('Issue #2748: zero-send retry preserves spacing after independent initial source starts', async () => {
+    const storeRoot = tempRoot('opk-gpt-zero-send-spacing-2748-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    selectProjectCard(storeRoot);
+    delete process.env.PACK_GPT_BROWSER_PROJECT_URL;
+    process.env.PACK_GPT_BROWSER_PROFILE = path.join(storeRoot, 'browser-profile');
+    process.env.PACK_GPT_BROWSER_CDP = 'http://127.0.0.1:9222';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const fixtureAttempts: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
+    const trace: Array<{ slotId: string; attemptOrdinal: number; invocationId: string; at: number }> = [];
+    const started = Date.now();
+    const pending = startPackReview(pluralStart(storeRoot, capture, {
+      fixtureGptAdmissionReadObservation: () => { throw new Error('sibling admission must not serialize'); },
+      fixtureReviewBySourceSlot: fixtureAttempts,
+      fixtureAfterGptInvocationBound: ({ slotId, attemptOrdinal, invocationId }: {
+        slotId: string; attemptOrdinal: number; invocationId: string;
+      }) => {
+        trace.push({ slotId, attemptOrdinal, invocationId, at: Date.now() });
+        if (slotId === 'source-01' && attemptOrdinal === 1) {
+          fixtureAttempts[slotId] = [{ stdout: JSON.stringify({
+            schema: 'turn-result/v1', state: 'profile_busy', scope: 'profile',
+            cause: 'profile_busy', invocation_id: invocationId, send_count: 0,
+          }), exitCode: 13 }];
+        } else if (slotId === 'source-01') {
+          const first = fixtureAttempts[slotId]?.[0];
+          if (!first) throw new Error('missing first zero-send collision fixture');
+          fixtureAttempts[slotId] = [first, { stdout: successfulCleanReviewPayload(invocationId), exitCode: 0 }];
+        } else {
+          fixtureAttempts[slotId] = [{ stdout: successfulCleanReviewPayload(invocationId), exitCode: 0 }];
+        }
+      },
+    }));
+    await vi.waitFor(() => expect(trace).toHaveLength(1));
+    expect(trace[0]).toMatchObject({ slotId: 'source-01', attemptOrdinal: 1 });
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(trace).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() => expect(trace).toHaveLength(2));
+    expect(trace[1]).toMatchObject({ slotId: 'source-02', attemptOrdinal: 1 });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.waitFor(() => expect(trace).toHaveLength(3));
+    expect(trace[2]).toMatchObject({ slotId: 'source-03', attemptOrdinal: 1 });
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(trace).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() => expect(trace).toHaveLength(4));
+    expect(trace[3]).toMatchObject({ slotId: 'source-01', attemptOrdinal: 2 });
+    expect(trace[1]!.at - trace[0]!.at).toBeGreaterThanOrEqual(30_000);
+    expect(trace[2]!.at - trace[1]!.at).toBeGreaterThanOrEqual(30_000);
+    expect(trace[3]!.at - trace[2]!.at).toBeGreaterThanOrEqual(30_000);
+    expect(new Set(trace.map((entry) => entry.invocationId)).size).toBe(4);
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot })!;
+    expect(run.reviewRound!.sourceSlots.map((slot) => slot.attemptOrdinal)).toEqual([2, 1, 1]);
+  });
+
   it.each([true, false].flatMap((published) => [true, false].map((sendAttempted) => ({ published, sendAttempted }))))(
     'censuses attempted zero-count sources without a second send (published $published, attempt flag $sendAttempted)', async ({ published, sendAttempted }) => {
     const storeRoot = tempRoot('opk-gpt-attempted-zero-census-');
@@ -5016,13 +5076,34 @@ describe('Issue #2496 r03 genuine GPT source delivery and status observation', (
       fixtureRequiredStatusReader: async () => undefined,
     });
     expect(result).toMatchObject({
-      ok: true, created: true, reason: 'completed',
+      ok: false, created: true, reason: 'status_not_published:current_head_status_unconfirmed',
       publicationVerified: false,
       publicationReason: 'status_not_published:current_head_status_unconfirmed',
       nextAction: expect.any(String),
     });
     expect(result).not.toHaveProperty('publicationHeadSha');
     expect(f.statuses.filter((state) => state === 'success')).toHaveLength(2);
+  });
+
+
+  it('Issue #2748: persistent fresh-run 409 status observation cannot report completed', async () => {
+    const f = fixture(249607);
+    let reads = 0;
+    const result = await startPackReview({
+      ...f.input,
+      fixtureRequiredStatusReader: async () => {
+        reads += 1;
+        throw new Error('HTTP 409: persistent synthetic exact-head status conflict');
+      },
+    });
+    expect(result).toMatchObject({
+      ok: false, created: true, publicationVerified: false,
+      nextAction: expect.any(String), httpStatus: 409,
+    });
+    expect(result.reason).not.toBe('completed');
+    expect(result).not.toHaveProperty('publicationHeadSha');
+    expect(reads).toBeGreaterThanOrEqual(3);
+    expect(f.statuses).toContain('success');
   });
 
   it('status-failed-comment-success-reposts via the same GPT journaled PR-led resume', async () => {
@@ -5038,7 +5119,7 @@ describe('Issue #2496 r03 genuine GPT source delivery and status observation', (
     };
     const first = await startPackReview({ ...f.input, fixtureRequiredStatusWriter: writer });
     expect(first).toMatchObject({
-      ok: true, created: true, publicationVerified: false,
+      ok: false, created: true, publicationVerified: false,
       publicationReason: 'status_not_published:failed_required_status_channel',
     });
     expect(f.statuses.filter((state) => state === 'success')).toHaveLength(1);
@@ -5080,7 +5161,7 @@ describe('Issue #2496 r03 genuine GPT source delivery and status observation', (
       },
     });
     expect(result).toMatchObject({
-      ok: true, created: true, publicationVerified: false,
+      ok: false, created: true, publicationVerified: false,
       publicationReason: expect.stringContaining('status_not_published'),
     });
     expect(result).not.toHaveProperty('publicationHeadSha');
