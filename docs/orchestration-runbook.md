@@ -205,9 +205,14 @@ snapshots do not establish atomic one-live-writer or full agent-PID/CWD
 coverage; simultaneous restorers of the same worktree are **unsupported**.
 For any ambiguous prior effect, stop and reconcile exact native Dispatch and
 terminal identities with the coordinator; never automatically clear the dirty
-checkout or assume a failed attempt had no side effects. Selected vanished
-registrations use only native selected-repository `git worktree prune`;
-locked/live/dirty worktrees are preserved. See
+checkout or assume a failed attempt had no side effects. An ordinary fresh launch does **not** run native prune: selected-repository
+`git worktree list --porcelain` must show a single exact vanished temporary
+registration matching the operator-selected name, with an available parent,
+and `git worktree prune --dry-run --verbose --expire=now` must identify
+only its exact Git-admin record before native prune. Any other prunable row,
+unavailable mount or ambiguous preview refuses for explicit operator inspection
+and locking/restoration of retained worktrees; Git-native manual repair is
+preferred to destructive guessing. See
 [operator commands](target_repo_setup.md#operator-serialized-quiescent-dirty-worktree-handover-issue-2754).
 
 The existing scoped `supervised-worker-start.ts stop-external` CLI (syntax in
@@ -226,8 +231,12 @@ guessed native abandon command is authorized.
 
 B5 hook installation for the selected manager worktree is family-based:
 `workClass=manager` **and not Claude** installs B5; a resolved Claude-family
-manager local route must be unguarded, restoring recorded previous
-`core.hooksPath` and guard keys on reuse or refusing when ambiguous.
+manager local route must be unguarded. On reuse the previous B5 remains
+effective through *final* native Dispatch/assignment/quiescence admission:
+only after that check succeeds and immediately before Claude's spawn may the
+exact recorded original `core.hooksPath` and guard keys be restored. A
+refused admission leaves the old manager guard intact; ambiguous restoration
+also refuses.
 Independent sibling managers retain their own effective guards and original
 hook chains. B5 proofs remain disposable per-push; verified parent
 `uv.lock` enables `uv export --frozen --offline` and isolated hash-locked
@@ -235,8 +244,12 @@ hook chains. B5 proofs remain disposable per-push; verified parent
 retry, not false authorization. OpenCode task/smoke requires a validated
 absolute `PACK_EXECUTOR_OPENCODE_BIN` for all probes, overlay and spawn,
 plus terminal `codex`, `codex exec`, `agent-launch` and existing browser
-denies under inherited broad allows; synthetic permission maps cannot
-substitute for installed native-effect observation.
+denies. Because shell wrappers can evade executable-prefix patterns under
+inherited Bash allow, affected OpenCode agents now deny **all** Bash tool
+calls, including benign shell commands; other permitted non-shell tools remain
+available. Choose approved non-shell actions or an executor alternative
+rather than a bypass. Synthetic permission maps cannot substitute for
+installed native-effect observation.
 
 The B5 structural declaration-only exception (AC15) remains **disabled**
 until an administrator positively verifies the effective required current-head
