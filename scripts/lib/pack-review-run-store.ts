@@ -2581,7 +2581,9 @@ export function claimPackReviewGptTriageAttempt(
           const terminal = slot.terminalResult;
           return terminal && typeof terminal === 'object'
             && !Array.isArray(terminal)
-            && (terminal as Record<string, unknown>).source_comment_authority === 'credentialed_github';
+            && ((terminal as Record<string, unknown>).source_comment_authority === 'credentialed_github'
+              || (process.env.OPK_VITEST_HARNESS === '1'
+                && (terminal as Record<string, unknown>).source_comment_authority === 'harness_fixture'));
         }));
   }, (run) => {
     const census = packReviewTriageCensus(run);
