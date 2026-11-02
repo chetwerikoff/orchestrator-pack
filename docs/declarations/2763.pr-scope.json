@@ -2,7 +2,9 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 2763,
   "declared_paths": [
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
     "scripts/fleet/fleet-wake.test.ts",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
     "scripts/flow-manager-long-running-child.test.ts",
     "scripts/flow-manager-long-running-child.ts"
   ],
@@ -26,9 +28,11 @@
     "vendor/"
   ],
   "allowed_roots": [
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
     "scripts/fleet/fleet-wake.test.ts",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
     "scripts/flow-manager-long-running-child.test.ts",
     "scripts/flow-manager-long-running-child.ts"
   ],
-  "source_revision": "e696ac79077010fecebf7355d915f9502836f8d2"
+  "source_revision": "6ec71bbbbe8914a83c726ef8ffdb100c87c875b9"
 }
