@@ -199,13 +199,6 @@ export function isOriginallyBlockingPackReviewFinding(finding: unknown): boolean
     String((finding as Record<string, unknown>).severity ?? '').trim().toLowerCase());
 }
 
-function protectedTriageHarm(finding: Record<string, unknown>): boolean {
-  // Source findings commonly put the actual impact in summary/details rather
-  // than title/body; adversarial labels alone cannot downgrade protected harm.
-  const text = JSON.stringify(finding).toLowerCase();
-  return /security|auth(?:orization|entication)?|scope.?(?:violation|escape)|permission|unauthori[sz]ed|secret|credential|data.?(?:loss|corrupt)|lost.?data|destruct|false.?(?:success|green|completion|merge)|falsely.?(?:green|success|merged)|incorrect.?(?:completion|success)|green.?(?:status|check).?(?:false|wrong|despite)|hung|hang.?forever|no.?recovery|deadlock|stuck.?(?:unit|worker)|integrity|safety/.test(text);
-}
-
 /** A model-supplied path:line assertion is never its own proof.
  * Read the immutable reviewed commit object, not the mutable working tree.
  * Unavailable Git, wrong head, ambiguous paths, and missing lines all fail closed.
@@ -298,19 +291,21 @@ function validatePackReviewTriageResultInternal(
     if (/[\r\n\x00-\x1f]/.test(value.reason)) {
       throw new Error('triage reason must be a single physical line');
     }
-    const protectedBlocking = originals.some((finding: Record<string, unknown>) =>
-      isOriginallyBlockingPackReviewFinding(finding) && protectedTriageHarm(finding));
     const reason = value.reason.trim();
     const codeEvidence = value.codeEvidence;
     const verifiedCode = typeof codeEvidence === 'string'
       && (evidenceMode === 'write'
         ? verifiedExactHeadTriageCodeLine(run,codeEvidence)
         : /^([A-Za-z0-9._+@/-]+):([1-9][0-9]*)\s+([^\r\n]{6,240})$/.test(codeEvidence));
+    // An exact-head line proves that a citation exists, not that a trigger
+    // is impossible or its harm is low.  Neither model-authored lowImpact nor
+    // a finite protected-harm keyword list supplies independent causal proof.
+    // The current boundary has no production witness that can establish such
+    // proof: fail the whole triage rather than publish an unsafe downgrade.
+    // Advisory source groups may still DEFER/REJECT; blocking FIX_NOW groups
+    // may still deduplicate without changing their original severity.
     if (originalBlocking && value.decision !== 'FIX_NOW') {
-      if (!verifiedCode || (value.decision === 'DEFER'
-          && (protectedBlocking || value.lowImpact !== true))) {
-        throw new Error('blocking downgrade lacks verified exact-head evidence or is protected');
-      }
+      throw new Error('blocking downgrade lacks independent causal or low-harm proof');
     }
     const code = originals.map((finding: Record<string, unknown>) => String(finding.code ?? finding.signature ?? '').trim())
       .find(Boolean) ?? 'UNSPECIFIED';
