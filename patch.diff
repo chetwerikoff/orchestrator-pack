@@ -1,0 +1,48 @@
+diff --git a/docs/declarations/2751.pr-scope.json b/docs/declarations/2751.pr-scope.json
+new file mode 100644
+index 000000000..52be0c3a1
+--- /dev/null
++++ b/docs/declarations/2751.pr-scope.json
+@@ -0,0 +1,42 @@
++{
++  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
++  "issue_number": 2751,
++  "declared_paths": [
++    "scripts/contract-evidence-validator.mjs",
++    "scripts/draft-discipline.mjs",
++    "scripts/lib/contract-evidence-reverify.ts",
++    "scripts/lib/target-context.test.ts",
++    "scripts/lib/target-context.ts",
++    "scripts/lib/tier-gate-core.ts",
++    "scripts/lib/tier-gate-floor.ts",
++    "scripts/tier-gate-guard.test.ts",
++    "scripts/tier-gate-guard.ts",
++    "scripts/worker-smoke.test.ts"
++  ],
++  "denylist": [
++    ".env",
++    ".env.local",
++    ".runtime/",
++    "credentials/",
++    "node_modules/",
++    "packages/core/",
++    "secrets/",
++    "state/",
++    "vendor/"
++  ],
++  "allowed_roots": [
++    "scripts/contract-evidence-legacy-list-guard.test.ts",
++    "scripts/contract-evidence-validator.mjs",
++    "scripts/contract-evidence.mjs",
++    "scripts/draft-discipline.mjs",
++    "scripts/lib/contract-evidence-reverify.ts",
++    "scripts/lib/target-context.test.ts",
++    "scripts/lib/target-context.ts",
++    "scripts/lib/tier-gate-core.ts",
++    "scripts/lib/tier-gate-floor.ts",
++    "scripts/tier-gate-guard.test.ts",
++    "scripts/tier-gate-guard.ts",
++    "scripts/worker-smoke.test.ts"
++  ],
++  "source_revision": "da54ce4a1fc7efbb7ee09be7d1d10a4a02de3438"
++}
