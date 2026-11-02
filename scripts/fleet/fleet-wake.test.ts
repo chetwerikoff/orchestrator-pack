@@ -774,22 +774,25 @@ describe('fleet alarm', () => {
       }
     };
 
-    it('defaults to $XDG_STATE_HOME/orchestrator-pack and ignores an emptied TMPDIR', () => {
+    it('defaults to HOME rather than scratch XDG_STATE_HOME and ignores an emptied TMPDIR', () => {
       const xdg = mkdtempSync(join(tmpdir(), 'fleet-wake-xdg-'));
+      const home = mkdtempSync(join(tmpdir(), 'fleet-wake-home-'));
       const emptiedTmp = mkdtempSync(join(tmpdir(), 'fleet-wake-emptied-tmp-'));
       try {
         withEnv(() => {
           process.env.XDG_STATE_HOME = xdg;
+          process.env.HOME = home;
           process.env.TMPDIR = emptiedTmp;
-          const root = join(xdg, 'orchestrator-pack');
+          const root = join(home, '.local', 'state', 'orchestrator-pack');
           mkdirSync(root, { recursive: true });
-          writeFileSync(join(root, 'fresh-terminal.json'), envelopeBody('inv-xdg'), 'utf8');
+          writeFileSync(join(root, 'fresh-terminal.json'), envelopeBody('inv-home'), 'utf8');
           expect(listTerminalEnvelopes()).toEqual([
-            { path: join(root, 'fresh-terminal.json'), invocationId: 'inv-xdg', observedInvocationId: 'inv-xdg', cwd: '/w/one' },
+            { path: join(root, 'fresh-terminal.json'), invocationId: 'inv-home', observedInvocationId: 'inv-home', cwd: '/w/one' },
           ]);
         });
       } finally {
         rmSync(xdg, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true });
         rmSync(emptiedTmp, { recursive: true, force: true });
       }
     });
@@ -810,12 +813,14 @@ describe('fleet alarm', () => {
       }
     });
 
-    it('never scans /tmp/opencode and skips other pack state subtrees under the root', () => {
+    it('never scans scratch XDG or /tmp/opencode and skips other pack state subtrees under HOME', () => {
       const xdg = mkdtempSync(join(tmpdir(), 'fleet-wake-xdg-'));
+      const home = mkdtempSync(join(tmpdir(), 'fleet-wake-home-'));
       try {
         withEnv(() => {
           process.env.XDG_STATE_HOME = xdg;
-          const root = join(xdg, 'orchestrator-pack');
+          process.env.HOME = home;
+          const root = join(home, '.local', 'state', 'orchestrator-pack');
           for (const sub of ['chatgpt-browser-turn', 'browser-gpt-receipts', 'nested']) mkdirSync(join(root, sub), { recursive: true });
           writeFileSync(join(root, 'chatgpt-browser-turn', 'profile-terminal.json'), envelopeBody('inv-profile'), 'utf8');
           writeFileSync(join(root, 'browser-gpt-receipts', 'locator-terminal.json'), envelopeBody('inv-locator'), 'utf8');
@@ -828,17 +833,19 @@ describe('fleet alarm', () => {
         });
       } finally {
         rmSync(xdg, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true });
       }
     });
 
     it('logs a diagnostic and scans nothing when the durable root cannot be resolved', () => {
       withEnv(() => {
         process.env.XDG_STATE_HOME = 'relative/state';
+        delete process.env.HOME;
         const diagnostics: string[] = [];
         expect(listTerminalEnvelopes(undefined, (message) => diagnostics.push(message))).toEqual([]);
         expect(diagnostics).toHaveLength(1);
         expect(diagnostics[0]).toContain('terminal_envelope_root_unresolved');
-        expect(diagnostics[0]).toContain('durable_root_xdg_state_home_not_absolute');
+        expect(diagnostics[0]).toContain('durable_root_home_unavailable');
       });
     });
   });
