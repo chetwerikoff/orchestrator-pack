@@ -1800,6 +1800,14 @@ async function wakeNamedParkedProducers(
       store.writeParkedEpoch?.(pane.handle, epoch);
     }
     const producer = parseNamedParkedProducer(pane.wait);
+    // A quoted/historical visible PARKED line is classification only: a
+    // numbered PR recheck needs a positively own final named wait.
+    const namedPrOwn = !((producer?.kind === 'ci' || producer?.kind === 'pack-review')
+      && producer.number && !pane.ownParkObservation);
+    if (!namedPrOwn) {
+      log('named PR Wake withheld for ' + pane.handle
+        + ': re-check current own PARKED on PR #' + producer!.number + ', not a foreign/quoted park line');
+    }
     let match: ProducerResolution | undefined;
     // Re-observe this same native pane AND its actual last own PARKED line
     // immediately before text and again before Enter. A recycled handle or
@@ -1862,7 +1870,7 @@ async function wakeNamedParkedProducers(
       } else {
         uncertainty = 'process provenance unverified';
       }
-    } else if (producer) {
+    } else if (producer && namedPrOwn) {
       match = resolveParkEvent(pane.wait, terminals, options);
       if (!match && (producer.kind === 'ci' || producer.kind === 'pack-review') && producer.number) {
         log('named PR Wake pending/unverified for ' + pane.handle
