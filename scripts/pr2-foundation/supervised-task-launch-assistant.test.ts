@@ -6031,7 +6031,7 @@ function withWorld(options: Parameters<typeof pushWorld>[0], body: (world: PushW
 describe('Issue #2754 AC5 production dirty manager restore (read-only Git)', () => {
   it.each(['same-task', 'new-task'] as const)(
     'preserves branch, HEAD, tracked and untracked bytes for a verified %s handover',
-    withWorld({ install: false }, async (world) => {
+    (mode) => withWorld({ install: false }, async (world) => {
       const tracked = join(world.manager, 'src', 'app.ts');
       const untracked = join(world.manager, 'operator-recovery.diff');
       writeFileSync(tracked, TS_BEFORE + '// preserved operator edit\n');
@@ -6106,10 +6106,11 @@ describe('Issue #2754 AC5 production dirty manager restore (read-only Git)', () 
       expect(readFileSync(tracked)).toEqual(before.tracked);
       expect(readFileSync(untracked)).toEqual(before.untracked);
       expect(calls.some((args) => args[0] === 'git' &&
-        ['checkout', 'fetch', 'merge', 'reset', 'stash', 'clean', 'worktree'].includes(args[1]!))).toBe(false);
+        (['checkout', 'fetch', 'merge', 'reset', 'stash', 'clean'].includes(args[1]!)
+          || (args[1] === 'worktree' && args[2] !== 'list')))).toBe(false);
       expect(calls.some((args) => args[0] === 'orca' &&
         ['worker-start', 'terminal', 'dispatch-start'].includes(args[2]!))).toBe(false);
-    }),
+    })(),
   );
 });
 
