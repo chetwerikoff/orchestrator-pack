@@ -88,20 +88,23 @@ authority, non-review current-head CI failure or absence of any same-PR smoke PA
 head/base drift, or assignment/marker drift remains blocked.
 
 After merge, use the ordinary adoption and exact-target cleanup path, but delegated mode never
-uses the direct-user cleanup override. Independently derive local adoption from the live Issue,
-PR body including `## Operator adoption`, changed paths/content, current migration/runbooks,
-and live machine state. Prose is a hint, not proof. The common mandatory Verify-effect step
-below owns the runtime read-back for delegated mode exactly as it does for direct-user and
-orchestrator-issued Task modes.
+uses the direct-user cleanup override. Independently derive local adoption from the live
+Issue, PR body including `## Operator adoption`, changed paths/content, current
+migration/runbooks, and live machine state. Prose is a hint, not proof. Read back the actual
+primary ancestry and selected merged-PR worktree/branch cleanup. Independent runtime-consumer
+observations are separate diagnostics, not completion predicates; do not infer process
+freshness or successful live checks from Git ancestry.
 
 The delegated final report includes the marker PR/head/predecessor identity, sequencing result,
-production readiness source/result, any projection-repair receipt, merge SHA, adopted local
-HEAD, source paths/config/runbooks and live observations that drove adoption, adoption actions,
-live verification, residual state/blocker, and next action. Its only outcome vocabulary is
+production readiness source/result, any projection-repair receipt, merge SHA, adopted primary
+HEAD and ancestry, source paths/config/runbooks and live observations that drove adoption,
+adoption actions, exact selected-target cleanup and branch-ref read-back, and any separately
+observed runtime diagnostic with its owner and next step. Its only outcome vocabulary is
 `operationally_complete` or `operationally_incomplete`; these are report values, not
-WorkerReport states or durable records. On post-merge failure, stop further mutation by
-default; reverse a task-owned local change only through an already-supported component
-runbook/CLI/API reverse or restore operation with read-back.
+WorkerReport states or durable records. On a real merge, primary-adoption, or selected-target
+cleanup safety failure, stop further mutation by default; independent non-gating diagnostics
+do not become new failure conditions. Reverse a task-owned local change only through an
+already-supported component runbook/CLI/API reverse or restore operation with read-back.
 
 ## Runtime profile
 
@@ -206,14 +209,22 @@ orca worktree ps --json
 orca terminal list --json
 ```
 
-Resolve one absolute non-primary worktree path `WT` in the same repository. Save its actual
-live head and branch/detached state. Branch, head, or linkage mismatches are report facts; they
-are not repository-policy vetoes after a direct user instruction. A branch mismatch, third head,
-stale or conflicting linkage, missing gate-specific input, or `cleanup_deferred` result is
-diagnostic evidence, not a terminal cleanup veto. Continue with the exact absolute target path
-through the lower-level Orca/Git removal path in Step 9, then perform the final Git/Orca
-read-back. A second plausible target or an inability to distinguish the primary checkout remains
-real ambiguity.
+Resolve the absolute merged-PR non-primary worktree path `WT` in the same repository,
+separately from the primary checkout and the merging manager's own active worktree. Bind it
+from exact Git/Orca/repository/PR identity, not a name or heuristic. If already absent,
+require an established exact target binding and prove its absence in final inventories;
+do not invent a deleted target. Save the actual live head and branch/detached state,
+the actual associated local branch/OID where present, and the PR's source remote/ref.
+An ambiguous target or a manager-owned worktree presented as `WT` remains a real
+identity blocker with the next action to resolve the exact target.
+
+Branch, head, or linkage mismatches are report facts; they are not repository-policy vetoes
+after a direct user instruction. A branch mismatch, third head, stale or conflicting linkage,
+missing gate-specific input, or `cleanup_deferred` result is diagnostic evidence, not
+a terminal cleanup veto. Continue with the exact absolute target path through Step 9 when
+the current authority permits it, then perform final Git/Orca and branch-ref read-back.
+A second plausible target or an inability to distinguish the primary/manager checkout is
+real ambiguity; preserve both and request an exact authorized target decision.
 
 ## Step 3 — Inspect readiness
 
@@ -281,27 +292,19 @@ Read the PR body, changed paths/content, linked Issue, applicable migration note
 environment docs, runbooks, and rules-channel files. State the local post-merge work. Do not
 invent secrets, ports, or machine-local values.
 
-For `TARGET_REPOSITORY=PACK_REPOSITORY`, collect only executable live-check candidates
-expressly declared in the linked Issue's **current** `Fixed means` / `smoke-test-plan`,
-keeping their exact argv and declared prerequisites. A `smoke-test-plan: not-applicable`
-or CI, prose, or earlier detached-checkout evidence is not an executable declaration;
-never invent a fallback check. This Step 4 inventory is **provisional**: do not assume
-the future `PRIMARY_ROOT` HEAD/status, decide eligibility here, or populate
-`LIVE_CHECK_JSON` yet. After Step 7, pack Verify effect selects the smallest eligible
-declared check/set for the actually adopted ordinary `PRIMARY_ROOT` and only then
-fills its existing one-or-more exact argv arrays. When nothing executable is
-declared, record that reason for the mandatory post-adoption Verify-effect decision;
-Git ancestry and process existence are not substitutes.
-
-For the #2445 fleet-wake pack merge class, the Issue binds the pack-only offline executable
-check to exactly `LIVE_CHECK_JSON='["npm","test","--","--maxWorkers=1","scripts/merge-adoption-effect.test.ts"]'`.
-This check alone is not installed-process evidence; the verifier still reads actual user-systemd
-unit/process identity after the adopted checkout is complete.
+For pack cards, collect local adoption actions from the Issue, PR diff, existing
+migration/runbooks and actual selected machine state. The pre-merge same-PR smoke
+decision is already owned by pre-merge authority; this skill does not select
+a new post-merge Issue live check, populate `LIVE_CHECK_JSON`, or invoke a pack
+verifier or canary to decide completion. A missing check is not evidence of
+consumer freshness, and no check is claimed run without observation.
 
 For every non-pack selected card, read exactly `{PRIMARY_ROOT}/AGENTS.md` and collect its
-target-owned merge-time adoption instructions and named target live check, if any. Steps 6,
-7, and Verify effect follow that authority exclusively; do not import pack runtime adoption,
-pack verifier, pack wiki sync, or unrelated verification/database commands into this route.
+target-owned merge-time adoption instructions and named target live check, if any. Apply
+target-owned adoption only. A separately observed target check may be reported as an
+independent diagnostic with its owner and next action; it is not an additional
+`merge-N done` predicate. Do not import pack runtime adoption, pack verifier, pack
+wiki sync, or unrelated verification/database commands into this route.
 Keep target-specific commands and environment limits in the target's rules, not this skill.
 
 Set `RULES_TOUCHED=yes` when the diff includes any of:
@@ -326,17 +329,13 @@ gh pr view P --repo $TARGET_REPOSITORY \
   --json state,mergedAt,mergeCommit,headRefName,headRefOid,baseRefName
 ```
 
-Use expected-head protection when the available merge API supports it. Require remote read-back
-of `state=MERGED` before claiming success. Record `MERGE_SHA`, the pre-merge target facts, and
-the live merged PR head.
+Use expected-head protection when the available merge API supports it. Require fresh
+GitHub read-back of the intended PR as `merged=true` (or `state=MERGED` with actual
+`mergedAt`) and its real merge commit SHA before claiming a merge. Record `MERGE_SHA`,
+the pre-merge target facts, and the live merged PR head. The PR's original head SHA
+must not be substituted for an unobserved merge SHA.
 
 ## Step 6 — Adopt the merged selected default branch
-
-Immediately before updating the primary checkout, record the local adoption boundary:
-
-```bash
-ADOPTION_STARTED_AT_UTC=$(node -e 'process.stdout.write(new Date().toISOString())')
-```
 
 Fetch and update the selected `PRIMARY_ROOT` without discarding pre-existing changes, using
 the target-owned update/adoption instructions collected in Step 4 for non-pack cards. Verify:
@@ -348,6 +347,8 @@ git -C "$PRIMARY_ROOT" log -1 --oneline
 ```
 
 The selected default branch may move beyond `MERGE_SHA`; equality is not required.
+If ancestry fails, preserve operator changes and report the actual adoption residual and
+its target-owned safe update/reconciliation next action; do not claim adopted.
 
 **Pack only (`TARGET_REPOSITORY=PACK_REPOSITORY`):** after adoption read-back, read the actual
 pack `PRIMARY_ROOT` `HEAD` once as a 40-hex value and pass that literal to one bounded
@@ -376,223 +377,25 @@ cards these are exclusively the target's own merge-time adoption instructions. K
 surgical and report remaining manual action. Never commit secrets or machine-local values
 unless the same direct user message explicitly requested it.
 
+Optional post-adoption observations of installed consumers, wiki freshness, target-owned
+live checks, or runtime problems are truthful, separately owned diagnostics with
+specific residuals and next steps. Do not invent a check, claim a verifier/canary ran
+when it did not, or treat an unrelated failure as failed merge/adoption/selected-target
+cleanup. The authorized pre-merge smoke PASS is not evidence of post-merge consumer
+process freshness. There is no mandatory second Issue live-check, pack Verify-effect,
+OpenCode/Browser-GPT canary, or `effect_verified` completion decision here.
+
+**Retired Verify-effect references (historical only, not instructions).** These are literal labels from the superseded procedure, not an active heading, command, branch, test requirement, or completion gate. Do not run them or infer any effect result. Step 10's three observed merge/adoption/cleanup facts remain the sole completion test:
+
+```text
 ## Verify effect — mandatory after Step 7
-
-Immediately after Step 7 finishes, before invoking the pack verifier, capture the separate
-pack fleet/wake-supervisor completed-checkout cutoff (without moving or replacing
-the pre-Step-6 `ADOPTION_STARTED_AT_UTC` for scheduler and hooks):
-
-```bash
-if [ "$TARGET_REPOSITORY" = "$PACK_REPOSITORY" ]; then
-  FLEET_ADOPTED_AT_UTC=$(node -e 'process.stdout.write(new Date().toISOString())')
-fi
+scripts/merge-adoption-effect.ts
+effect_verified
+effect_unverified(<reason>)
+**Non-pack selected cards:** execute only the named target live check, if any
+**Pack only (`TARGET_REPOSITORY=PACK_REPOSITORY`):**
+Do not run the pack verifier or substitute pack process/registry evidence
 ```
-
-This step is mandatory for **every** merge mode. Step 6 ancestry proves only that the merge is
-present in repository history; it is never evidence that a long-lived consumer is running the
-adopted code.
-
-**Non-pack selected cards:** execute only the named target live check, if any, from
-`{PRIMARY_ROOT}/AGENTS.md` after its adoption instructions. Read back and report the
-target-prescribed effect; if no live check is named, report that fact without inventing one
-or claiming an executable check passed. A failed required target check is
-`operationally_incomplete`: send its exact refusal and target-owned next action to the
-coordinator. Do not run the pack verifier or substitute pack process/registry evidence.
-Then continue to Step 8 and the unchanged exact-target cleanup in Step 9, subject to the
-existing delegated fail-closed rule.
-
-**Pack only (`TARGET_REPOSITORY=PACK_REPOSITORY`):** immediately before the
-verifier handoff, evaluate the provisional linked-Issue checks against the **actual
-adopted, ordinary `PRIMARY_ROOT`** after Step 7, including its current HEAD, status,
-operator modifications, and other declared prerequisites. It may legitimately
-be dirty or ahead of `MERGE_SHA`. A candidate is eligible only when its known
-prerequisites are satisfied there without cleaning, resetting, detaching,
-switching branches, replacing the checkout, or discarding operator state.
-Categorically exclude any candidate that **requires** a clean checkout or a
-detached/exact-PR-head/exact-head checkout **even if** the primary is currently
-clean or at that head; a check merely *able* to run on a clean primary is not
-excluded if it does not require those conditions. Exclude unmet or unknown
-prerequisites. Do not rely on Step 4's forecast, an earlier detached-run PASS,
-or success in a separate checkout; add no validator or alternative checker.
-
-If **no declared candidate is primary-eligible** (none declared, `not-applicable`
-alone, all clean/exact-head-dependent, or unknown/unmet primary prerequisites),
-the mandatory Verify-effect **decision** reports the **skill-owned operator-level**
-`effect_unverified(no_primary_eligible_issue_check)` and
-`operationally_incomplete`, with the linked Issue, actual checkout state, and
-concrete absence/disqualification reason. **Do not invoke**
-`scripts/merge-adoption-effect.ts verify` or pass empty/null/`[]` or synthetic
-`--live-check-json`. Explicitly state that no Issue live check or verifier
-consumer control/read-back ran, and no verifier v1 JSON receipt or emitted
-`coordinatorMessage` exists. Surface the same substantive blocker to the direct
-operator or via the existing coordinator channel. Ask the linked Issue owner
-to declare a legitimate primary-valid live check and rerun the existing
-Verify-effect step when available under existing authority; until then keep
-the incomplete/unverified outcome. Delegated integration stops further mutation
-except already-supported component recovery; direct-user/orchestrator Task modes
-retain their existing Step 8–9 cleanup permissions. Never report
-`merge-<PR_NUMBER> done` for this unverified effect.
-
-Only **with** a primary-eligible declared check/set, select the smallest eligible
-one, bind its original one-or-more exact argv arrays into `LIVE_CHECK_JSON`
-**now**, and run the unchanged pack-owned verifier from `{PACK_ROOT}` against
-the pack `PRIMARY_ROOT` as follows:
-```bash
-node --experimental-strip-types scripts/merge-adoption-effect.ts verify \
-  --repo-root "$PRIMARY_ROOT" \
-  --merge-sha "$MERGE_SHA" \
-  --adopted-at "$ADOPTION_STARTED_AT_UTC" \
-  --fleet-adopted-at "$FLEET_ADOPTED_AT_UTC" \
-  --live-check-json "$LIVE_CHECK_JSON"
-```
-
-The script, rather than merge prose, maps changed paths through the static import closures of
-the supervisor entrypoint, every child named by
-`scripts/orchestrator-side-process-registry.json`, the fleet-wake executable entrypoint
-and TypeScript launcher, and tracked agent-hook entrypoints. On relevant fleet
-or wake-supervisor paths it validates **all** registered project cards from the existing
-configured directory, independently of caller `OPK_PROJECT_ID`. It maps exact
-`fleet-wake@<projectId>.service` consumers for fleet code or exact
-`orchestrator-side-process-supervisor@<projectId>` consumers for supervisor
-entrypoint/import/registry changes. Missing, malformed, or aliased relevant inventory
-is existing-v1 `operationally_incomplete`, never a singleton fallback. Unrelated
-pack changes do not consult or control those project instances.
-
-`ADOPTION_STARTED_AT_UTC` continues to govern the registered `pr2-scheduler`
-normal cadence and unchanged ephemeral hooks. **Both fleet and wake-supervisor**
-process freshness use only `FLEET_ADOPTED_AT_UTC` recorded **after** Step 7,
-including already-running exemptions and post-control readbacks. A missing or invalid
-late cutoff never falls back to the earlier adoption-start time.
-
-For #2445 pack-code-only merges, the direct operator-ordered brief authorizes a narrow
-exception to the general integration-actor restart rule of `docs/fleet-alarm.md`:
-**only** an already-active registered stale fleet unit whose currently observed
-MainPID/start-ticks and safely parsed `--repo-root`, `--script`, and `--project`
-point to the just-adopted canonical `PRIMARY_ROOT` can receive the exact
-`systemctl --user try-restart fleet-wake@<projectId>.service`. A wrong or unobservable
-checkout/invocation has **no fleet control** and a named unverified residual.
-The verifier performs separate exact-unit PID/invocation readback after the completed
-checkout cutoff, without asserting a loaded Git SHA. Initially inactive/uninstalled
-and failed units are never started. `try-restart` uses the **already-installed**
-unit/drop-in; on re-execution systemd can load pending, locally edited
-`EnvironmentFile=` values. That inherent effect is included in the direct #2445
-restart order, **not** prevented/detected/approved by the Git changed-path check.
-Neither verifier nor skill reads/discloses those values, installs templates/drop-ins,
-executes daemon-reload, or edits machine-local configuration. Any change touching
-`scripts/fleet/fleet-wake@.service` (including mixed code+template) performs
-**no automatic fleet restart** and stays `effect_unverified` pending operator
-render/install, daemon-reload, activation and effective-unit readback.
-
-For each **stale running** wake supervisor, the verifier resolves that validated
-project's state root and live PID/start-ticks identity, checks all projects for
-shared identities **before any control**, then re-observes the same process immediately
-before its own control. Only an unchanged, unambiguous stale instance receives
-the normal argv controls in order:
-
-```bash
-opk-wake-supervisor <projectId> stop
-opk-wake-supervisor <projectId> start
-opk-wake-supervisor <projectId> status  # supported optional operator readback
-```
-
-The verifier runs stop/start with the **validated project ID** as argv and without
-inheriting the caller's `OPK_PROJECT_ID` selector, so project B remains reachable
-when the caller selected A. It reads back B's own status/PID/start-ticks and
-post-Step-7 start time; status-file/process absence must be conclusively observed
-before declaring `not_running`. Unknown or aliased state is incomplete and receives
-no control. An already-stopped project is **never started**. Stop/start is not atomic:
-a failed start can leave that project's supervisor unavailable and requires operator
-reconciliation using the same normal project-specific controls. No direct PID signals,
-fallback restart scheme, or automatic rollback.
-
-The registered `pr2-scheduler` retains its supervisor-owned normal cadence under
-`ADOPTION_STARTED_AT_UTC`. Generic `--restart-control-json` remains available for
-other applicable consumers, but the merge agent never supplies a speculative singleton
-supervisor argv. `--supervisor-state-dir` remains a generic scheduler/other-consumer
-option and **must not** replace any project-qualified wake-supervisor root. Agent
-hooks are fresh per invocation and covered by the mandatory Issue live check.
-
-On the primary-eligible path, the verifier's JSON is the effect receipt. Success requires exactly
-`effect_verified` and `operationally_complete`. Any
-`effect_unverified(<reason>)` is `operationally_incomplete`, even when Step 6 ancestry is
-green. Send the emitted `coordinatorMessage` to the coordinator when one exists; in direct
-operator mode surface the same blocker in the final report. Delegated-integration mode also
-keeps its existing post-merge fail-closed rule: after an unverified effect, stop further
-mutation unless an already-supported component recovery path applies.
-
-## Pack-only post-adoption diagnostic canaries (after Verify effect, before Step 10)
-
-For **pack-repository merges through this skill only**, the **same merge actor**
-checks the adopted selected `PRIMARY_ROOT` and selected `PROJECT_ID` after Step 7
-and the unchanged Verify-effect decision. This is not an admission gate before merge
-and never applies to non-pack target-owned adoption or other merge entrypoints.
-An existing `effect_unverified` is already `operationally_incomplete`: preserve
-that original outcome and next action; do not treat a diagnostic PASS as a
-replacement effect witness or run more child commands after a delegated post-failure
-stop. With `effect_verified`, perform **both** current-context checks before
-reporting `operationally_complete` or `merge-N done`:
-
-1. **OpenCode:** from `{PACK_ROOT}`, invoke
-   `node --experimental-strip-types scripts/pr2-foundation/supervised-task-launch-assistant.ts probe --project "$PROJECT_ID" --work-class manager --start-mode exact_terminal_worktree --timeout-ms "$REMAINING_MS"`.
-   The probe reads the selected card and the installed manager/OpenCode profile in
-   its actual adopted primary checkout. It uses no Task, Dispatch, terminal,
-   worktree, worker start, or future prepared-worktree equivalence witness. Only
-   its `outcome=pass` with verified owned scratch cleanup counts.
-2. **Browser-GPT:** from the **actual Orca merge terminal**, invoke
-   `npm run --silent chatgpt-browser-turn -- preflight --route pack-gpt-reviewer --project "$PROJECT_ID" --timeout-ms "$REMAINING_MS"`.
-   Both existing canaries select their project via `--project "$PROJECT_ID"`; an unset or blank
-   `OPK_PROJECT_ID` is therefore not a mismatch for this preflight. A nonempty, different
-   environment selector still returns `project_selector_mismatch` before probing. This rule
-   is preflight-only and does not alter normal Browser-GPT turn/send behavior.
-   The Browser command selects only the pack GPT PR-review sender route, using the
-   unchanged `resolveGptBrowserConfig` and selected card for the *actual* profile/CDP pair
-   at invocation. Neither the skill nor operator supplies `--profile`, `--cdp` or an
-   alternative pair. The entrypoint uses only `inspectCdpProfileBounded` (never writing
-   `verifyProfile`) and bounded CDP HTTP reachability, without opening tabs,
-   claiming/sending messages, or modifying the persistent CDP-owner record.
-   `ORCA_TERMINAL_HANDLE` is present/absent routing context only, **not** proof of its
-   original generation.
-   A different healthy Browser-GPT profile cannot rescue a failed selected pair.
-   `probeProfileReady:no_existing_page` is not a failure proxy; zero existing
-   tabs may be healthy for a new `turn`. A PASS does not certify future sends
-   or other manager/standalone Browser-GPT routes.
-
-Use **one best-effort 50,000-ms monotonic budget** for *both* subprocesses and
-their owned teardown (not 50 seconds separately). Capture one
-`process.hrtime.bigint()` origin before the first call, calculate
-`REMAINING_MS = max(0, floor(50000 - elapsed_ms))` from that same origin
-immediately before each command, and pass a strictly positive remaining value
-to the CLI. Use a bounded child/process-group invocation with TERM then
-bounded KILL **only for the child processes this actor started**, and account
-for its cleanup in the same elapsed budget. Do not signal an existing Orca,
-Chrome, operator terminal, or sibling process. An operator can implement the
-portable remaining-time calculation as:
-
-```bash
-CANARY_STARTED_NS=$(node -e 'process.stdout.write(process.hrtime.bigint().toString())')
-remaining_canary_ms() {
-  node -e 'const elapsed=Number(process.hrtime.bigint()-BigInt(process.argv[1]))/1e6; process.stdout.write(String(Math.max(0,Math.floor(50000-elapsed))))' "$CANARY_STARTED_NS"
-}
-REMAINING_MS=$(remaining_canary_ms)
-# Only when REMAINING_MS > 0: run the OpenCode probe above, with bounded owned-child cancellation.
-REMAINING_MS=$(remaining_canary_ms)
-# Only when REMAINING_MS > 0: run the route-bound Browser-GPT preflight above, with the same bound.
-# After both children are settled/cleaned, check remaining_canary_ms again.
-```
-
-Require both child exit codes `0`, both scrubbed JSON `outcome=pass`
-and their expected route identity, plus no observed deadline overrun or unknown
-owned child/scratch residue. A child failure, nonzero exit, timeout, malformed
-result, mismatched project/route, uncertain teardown, or overrun is
-`operationally_incomplete`; do not invent a hard OS/process-tree deadline.
-Retain the already-observed merged PR and exact Verify-effect report. Send the
-specific missing installed OpenCode context or selected pack-review browser/CDP
-repair through the **existing** coordinator/operator channel. A suspected
-regression rollback requires **separate explicit authority**; never create,
-commit, status-write, merge or revert a PR under the original merge grant.
-Continue only the previously authorized Step 8/9 advisory and exact-target
-cleanup, respecting the unchanged delegated post-failure stop rule. Do not
-create a canary ledger, new receipt, watcher, Task or automatic retry.
 
 ## Step 8 — Sibling advisory
 
@@ -602,9 +405,15 @@ direct user instruction explicitly includes them.
 
 ## Step 9 — Complete merged-worktree cleanup
 
+`WT` is the exact selected merged-PR non-primary worktree, never the merging manager's
+own active worktree. The merge actor must not self-remove its manager worktree. The
+orchestrator removes that separate manager worktree **after the manager terminates**,
+through its existing lifecycle; its temporary survival is not an additional merge
+completion condition. No actor claims that teardown occurred without observing it.
+
 ### 9a — Ordinary lifecycle attempt
 
-Run the normal dry-run first because it provides useful census and diagnostics:
+Run the normal dry-run for selected-target census and diagnostics:
 
 ```bash
 node --experimental-strip-types scripts/worktree-lifecycle/cli.ts \
@@ -617,27 +426,36 @@ node --experimental-strip-types scripts/worktree-lifecycle/cli.ts \
   --json
 ```
 
-Use `--detached` for a saved detached target. Read and retain the returned classification,
-disagreeing fields, processes, terminals, and error.
+Use `--detached` for a saved detached target. Retain its exact-target classification,
+disagreeing fields, processes, terminals and errors. `cleanup_eligible` or
+`already_absent` permits the ordinary path; `already_absent` alone does not
+prove associated branch cleanup.
 
-- `cleanup_eligible` or `already_absent`: continue normally.
-- `cleanup_deferred`, `quiesced_cleanup_deferred`, `unsupported_runtime_preflight`, or
-  `task_degraded`: these are evidence, not a final repository veto when the user directly
-  ordered cleanup.
+`cleanup_deferred`, `quiesced_cleanup_deferred`,
+`unsupported_runtime_preflight`, and `task_degraded` are diagnostics, not
+proof of either deletion or survival. A `task_degraded` classification solely from
+unrelated fleet/sibling activity cannot veto completion after all three target
+facts are independently read back. It does not waive an actual selected-target
+refusal, live process, unknown target, or branch-CAS mismatch. If the target remains,
+direct-user or qualifying Task modes may use Step 9b for repository-policy refusal;
+delegated mode may use only the existing ordinary safe path, and preserves the
+target on a genuine lifecycle refusal with an exact next action.
 
 ### 9b — Direct-user exact-target override
 
-Delegated-integration mode must not enter this subsection. A delegated cleanup refusal is
-reported as `operationally_incomplete`; it is not authority for this override.
+Delegated-integration mode must not enter this subsection; its unresolved
+selected-target cleanup failures are reported as `operationally_incomplete` with
+the actual reason and owning actor's next safe action.
 
-Use this path only when the current top-level user directly ordered completion or when the
-qualifying orchestrator-issued Task instruction authorizes that same completion path, and `WT`
-is one resolved absolute non-primary worktree in the intended repository. Do not require saved
-branch, saved head, PR linkage, closed-head-set, scope, review, CI, or lifecycle-gate agreement.
-Record every mismatch as overridden.
+Use this path only when the current top-level user directly ordered completion or
+a qualifying orchestrator-issued Task instruction authorizes it, and `WT` is
+the one resolved absolute non-primary merged-PR worktree in the intended
+repository. Do not require saved branch, saved head, PR linkage, closed-head-set,
+scope, review, CI, or lifecycle-gate agreement; record each mismatch as overridden.
+Never override a real GitHub/OS permission failure or ambiguous destructive target.
 
-1. Re-read Git and Orca inventories and confirm `WT` is not the primary checkout. If two rows or
-   repositories plausibly identify different targets, stop for real ambiguity.
+1. Re-read Git and Orca inventories, confirm `WT` is neither the primary checkout
+   nor the active merging manager's own worktree; stop on two plausible targets.
 2. Stop/close only terminals whose structured `worktreePath` equals `WT`:
 
    ```bash
@@ -645,80 +463,113 @@ Record every mismatch as overridden.
    orca terminal list --json
    ```
 
-   Close individually addressable residual target handles only; preserve mixed/unrelated panes.
-3. Repeatedly census processes whose current CWD equals/is below `WT`, plus descendants. Apply
-   bounded TERM, wait, SIGKILL, then require a repeated zero census. A survivor is a technical
-   inability to remove the target safely and must be reported exactly.
-4. Capture only a path-name discard summary (`git status --porcelain=v1 -z` or equivalent);
-   never publish file contents, diffs, credentials, or editor buffers.
+   Close individually addressable residual target handles only; preserve
+   mixed/unrelated panes.
+3. Repeatedly census processes whose current CWD equals/is below `WT`, plus
+   descendants. Apply bounded TERM, wait, SIGKILL, then require a repeated zero
+   census. A survivor is a real technical inability to remove the target safely.
+4. Capture only a path-name discard summary (`git status --porcelain=v1 -z`
+   or equivalent); never publish file contents, diffs, secrets or editor buffers.
 5. Re-read the absolute target and primary checkout paths immediately before removal.
-6. Remove the selected target with the narrowest available operation:
+6. Remove only the selected target with the narrowest supported operation:
 
    ```bash
    orca worktree rm --worktree "path:$WT" --force --json
    ```
 
-   Validate `removed: true`. If Orca lacks/refuses that capability but Git still lists exactly
-   `WT`, use:
+   Require `removed: true`. If Orca lacks/refuses that capability and Git
+   still lists exactly `WT`, use:
 
    ```bash
    git -C REPO worktree remove --force "$WT"
    ```
 
-7. If the direct instruction includes branch cleanup and one actual local branch is bound to the
-   removed target, delete it with expected-old-OID compare-and-delete:
-
-   ```bash
-   git -C REPO update-ref -d "refs/heads/$ACTUAL_BRANCH" "$ACTUAL_BRANCH_OID"
-   ```
-
-   A moved branch is reported and preserved unless the user explicitly ordered deletion of the
-   moved branch too.
-8. Read back Git worktrees, Orca worktrees, terminals, processes, and the primary checkout.
-   Report cleanup complete only when the selected path is absent and unrelated targets are
-   unchanged.
+7. Read back exact Git/Orca worktree, terminal/process and primary state;
+   do not infer branch cleanup from worktree removal.
 
 ### 9c — Ordinary apply path
 
-When the dry-run is eligible, run the same lifecycle command with `--apply`. Its internal
-quiescence, discard-manifest, removal, branch-CAS, and dual-read-back remain the preferred path.
-A later pack-owned refusal still falls back to Step 9b under the same direct instruction.
+When the dry-run is eligible, run the same lifecycle command with `--apply`.
+Its internal quiescence, discard-manifest, removal, branch-CAS and dual read-back
+remain the preferred path. A later pack-owned refusal falls back to Step 9b only
+under the same direct-user/qualifying Task authority. Delegated mode never
+uses that override.
+
+### Final selected-target worktree and branch read-back
+
+Either safe ordering of selected worktree removal and local-branch
+compare-and-delete is valid; the final observed state controls completion.
+Do not delete a branch still attached to a worktree. If an actual associated
+local branch remains after safe detachment, delete it only using its captured
+expected-old-OID compare-and-delete:
+
+```bash
+git -C REPO update-ref -d "refs/heads/$ACTUAL_BRANCH" "$ACTUAL_BRANCH_OID"
+```
+
+Re-read the associated local branch ref and the actual PR source remote/ref.
+Step 5's `--delete-branch` may already have removed the remote PR branch;
+if it survives, use only an existing authorized exact-ref/expected-OID-safe
+deletion route. Do not force/delete an unbound or moved branch; a CAS mismatch
+preserves that ref and requires the branch owner to reconcile or explicitly
+authorize the changed target. Inability to delete a surviving associated
+remote branch safely is a reported residual, not a claim of deletion.
+
+Finally, read back Git worktrees, Orca worktrees, selected terminals/processes,
+associated local and remote branch refs, and the selected primary checkout.
+Require the exact `WT` absent and each actually associated branch cleaned
+(where present), with no primary/sibling damage. A global fleet
+`task_degraded` warning can be reported separately but is not itself a
+fourth completion fact. An actual surviving selected worktree/ref, ambiguous
+binding, unsafe moved branch, or unconfirmed removal is
+`operationally_incomplete`, with the factual residual and next allowed action.
 
 ## Step 10 — Report
 
 Report in the user's language:
 
-- PR, Issue, merge SHA, saved and actual target head/branch, and current selected default branch;
-- CI/review facts and whether they were overridden;
-- for any waiver, the source of the direct operator authorization (channel/reference only,
-  with private data omitted), plus the waiver status description and POST/read-back result;
-- operator-checkout adoption and preservation of existing changes;
-- for pack cards, distinguish a real verifier JSON receipt (only when a declared
-  primary-eligible Issue check ran) from the skill-owned no-eligible operator report.
-  Give actual mapped-consumer/start-time and live-check/read-back evidence only when
-  observed, `effect_verified|effect_unverified(<reason>)`, and exactly one
-  `operationally_complete|operationally_incomplete` outcome. On no eligible check,
-  state `effect_unverified(no_primary_eligible_issue_check)` and
-  `operationally_incomplete`, the exact Issue/checkout disqualification, that no
-  verifier CLI/live check/consumer control/read-back or v1 JSON receipt/emitted
-  `coordinatorMessage` occurred, the existing operator/coordinator escalation,
-  and the Issue-owner primary-valid-check/rerun next action; for a genuine
-  verifier `effect_unverified`, include its emitted coordinator message/blocker;
-- for non-pack cards, the target-owned `{PRIMARY_ROOT}/AGENTS.md` adoption source, actions,
-  named live check and its read-back (or no named check), residual blocker and next action;
-- target absolute path and why it was the selected non-primary worktree;
-- every lifecycle disagreement/blocked condition that was overridden;
-- terminal/process quiescence and residual counts;
-- removal operation and branch compare-and-delete result;
-- final Git+Orca read-back and any external/technical refusal;
-- in delegated-integration mode, the marker PR/head/predecessor identity, sequencing result,
-  production `READY_TO_MERGE` source/result, any projection-repair POST/read-back, adoption
-  source paths and live observations, adoption actions, the actual verifier receipt or skill-owned no-eligible Verify-effect report,
-  exact residual state/blocker, and next action.
+- PR/Issue, real `MERGE_SHA`, saved and actual selected worktree head/branch,
+  source remote ref, and selected default branch;
+- CI/review and direct-authorization/waiver facts, including which repository
+  requirements (if any) were overridden; delegated marker PR/head/predecessor
+  identity, sequencing, production `READY_TO_MERGE` evidence and any
+  projection-repair POST/read-back when applicable;
+- adoption source and actions, preservation of primary operator changes,
+  selected `PRIMARY_ROOT` HEAD and actual `merge-base --is-ancestor` outcome;
+- exact-target terminal/process quiescence, worktree removal, actual local
+  expected-OID CAS and associated remote branch-ref read-back, including all
+  real destructive-target or GitHub/OS refusals;
+- independently observed target runtime, wiki, fleet, consumer, live-check or
+  other diagnostics with their own owner/next action. An unrelated
+  `task_degraded`, missing post-merge Issue live check, failed/missing canary,
+  or post-adoption verifier outcome is **not** a merge completion veto. Never
+  claim consumer freshness, a check PASS, a runtime restart, or a removed
+  manager worktree without corresponding observation.
+
+Exactly three terminal facts determine the one report outcome:
+
+1. The intended PR is live `merged=true` with its actual merge SHA.
+2. The selected `PRIMARY_ROOT` HEAD equals or descends from that merge SHA,
+   proven by `git -C "$PRIMARY_ROOT" merge-base --is-ancestor "$MERGE_SHA" HEAD`.
+3. Final Git/Orca and branch-ref read-back prove the selected merged-PR
+   non-primary `WT` absent and the actual associated local and remote PR
+   branches absent where present. The merging manager's separate worktree is
+   excluded and handed to the orchestrator for post-termination teardown.
+
+Only when **all three** are observed report `operationally_complete`.
+A later-advanced primary HEAD is valid; no extra fleet, second smoke/live check,
+canary, verifier, or cleanup-ordering requirement may change this outcome.
+If any fact is unobserved or false, report `operationally_incomplete` and the
+specific residual, who can act and the next authorized step: repair a real PR
+merge refusal before retry; safely adopt a merged commit in the primary without
+discarding operator changes; resolve a destructive-target ambiguity before
+cleanup; or reconcile a surviving target or moved branch OID before any further
+deletion. Never fabricate a missing merge SHA, ancestry, target absence, or
+branch result.
 
 **Final own-response line (already-invoked actors only):** Preserve the
-detailed evidence-backed report above, then end the actual actor's standalone
-final reply with the single truthful terminal line appropriate to its state.
+evidence-backed report above, then end the merging actor's standalone final
+reply with one truthful terminal line.
 
 For a genuinely observed **retained wait** after actor invocation, the final
 line begins **exactly** `PARKED on ` or `PARKED:`. Examples:
@@ -728,27 +579,26 @@ PARKED on merge-<PR_NUMBER> — waiting on <verified dependency>; resume when <c
 PARKED: merge-<PR_NUMBER> — waiting on <verified dependency>; resume when <condition>, owner <owner>
 ```
 
-Use the resolved **actual PR number**, any separately known release identifier,
-a concrete observed reason, a specific resume condition and its owner. The
-observer's accepted prefix grammar is `^PARKED(?: on\b|:)`; the actual
-extraction grammar is `^PARKED(?: on\s+|:\s*(?:wait\s+)?)(.+)$`.
-Merely containing the word PARKED or using `PARKED merge-...` is not enough.
-An ordinary technical failure without an actual retained actor/wait must
-not be falsely parked; report its concrete failure and next action.
+Use the resolved actual PR number, an observed reason, the specific resume
+condition and its owner; merely saying `PARKED` without an actual retained
+actor/wait is false. The accepted prefix is
+`^PARKED(?: on\b|:)`; the extraction grammar is
+`^PARKED(?: on\s+|:\s*(?:wait\s+)?)(.+)$`.
+An ordinary technical failure is reported with its real next action, not
+falsely parked.
 
-Only after **verified completion** of the resolved PR merge, applicable local
-adoption and effect verification, worktree/terminal cleanup, and required
-GitHub/runtime read-back is the final own-response line:
+Only after the three terminal facts above are verified, the final
+own-response line is:
 
 ```text
 merge-<PR_NUMBER> done
 ```
 
-A merely merged but unadopted, otherwise blocked, unverified, partial, or
-never-launched actor may not report `done`. The orchestrator's **pre-dispatch**
-`wait_for_dependency` launches **no merge actor**, so this Step 10 line
-convention makes **no output promise** for a worker that does not exist.
-Prelaunch dependency sequencing and reporting remain outside this skill.
+A merged but unadopted, still-present selected worktree/branch, unconfirmed,
+unauthorized, or never-launched actor may not report `done`. The
+orchestrator's **pre-dispatch** `wait_for_dependency` launches no merge actor,
+so this line convention makes no output promise for a worker that does
+not exist.
 
-Never claim merge, adoption, quiescence, removal, branch deletion, or read-back succeeded without
-corresponding remote/runtime evidence.
+Never claim merge, adoption, quiescence, target removal, branch deletion,
+or read-back succeeded without corresponding remote/runtime evidence.
