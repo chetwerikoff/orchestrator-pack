@@ -9,6 +9,7 @@
     "scripts/lib/pack-review-delivery.ts",
     "scripts/lib/pack-review-run-store.ts",
     "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner-issue-1591.test.ts",
     "scripts/pack-review-runner.test.ts",
     "scripts/pack-review-runner.ts",
     "scripts/pack-review-state.test.ts",
@@ -30,11 +31,12 @@
     "scripts/lib/pack-review-run-store.ts",
     "scripts/pack-pr-review-contract.test.ts",
     "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner-issue-1591.test.ts",
     "scripts/pack-review-runner.test.ts",
     "scripts/pack-review-runner.ts",
     "scripts/pack-review-state.test.ts",
     "scripts/pack-review-state.ts",
     "scripts/review-delivery.test.ts"
   ],
-  "source_revision": "6d1c066f0f3b6993cea46c6fbd7c67e8e004d22c"
+  "source_revision": "6dbed36197caf3a504e7d8af0611975b69af33de"
 }
