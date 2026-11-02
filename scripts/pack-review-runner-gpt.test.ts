@@ -5271,6 +5271,52 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
     expect(readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.cycle?.consumedRoundOrdinals)
       .toEqual([1]);
   });
+
+  it.each(['edited-source', 'deleted-source', 'dismissed-review', 'rebound-review'] as const)(
+    'Issue #2748: ordinary final-required 409 readback refuses invalidated GitHub %s evidence',
+    async (mode) => {
+      const f = seed(3);
+      const input = { ...f.input };
+      let reads = 0;
+      const originalReviewTransport = input.fixtureGithubReviewTransport!;
+      const invalidate = () => {
+        if (mode === 'edited-source') {
+          f.comments[0]!.body += '\nEdited after original credentialed source delivery';
+        } else if (mode === 'deleted-source') {
+          f.comments.splice(0, 1);
+        } else {
+          input.fixtureGithubReviewTransport = {
+            ...originalReviewTransport,
+            listReviews: async () => (await originalReviewTransport.listReviews()).map((review) => ({
+              ...review,
+              ...(mode === 'dismissed-review'
+                ? { state: 'DISMISSED' }
+                : { commitId: HEAD_B }),
+            })),
+          };
+        }
+      };
+      input.fixtureRequiredStatusReader = async () => {
+        reads += 1;
+        if (reads === 1) {
+          invalidate();
+          throw new Error('HTTP 409: synthetic GitHub status read race');
+        }
+        return f.statusStates.at(-1);
+      };
+      const result = await reconcileStalePackReviewRuns(input);
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({ runId: f.runId, statusReconciled: false }),
+      ]));
+      expect(reads).toBeGreaterThanOrEqual(2);
+      expect(f.reviewBodies).toHaveLength(1);
+      expect(f.statusStates).toEqual(['success']);
+      expect(listPackReviewRuns(f.options)).toHaveLength(1);
+      expect(readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.cycle?.consumedRoundOrdinals)
+        .toEqual([1]);
+    },
+  );
+
   it('prefers a credentialed 3/3 census even after degraded-quorum grace', async () => {
     const f = seed(3);
     f.expireGrace();
