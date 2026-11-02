@@ -261,8 +261,23 @@ function runtimeAdapter(input: {
   };
 }
 
+const FIXTURE_OPENCODE_BIN = '/opt/opencode/1.18.35/bin/opencode';
+const FIXTURE_FORBIDDEN_OPEN_CODE_BASH = [
+  'bsk', '/bsk', '/*/bsk', '~?bsk', '~?*/bsk', 'env bsk',
+  'codex', '/codex', '/*/codex', '~?codex', '~?*/codex', 'env codex',
+  'agent-launch', '/agent-launch', '/*/agent-launch', '~?agent-launch', '~?*/agent-launch', 'env agent-launch',
+].flatMap((pattern) => [pattern, `${pattern} *`]);
+const FIXTURE_FORBIDDEN_OPEN_CODE_PERMISSIONS = {
+  bash: Object.fromEntries(FIXTURE_FORBIDDEN_OPEN_CODE_BASH.map((pattern) => [pattern, 'deny'])),
+  codex: { '*': 'deny' },
+  'agent-launch': { '*': 'deny' },
+  skill: { 'browser-skill': 'deny' },
+  read: { '*.env': 'deny', '*.env.*': 'deny' },
+};
+
 function profileEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
+    PACK_EXECUTOR_OPENCODE_BIN: FIXTURE_OPENCODE_BIN,
     PACK_EXECUTOR_MANAGER_AGENT: 'cursor-agent', PACK_EXECUTOR_MANAGER_MODEL: 'model', PACK_EXECUTOR_MANAGER_EFFORT: 'medium',
     PACK_EXECUTOR_T1_AGENT: 'cursor-agent', PACK_EXECUTOR_T1_MODEL: 'model', PACK_EXECUTOR_T1_EFFORT: 'medium',
     PACK_EXECUTOR_T2_AGENT: 'cursor-agent', PACK_EXECUTOR_T2_MODEL: 'model', PACK_EXECUTOR_T2_EFFORT: 'medium',
@@ -582,6 +597,7 @@ function managerReuseFixture(input: {
 }
 
 function opencodeProbeResult(args: readonly string[], variant = true): { ok: boolean; stdout: string; stderr: string } {
+  if (args[0] === FIXTURE_OPENCODE_BIN) return opencodeProbeResult(['opencode', ...args.slice(1)], variant);
   if (args[0] === 'opencode' && args[1] === 'models' && args.includes('--verbose')) {
     return {
       ok: true,
@@ -701,6 +717,7 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
 
 
   function lunaHighProbe(args: readonly string[]): { ok: boolean; stdout: string; stderr: string } {
+    if (args[0] === FIXTURE_OPENCODE_BIN) return lunaHighProbe(['opencode', ...args.slice(1)]);
     if (args[0] === 'opencode' && args[1] === 'models') {
       return { ok: true, stdout: args.includes('--verbose')
         ? 'openai/gpt-6-luna\n{"variants":{"high":{"reasoningEffort":"high"}}}\n'
@@ -794,7 +811,7 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
       }),
       finalizeProfile: async (profile) => {
         const overlay = buildOpenCodeAgentOverlay({
-          agentName: 'pack-opk-merge-2646',
+          executable: FIXTURE_OPENCODE_BIN, agentName: 'pack-opk-merge-2646',
           baseline: {
             name: 'build', mode: 'primary',
             permission: [
@@ -832,7 +849,7 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
     // spawn command must contain exactly one full OPENCODE_CONFIG_CONTENT.
     const command = spawned[0]!.command;
     expect(command.match(/OPENCODE_CONFIG_CONTENT=/gu)).toHaveLength(1);
-    const inline = /^OPENCODE_CONFIG_CONTENT='([^']+)' XDG_STATE_HOME='[^']+' opencode --hostname 127\.0\.0\.1 --port \d+ --agent '([^']+)'$/u.exec(command);
+    const inline = /^OPENCODE_CONFIG_CONTENT='([^']+)' XDG_STATE_HOME='[^']+' \/opt\/opencode\/1\.18\.35\/bin\/opencode --hostname 127\.0\.0\.1 --port \d+ --agent '([^']+)'$/u.exec(command);
     expect(inline).not.toBeNull();
     const config = JSON.parse(inline![1]!) as {
       permission: { bash: Record<string, string>; skill: Record<string, string> };
@@ -1541,7 +1558,7 @@ describe('supervised Task launch assistant', () => {
     const resolved = resolveSemanticExecutorProfile({
       surface,
       names,
-      env: { [names[0]]: 'opencode', [names[1]]: 'fixture/provider-model', [names[2]]: 'high' },
+      env: { [names[0]]: 'opencode', [names[1]]: 'fixture/provider-model', [names[2]]: 'high', PACK_EXECUTOR_OPENCODE_BIN: FIXTURE_OPENCODE_BIN },
     });
     if (!resolved.ok) throw new Error('synthetic OpenCode profile should resolve');
     const invocation = buildExecutorCommand(resolved.profile);
@@ -1551,14 +1568,10 @@ describe('supervised Task launch assistant', () => {
       agent?: Record<string, Record<string, unknown>>;
     };
     const agent = config.agent?.[agentName];
-    const bashDenies = {
-      bsk: 'deny', 'bsk *': 'deny', '/bsk': 'deny', '/bsk *': 'deny',
-      '/*/bsk': 'deny', '/*/bsk *': 'deny', '~?bsk': 'deny', '~?bsk *': 'deny',
-      '~?*/bsk': 'deny', '~?*/bsk *': 'deny', 'env bsk': 'deny', 'env bsk *': 'deny',
-    };
+    const bashDenies = FIXTURE_FORBIDDEN_OPEN_CODE_PERMISSIONS.bash;
     expect(agentName).toMatch(/^pack-opk-[a-f0-9]{32}$/u);
     expect(config.agent).not.toHaveProperty('pack');
-    expect(config.permission).toEqual({ bash: bashDenies, skill: { 'browser-skill': 'deny' }, read: { '*.env': 'deny', '*.env.*': 'deny' } });
+    expect(config.permission).toEqual({ ...FIXTURE_FORBIDDEN_OPEN_CODE_PERMISSIONS, bash: bashDenies });
     expect(agent).toMatchObject({
       model: 'fixture/provider-model',
       variant: 'high',
@@ -1642,10 +1655,10 @@ describe('supervised Task launch assistant', () => {
     });
     expect(launchConfig.permission).toMatchObject({ skill: { 'browser-skill': 'deny' } });
     expect(launchConfig.permission?.bash).toHaveProperty('bsk *', 'deny');
-    expect(admittedCalls[0]).toEqual(['opencode', 'models']);
-    expect(admittedCalls).toContainEqual(['opencode', '--help']);
-    expect(admittedCalls).toContainEqual(['opencode', 'models', '--verbose']);
-    expect(admittedCalls.some((args) => args[0] === 'opencode' && args[1] === 'debug')).toBe(false);
+    expect(admittedCalls[0]).toEqual([FIXTURE_OPENCODE_BIN, 'models']);
+    expect(admittedCalls).toContainEqual([FIXTURE_OPENCODE_BIN, '--help']);
+    expect(admittedCalls).toContainEqual([FIXTURE_OPENCODE_BIN, 'models', '--verbose']);
+    expect(admittedCalls.some((args) => args[0] === FIXTURE_OPENCODE_BIN && args[1] === 'debug')).toBe(false);
     expect(admittedCalls.some((args) => args[0] === 'orca')).toBe(false);
 
     const unsupportedEffort = await resolveLiveExecutorProfile('t2', {
@@ -1882,7 +1895,7 @@ describe('supervised Task launch assistant', () => {
         : { status: 'continue', cause: 'executor_effort_channel_unavailable' });
       if (pathKind === 'data' && accepted) {
         if (result.status !== 'ok') throw new Error('selected XDG data-home semantics must resolve');
-        expect(result.value.launchCommand).toContain(` XDG_DATA_HOME='${selectedDataRoot}' opencode --hostname`);
+        expect(result.value.launchCommand).toContain(` XDG_DATA_HOME='${selectedDataRoot}' ${FIXTURE_OPENCODE_BIN} --hostname`);
       }
     } finally {
       vi.unstubAllEnvs();
@@ -1972,7 +1985,7 @@ describe('supervised Task launch assistant', () => {
 
   it('projects resolved Agent.Info into a config-valid baseline overlay with terminal browser denies', () => {
     const invocation = buildOpenCodeAgentOverlay({
-      agentName: 'pack-opk-fixture',
+      executable: FIXTURE_OPENCODE_BIN, agentName: 'pack-opk-fixture',
       baseline: {
         name: 'build', native: true, mode: 'primary', topP: 0.8,
         prompt: 'fixture prompt', options: { temperature: 0.2 },
@@ -1988,15 +2001,7 @@ describe('supervised Task launch assistant', () => {
       agent?: Record<string, Record<string, unknown>>;
     };
     const agent = config.agent?.['pack-opk-fixture'];
-    expect(config.permission).toEqual({
-      bash: {
-        bsk: 'deny', 'bsk *': 'deny', '/bsk': 'deny', '/bsk *': 'deny',
-        '/*/bsk': 'deny', '/*/bsk *': 'deny', '~?bsk': 'deny', '~?bsk *': 'deny',
-        '~?*/bsk': 'deny', '~?*/bsk *': 'deny', 'env bsk': 'deny', 'env bsk *': 'deny',
-      },
-      skill: { 'browser-skill': 'deny' },
-      read: { '*.env': 'deny', '*.env.*': 'deny' },
-    });
+    expect(config.permission).toEqual(FIXTURE_FORBIDDEN_OPEN_CODE_PERMISSIONS);
     expect(config.agent?.general?.permission).toEqual(config.permission);
     expect(config.agent?.explore?.permission).toEqual(config.permission);
     expect(agent).toMatchObject({
@@ -2005,12 +2010,8 @@ describe('supervised Task launch assistant', () => {
     });
     expect(agent?.permission).toMatchObject({
       edit: 'allow',
-      bash: {
-        '*': 'ask',
-        bsk: 'deny', 'bsk *': 'deny', '/bsk': 'deny', '/bsk *': 'deny',
-        '/*/bsk': 'deny', '/*/bsk *': 'deny', '~?bsk': 'deny', '~?bsk *': 'deny',
-        '~?*/bsk': 'deny', '~?*/bsk *': 'deny', 'env bsk': 'deny', 'env bsk *': 'deny',
-      },
+      bash: { '*': 'ask', ...FIXTURE_FORBIDDEN_OPEN_CODE_PERMISSIONS.bash },
+      codex: { '*': 'deny' }, 'agent-launch': { '*': 'deny' },
       skill: { 'browser-skill': 'deny' },
       read: { '*.env': 'deny', '*.env.*': 'deny' },
     });
@@ -2024,7 +2025,7 @@ describe('supervised Task launch assistant', () => {
 
   it('appends precise browser denies after inherited allows without changing other permissions', () => {
     const invocation = buildOpenCodeAgentOverlay({
-      agentName: 'pack-opk-fixture',
+      executable: FIXTURE_OPENCODE_BIN, agentName: 'pack-opk-fixture',
       baseline: {
         name: 'build', prompt: 'original prompt', mode: 'primary',
         permission: [
@@ -2052,14 +2053,11 @@ describe('supervised Task launch assistant', () => {
       }>
     };
     const agent = parsed.agent['pack-opk-fixture']!;
-    const deniedBash = [
-      'bsk', 'bsk *', '/bsk', '/bsk *', '/*/bsk', '/*/bsk *',
-      '~?bsk', '~?bsk *', '~?*/bsk', '~?*/bsk *', 'env bsk', 'env bsk *',
-    ];
+    const deniedBash = FIXTURE_FORBIDDEN_OPEN_CODE_BASH;
     expect(agent.model).toBe('fixture/provider-model');
     expect(agent.variant).toBe('high');
     expect(agent.prompt).toBe('original prompt');
-    expect(Object.entries(agent.permission.bash).slice(-12)).toEqual(deniedBash.map((pattern) => [pattern, 'deny']));
+    expect(Object.entries(agent.permission.bash).slice(-deniedBash.length)).toEqual(deniedBash.map((pattern) => [pattern, 'deny']));
     expect(agent.permission.bash).toMatchObject({ 'bsk*': 'allow', 'git *': 'allow', '*': 'allow' });
     expect(agent.permission.skill).toEqual({ 'fixture-safe': 'allow', '*': 'allow', 'browser-skill': 'deny' });
     expect(agent.permission.edit).toBe('allow');
@@ -2077,11 +2075,7 @@ describe('supervised Task launch assistant', () => {
       expect(matchingReadRule(path)?.[1]).toBe('deny');
     }
     expect(matchingReadRule('README.md')).toEqual(['README.md', 'allow']);
-    expect(parsed.permission).toEqual({
-      bash: Object.fromEntries(deniedBash.map((pattern) => [pattern, 'deny'])),
-      skill: { 'browser-skill': 'deny' },
-      read: { '*.env': 'deny', '*.env.*': 'deny' },
-    });
+    expect(parsed.permission).toEqual(FIXTURE_FORBIDDEN_OPEN_CODE_PERMISSIONS);
     expect(openCodeFleetBrowserDenyRulesAreTerminal(agent.permission)).toBe(true);
   });
 
@@ -4954,7 +4948,7 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
           throw new Error('synthetic fixture has no admitted selected model/variant');
         }
         const overlay = buildOpenCodeAgentOverlay({
-          agentName: 'pack-opk-b5-selected', model: admittedAgent.model, effort: admittedAgent.variant,
+          executable: FIXTURE_OPENCODE_BIN, agentName: 'pack-opk-b5-selected', model: admittedAgent.model, effort: admittedAgent.variant,
           baseline: { name: 'build', mode: 'primary', prompt: 'synthetic benign task', permission: [] },
           stateRoot: '/tmp/opk-2661-disposable-state',
           ...(dataRoot !== undefined ? { dataRoot } : {}), resumeSession: requestedSession,
