@@ -1,5 +1,9 @@
 import { readFileSync } from 'node:fs';
-import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
+import {
+  mutateStateLightTurnObservation,
+  readStateLightTurnObservation,
+} from './state-light-turn-observation.ts';
+import { configuredProfileKey } from './storage-common.ts';
 import { isOwnedPromptMarker } from './owned-prompt-marker.ts';
 import { conversationUuidFromUrl } from './state-light-fresh-conversation.ts';
 import { USER_MESSAGE_SELECTOR } from './product-page-selectors.ts';
@@ -59,6 +63,12 @@ export interface BrowserTurnCancellationDependencies {
     readonly incomplete: boolean;
   }>;
   readonly stop?: (page: any) => Promise<StopOwnedGenerationOutcome>;
+  /** Prepared-only owner authority inputs (tests inject; production reads the store, Orca and env). */
+  readonly preparedOwner?: {
+    readonly env?: NodeJS.ProcessEnv;
+    readonly dispatchWitness?: (dispatchId: string) => Promise<Record<string, unknown> | undefined>;
+    readonly invokingTerminalHandle?: string;
+  };
 }
 
 export function isSupportedChatGptConversationUrl(value: string): boolean {
@@ -276,10 +286,13 @@ export async function cancelOwnedGenerationFromReceipt(
  * cross-process Stop authority: without an independent original tab and active
  * generation witness every valid request returns a non-success no-op.
  */
+const PREPARED_CANCEL_LOCATOR_MODULE = new URL('../flow-manager-long-running-child.ts', import.meta.url).href;
+
 export async function runStateLightCancellation(
   argv: readonly string[],
   dependencies: BrowserTurnCancellationDependencies = {},
 ): Promise<number> {
+  if (argv.includes('--prepared-only')) return await runPreparedOnlyCancellation(argv, dependencies);
   let receiptPath: string | undefined;
   let cdp = '';
   for (let index = 0; index < argv.length; index += 1) {
@@ -322,4 +335,171 @@ export async function runStateLightCancellation(
     stop_outcome: attempt.stopOutcome,
   }) + '\n');
   return attempt.stopOutcome === 'confirmed' && attempt.identityProven ? 0 : 13;
+}
+
+const PREPARED_CANCEL_ARGUMENTS_NEXT_STEP =
+  'Pass exactly: --prepared-only --invocation-id <id> --run-identity <run> --attempt-identity <attempt> '
+  + '--owner-task-id <task> --owner-dispatch-id <dispatch> --profile <profile> --cdp <url>; '
+  + 'do not combine with --receipt-file.';
+const PREPARED_CANCEL_RACE_NEXT_STEP =
+  'The turn may already be dispatching or sent: run the original owner wait / reconcile the exact '
+  + 'invocation; do not resend.';
+const PREPARED_CANCEL_OWNER_NEXT_STEP =
+  'Cancellation was not applied: run it from the original Task+Dispatch worker terminal while that '
+  + 'Dispatch is current and live (worker-show / current assignment); otherwise run the original owner '
+  + 'wait; do not resend.';
+const PREPARED_CANCEL_UNVERIFIED_NEXT_STEP =
+  'Cancellation was not applied. Verify the exact original invocation id, Run/attempt identity and '
+  + 'current owner Task/Dispatch, then retry; otherwise run the original owner wait; do not resend.';
+
+function preparedCancelFailure(cause: string, nextAction: string, extra: Record<string, unknown> = {}): number {
+  process.stdout.write(JSON.stringify({
+    schema: 'cancel-result/v1', state: 'driver_error', cause, ...extra, next_action: nextAction,
+  }) + '\n');
+  return 13;
+}
+
+/**
+ * AC7 prepared-only cancellation: authenticated by the original locator/receipt
+ * owner pair and the observation record, then a single owner-exclusive
+ * prepared -> not_sent mutation. No CDP connect, Stop or Send is ever issued;
+ * exit 0 only for a confirmed cancel-before-dispatch winner (or its repeat).
+ */
+type PreparedOwnerEffect = <T>(input: {
+  readonly taskId: string; readonly dispatchId: string; readonly originalTerminalHandle?: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly dispatchWitness?: (dispatchId: string) => Promise<Record<string, unknown> | undefined>;
+  readonly invokingTerminalHandle?: string;
+}, action: () => T | Promise<T>) => Promise<{ readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly evidence: string; readonly actionEntered: boolean }>;
+
+async function runPreparedOnlyCancellation(
+  argv: readonly string[], dependencies: BrowserTurnCancellationDependencies = {},
+): Promise<number> {
+  const values = new Map<string, string>();
+  const valueFlags = new Set([
+    '--invocation-id', '--run-identity', '--attempt-identity', '--owner-task-id',
+    '--owner-dispatch-id', '--profile', '--cdp',
+  ]);
+  for (let index = 0; index < argv.length; index += 1) {
+    const flag = argv[index]!;
+    if (flag === '--prepared-only') continue;
+    const value = argv[index + 1];
+    if (!valueFlags.has(flag) || !value || values.has(flag)) {
+      return preparedCancelFailure('cancel_arguments_invalid', PREPARED_CANCEL_ARGUMENTS_NEXT_STEP);
+    }
+    values.set(flag, value);
+    index += 1;
+  }
+  if (argv.filter((flag) => flag === '--prepared-only').length !== 1
+    || [...valueFlags].some((flag) => !values.get(flag)?.trim())) {
+    return preparedCancelFailure('cancel_arguments_invalid', PREPARED_CANCEL_ARGUMENTS_NEXT_STEP);
+  }
+  const invocationId = values.get('--invocation-id')!;
+  const ownerTaskId = values.get('--owner-task-id')!;
+  const ownerDispatchId = values.get('--owner-dispatch-id')!;
+  const identity = { invocation_id: invocationId, owner_task_id: ownerTaskId, owner_dispatch_id: ownerDispatchId };
+
+  let profileKey: string;
+  let withVerifiedOwnerEffect: PreparedOwnerEffect;
+  let originalTerminalHandle: string | undefined;
+  try {
+    // Locator-only read of the launcher module: this cancel path never reaches the launcher's
+    // browser probes, so it is loaded by resolved URL rather than as a Browser-turn graph edge.
+    const launcher = await import(PREPARED_CANCEL_LOCATOR_MODULE) as {
+      readonly readInvocationReceiptLocator: (input: {
+        readonly invocationId: string; readonly runIdentity: string; readonly attemptIdentity: string;
+        readonly ownerTaskId: string; readonly ownerDispatchId: string;
+      }) => { readonly receipt: { readonly invocation_id?: string; readonly owner_task_id?: string;
+        readonly owner_dispatch_id?: string; readonly launching_terminal_handle?: string } };
+      readonly withVerifiedOwnerEffect: PreparedOwnerEffect;
+    };
+    const { readInvocationReceiptLocator } = launcher;
+    withVerifiedOwnerEffect = launcher.withVerifiedOwnerEffect;
+    const bound = readInvocationReceiptLocator({
+      invocationId,
+      runIdentity: values.get('--run-identity')!,
+      attemptIdentity: values.get('--attempt-identity')!,
+      ownerTaskId,
+      ownerDispatchId,
+    });
+    if (bound.receipt.invocation_id !== invocationId
+      || bound.receipt.owner_task_id !== ownerTaskId
+      || bound.receipt.owner_dispatch_id !== ownerDispatchId) {
+      return preparedCancelFailure('cancel_owner_mismatch', PREPARED_CANCEL_UNVERIFIED_NEXT_STEP, identity);
+    }
+    originalTerminalHandle = bound.receipt.launching_terminal_handle;
+    profileKey = configuredProfileKey(values.get('--profile')!, values.get('--cdp')!);
+  } catch {
+    return preparedCancelFailure('cancel_locator_unverified', PREPARED_CANCEL_UNVERIFIED_NEXT_STEP, identity);
+  }
+  try {
+    const observed = readStateLightTurnObservation(profileKey, invocationId);
+    if (observed.invocation_id !== invocationId || observed.profile_key !== profileKey) throw new Error('mismatch');
+  } catch {
+    return preparedCancelFailure('cancel_observation_unverified', PREPARED_CANCEL_UNVERIFIED_NEXT_STEP, {
+      ...identity, configured_profile_key: profileKey,
+    });
+  }
+
+  // Historical locator/receipt equality only correlates; the mutation itself runs under positive
+  // current Task+Dispatch authority (store + live native Dispatch + invoking worker terminal), fenced.
+  let alreadyCancelled = false;
+  let mutationError: unknown;
+  const owner = dependencies.preparedOwner ?? {};
+  const fenced = await withVerifiedOwnerEffect({
+    taskId: ownerTaskId, dispatchId: ownerDispatchId,
+    ...(originalTerminalHandle ? { originalTerminalHandle } : {}),
+    ...(owner.env ? { env: owner.env } : {}),
+    ...(owner.dispatchWitness ? { dispatchWitness: owner.dispatchWitness } : {}),
+    ...(owner.invokingTerminalHandle ? { invokingTerminalHandle: owner.invokingTerminalHandle } : {}),
+  }, () => {
+    try {
+      mutateStateLightTurnObservation(profileKey, invocationId, (current) => {
+        if (current.phase === 'not_sent'
+          && current.transition_reason === 'cancelled_before_dispatch'
+          && (current.send_count ?? 0) === 0) {
+          alreadyCancelled = true;
+          return current;
+        }
+        if (current.phase !== 'prepared'
+          || (current.send_count ?? 0) !== 0
+          || current.send_witness !== 'none') {
+          throw new Error('cancel_not_prepared');
+        }
+        return {
+          ...current,
+          phase: 'not_sent',
+          send_count: 0,
+          send_witness: 'numeric_send_count',
+          transitioned_at: new Date().toISOString(),
+          transition_reason: 'cancelled_before_dispatch',
+        };
+      });
+    } catch (error) {
+      mutationError = error;
+    }
+  });
+  if (!fenced.ok && !fenced.actionEntered) {
+    return preparedCancelFailure('cancel_owner_not_current', PREPARED_CANCEL_OWNER_NEXT_STEP, {
+      ...identity, configured_profile_key: profileKey, owner_evidence: fenced.evidence,
+    });
+  }
+  if (!fenced.ok || mutationError !== undefined) {
+    const message = mutationError instanceof Error ? mutationError.message : String(mutationError ?? '');
+    const cause = message === 'cancel_not_prepared' || message === 'observation_mutation_busy'
+      ? message : 'cancel_mutation_unconfirmed';
+    return preparedCancelFailure(cause, PREPARED_CANCEL_RACE_NEXT_STEP, {
+      ...identity, configured_profile_key: profileKey,
+    });
+  }
+  process.stdout.write(JSON.stringify({
+    schema: 'cancel-result/v1',
+    state: 'cancelled_before_dispatch',
+    cause: alreadyCancelled ? 'already_cancelled' : 'cancelled_before_dispatch',
+    ...identity,
+    configured_profile_key: profileKey,
+    send_count: 0,
+  }) + '\n');
+  return 0;
 }

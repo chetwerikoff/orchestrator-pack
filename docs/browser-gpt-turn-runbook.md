@@ -69,14 +69,20 @@ authority through transport. Prompt content carries the substantive role/task.
 Normal manager adapter:
 
 ```text
-npm run --silent flow-manager-browser-gpt-long-run --   --run-identity <run>   --attempt-identity <attempt>   --handoff-receipt <path>   --invocation-id <id>   --terminal-envelope <path-ending-in-terminal.json>   --output <path>   --profile <profile>   --cdp <url>   --input <prompt-file>   --cwd <worktree>   [--project-url <url> --new-chat | --chat-url <url>]
+npm run --silent flow-manager-browser-gpt-long-run --   --run-identity <run>   --attempt-identity <attempt>   --owner-task-id <approved-task>   --owner-dispatch-id <approved-dispatch>   --handoff-receipt <path>   --invocation-id <id>   --terminal-envelope <path-ending-in-terminal.json>   --output <path>   --profile <profile>   --cdp <url>   --input <prompt-file>   --cwd <worktree>   [--bound-issue <owner/repo>#<number>]   [--project-url <url> --new-chat | --chat-url <url>]
 ```
+
+`--bound-issue` names the managed Issue target that the upstream Task/Dispatch
+is bound to (Issue authors and reviewers). Its repository must be the selected
+project card repository. It only lets the driver record a pre-SEND Issue body
+digest for later task-progress reconciliation; never derive it from the prompt,
+URL or GitHub activity. It cannot be combined with `--repo`/`--pr`.
 
 PR-author-only variant (a PR author whose turn may push to an existing OPEN PR;
 Issue authors and reviewers keep the normal command above):
 
 ```text
-npm run --silent flow-manager-browser-gpt-long-run --   --run-identity <run>   --attempt-identity <attempt>   --handoff-receipt <path>   --invocation-id <id>   --terminal-envelope <path-ending-in-terminal.json>   --output <path>   --profile <profile>   --cdp <url>   --input <prompt-file>   --cwd <worktree>   --repo <owner/repo> --pr <number>   [--project-url <url> --new-chat | --chat-url <url>]
+npm run --silent flow-manager-browser-gpt-long-run --   --run-identity <run>   --attempt-identity <attempt>   --owner-task-id <approved-task>   --owner-dispatch-id <approved-dispatch>   --handoff-receipt <path>   --invocation-id <id>   --terminal-envelope <path-ending-in-terminal.json>   --output <path>   --profile <profile>   --cdp <url>   --input <prompt-file>   --cwd <worktree>   --repo <owner/repo> --pr <number>   [--project-url <url> --new-chat | --chat-url <url>]
 ```
 
 `--repo` and `--pr` are one pair: pass both or neither. With the pair, the
@@ -88,8 +94,31 @@ after that turn ends. When the PR head changes during the turn, the result is
 inspect the PR. One project card per repository is assumed; a SEND by an
 orphaned child after its turn deadline is a named residual, not prevented.
 
+A `conversation_busy` / `conversation_incident_active` record whose exact
+producer PID has exited releases only its conversation custody, and only when
+the next turn's read-only view of that conversation Page is positively idle
+(not generating, last reply finished). The incident, its output identity and
+its possible delivery stay recorded: the original output still refuses with
+`destination_bound_to_unresolved_delivery`. A live, ownerless, generating or
+unreadable holder keeps blocking. Release grants no resend.
+
 The adapter returns after launcher handoff is proven; that is not proof of a
 model reply or workflow-level completion.
+
+Managed launches require both `--owner-task-id` and `--owner-dispatch-id`.
+Durable artifacts (terminal envelope, original handoff receipt, receipt locator)
+live under `$XDG_STATE_HOME/orchestrator-pack/`, or
+`~/.local/state/orchestrator-pack/` when XDG is unset; a caller-supplied
+`--handoff-receipt`/`--terminal-envelope` path contributes only its basename
+(the terminal name still ends in `terminal.json`), and accepted/v1 returns the
+resolved paths. `--predecessor-invocation-id` and `--predecessor-attempt-identity`
+take only the earlier invocation and attempt: the launcher reads that
+predecessor's original Run/Task/Dispatch from its own durable locator, and a
+settled `ok`/landed predecessor is a no-op that never admits the new Send.
+Refusals print an exact code and `nextStep`. After the launcher may have
+started, a refusal names only the adapter's own code and marks physical SEND
+unknown: reconcile the original invocation, never resend. Details:
+[flow-manager runbook](flow-manager-long-running-child-runbook.md).
 
 ## Observe and settle
 
@@ -114,7 +143,15 @@ Product/login/quota/network walls are evidence, not send authority.
 When delivery may have happened: retain invocation/conversation identity,
 re-observe the owned conversation, harvest only an attributable reply, and
 publish output once. If attribution remains uncertain, report uncertainty and
-preserve no-resend semantics.
+preserve no-resend semantics. A redirect away from the bound conversation is
+`cause: conversation_unavailable` with no recoverable locator: start a fresh
+chat as advice only, not as resend authority for possibly delivered work.
+No fixed time window settles an attempt or
+authorizes a new Send: reconcile the original Page and the exact bound GitHub
+target (task-progress check) first. The owner-run `wait` may publish one
+uncertainty envelope only for a currently approved original Task+Dispatch owner
+after the original launcher is positively dead, and never signals a live
+launcher.
 
 ### Diagnostic recurrence journal
 

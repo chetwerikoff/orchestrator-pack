@@ -1,0 +1,38 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2763,
+  "declared_paths": [
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts"
+  ],
+  "denylist": [
+    ".cache/",
+    ".config/",
+    ".env",
+    ".env.local",
+    ".git/",
+    ".local/",
+    ".opencode/",
+    ".orchestrator-pack/",
+    "credentials/",
+    "local.config.json",
+    "node_modules/",
+    "packages/core/",
+    "runtime-state/",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
+    "secrets/",
+    "state/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts"
+  ],
+  "source_revision": "6ec71bbbbe8914a83c726ef8ffdb100c87c875b9"
+}

@@ -754,6 +754,102 @@ describe('fleet alarm', () => {
     }
   });
 
+  describe('Issue #2750 single durable envelope root (AC19-AC20)', () => {
+    const schema = 'flow-manager-long-running-child-terminal/v1';
+    const envelopeBody = (id: string) => JSON.stringify({ schema, observed_invocation_id: id, cwd: '/w/one' });
+    const saved = {
+      xdg: process.env.XDG_STATE_HOME, home: process.env.HOME, tmp: process.env.TMPDIR,
+      gate: process.env.OPK_FM_LONG_CHILD_TEST_GATE, fixture: process.env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT,
+    };
+    const restore = (key: string, value: string | undefined) => {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    };
+    const withEnv = (fn: () => void) => {
+      delete process.env.OPK_FM_LONG_CHILD_TEST_GATE;
+      delete process.env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT;
+      try { fn(); } finally {
+        restore('XDG_STATE_HOME', saved.xdg); restore('HOME', saved.home); restore('TMPDIR', saved.tmp);
+        restore('OPK_FM_LONG_CHILD_TEST_GATE', saved.gate);
+        restore('OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT', saved.fixture);
+      }
+    };
+
+    it('defaults to HOME rather than scratch XDG_STATE_HOME and ignores an emptied TMPDIR', () => {
+      const xdg = mkdtempSync(join(tmpdir(), 'fleet-wake-xdg-'));
+      const home = mkdtempSync(join(tmpdir(), 'fleet-wake-home-'));
+      const emptiedTmp = mkdtempSync(join(tmpdir(), 'fleet-wake-emptied-tmp-'));
+      try {
+        withEnv(() => {
+          process.env.XDG_STATE_HOME = xdg;
+          process.env.HOME = home;
+          process.env.TMPDIR = emptiedTmp;
+          const root = join(home, '.local', 'state', 'orchestrator-pack');
+          mkdirSync(root, { recursive: true });
+          writeFileSync(join(root, 'fresh-terminal.json'), envelopeBody('inv-home'), 'utf8');
+          expect(listTerminalEnvelopes()).toEqual([
+            { path: join(root, 'fresh-terminal.json'), invocationId: 'inv-home', observedInvocationId: 'inv-home', cwd: '/w/one' },
+          ]);
+        });
+      } finally {
+        rmSync(xdg, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true });
+        rmSync(emptiedTmp, { recursive: true, force: true });
+      }
+    });
+
+    it('falls back to ~/.local/state/orchestrator-pack when XDG_STATE_HOME is unset', () => {
+      const home = mkdtempSync(join(tmpdir(), 'fleet-wake-home-'));
+      try {
+        withEnv(() => {
+          delete process.env.XDG_STATE_HOME;
+          process.env.HOME = home;
+          const root = join(home, '.local', 'state', 'orchestrator-pack');
+          mkdirSync(root, { recursive: true });
+          writeFileSync(join(root, 'home-terminal.json'), envelopeBody('inv-home'), 'utf8');
+          expect(listTerminalEnvelopes().map((event) => event.invocationId)).toEqual(['inv-home']);
+        });
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('never scans scratch XDG or /tmp/opencode and skips other pack state subtrees under HOME', () => {
+      const xdg = mkdtempSync(join(tmpdir(), 'fleet-wake-xdg-'));
+      const home = mkdtempSync(join(tmpdir(), 'fleet-wake-home-'));
+      try {
+        withEnv(() => {
+          process.env.XDG_STATE_HOME = xdg;
+          process.env.HOME = home;
+          const root = join(home, '.local', 'state', 'orchestrator-pack');
+          for (const sub of ['chatgpt-browser-turn', 'browser-gpt-receipts', 'nested']) mkdirSync(join(root, sub), { recursive: true });
+          writeFileSync(join(root, 'chatgpt-browser-turn', 'profile-terminal.json'), envelopeBody('inv-profile'), 'utf8');
+          writeFileSync(join(root, 'browser-gpt-receipts', 'locator-terminal.json'), envelopeBody('inv-locator'), 'utf8');
+          writeFileSync(join(root, 'nested', 'ok-terminal.json'), envelopeBody('inv-nested'), 'utf8');
+          writeFileSync(join(root, 'not-an-envelope.json'), envelopeBody('inv-wrong-name'), 'utf8');
+          expect(listTerminalEnvelopes().map((event) => event.invocationId)).toEqual(['inv-nested']);
+          // The default root is the durable root only: no legacy dual root is consulted.
+          const sourceOfScan = readFileSync(new URL('./fleet-wake.ts', import.meta.url), 'utf8');
+          expect(sourceOfScan).not.toContain('/tmp/opencode');
+        });
+      } finally {
+        rmSync(xdg, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('logs a diagnostic and scans nothing when the durable root cannot be resolved', () => {
+      withEnv(() => {
+        process.env.XDG_STATE_HOME = 'relative/state';
+        delete process.env.HOME;
+        const diagnostics: string[] = [];
+        expect(listTerminalEnvelopes(undefined, (message) => diagnostics.push(message))).toEqual([]);
+        expect(diagnostics).toHaveLength(1);
+        expect(diagnostics[0]).toContain('terminal_envelope_root_unresolved');
+        expect(diagnostics[0]).toContain('durable_root_home_unavailable');
+      });
+    });
+  });
+
   it('wakes the idle owner of a PR once per finished CI run on its head', async () => {
     const store = new MemoryWakeStore();
     const now = Date.parse('2026-10-02T12:00:00Z');

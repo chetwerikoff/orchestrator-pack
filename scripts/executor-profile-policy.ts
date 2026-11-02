@@ -112,11 +112,11 @@ export const EXECUTOR_PROFILE_VARIABLES: Readonly<Record<ExecutorProfileClass, E
   smoke_complex: ['PACK_EXECUTOR_SMOKE_COMPLEX_AGENT', 'PACK_EXECUTOR_SMOKE_COMPLEX_MODEL', 'PACK_EXECUTOR_SMOKE_COMPLEX_EFFORT'],
 };
 
-/** Merge is a distinct Task class; absent operator keys use this OpenCode high profile. */
+/** Merge is a distinct Task class; absent operator keys use this OpenCode medium profile. */
 export const DEFAULT_MERGE_EXECUTOR_PROFILE = {
   PACK_EXECUTOR_MERGE_AGENT: 'opencode',
   PACK_EXECUTOR_MERGE_MODEL: 'openai/gpt-6-luna',
-  PACK_EXECUTOR_MERGE_EFFORT: 'high',
+  PACK_EXECUTOR_MERGE_EFFORT: 'medium',
 } as const;
 
 /** Do not override an explicit (even empty/malformed) operator value. */

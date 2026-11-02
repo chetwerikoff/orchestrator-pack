@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import './toolchain/native-entrypoint-preflight.ts';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   closeSync,
   constants as fsConstants,
@@ -8,15 +8,19 @@ import {
   fchmodSync,
   mkdirSync,
   lstatSync,
+  linkSync,
   openSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
+  renameSync,
   statSync,
   unlinkSync,
   writeSync,
   fsyncSync,
 } from 'node:fs';
-import { dirname, basename, isAbsolute, join, normalize, resolve } from 'node:path';
+import { dirname, basename, isAbsolute, join, normalize, resolve, sep } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { TURN_STATES, type FailureScope, type TurnResultV1, type TurnState } from './chatgpt-browser-turn/contracts.ts';
 import { runProcess, type ProcessResult } from './kernel/subprocess.ts';
@@ -38,6 +42,10 @@ import { observationRecordPath, readStateLightTurnObservation, type StateLightTu
 import { loadChromium, normalizeConversationUrl } from './chatgpt-browser-turn/ui-adapter.ts';
 import { releaseCdpBrowser } from './chatgpt-browser-turn/browser-session.ts';
 import { recoveryMarkerCardinality } from './chatgpt-browser-turn/state-light-turn-recovery.ts';
+import {
+  listCurrentWorkerAssignmentRecords, resolveWorkerAssignmentStorePath, withCurrentWorkerAssignmentFence,
+  type WorkerAssignmentRecord,
+} from './lib/worker-assignment-store.ts';
 
 export const COMPLETION_MODE = 'browser-turn-result-v1' as const;
 export const HANDOFF_SCHEMA = 'flow-manager-long-running-child-handoff/v1' as const;
@@ -46,7 +54,35 @@ export const WAIT_SCHEMA = 'flow-manager-long-running-child-wait/v1' as const;
 export const REFUSAL_SCHEMA = 'flow-manager-long-running-child-refusal/v1' as const;
 // fleet-wake scans terminal envelopes under this root by file name.
 export const TERMINAL_ENVELOPE_NAME_SUFFIX = 'terminal.json' as const;
-export const TERMINAL_ENVELOPE_ROOT = '/tmp/opencode' as const;
+export const DURABLE_ARTIFACT_APP_DIR = 'orchestrator-pack' as const;
+const DURABLE_ROOT_NEXT_STEP = 'set HOME to an absolute directory';
+
+/**
+ * The single durable root for terminal envelopes, original handoff receipts and receipt
+ * locators: `$HOME/.local/state/orchestrator-pack`, independent of XDG_STATE_HOME.
+ * Only the existing two-part synthetic fixture gate may redirect it. Never a second root.
+ */
+export function resolveDurableArtifactRoot(env: NodeJS.ProcessEnv = process.env): string {
+  const fixtureRoot = env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT;
+  if (env.OPK_FM_LONG_CHILD_TEST_GATE === 'fixture-root-v1'
+    && typeof fixtureRoot === 'string' && isAbsolute(fixtureRoot)) return resolve(fixtureRoot);
+  const home = env.HOME;
+  if (typeof home !== 'string' || !home.trim() || !isAbsolute(home)) {
+    throw new Error(`durable_root_home_unavailable; nextStep: ${DURABLE_ROOT_NEXT_STEP}`);
+  }
+  return join(resolve(home), '.local', 'state', DURABLE_ARTIFACT_APP_DIR);
+}
+
+function productionRootSnapshot(): string {
+  try {
+    return resolveDurableArtifactRoot({ ...process.env, OPK_FM_LONG_CHILD_TEST_GATE: undefined });
+  } catch {
+    return join(homedir(), '.local', 'state', DURABLE_ARTIFACT_APP_DIR);
+  }
+}
+
+/** Production default at module load (diagnostic/reference only; resolution always calls the resolver). */
+export const TERMINAL_ENVELOPE_ROOT = productionRootSnapshot();
 export const RECEIPT_LOCATOR_SCHEMA = 'flow-manager-long-running-child-locator/v1' as const;
 export const RECEIPT_LOCATOR_ROOT = join(TERMINAL_ENVELOPE_ROOT, 'browser-gpt-receipts');
 
@@ -59,13 +95,49 @@ export interface InvocationReceiptLocator {
   readonly terminal_envelope_path: string;
 }
 
-/** The same two-part fixture gate already used for terminal envelopes; never redirect production by one env var. */
+/**
+ * A caller artifact pathname (including a legacy scratch-directory path) contributes only its
+ * basename; its directory is never used. Synthetic fixtures under the gated fixture root keep
+ * their nested path inside that root.
+ */
+export function resolveDurableArtifactPath(path: string, root: string = resolveDurableArtifactRoot()): string {
+  const name = basename(path);
+  if (!name || name === '.' || name === '..' || name.startsWith('.')) {
+    throw new Error(`artifact_basename_invalid; nextStep: pass a plain file name such as <project>-issue-<N>-<invocation>-terminal.json`);
+  }
+  const absolute = resolve(path);
+  const testRoot = process.env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT;
+  if (process.env.OPK_FM_LONG_CHILD_TEST_GATE === 'fixture-root-v1'
+    && typeof testRoot === 'string' && isAbsolute(testRoot) && resolve(testRoot) === resolve(root)
+    && absolute.startsWith(resolve(testRoot) + sep)) return absolute;
+  return join(resolve(root), name);
+}
+
+/** Create (0700) or verify the single private durable root; never follow an aliased root. */
+export function ensureDurableArtifactRoot(root: string = resolveDurableArtifactRoot()): string {
+  try {
+    if (!existsSync(root)) mkdirSync(root, { recursive: true, mode: 0o700 });
+    if (lstatSync(root).isSymbolicLink()) throw new Error('durable_root_symlink');
+    assertPrivateFile(root, true);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`durable_root_unsafe: ${message.split(';')[0]}; root ${root}; nextStep: ${DURABLE_ROOT_NEXT_STEP}`);
+  }
+  return root;
+}
+
+/** Read-only verification for readers (fleet-wake, PR-author scan): an absent root is simply empty. */
+export function validateDurableArtifactRoot(root: string = resolveDurableArtifactRoot()): string {
+  if (existsSync(root)) {
+    if (lstatSync(root).isSymbolicLink()) throw new Error('durable_root_symlink');
+    assertPrivateFile(root, true);
+  }
+  return root;
+}
+
+/** The same two-part fixture gate used for terminal envelopes; no single-env redirection. */
 function effectiveTerminalRoot(): string {
-  const fixtureRoot = process.env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT;
-  return process.env.OPK_FM_LONG_CHILD_TEST_GATE === 'fixture-root-v1'
-    && typeof fixtureRoot === 'string' && isAbsolute(fixtureRoot)
-    ? resolve(fixtureRoot)
-    : TERMINAL_ENVELOPE_ROOT;
+  return resolveDurableArtifactRoot();
 }
 
 export function invocationReceiptLocatorPath(
@@ -112,7 +184,7 @@ function locatorRoot(terminalRoot: string, create: boolean): string {
 function readLocatorIndex(
   path: string,
   terminalRoot: string,
-  expected?: { invocationId?: string; runIdentity: string; attemptIdentity: string },
+  expected?: { invocationId?: string; runIdentity?: string; attemptIdentity?: string },
 ): InvocationReceiptLocator {
   const root = locatorRoot(terminalRoot, false);
   const target = resolve(path);
@@ -131,8 +203,8 @@ function readLocatorIndex(
     || typeof value.terminal_envelope_path !== 'string' || !isAbsolute(value.terminal_envelope_path)
     || resolve(value.terminal_envelope_path) !== value.terminal_envelope_path
     || (expected?.invocationId && value.invocation_id !== expected.invocationId)
-    || (expected && (value.run_identity !== expected.runIdentity
-      || value.attempt_identity !== expected.attemptIdentity))) {
+    || (expected?.runIdentity !== undefined && value.run_identity !== expected.runIdentity)
+    || (expected?.attemptIdentity !== undefined && value.attempt_identity !== expected.attemptIdentity)) {
     throw new Error('receipt_locator_identity_mismatch');
   }
   assertNoSymlinkComponents(value.handoff_receipt_path);
@@ -152,6 +224,7 @@ export function readInvocationReceiptLocator(input: {
   readonly terminalEnvelopeRoot?: string;
 }): { readonly locator: InvocationReceiptLocator; readonly receipt: HandoffReceipt; readonly path: string } {
   const taskBound = input.ownerTaskId !== undefined || input.ownerDispatchId !== undefined;
+  // Locator correlation only; owner-wait authority (runWait) separately requires the full pair.
   if (taskBound && (!input.ownerTaskId?.trim()
     || (input.ownerDispatchId !== undefined && !input.ownerDispatchId.trim()))) {
     throw new Error('wait_owner_identity_required');
@@ -186,11 +259,42 @@ export function readInvocationReceiptLocator(input: {
     throw new Error('wait_receipt_owner_mismatch');
   }
   return { locator, receipt, path };
+
+}
+/** Resolve an earlier invocation from its own durable locator identity. The
+ * caller chooses only the invocation; Run/attempt/owner identity comes from
+ * the original private locator and handoff receipt, never the new launch. */
+export function readPredecessorReceiptLocator(input: {
+  readonly invocationId: string;
+  readonly expectedAttemptIdentity?: string;
+  readonly terminalEnvelopeRoot?: string;
+}): { readonly locator: InvocationReceiptLocator; readonly receipt: HandoffReceipt; readonly path: string } {
+  if (!input.invocationId.trim()) throw new Error('predecessor_invocation_required');
+  const root = input.terminalEnvelopeRoot ?? effectiveTerminalRoot();
+  const path = invocationReceiptLocatorPath(input.invocationId, root);
+  const locator = readLocatorIndex(path, root, { invocationId: input.invocationId });
+  if (input.expectedAttemptIdentity && locator.attempt_identity !== input.expectedAttemptIdentity) {
+    throw new Error('predecessor_attempt_identity_mismatch');
+  }
+  assertPrivateFile(locator.handoff_receipt_path, false);
+  const receipt = readHandoffReceipt(locator.handoff_receipt_path, {
+    runIdentity: locator.run_identity, attemptIdentity: locator.attempt_identity,
+  });
+  if (!receipt || receipt.invocation_id !== input.invocationId
+    || !Number.isSafeInteger(receipt.launcher_pid) || (receipt.launcher_pid ?? 0) <= 1
+    || typeof receipt.child_cwd !== 'string' || !isAbsolute(receipt.child_cwd)
+    || receipt.completion_mode !== COMPLETION_MODE
+    // Pre-#2750 managed receipts may carry only the Task; a present Dispatch must be nonempty.
+    || !receipt.owner_task_id?.trim()
+    || (receipt.owner_dispatch_id !== undefined && !receipt.owner_dispatch_id.trim())) {
+    throw new Error('predecessor_owner_bound_handoff_missing_or_mismatched');
+  }
+  return { locator, receipt, path };
 }
 
 export function isWakeableTerminalEnvelopePath(
   path: string,
-  root: string = TERMINAL_ENVELOPE_ROOT,
+  root: string = resolveDurableArtifactRoot(),
 ): boolean {
   const absolute = resolve(path);
   return absolute.startsWith(`${resolve(root)}/`)
@@ -203,10 +307,11 @@ export function unwakeableTerminalEnvelopeHint(path: string): { suggested_path: 
   const wakeableName = name.endsWith(TERMINAL_ENVELOPE_NAME_SUFFIX)
     ? name
     : `${name.replace(/\.json$/u, '')}-${TERMINAL_ENVELOPE_NAME_SUFFIX}`;
-  const suggested = join(TERMINAL_ENVELOPE_ROOT, wakeableName);
+  const durableRoot = resolveDurableArtifactRoot();
+  const suggested = join(durableRoot, wakeableName);
   return {
     suggested_path: suggested,
-    hint: `fleet-wake scans only ${TERMINAL_ENVELOPE_ROOT}/ and discovers terminal envelopes by a file name ending in ${TERMINAL_ENVELOPE_NAME_SUFFIX}; `
+    hint: `fleet-wake scans ${durableRoot}/ and discovers terminal envelopes by a file name ending in ${TERMINAL_ENVELOPE_NAME_SUFFIX}; `
       + `with this location or name the turn would finish and nobody would wake you. Nothing was sent to GPT and no file was written. `
       + `Re-run the same command unchanged except --terminal-envelope ${suggested}`,
   };
@@ -236,6 +341,62 @@ export interface HandoffReceipt {
   readonly launcher_pid?: number;
   /** Optional routing hint, not a terminal incarnation or effect authority. */
   readonly launching_terminal_handle?: string;
+  /** Optional observational witnesses (Linux /proc): never an identity-atomic signal capability. */
+  readonly launcher_startticks?: string;
+  readonly launcher_pid_namespace?: string;
+  /** The launcher's own watchdog hard deadline (epoch ms); distinct from the driver's private deadline. */
+  readonly launcher_hard_deadline_ms?: number;
+  readonly launcher_boot_id?: string;
+  /** Optional additive pre-physical-SEND GitHub snapshot written by the driver. */
+  readonly github_effect_baseline?: GithubEffectBaseline;
+}
+
+export const GITHUB_EFFECT_BASELINE_SCHEMA = 'opk-github-effect-baseline/v1' as const;
+
+export interface GithubEffectBaseline {
+  readonly schema: typeof GITHUB_EFFECT_BASELINE_SCHEMA;
+  readonly invocation_id: string;
+  readonly run_identity: string;
+  readonly attempt_identity: string;
+  readonly repo: string;
+  readonly kind: 'issue' | 'pr';
+  readonly number: number;
+  /** SHA-256 of the Issue body (kind issue). */
+  readonly body_sha256?: string;
+  /** PR head SHA (kind pr). */
+  readonly head_sha?: string;
+  readonly captured_at: string;
+}
+
+/** Optional additive receipt fields that never change the receipt's immutable launch identity. */
+const ADDITIVE_RECEIPT_FIELDS = new Set(['github_effect_baseline']);
+
+/** Compare immutable launch identity, not stale byte-for-byte receipt JSON. */
+export function sameHandoffIdentity(left: HandoffReceipt | null | undefined, right: HandoffReceipt | null | undefined): boolean {
+  if (!left || !right) return false;
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)].filter((key) => !ADDITIVE_RECEIPT_FIELDS.has(key)));
+  for (const key of keys) {
+    if (JSON.stringify((left as unknown as Record<string, unknown>)[key])
+      !== JSON.stringify((right as unknown as Record<string, unknown>)[key])) return false;
+  }
+  return true;
+}
+
+export function parseGithubEffectBaseline(value: unknown, expected: {
+  readonly invocationId?: string; readonly runIdentity: string; readonly attemptIdentity: string;
+}): GithubEffectBaseline | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const body = value as Record<string, unknown>;
+  if (body.schema !== GITHUB_EFFECT_BASELINE_SCHEMA
+    || body.run_identity !== expected.runIdentity || body.attempt_identity !== expected.attemptIdentity
+    || typeof body.invocation_id !== 'string' || (expected.invocationId && body.invocation_id !== expected.invocationId)
+    || typeof body.repo !== 'string' || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(body.repo)
+    || (body.kind !== 'issue' && body.kind !== 'pr')
+    || typeof body.number !== 'number' || !Number.isSafeInteger(body.number) || body.number <= 0
+    || typeof body.captured_at !== 'string') return undefined;
+  if (body.kind === 'issue' && (typeof body.body_sha256 !== 'string' || !/^[a-f0-9]{64}$/u.test(body.body_sha256))) return undefined;
+  if (body.kind === 'pr' && (typeof body.head_sha !== 'string' || !/^[a-f0-9]{40}$/u.test(body.head_sha))) return undefined;
+  return body as unknown as GithubEffectBaseline;
 }
 
 export interface TerminalEnvelope {
@@ -427,7 +588,7 @@ function assertPairwiseDistinct(paths: readonly string[]): void {
 
 function ensureParentWritable(path: string): void {
   const parent = dirname(resolve(path));
-  if (!existsSync(parent)) mkdirSync(parent, { recursive: true });
+  if (!existsSync(parent)) mkdirSync(parent, { recursive: true, mode: 0o700 });
   const probe = join(parent, `.opk-write-probe-${process.pid}`);
   const handle = openSync(probe, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 0o600);
   closeSync(handle);
@@ -453,41 +614,45 @@ function atomicCreateJson(path: string, body: Record<string, unknown>, kind: 're
     throw new Error('forced_envelope_create_failure');
   }
   const target = resolve(path);
+  const temporary = join(dirname(target), `.${basename(target)}.${process.pid}.${randomUUID()}.tmp`);
   const bytes = Buffer.from(JSON.stringify(body) + '\n', 'utf8');
-  let handle: number;
+  const handle = openSync(temporary, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 0o600);
   try {
-    handle = openSync(target, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 0o600);
-  } catch (error) {
-    if (isOccupiedPathError(error)) {
-      throw new Error('occupied_launcher_owned_path');
+    let offset = 0;
+    while (offset < bytes.length) {
+      const written = writeSync(handle, bytes, offset, bytes.length - offset);
+      if (written <= 0) throw new Error('artifact_write_incomplete');
+      offset += written;
     }
+    try { fchmodSync(handle, 0o600); } catch { /* Unsupported on some platforms. */ }
+    try { fsyncSync(handle); } catch { /* Best effort; publication remains atomic. */ }
+  } catch (error) {
+    closeSync(handle);
+    try { unlinkSync(temporary); } catch { /* best effort */ }
     throw error;
   }
+  closeSync(handle);
   try {
-    writeSync(handle, bytes);
-    try {
-      fchmodSync(handle, 0o600);
-    } catch {
-      // unsupported on some platforms
-    }
-    try {
-      fsyncSync(handle);
-    } catch {
-      // best effort
-    }
+    // Complete-before-visible exclusive commit: link() never overwrites a competitor.
+    linkSync(temporary, target);
   } catch (error) {
-    // An uncertain, partly written index must stay occupied: never reuse the
-    // invocation ID after a failed reservation or a short write.
-    if (kind !== 'index') {
-      try {
-        unlinkSync(target);
-      } catch {
-        // best effort
-      }
-    }
+    if (isOccupiedPathError(error)) throw new Error('occupied_launcher_owned_path');
     throw error;
   } finally {
-    closeSync(handle);
+    try { unlinkSync(temporary); } catch { /* Target is already a complete independent inode. */ }
+  }
+  fsyncDirectory(dirname(target));
+}
+
+function fsyncDirectory(directory: string): void {
+  let handle: number | undefined;
+  try {
+    handle = openSync(directory, fsConstants.O_RDONLY);
+    fsyncSync(handle);
+  } catch {
+    // Directory fsync is unsupported on some platforms; the link commit stays exclusive.
+  } finally {
+    if (handle !== undefined) try { closeSync(handle); } catch { /* best effort */ }
   }
 }
 
@@ -686,8 +851,10 @@ function turnTargetEnvelopeFields(
 
 function conversationLocatorFields(
   config: LaunchConfig,
-  candidate?: { conversation_id?: string },
+  candidate?: { conversation_id?: string; cause?: string },
 ): Pick<TerminalEnvelope, 'recovery_available' | 'conversation_locator'> {
+  // A redirected original conversation is unavailable: no recoverable (or foreign) locator.
+  if (candidate?.cause === 'conversation_unavailable') return { recovery_available: false };
   const locator = resolveConversationLocator(config, candidate);
   return {
     recovery_available: Boolean(locator),
@@ -833,43 +1000,41 @@ function childOption(config: LaunchConfig, flag: string): string | undefined {
 }
 
 /**
- * The launcher verifies the caller-supplied predecessor pair, not browser
- * ownership. The exact earlier task/run/attempt/terminal and positively created
- * target must agree before the current child is even spawned. Only the
- * state-light driver can then reattach and attempt guarded physical retirement.
+ * Resolve the predecessor's owner and Run/attempt from its own durable locator.
+ * The current launch must independently carry its admitted Task+Dispatch pair.
+ * This evidence gate has no cleanup or browser-tab retirement authority.
  */
-function verifyOptionalPredecessorHandoff(config: LaunchConfig): void {
+function verifyOptionalPredecessorHandoff(config: LaunchConfig): PredecessorDisposition {
   const invocation = childOption(config, '--predecessor-invocation-id');
   const attempt = childOption(config, '--predecessor-attempt-identity');
-  const run = childOption(config, '--predecessor-run-identity');
-  const task = childOption(config, '--predecessor-owner-task-id');
-  if (![invocation, attempt, run, task].some(Boolean)) return;
-  if (!invocation || !attempt || !run || !task || !config.ownerTaskId
+  if (!invocation && !attempt) return 'none';
+  if (!invocation || !attempt || !config.ownerTaskId || !config.ownerDispatchId
     || !config.invocationId || !config.profile || !config.cdp
-    || invocation === config.invocationId || attempt === config.attemptIdentity
-    || run !== config.runIdentity || task !== config.ownerTaskId
+    || invocation === config.invocationId
     || childOption(config, '--invocation-id') !== config.invocationId
     || childOption(config, '--profile') !== config.profile
     || childOption(config, '--cdp') !== config.cdp) {
-    throw new Error('predecessor_exact_owner_and_selector_required');
+    throw new Error('predecessor_identity_and_current_owner_required');
   }
-  const bound = readInvocationReceiptLocator({
-    invocationId: invocation, runIdentity: run, attemptIdentity: attempt,
-    ownerTaskId: task, terminalEnvelopeRoot: config.terminalEnvelopeRoot,
+  const bound = readPredecessorReceiptLocator({
+    invocationId: invocation, expectedAttemptIdentity: attempt,
+    terminalEnvelopeRoot: config.terminalEnvelopeRoot,
   });
+  const run = bound.locator.run_identity;
+  const oldAttempt = bound.locator.attempt_identity;
   const terminal = readTerminalEnvelope(bound.locator.terminal_envelope_path, {
-    runIdentity: run, attemptIdentity: attempt,
+    runIdentity: run, attemptIdentity: oldAttempt,
   });
   const original = readStateLightTurnObservation(
     configuredProfileKey(config.profile, config.cdp), invocation,
   );
   const target = original.owned_target;
-  // #2685: a *positive* noncreation witness admits the driver to continue
-  // without closing the selected existing Page. Missing metadata is not proof.
-  if (!target || typeof target.created !== 'boolean'
-    || typeof terminal?.owned_target_created !== 'boolean') {
-    throw new Error('predecessor_noncreation_unproven');
+  if (!terminal || !target || typeof target.created !== 'boolean'
+    || typeof terminal.owned_target_created !== 'boolean') {
+    throw new Error('predecessor_terminal_or_target_unproven');
   }
+  const settledOk = terminal.lifecycle_outcome === 'success'
+    && terminal.delivery === 'landed' && terminal.turn_result_state === 'ok';
   const notCreatedAndNotSent = target.created === false
     && terminal.owned_target_created === false
     && original.phase === 'not_sent'
@@ -879,19 +1044,25 @@ function verifyOptionalPredecessorHandoff(config: LaunchConfig): void {
     && original.owned_marker_confirmed !== true
     && terminal.delivery === 'not-sent'
     && terminal.send_count === 0;
-  if (!terminal || terminal.observed_invocation_id !== invocation
+  const unresolvedOwnedTarget = target.created === true
+    && terminal.cleanup_status === 'cleanup_unconfirmed';
+  if (terminal.observed_invocation_id !== invocation
     || terminal.handoff_receipt_path !== bound.locator.handoff_receipt_path
-    || (!notCreatedAndNotSent && terminal.cleanup_status !== 'cleanup_unconfirmed')
-    || bound.receipt.owner_task_id !== task
+    || (!settledOk && !notCreatedAndNotSent && !unresolvedOwnedTarget)
+    || !bound.receipt.owner_task_id?.trim() || !bound.receipt.owner_dispatch_id?.trim()
     || original.invocation_id !== invocation
     || target.cdp_sha256 !== createHash('sha256').update(config.cdp, 'utf8').digest('hex')
     || terminal.owned_target_id !== target.id
     || terminal.owned_target_created !== target.created
     || terminal.owned_prompt_marker !== original.marker
-    || (!target.created && !notCreatedAndNotSent)) {
-    throw new Error(target.created ? 'predecessor_terminal_cleanup_or_created_target_unproven'
-      : 'predecessor_noncreation_unproven');
+    || (!target.created && !notCreatedAndNotSent)
+    || (config.conversationLocator !== undefined && terminal.conversation_locator !== undefined
+      && normalizeConversationUrl(config.conversationLocator) !== normalizeConversationUrl(terminal.conversation_locator))) {
+    throw new Error('predecessor_terminal_owner_profile_or_target_mismatch');
   }
+  // A settled ok/landed (or never-created, never-sent) predecessor is a read-only no-op:
+  // no Stop, cleanup, resend or old-Task equality. Only an unresolved owned target goes to the driver.
+  return settledOk || notCreatedAndNotSent ? 'settled_noop' : 'retire_owned_target';
 }
 
 async function provenOwnedTab(
@@ -1348,58 +1519,408 @@ async function finalizeCandidatePath(
   return 1;
 }
 
-export async function runLaunch(config: LaunchConfig): Promise<number> {
-  const canaries = config.secretCanaries ?? [];
+/** Default executable remediation for each pre-child launcher refusal code (AC13). */
+const REFUSAL_NEXT_STEPS: Readonly<Record<string, string>> = {
+  durable_artifact_root_invalid: 'set HOME to an absolute home directory, make $HOME/.local/state/orchestrator-pack private (0700) and owned by you, then relaunch',
+  predecessor_handoff_unproven: 'reconcile the exact predecessor invocation through its own locator/terminal (wait --invocation-id <old> with its original Run/attempt) before any SEND; do not retry while it is unresolved',
+  owner_identity_pair_required: 'pass both --owner-task-id and --owner-dispatch-id from the current upstream-admitted Task+Dispatch, or neither for a legacy direct launch',
+  owner_dispatch_not_current: 'the selected assignment store records a different Dispatch for this Task: relaunch only from the currently approved Task+Dispatch owner',
+  invalid_cwd: 'pass --cwd <existing worktree directory>',
+  terminal_envelope_name_not_wakeable: 'pass a --terminal-envelope basename ending in terminal.json',
+  occupied_launcher_owned_path: 'choose fresh handoff/terminal/browser-output basenames (or reconcile the earlier invocation that owns them)',
+  preflight_failed: 'make the durable root and browser-output parent private (0700) writable directories with distinct artifact paths, then relaunch',
+  liveness_contract_invalid: 'fix the OPK browser-turn liveness timing environment, then relaunch',
+  invocation_admission_failed_use_fresh_id: 'relaunch with a fresh --invocation-id; this id is already reserved or its observation exists',
+  receipt_create_or_index_readback_failed: 'reconcile the exact original invocation with wait --invocation-id before any new SEND; never resend blindly',
+  receipt_create_failed: 'check the durable root permissions, then relaunch with fresh artifact basenames',
+  canary_in_receipt: 'remove secret-bearing values from launch arguments, then relaunch with a fresh invocation id',
+};
+
+function refusalDetails(code: string, details: Record<string, unknown> = {}): Record<string, unknown> {
+  const nextStep = typeof details.nextStep === 'string' && details.nextStep.trim()
+    ? details.nextStep : REFUSAL_NEXT_STEPS[code] ?? 'reconcile the exact original invocation before any new SEND';
+  return { ...details, nextStep };
+}
+
+/** Companion schema for an authenticated detached-launcher pre-SEND refusal (non-authoritative). */
+export const REFUSAL_COMPANION_SCHEMA = 'flow-manager-long-running-child-refusal-companion/v1' as const;
+export const REFUSAL_COMPANION_ENV = 'OPK_FM_LONG_CHILD_REFUSAL_COMPANION' as const;
+export const HANDOFF_RECEIPT_ENV = 'OPK_FM_LONG_CHILD_HANDOFF_RECEIPT' as const;
+const COMPANION_BYTE_CAP = 2_048;
+
+export function refusalCompanionPath(handoffReceiptPath: string): string {
+  return `${resolve(handoffReceiptPath)}.refusal.json`;
+}
+
+export interface RefusalCompanion {
+  readonly schema: typeof REFUSAL_COMPANION_SCHEMA;
+  readonly run_identity: string;
+  readonly attempt_identity: string;
+  readonly invocation_id?: string;
+  readonly launcher_pid: number;
+  readonly code: string;
+  readonly nextStep: string;
+  readonly physical_send: 'none';
+}
+
+/** Detached launcher refusals lose stderr; when the wrapper asks, leave one bounded scrubbed companion. */
+function writeRefusalCompanion(config: LaunchConfig, code: string, details: Record<string, unknown>): void {
+  if (process.env[REFUSAL_COMPANION_ENV] !== 'v1') return;
   try {
-    verifyOptionalPredecessorHandoff(config);
-  } catch (error) {
-    refuse('predecessor_handoff_unproven', {
-      message: error instanceof Error ? error.message : String(error),
+    const nextStep = String(details.nextStep ?? '').slice(0, 512);
+    const body: RefusalCompanion = {
+      schema: REFUSAL_COMPANION_SCHEMA,
+      run_identity: config.runIdentity,
+      attempt_identity: config.attemptIdentity,
+      ...(config.invocationId ? { invocation_id: config.invocationId } : {}),
+      launcher_pid: process.pid,
+      code: code.slice(0, 128),
+      nextStep,
+      physical_send: 'none',
+    };
+    const json = JSON.stringify(body);
+    const canaries = config.secretCanaries ?? [];
+    if (json.length > COMPANION_BYTE_CAP || canaries.some((value) => value && json.includes(value))) return;
+    if (existsSync(config.handoffReceiptPath)) return;
+    atomicCreateJson(refusalCompanionPath(config.handoffReceiptPath), body as unknown as Record<string, unknown>, 'receipt');
+  } catch {
+    // The companion is best-effort diagnostics; its absence never fabricates a code.
+  }
+}
+
+export function readRefusalCompanion(handoffReceiptPath: string, expected: {
+  readonly runIdentity: string; readonly attemptIdentity: string; readonly invocationId?: string; readonly launcherPid: number;
+}): RefusalCompanion | null {
+  try {
+    const path = refusalCompanionPath(handoffReceiptPath);
+    assertPrivateFile(path, false);
+    const raw = readFileSync(path, 'utf8');
+    if (raw.length > COMPANION_BYTE_CAP) return null;
+    const body = JSON.parse(raw) as RefusalCompanion;
+    if (body.schema !== REFUSAL_COMPANION_SCHEMA || body.run_identity !== expected.runIdentity
+      || body.attempt_identity !== expected.attemptIdentity || body.launcher_pid !== expected.launcherPid
+      || body.invocation_id !== expected.invocationId || body.physical_send !== 'none'
+      || typeof body.code !== 'string' || !/^[a-z0-9_:-]{1,128}$/u.test(body.code)
+      || typeof body.nextStep !== 'string' || !body.nextStep.trim()) return null;
+    return body;
+  } catch {
+    return null;
+  }
+}
+
+export type OwnerCurrencyState = 'current' | 'not_current' | 'unverified';
+
+/**
+ * Existing selected assignment authority (worker-assignments.json) for the upstream-admitted
+ * Task+Dispatch pair. `unverified` (store absent/unreadable/Task unknown) stays the named upstream
+ * responsibility; only an exact record makes the pair locally `current`.
+ */
+export function observeOwnerCurrency(
+  taskId: string, dispatchId: string, env: NodeJS.ProcessEnv = process.env,
+): { readonly state: OwnerCurrencyState; readonly evidence: string } {
+  const projectId = env.OPK_PROJECT_ID?.trim() || 'orchestrator-pack';
+  let file: string;
+  try {
+    file = resolveWorkerAssignmentStorePath(projectId, env);
+  } catch {
+    return { state: 'unverified', evidence: 'assignment_store_path_unresolved' };
+  }
+  if (!existsSync(file)) return { state: 'unverified', evidence: 'assignment_store_absent' };
+  const records = listCurrentWorkerAssignmentRecords(file);
+  if (!records) return { state: 'unverified', evidence: 'assignment_store_unreadable' };
+  if (records.some((record) => record.taskId === taskId && record.bindingKey === dispatchId)) {
+    return { state: 'current', evidence: 'assignment_current' };
+  }
+  if (records.some((record) => record.taskId === taskId)) return { state: 'not_current', evidence: 'task_dispatch_replaced' };
+  return { state: 'unverified', evidence: 'task_not_in_selected_store' };
+}
+
+/** Read-only native Orca Dispatch witness (`orca orchestration worker-show --dispatch <id> --json` result). */
+export type OwnerDispatchWitness = (dispatchId: string) => Promise<Record<string, unknown> | undefined>;
+
+export async function defaultOwnerDispatchWitness(dispatchId: string): Promise<Record<string, unknown> | undefined> {
+  try {
+    const result = await runProcess({
+      command: 'orca', args: ['orchestration', 'worker-show', '--dispatch', dispatchId, '--json'],
+      timeoutMs: 15_000, inheritParentEnv: true,
     });
-    return 2;
+    if (!result.ok) return undefined;
+    const receipt = JSON.parse(result.stdout) as { ok?: unknown; result?: unknown };
+    return receipt.ok === true && receipt.result && typeof receipt.result === 'object'
+      ? receipt.result as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
   }
-  if (!existsSync(config.cwd) || !statSync(config.cwd).isDirectory()) {
-    refuse('invalid_cwd', { cwd: config.cwd });
-    return 2;
+}
+
+export interface OwnerAuthorityInput {
+  readonly taskId: string;
+  readonly dispatchId: string;
+  /** The original receipt's launching terminal, when it recorded one. */
+  readonly originalTerminalHandle?: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly dispatchWitness?: OwnerDispatchWitness;
+  /** The invoking process's own Orca terminal; defaults to ORCA_TERMINAL_HANDLE. */
+  readonly invokingTerminalHandle?: string;
+}
+
+export type OwnerAuthority =
+  | { readonly ok: true; readonly evidence: string; readonly file: string; readonly record: WorkerAssignmentRecord }
+  | { readonly ok: false; readonly evidence: string };
+
+/**
+ * Effectful owner authority: the selected assignment store holds exactly this Task+Dispatch, the
+ * native Dispatch is live and dispatched for that Task, and the invoking process is that Dispatch's
+ * own worker terminal. Historical receipt strings or a lingering store row alone never qualify.
+ */
+export async function verifyCurrentInvokingOwner(input: OwnerAuthorityInput): Promise<OwnerAuthority> {
+  const env = input.env ?? process.env;
+  const projectId = env.OPK_PROJECT_ID?.trim() || 'orchestrator-pack';
+  let file: string;
+  try { file = resolveWorkerAssignmentStorePath(projectId, env); }
+  catch { return { ok: false, evidence: 'assignment_store_path_unresolved' }; }
+  if (!existsSync(file)) return { ok: false, evidence: 'assignment_store_absent' };
+  const records = listCurrentWorkerAssignmentRecords(file);
+  if (!records) return { ok: false, evidence: 'assignment_store_unreadable' };
+  const matches = records.filter((record) => record.taskId === input.taskId && record.bindingKey === input.dispatchId);
+  if (matches.length !== 1) {
+    return { ok: false, evidence: records.some((record) => record.taskId === input.taskId)
+      ? 'task_dispatch_replaced' : 'task_not_in_selected_store' };
   }
-  if (!isWakeableTerminalEnvelopePath(config.terminalEnvelopePath, config.terminalEnvelopeRoot)) {
-    refuse('terminal_envelope_name_not_wakeable', {
-      path: config.terminalEnvelopePath,
-      required_suffix: TERMINAL_ENVELOPE_NAME_SUFFIX,
-      ...unwakeableTerminalEnvelopeHint(config.terminalEnvelopePath),
-    });
-    return 2;
+  const invoking = input.invokingTerminalHandle?.trim() || launchingTerminalHandle(env);
+  if (!invoking) return { ok: false, evidence: 'invoking_terminal_unknown' };
+  if (input.originalTerminalHandle && input.originalTerminalHandle !== invoking) {
+    return { ok: false, evidence: 'invoking_terminal_not_original_launcher_terminal' };
   }
-  const launcherArtifacts = [
-    config.handoffReceiptPath,
-    config.terminalEnvelopePath,
-    config.browserOutputPath,
-  ];
-  for (const path of launcherArtifacts) {
-    if (existsSync(path)) {
-      refuse('occupied_launcher_owned_path', { path });
-      return 2;
+  let witness: Record<string, unknown> | undefined;
+  try { witness = await (input.dispatchWitness ?? defaultOwnerDispatchWitness)(input.dispatchId); }
+  catch { witness = undefined; }
+  const dispatch = witness?.dispatch as { id?: unknown; taskId?: unknown; status?: unknown } | undefined;
+  const observation = witness?.observation as { status?: unknown; exactWorker?: unknown } | undefined;
+  const terminal = witness?.terminal as { handle?: unknown } | undefined;
+  if (!witness) return { ok: false, evidence: 'native_dispatch_unreadable' };
+  if (dispatch?.id !== input.dispatchId || dispatch.taskId !== input.taskId) {
+    return { ok: false, evidence: 'native_dispatch_foreign' };
+  }
+  if (dispatch.status !== 'dispatched' || observation?.status !== 'live' || observation.exactWorker !== true) {
+    return { ok: false, evidence: 'native_dispatch_not_live' };
+  }
+  if (terminal?.handle !== invoking) return { ok: false, evidence: 'invoking_terminal_not_dispatch_worker' };
+  return { ok: true, evidence: 'assignment_and_native_dispatch_current', file, record: matches[0]! };
+}
+
+const OWNER_FENCE_ATTEMPTS = 40;
+const OWNER_FENCE_RETRY_MS = 25;
+
+/**
+ * Re-verify owner authority immediately before one bounded effect, then run it inside the existing
+ * assignment fence so a reassignment either wins first (effect refused) or waits for it.
+ */
+export async function withVerifiedOwnerEffect<T>(
+  input: OwnerAuthorityInput, action: () => T | Promise<T>,
+): Promise<{ readonly ok: true; readonly value: T } | { readonly ok: false; readonly evidence: string; readonly actionEntered: boolean }> {
+  const authority = await verifyCurrentInvokingOwner(input);
+  if (!authority.ok) return { ok: false, evidence: authority.evidence, actionEntered: false };
+  // The fence never waits on its lock; a short bounded retry lets concurrent same-owner effects
+  // serialize (the loser then observes the winner) instead of failing as busy.
+  for (let attempt = 1; ; attempt += 1) {
+    const fenced = await withCurrentWorkerAssignmentFence(authority.file, authority.record, action);
+    if (fenced.ok) return { ok: true, value: fenced.value };
+    if (fenced.reason !== 'assignment_store_busy' || fenced.actionEntered || attempt >= OWNER_FENCE_ATTEMPTS) {
+      return { ok: false, evidence: fenced.reason, actionEntered: fenced.actionEntered };
     }
+    await delay(OWNER_FENCE_RETRY_MS);
+  }
+}
+
+type PredecessorDisposition = 'none' | 'settled_noop' | 'retire_owned_target';
+
+export type LaunchPreSpawnValidation =
+  | { readonly ok: true; readonly config: LaunchConfig; readonly predecessor: PredecessorDisposition;
+    readonly ownerCurrency?: OwnerCurrencyState }
+  | { readonly ok: false; readonly code: string; readonly details: Record<string, unknown> };
+
+/**
+ * The one production pre-spawn validation, shared in-process by the adapter (before detachment)
+ * and by the launcher itself. It reserves nothing: the invocation key is reserved only by runLaunch.
+ */
+export function validateLaunchPreSpawn(input: LaunchConfig): LaunchPreSpawnValidation {
+  const fail = (code: string, details: Record<string, unknown> = {}): LaunchPreSpawnValidation => ({
+    ok: false, code, details: refusalDetails(code, details),
+  });
+  let config = input;
+  if (!config.terminalEnvelopeRoot) {
+    try {
+      const root = resolveDurableArtifactRoot();
+      config = {
+        ...config,
+        terminalEnvelopeRoot: root,
+        handoffReceiptPath: resolveDurableArtifactPath(config.handoffReceiptPath, root),
+        terminalEnvelopePath: resolveDurableArtifactPath(config.terminalEnvelopePath, root),
+      };
+    } catch (error) {
+      return fail('durable_artifact_root_invalid', { message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  if ((config.ownerTaskId === undefined) !== (config.ownerDispatchId === undefined)
+    || (config.ownerTaskId !== undefined && (!config.ownerTaskId.trim() || !config.ownerDispatchId?.trim()))) {
+    return fail('owner_identity_pair_required');
+  }
+  let ownerCurrency: OwnerCurrencyState | undefined;
+  if (config.ownerTaskId && config.ownerDispatchId) {
+    const observed = observeOwnerCurrency(config.ownerTaskId, config.ownerDispatchId);
+    ownerCurrency = observed.state;
+    if (observed.state === 'not_current') return fail('owner_dispatch_not_current', { evidence: observed.evidence });
+  }
+  let predecessor: PredecessorDisposition;
+  try {
+    predecessor = verifyOptionalPredecessorHandoff(config);
+  } catch (error) {
+    return fail('predecessor_handoff_unproven', { message: error instanceof Error ? error.message : String(error) });
+  }
+  if (!existsSync(config.cwd) || !statSync(config.cwd).isDirectory()) return fail('invalid_cwd', { cwd: config.cwd });
+  if (!isWakeableTerminalEnvelopePath(config.terminalEnvelopePath, config.terminalEnvelopeRoot)) {
+    const hint = unwakeableTerminalEnvelopeHint(config.terminalEnvelopePath);
+    return fail('terminal_envelope_name_not_wakeable', {
+      path: config.terminalEnvelopePath, required_suffix: TERMINAL_ENVELOPE_NAME_SUFFIX, ...hint, nextStep: hint.hint,
+    });
+  }
+  const launcherArtifacts = [config.handoffReceiptPath, config.terminalEnvelopePath, config.browserOutputPath];
+  for (const path of launcherArtifacts) {
+    if (existsSync(path)) return fail('occupied_launcher_owned_path', { path });
   }
   try {
     assertPairwiseDistinct(launcherArtifacts);
+    if (resolve(config.terminalEnvelopeRoot ?? '') === resolveDurableArtifactRoot()) ensureDurableArtifactRoot();
     ensureParentWritable(config.handoffReceiptPath);
     ensureParentWritable(config.terminalEnvelopePath);
     ensureParentWritable(config.browserOutputPath);
   } catch (error) {
-    refuse('preflight_failed', { message: error instanceof Error ? error.message : String(error) });
-    return 2;
+    return fail('preflight_failed', { message: error instanceof Error ? error.message : String(error) });
   }
-
-  let livenessTiming: ReturnType<typeof resolveBrowserTurnLivenessTiming>;
   try {
-    livenessTiming = resolveBrowserTurnLivenessTiming();
+    resolveBrowserTurnLivenessTiming();
   } catch (error) {
-    refuse('liveness_contract_invalid', {
-      message: error instanceof Error ? error.message : String(error),
-    });
+    return fail('liveness_contract_invalid', { message: error instanceof Error ? error.message : String(error) });
+  }
+  if (config.invocationId !== undefined) {
+    try {
+      if (!config.invocationId.trim() || !config.profile?.trim() || !config.cdp?.trim()) {
+        throw new Error('indexed_invocation_profile_cdp_required');
+      }
+      const observationPath = observationRecordPath(configuredProfileKey(config.profile, config.cdp), config.invocationId);
+      if (existsSync(observationPath)) throw new Error('invocation_observation_occupied_use_fresh_id');
+      if (existsSync(invocationReceiptLocatorPath(config.invocationId, config.terminalEnvelopeRoot ?? effectiveTerminalRoot()))) {
+        throw new Error('invocation_locator_occupied_use_fresh_id');
+      }
+    } catch (error) {
+      return fail('invocation_admission_failed_use_fresh_id', { message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  if (predecessor === 'settled_noop') config = { ...config, childArgs: withoutPredecessorSelector(config.childArgs) };
+  return { ok: true, config, predecessor, ...(ownerCurrency ? { ownerCurrency } : {}) };
+}
+
+function withoutPredecessorSelector(args: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === '--predecessor-invocation-id' || args[index] === '--predecessor-attempt-identity') {
+      index += 1;
+      continue;
+    }
+    out.push(args[index]!);
+  }
+  return out;
+}
+
+/** Optional Linux /proc witnesses: observational identity, never a signal capability. */
+export interface ProcessWitnessProbe {
+  readonly bootId: () => string | undefined;
+  readonly pidNamespace: () => string | undefined;
+  readonly stat: (pid: number) => { readonly kind: 'ok'; readonly startticks: string; readonly state: string }
+    | { readonly kind: 'absent' } | { readonly kind: 'error' };
+}
+
+export const procProcessWitnessProbe: ProcessWitnessProbe = {
+  bootId: () => {
+    try { return readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim() || undefined; } catch { return undefined; }
+  },
+  pidNamespace: () => {
+    try { return readlinkSync('/proc/self/ns/pid'); } catch { return undefined; }
+  },
+  stat: (pid) => {
+    try {
+      const raw = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const rest = raw.slice(raw.lastIndexOf(')') + 2).split(' ');
+      const state = rest[0];
+      const startticks = rest[19];
+      if (!state || !startticks || !/^[0-9]+$/u.test(startticks)) return { kind: 'error' };
+      return { kind: 'ok', startticks, state };
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'ENOENT' ? { kind: 'absent' } : { kind: 'error' };
+    }
+  },
+};
+
+function selfProcessWitnesses(probe: ProcessWitnessProbe = procProcessWitnessProbe): Partial<HandoffReceipt> {
+  const stat = probe.stat(process.pid);
+  const namespace = probe.pidNamespace();
+  const boot = probe.bootId();
+  return {
+    ...(stat.kind === 'ok' ? { launcher_startticks: stat.startticks } : {}),
+    ...(namespace ? { launcher_pid_namespace: namespace } : {}),
+    ...(boot ? { launcher_boot_id: boot } : {}),
+  };
+}
+
+export type LauncherLiveness = { readonly state: 'alive' | 'dead' | 'unknown'; readonly evidence: string };
+
+/**
+ * Positive original-launcher death from receipt witnesses. Unreadable /proc, a missing witness or
+ * deadline, or namespace ambiguity is `unknown`; PID-only liveness is never decisive.
+ */
+export function observeOriginalLauncher(
+  receipt: HandoffReceipt, probe: ProcessWitnessProbe = procProcessWitnessProbe,
+): LauncherLiveness {
+  const pid = receipt.launcher_pid;
+  if (!Number.isSafeInteger(pid) || (pid ?? 0) <= 1 || !receipt.launcher_startticks
+    || !receipt.launcher_pid_namespace || !receipt.launcher_boot_id) return { state: 'unknown', evidence: 'witness_missing' };
+  if (!Number.isSafeInteger(receipt.launcher_hard_deadline_ms)) return { state: 'unknown', evidence: 'hard_deadline_missing' };
+  const boot = probe.bootId();
+  if (!boot) return { state: 'unknown', evidence: 'boot_id_unreadable' };
+  if (boot !== receipt.launcher_boot_id) return { state: 'dead', evidence: 'host_rebooted' };
+  const namespace = probe.pidNamespace();
+  if (!namespace || namespace !== receipt.launcher_pid_namespace) return { state: 'unknown', evidence: 'pid_namespace_unproven' };
+  const stat = probe.stat(pid!);
+  if (stat.kind === 'absent') return { state: 'dead', evidence: 'pid_absent' };
+  if (stat.kind === 'error') return { state: 'unknown', evidence: 'proc_unreadable' };
+  if (stat.startticks !== receipt.launcher_startticks) return { state: 'dead', evidence: 'pid_reused_distinct_startticks' };
+  if (stat.state === 'Z' || stat.state === 'X') return { state: 'dead', evidence: 'launcher_zombie' };
+  return { state: 'alive', evidence: 'launcher_live' };
+}
+
+export async function runLaunch(input: LaunchConfig): Promise<number> {
+  const canaries = input.secretCanaries ?? [];
+  const validation = validateLaunchPreSpawn(input);
+  if (!validation.ok) {
+    refuse(validation.code, validation.details);
+    writeRefusalCompanion(input.terminalEnvelopeRoot ? input : {
+      ...input,
+      handoffReceiptPath: (() => {
+        try { return resolveDurableArtifactPath(input.handoffReceiptPath); } catch { return resolve(input.handoffReceiptPath); }
+      })(),
+    }, validation.code, validation.details);
     return 2;
   }
+  let config = validation.config;
+  const launcherArtifacts = [config.handoffReceiptPath, config.terminalEnvelopePath, config.browserOutputPath];
+  const refuseAfterValidation = (code: string, details?: Record<string, unknown>): number => {
+    const full = refusalDetails(code, details);
+    refuse(code, full);
+    writeRefusalCompanion(config, code, full);
+    return 2;
+  };
+  const livenessTiming = resolveBrowserTurnLivenessTiming();
 
   const launcherStartedAt = nowIso();
   const launchHandle = launchingTerminalHandle();
@@ -1416,6 +1937,8 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     child_cwd: realpathSync(config.cwd),
     launcher_pid: process.pid,
     ...(launchHandle ? { launching_terminal_handle: launchHandle } : {}),
+    ...selfProcessWitnesses(),
+    launcher_hard_deadline_ms: Date.now() + hardDeadlineMs(),
   };
   // Reserve the single global invocation key before publishing the original receipt or spawning the Browser.
   // A partial reservation is intentionally not recycled: retry with a fresh invocation ID.
@@ -1459,10 +1982,9 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
       });
       if (JSON.stringify(committed) !== JSON.stringify(index)) throw new Error('receipt_locator_readback_failed');
     } catch (error) {
-      refuse('invocation_admission_failed_use_fresh_id', {
+      return refuseAfterValidation('invocation_admission_failed_use_fresh_id', {
         message: error instanceof Error ? error.message : String(error),
       });
-      return 2;
     }
   }
   try {
@@ -1482,14 +2004,12 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
       }
     }
   } catch (error) {
-    refuse(indexedPath ? 'receipt_create_or_index_readback_failed' : 'receipt_create_failed', {
+    return refuseAfterValidation(indexedPath ? 'receipt_create_or_index_readback_failed' : 'receipt_create_failed', {
       message: error instanceof Error ? error.message : String(error),
     });
-    return 2;
   }
   if (scanArtifactForCanaries(config.handoffReceiptPath, canaries).length > 0) {
-    refuse('canary_in_receipt');
-    return 2;
+    return refuseAfterValidation('canary_in_receipt');
   }
 
   const controller = new AbortController();
@@ -1588,7 +2108,12 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
 
   let launcherSignal: NodeJS.Signals | undefined;
   let cleanupProcess: Promise<ProcessResult> | undefined;
-  const onSignal = (signal: NodeJS.Signals): void => { launcherSignal ??= signal; };
+  const onSignal = (signal: NodeJS.Signals): void => {
+    launcherSignal ??= signal;
+    // Forward the launcher signal immediately through the already-owned child tree;
+    // publishAbnormal still performs the bounded result drain afterwards.
+    controller.abort();
+  };
   const onTerm = (): void => onSignal('SIGTERM');
   const onInt = (): void => onSignal('SIGINT');
   process.on('SIGTERM', onTerm);
@@ -1628,6 +2153,8 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     args: [...config.childArgs],
     cwd: config.cwd,
     inheritParentEnv: true,
+    // The driver may add the optional pre-SEND github_effect_baseline to this exact receipt.
+    env: { [HANDOFF_RECEIPT_ENV]: resolve(config.handoffReceiptPath), [REFUSAL_COMPANION_ENV]: undefined },
     allowEmptyStdout: true,
     signal: controller.signal,
     onStdoutChunk: (chunk) => {
@@ -1830,6 +2357,243 @@ export function readHandoffReceipt(
   }
 }
 
+export type GithubEffectClass = 'target_progress_observed' | 'effect_unverified';
+
+export interface GithubEffectReaders {
+  readonly prHead: (repo: string, pr: number) => Promise<string | undefined>;
+  readonly issueBodySha256: (repo: string, issue: number) => Promise<string | undefined>;
+}
+
+async function defaultGithubEffectReaders(): Promise<GithubEffectReaders> {
+  const driver = await import('./chatgpt-browser-turn/state-light-turn-base.ts');
+  return {
+    prHead: async (repo, pr) => (await driver.readPrAuthorHeadViaPackGh({ repo, pr } as never))?.sha,
+    issueBodySha256: async (repo, issue) => await driver.readIssueBodySha256ViaPackGh(repo, issue),
+  };
+}
+
+/**
+ * Exact bound-target task progress after child/launcher loss: two classes only. A changed exact
+ * target is progress with attribution unverified (concurrent writers included); unchanged, missing,
+ * unreadable or baseline-absent evidence is effect_unverified. Neither proves Send or authorship.
+ */
+export async function classifyGithubEffect(
+  baseline: GithubEffectBaseline | undefined, readers: GithubEffectReaders,
+): Promise<{ readonly class: GithubEffectClass; readonly attribution: 'unverified'; readonly evidence: string;
+  readonly target?: string }> {
+  const unverified = (evidence: string, target?: string) => ({
+    class: 'effect_unverified' as const, attribution: 'unverified' as const, evidence, ...(target ? { target } : {}),
+  });
+  if (!baseline) return unverified('baseline_absent');
+  const target = `${baseline.repo}${baseline.kind === 'pr' ? '/pull/' : '#'}${baseline.number}`;
+  try {
+    if (baseline.kind === 'pr') {
+      const first = await readers.prHead(baseline.repo, baseline.number);
+      const second = first ? await readers.prHead(baseline.repo, baseline.number) : undefined;
+      if (!first || !second) return unverified('pr_head_unreadable', target);
+      if (first !== second) return unverified('pr_head_not_stable', target);
+      if (first === baseline.head_sha) return unverified('pr_head_unchanged', target);
+      return { class: 'target_progress_observed', attribution: 'unverified', evidence: 'pr_head_advanced_stable', target };
+    }
+    const digest = await readers.issueBodySha256(baseline.repo, baseline.number);
+    if (!digest) return unverified('issue_body_unreadable', target);
+    if (digest === baseline.body_sha256) return unverified('issue_body_unchanged', target);
+    return { class: 'target_progress_observed', attribution: 'unverified', evidence: 'issue_body_digest_changed', target };
+  } catch {
+    return unverified('github_read_failed', target);
+  }
+}
+
+export interface OwnerWaitPageWitness {
+  readonly state: 'page_finished' | 'page_unverified' | 'conversation_unavailable';
+  readonly evidence: string;
+  readonly reply_length?: number;
+}
+
+export type OwnerWaitPageReader = (input: {
+  readonly record: StateLightTurnObservationRecord; readonly profileKey: string; readonly cdp: string; readonly deadlineMs: number;
+}) => Promise<OwnerWaitPageWitness>;
+
+async function defaultOwnerWaitPageReader(input: Parameters<OwnerWaitPageReader>[0]): Promise<OwnerWaitPageWitness> {
+  const driver = await import('./chatgpt-browser-turn/state-light-turn-base.ts');
+  return await driver.observeOriginalOwnedPageReadOnly(input);
+}
+
+export interface OwnerWaitDependencies {
+  readonly launcherProbe?: ProcessWitnessProbe;
+  readonly githubReaders?: GithubEffectReaders;
+  readonly pageReader?: OwnerWaitPageReader;
+  readonly ownerEnv?: NodeJS.ProcessEnv;
+  readonly dispatchWitness?: OwnerDispatchWitness;
+  readonly invokingTerminalHandle?: string;
+}
+
+type OwnerWaitOutcome =
+  | { readonly effect: 'none'; readonly reason: string; readonly nextStep: string;
+    readonly diagnostics?: Record<string, unknown> }
+  | { readonly effect: 'published' | 'occupied_by_winner'; readonly envelope: TerminalEnvelope };
+
+const OWNER_RECONCILE_STEP = 'reconcile the exact original invocation from its current Task+Dispatch owner: '
+  + 'inspect the original Page and the exact GitHub target; never resend blindly';
+
+/**
+ * The only reaper: an owner-run wait for the original managed invocation. It never signals any
+ * process and publishes one exclusive uncertainty envelope only when the caller is the currently
+ * approved original Task+Dispatch owner and the original launcher is positively gone.
+ */
+async function ownerWaitReap(input: {
+  readonly runIdentity: string; readonly attemptIdentity: string;
+  readonly ownerTaskId: string; readonly ownerDispatchId: string;
+  readonly handoffReceiptPath: string; readonly terminalEnvelopePath: string;
+  readonly receipt: HandoffReceipt;
+  readonly profile?: string; readonly cdp?: string;
+  readonly deps: OwnerWaitDependencies;
+}): Promise<OwnerWaitOutcome> {
+  const none = (reason: string, nextStep: string, diagnostics?: Record<string, unknown>): OwnerWaitOutcome => ({
+    effect: 'none', reason, nextStep, ...(diagnostics ? { diagnostics } : {}),
+  });
+  const { receipt } = input;
+  if (!receipt.owner_task_id?.trim() || !receipt.owner_dispatch_id?.trim() || !receipt.invocation_id?.trim()) {
+    return none('original_receipt_not_managed', OWNER_RECONCILE_STEP);
+  }
+  const authorityInput: OwnerAuthorityInput = {
+    taskId: input.ownerTaskId, dispatchId: input.ownerDispatchId,
+    ...(receipt.launching_terminal_handle ? { originalTerminalHandle: receipt.launching_terminal_handle } : {}),
+    ...(input.deps.ownerEnv ? { env: input.deps.ownerEnv } : {}),
+    ...(input.deps.dispatchWitness ? { dispatchWitness: input.deps.dispatchWitness } : {}),
+    ...(input.deps.invokingTerminalHandle ? { invokingTerminalHandle: input.deps.invokingTerminalHandle } : {}),
+  };
+  const notOwner = (evidence: string) => none(`owner_not_current:${evidence}`,
+    'run this wait from the original Task+Dispatch worker terminal while that Dispatch is current and live (worker-show / current assignment), or reconcile the exact invocation on GitHub');
+  const owner = await verifyCurrentInvokingOwner(authorityInput);
+  if (!owner.ok) return notOwner(owner.evidence);
+  const launcher = observeOriginalLauncher(receipt, input.deps.launcherProbe);
+  if (launcher.state !== 'dead') {
+    return none(`launcher_${launcher.state}:${launcher.evidence}`, launcher.state === 'alive'
+      ? 'the original launcher is still live and owns its watchdog/child signal: wait again, or stop it through its exact-owner native supervisor; this wait never signals a PID'
+      : 'original launcher death is unproven: reconcile through the exact-owner native supervisor and the original Page/GitHub target; no signal, no publication');
+  }
+  const existing = readTerminalEnvelope(input.terminalEnvelopePath, {
+    runIdentity: input.runIdentity, attemptIdentity: input.attemptIdentity,
+  });
+  // A terminal committed after the poll loop is the original authority: report it, never replace it.
+  if (existing) return { effect: 'occupied_by_winner', envelope: existing };
+  const invocationId = receipt.invocation_id;
+  let record: StateLightTurnObservationRecord | undefined;
+  let page: OwnerWaitPageWitness = { state: 'page_unverified', evidence: 'profile_cdp_not_supplied' };
+  if (input.profile && input.cdp) {
+    const profileKey = configuredProfileKey(input.profile, input.cdp);
+    try {
+      record = readStateLightTurnObservation(profileKey, invocationId);
+    } catch {
+      record = undefined;
+    }
+    if (!record || record.invocation_id !== invocationId) {
+      page = { state: 'page_unverified', evidence: 'original_observation_missing_or_foreign' };
+    } else {
+      try {
+        page = await (input.deps.pageReader ?? defaultOwnerWaitPageReader)({
+          record, profileKey, cdp: input.cdp, deadlineMs: Date.now() + 30_000,
+        });
+      } catch {
+        page = { state: 'page_unverified', evidence: 'original_page_unreachable' };
+      }
+    }
+  }
+  const freshReceipt = readHandoffReceipt(input.handoffReceiptPath, {
+    runIdentity: input.runIdentity, attemptIdentity: input.attemptIdentity,
+  });
+  if (!sameHandoffIdentity(freshReceipt, receipt)) return none('receipt_identity_changed', OWNER_RECONCILE_STEP);
+  const baseline = parseGithubEffectBaseline(freshReceipt!.github_effect_baseline, {
+    invocationId, runIdentity: input.runIdentity, attemptIdentity: input.attemptIdentity,
+  });
+  let readers = input.deps.githubReaders;
+  if (!readers && baseline) {
+    try { readers = await defaultGithubEffectReaders(); } catch { readers = undefined; }
+  }
+  const github = readers ? await classifyGithubEffect(baseline, readers)
+    : { class: 'effect_unverified' as const, attribution: 'unverified' as const, evidence: baseline ? 'github_reader_unavailable' : 'baseline_absent' };
+  // Harvest is the only stronger delivery witness; a dead launcher never proves not-sent.
+  let delivery: DeliveryState = 'POSSIBLY_DELIVERED';
+  if (record && record.phase === 'harvested' && record.send_count === 1 && record.primary) {
+    try {
+      const bytes = readFileSync(record.primary.target);
+      if (bytes.byteLength === record.primary.byte_length
+        && createHash('sha256').update(bytes).digest('hex') === record.primary.sha256) delivery = 'landed';
+    } catch { /* unreadable primary stays possible delivery */ }
+  }
+  const envelope: TerminalEnvelope = {
+    schema: TERMINAL_SCHEMA,
+    run_identity: input.runIdentity,
+    attempt_identity: input.attemptIdentity,
+    completion_mode: COMPLETION_MODE,
+    handoff_receipt_path: input.handoffReceiptPath,
+    launcher_started_at: receipt.launcher_started_at,
+    handoff_committed_at: receipt.handoff_committed_at,
+    terminal_at: nowIso(),
+    lifecycle_outcome: 'incident',
+    incident: 'launcher_lost_owner_wait_uncertain',
+    delivery,
+    observed_invocation_id: invocationId,
+    recovery_available: false,
+    next_action: page.state === 'conversation_unavailable'
+      ? 'conversation unavailable: start a fresh chat (advice only; no resend authority)'
+      : OWNER_RECONCILE_STEP,
+    ...(record ? turnTargetEnvelopeFields(undefined, record) : {}),
+    ...(record?.send_count !== undefined ? { send_count: record.send_count } : {}),
+    ...(typeof receipt.child_cwd === 'string' ? { cwd: receipt.child_cwd } : {}),
+    ...(receipt.launching_terminal_handle ? { terminal_handle: receipt.launching_terminal_handle } : {}),
+    diagnostics: boundedDiagnostics({
+      owner_wait: { owner: owner.evidence, launcher: launcher.evidence },
+      page,
+      github_effect: github,
+    }),
+  };
+  // Owner authority is re-proven after the awaited Page/GitHub reads, and the exclusive create runs
+  // inside the assignment fence: a Dispatch replaced meanwhile publishes nothing.
+  let fenced: Awaited<ReturnType<typeof withVerifiedOwnerEffect<'created'>>>;
+  try {
+    fenced = await withVerifiedOwnerEffect(authorityInput, () => {
+      atomicCreateJson(input.terminalEnvelopePath, envelope as unknown as Record<string, unknown>, 'envelope');
+      return 'created' as const;
+    });
+  } catch {
+    fenced = { ok: false, evidence: 'terminal_create_failed', actionEntered: true };
+  }
+  if (fenced.ok) return { effect: 'published', envelope };
+  if (!fenced.actionEntered) return notOwner(fenced.evidence);
+  const winner = readTerminalEnvelope(input.terminalEnvelopePath, {
+    runIdentity: input.runIdentity, attemptIdentity: input.attemptIdentity,
+  });
+  if (winner && winner.launcher_started_at === receipt.launcher_started_at
+    && winner.handoff_committed_at === receipt.handoff_committed_at
+    && (winner.observed_invocation_id === undefined || winner.observed_invocation_id === invocationId)) {
+    return { effect: 'occupied_by_winner', envelope: winner };
+  }
+  return none('terminal_publication_uncertain', 'an unreadable or foreign terminal occupies the original path: reconcile the exact invocation manually; never republish');
+}
+
+/** Explicit owner-wait paths may reach the reaper only when the original keyed locator names exactly them. */
+function explicitPathsBoundToLocator(
+  options: { readonly invocationId?: string; readonly runIdentity: string; readonly attemptIdentity: string;
+    readonly ownerTaskId?: string; readonly ownerDispatchId?: string; readonly terminalEnvelopeRoot?: string },
+  handoffReceiptPath: string, terminalEnvelopePath: string,
+): boolean {
+  if (!options.invocationId) return false;
+  try {
+    const bound = readInvocationReceiptLocator({
+      invocationId: options.invocationId, runIdentity: options.runIdentity, attemptIdentity: options.attemptIdentity,
+      ...(options.ownerTaskId ? { ownerTaskId: options.ownerTaskId } : {}),
+      ...(options.ownerDispatchId ? { ownerDispatchId: options.ownerDispatchId } : {}),
+      ...(options.terminalEnvelopeRoot ? { terminalEnvelopeRoot: options.terminalEnvelopeRoot } : {}),
+    });
+    return resolve(bound.locator.handoff_receipt_path) === resolve(handoffReceiptPath)
+      && resolve(bound.locator.terminal_envelope_path) === resolve(terminalEnvelopePath);
+  } catch {
+    return false;
+  }
+}
+
 export async function runWait(options: {
   readonly runIdentity: string;
   readonly attemptIdentity: string;
@@ -1841,8 +2605,13 @@ export async function runWait(options: {
   readonly ownerDispatchId?: string;
   readonly terminalEnvelopeRoot?: string;
   readonly deadlineMs: number;
+  /** Read-only original Page reattachment inputs for an authenticated managed owner wait. */
+  readonly profile?: string;
+  readonly cdp?: string;
+  readonly ownerWaitDependencies?: OwnerWaitDependencies;
 }): Promise<void> {
   const taskBound = options.ownerTaskId !== undefined || options.ownerDispatchId !== undefined;
+  // Task-only correlation stays a legal diagnostic wait; only the full pair can reach the reaper.
   if (taskBound && (!options.ownerTaskId?.trim()
     || (options.ownerDispatchId !== undefined && !options.ownerDispatchId.trim()))) {
     throw new Error('wait_owner_identity_required');
@@ -1866,8 +2635,14 @@ export async function runWait(options: {
     ...(taskBound ? { ownerTaskId: options.ownerTaskId, ownerDispatchId: options.ownerDispatchId } : {}),
     ...(options.terminalEnvelopeRoot ? { terminalEnvelopeRoot: options.terminalEnvelopeRoot } : {}),
   }) : null;
-  const terminalEnvelopePath = bound?.locator.terminal_envelope_path ?? options.terminalEnvelopePath;
-  const handoffReceiptPath = bound?.locator.handoff_receipt_path ?? options.handoffReceiptPath;
+  const terminalEnvelopePath = bound?.locator.terminal_envelope_path
+    ?? (options.terminalEnvelopePath === undefined ? undefined
+      : options.terminalEnvelopeRoot ? resolve(options.terminalEnvelopePath)
+        : resolveDurableArtifactPath(options.terminalEnvelopePath));
+  const handoffReceiptPath = bound?.locator.handoff_receipt_path
+    ?? (options.handoffReceiptPath === undefined ? undefined
+      : options.terminalEnvelopeRoot ? resolve(options.handoffReceiptPath)
+        : resolveDurableArtifactPath(options.handoffReceiptPath));
   if (!terminalEnvelopePath || !handoffReceiptPath) throw new Error('wait_paths_or_locator_required');
   // Task-bound waits bind the original receipt before exposing any result.
   const initialReceipt = taskBound
@@ -1908,7 +2683,7 @@ export async function runWait(options: {
     });
     if (reread.locator.handoff_receipt_path !== handoffReceiptPath
       || reread.locator.terminal_envelope_path !== terminalEnvelopePath
-      || !handoff || JSON.stringify(reread.receipt) !== JSON.stringify(handoff)) {
+      || !handoff || !sameHandoffIdentity(reread.receipt, handoff)) {
       throw new Error('wait_locator_identity_changed');
     }
   }
@@ -1926,7 +2701,7 @@ export async function runWait(options: {
   if ((indexed || taskBound) && !terminalHandoffMatches) {
     throw new Error(indexed ? 'wait_locator_identity_changed' : 'wait_receipt_identity_changed');
   }
-  if (taskBound && (!handoff || JSON.stringify(initialReceipt) !== JSON.stringify(handoff)
+  if (taskBound && (!handoff || !sameHandoffIdentity(initialReceipt, handoff)
     || handoff.owner_task_id !== options.ownerTaskId
     || (options.ownerDispatchId !== undefined && handoff.owner_dispatch_id !== options.ownerDispatchId)
     || (!indexed && handoff.invocation_id !== options.invocationId)
@@ -1934,6 +2709,31 @@ export async function runWait(options: {
       && envelope.observed_invocation_id !== handoff.invocation_id)
     || !terminalHandoffMatches)) {
     throw new Error('wait_receipt_identity_changed');
+  }
+  // Only a Task-bound wait over a managed original receipt can ever reach the reaper; legacy,
+  // direct and unbound waits stay diagnostic-only.
+  let ownerWait: OwnerWaitOutcome | undefined;
+  if (!envelope && taskBound && handoff && initialReceipt && options.ownerDispatchId === undefined) {
+    ownerWait = {
+      effect: 'none', reason: 'owner_dispatch_required',
+      nextStep: 'rerun this wait with both the original --owner-task-id and --owner-dispatch-id; a Task-only wait is diagnostic-only',
+    };
+  } else if (!envelope && taskBound && handoff && initialReceipt && !indexed
+    && !explicitPathsBoundToLocator(options, handoffReceiptPath, terminalEnvelopePath)) {
+    ownerWait = {
+      effect: 'none', reason: 'explicit_paths_not_bound_to_locator',
+      nextStep: 'rerun the owner wait by --invocation-id (indexed original locator); explicit paths whose original locator does not bind the same receipt and terminal stay diagnostic-only',
+    };
+  } else if (!envelope && taskBound && handoff && initialReceipt) {
+    ownerWait = await ownerWaitReap({
+      runIdentity: options.runIdentity, attemptIdentity: options.attemptIdentity,
+      ownerTaskId: options.ownerTaskId!, ownerDispatchId: options.ownerDispatchId!,
+      handoffReceiptPath, terminalEnvelopePath, receipt: initialReceipt,
+      ...(options.profile ? { profile: options.profile } : {}),
+      ...(options.cdp ? { cdp: options.cdp } : {}),
+      deps: options.ownerWaitDependencies ?? {},
+    });
+    if (ownerWait.effect !== 'none') envelope = ownerWait.envelope;
   }
   process.stdout.write(JSON.stringify({
     schema: WAIT_SCHEMA,
@@ -1946,21 +2746,26 @@ export async function runWait(options: {
     no_retry_authority: true,
     handoff_receipt_observed: handoff !== null,
     ...(envelope ? { envelope } : {}),
+    ...(ownerWait ? {
+      owner_wait: ownerWait.effect === 'none'
+        ? { effect: 'none', reason: ownerWait.reason, nextStep: ownerWait.nextStep, no_signal_sent: true }
+        : { effect: ownerWait.effect, no_signal_sent: true },
+    } : {}),
   }) + '\n');
 }
 
-async function launchFromCli(argv: readonly string[]): Promise<number> {
+/** The launcher's own `launch` argv parser, shared by the adapter's in-process pre-spawn validation. */
+export function launchConfigFromArgv(argv: readonly string[], env: NodeJS.ProcessEnv = process.env): LaunchConfig {
   const parsed = parseCli(argv);
   const options = parsed.options;
   if (options.has('completion-mode') || options.has('authority') || options.has('result-protocol')) {
-    refuse('forbidden_authority_selector');
-    return 2;
+    throw new Error('forbidden_authority_selector');
   }
   // Only synthetic native CLI fixtures may override the fleet wake root. Either signal alone is inert.
-  const fixtureRoot = process.env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT;
-  const useFixtureRoot = process.env.OPK_FM_LONG_CHILD_TEST_GATE === 'fixture-root-v1'
+  const fixtureRoot = env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT;
+  const useFixtureRoot = env.OPK_FM_LONG_CHILD_TEST_GATE === 'fixture-root-v1'
     && typeof fixtureRoot === 'string' && isAbsolute(fixtureRoot);
-  const config: LaunchConfig = {
+  return {
     ...(useFixtureRoot && fixtureRoot ? { terminalEnvelopeRoot: fixtureRoot } : {}),
     runIdentity: requiredOption(options, 'run-identity'),
     attemptIdentity: requiredOption(options, 'attempt-identity'),
@@ -1979,6 +2784,19 @@ async function launchFromCli(argv: readonly string[]): Promise<number> {
     ...(options.has('profile') ? { profile: requiredOption(options, 'profile') } : {}),
     ...(options.has('cdp') ? { cdp: requiredOption(options, 'cdp') } : {}),
   };
+}
+
+async function launchFromCli(argv: readonly string[]): Promise<number> {
+  let config: LaunchConfig;
+  try {
+    config = launchConfigFromArgv(argv);
+  } catch (error) {
+    refuse(error instanceof Error && error.message === 'forbidden_authority_selector'
+      ? 'forbidden_authority_selector' : 'launch_arguments_invalid', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return 2;
+  }
   return await runLaunch(config);
 }
 
@@ -1996,6 +2814,8 @@ async function main(): Promise<void> {
       ...(options.has('receipt-locator') ? { receiptLocator: requiredOption(options, 'receipt-locator') } : {}),
       ...(options.has('owner-task-id') ? { ownerTaskId: requiredOption(options, 'owner-task-id') } : {}),
       ...(options.has('owner-dispatch-id') ? { ownerDispatchId: requiredOption(options, 'owner-dispatch-id') } : {}),
+      ...(options.has('profile') ? { profile: requiredOption(options, 'profile') } : {}),
+      ...(options.has('cdp') ? { cdp: requiredOption(options, 'cdp') } : {}),
       ...(process.env.OPK_FM_LONG_CHILD_TEST_GATE === 'fixture-root-v1'
         && process.env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT
         && isAbsolute(process.env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT)

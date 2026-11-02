@@ -1022,11 +1022,24 @@ describe('DOM observation boundary', () => {
       ...candidate, snapshotSignature: atomicSnapshotSignature(observed.snapshot!),
     })).resolves.toEqual({ state: 'ready', reply: expected });
 
-    // A virtualized CodeMirror body (.cm-gap instead of rendered lines) is partial code.
+    // A virtualized CodeMirror body (.cm-gap instead of rendered lines) is partial
+    // DOM code: without the editor's own document it stays uncertifiable.
     append(cmContent, 'DIV', '', { class: 'cm-gap' });
     const virtualized = await readPageObservation(fixture.page, marker, 0);
     expect(virtualized.transcriptIncomplete).toBe(true);
     expect(virtualized.snapshot?.complete).toBe(false);
+    // Defect-log 1456: the editor document (read-only) certifies the full body
+    // when every rendered line appears in it in order.
+    cmContent.cmView = { view: { contentDOM: cmContent, state: { doc: { toString: () => python } } } };
+    const fromEditor = await readPageObservation(fixture.page, marker, 0);
+    expect(fromEditor.transcriptIncomplete).toBe(false);
+    expect(fromEditor.snapshot?.carriers.at(-1)?.text).toBe(expected);
+    // A foreign editor, or a document that lacks a rendered line, stays refused.
+    cmContent.cmView = { view: { contentDOM: {}, state: { doc: { toString: () => python } } } };
+    expect((await readPageObservation(fixture.page, marker, 0)).transcriptIncomplete).toBe(true);
+    cmContent.cmView = { view: { contentDOM: cmContent, state: { doc: { toString: () => 'def other():\n    pass' } } } };
+    expect((await readPageObservation(fixture.page, marker, 0)).transcriptIncomplete).toBe(true);
+    delete cmContent.cmView;
     cmContent.children.pop();
     cmContent.childNodes.pop();
     expect((await readPageObservation(fixture.page, marker, 0)).snapshot?.complete).toBe(true);
@@ -2665,5 +2678,408 @@ describe('Issue #2718 SENDING phase in the existing observation grammar', () => 
       vi.unstubAllEnvs();
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('Issue #2750 AC5 dead-producer harvested PR-author claim', () => {
+  async function prAuthorFixture() {
+    const { createHash } = await import('node:crypto');
+    const { mkdirSync, mkdtempSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const base = await import('./state-light-turn-base.ts');
+    const observation = await import('./state-light-turn-observation.ts');
+    const { configuredProfileKey } = await import('./storage-common.ts');
+    const root = mkdtempSync(join(tmpdir(), 'opk-2750-ac5-'));
+    const terminalRoot = join(root, 'term');
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
+    vi.stubEnv('OPK_FM_LONG_CHILD_TEST_GATE', 'fixture-root-v1');
+    vi.stubEnv('OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT', terminalRoot);
+    mkdirSync(join(terminalRoot, 'browser-gpt-receipts'), { recursive: true, mode: 0o700 });
+    const cdp = 'http://127.0.0.1:9222';
+    const profileKey = configuredProfileKey(join(root, 'profile'), cdp);
+    const binding = { repo: 'acme/widgets', pr: 7 };
+    const worktree = join(root, 'worktree');
+    mkdirSync(worktree);
+    const procs = new Map<number, { argv: string[]; startMs: number }>();
+    const reader = { cmdline: (pid: number) => procs.get(pid)?.argv, startTimeMs: (pid: number) => procs.get(pid)?.startMs };
+    let nextPid = 50_000;
+    const turnArgv = (id: string) => [
+      base.PR_AUTHOR_CANONICAL_ENTRY, 'turn', '--invocation-id', id, '--profile', join(root, 'profile'), '--cdp', cdp,
+      '--timeout-ms', '600000', '--repo', binding.repo, '--pr', String(binding.pr),
+    ];
+    const launch = (id: string, options: { childLive?: boolean } = {}) => {
+      const launcherPid = nextPid++;
+      const startedAt = Date.now();
+      procs.set(launcherPid, {
+        argv: ['node', '--experimental-strip-types', base.PR_AUTHOR_CANONICAL_LAUNCHER, 'launch',
+          '--invocation-id', id, '--profile', join(root, 'profile'), '--cdp', cdp,
+          '--child-command', 'node', '--', '--experimental-strip-types', ...turnArgv(id)],
+        startMs: startedAt - 250,
+      });
+      const receipt = join(terminalRoot, id + '.receipt.json');
+      const identity = { run_identity: 'run-' + id, attempt_identity: 'attempt-' + id };
+      writeFileSync(receipt, JSON.stringify({
+        schema: 'flow-manager-long-running-child-handoff/v1', ...identity,
+        launcher_started_at: new Date(startedAt).toISOString(),
+        handoff_committed_at: new Date(startedAt).toISOString(),
+        completion_mode: 'browser-turn-result-v1', invocation_id: id, launcher_pid: launcherPid,
+        child_cwd: worktree,
+      }));
+      writeFileSync(join(terminalRoot, 'browser-gpt-receipts', createHash('sha256').update(id, 'utf8').digest('hex') + '.json'),
+        JSON.stringify({
+          schema: 'flow-manager-long-running-child-locator/v1', invocation_id: id, ...identity,
+          handoff_receipt_path: receipt, terminal_envelope_path: join(terminalRoot, id + '.terminal.json'),
+        }));
+      const marker = 'OPKTURNV1' + id;
+      observation.admitStateLightTurnObservation({ profileKey, invocationId: id, marker });
+      if (options.childLive) {
+        procs.set(process.pid, { argv: ['node', '--experimental-strip-types', ...turnArgv(id)], startMs: startedAt });
+        observation.bindStateLightOwnedTarget({
+          profileKey, invocationId: id, targetId: 'target-' + id, created: true, cdp, initialRoute: 'https://chatgpt.com/',
+        });
+      }
+      const step = (phase: 'sending' | 'dispatching' | 'sent_unharvested', reason: string, extra: object = {}) =>
+        observation.transitionStateLightTurnObservation({ profileKey, invocationId: id, phase, reason, ...extra });
+      step('sending', 'pr_author_send_claim:acme/widgets#7');
+      return {
+        id,
+        killLauncher: () => { procs.delete(launcherPid); },
+        sendUnharvested: () => {
+          step('dispatching', 'dispatch_boundary_entered');
+          step('sent_unharvested', 'owned_marker_observed', { sendCount: 1, sendWitness: 'numeric_send_count' });
+        },
+        harvest: async () => {
+          const target = join(root, id + '.reply.txt');
+          const bytes = 'FINISHED REPLY ' + id;
+          const result = await observation.finalizeStateLightPrimaryPublication({
+            profileKey, invocationId: id, target, bytes,
+            publish: () => {
+              writeFileSync(target, bytes);
+              return {
+                state: 'committed_ok' as const, output_bytes: Buffer.byteLength(bytes),
+                output_sha256: createHash('sha256').update(bytes).digest('hex'),
+              };
+            },
+          });
+          expect(result.state).toBe('committed_ok');
+          return target;
+        },
+      };
+    }
+    const holder = (own: string) => base.findOtherPrAuthorHolder({
+      binding, profileKey, ownInvocationId: own, worktree, reader,
+    });
+    return { root, profileKey, launch, holder, observation };
+  }
+
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('releases a dead producer harvested claim with a verified primary and deletes nothing', async () => {
+    const f = await prAuthorFixture();
+    const a = f.launch('inv-a');
+    a.sendUnharvested();
+    expect(f.holder('inv-b')).toMatchObject({ holding: true, invocationId: 'inv-a', phase: 'sent_unharvested' });
+    await a.harvest();
+    a.killLauncher();
+    expect(f.holder('inv-b')).toBeUndefined();
+    expect(f.observation.readStateLightTurnObservation(f.profileKey, 'inv-a')).toMatchObject({
+      phase: 'harvested', send_count: 1,
+    });
+  });
+
+  it('keeps holding a dead producer harvested claim whose primary is no longer verified', async () => {
+    const f = await prAuthorFixture();
+    const a = f.launch('inv-a');
+    a.sendUnharvested();
+    const target = await a.harvest();
+    a.killLauncher();
+    const { rmSync } = await import('node:fs');
+    rmSync(target);
+    expect(f.holder('inv-b')).toMatchObject({ holding: true, invocationId: 'inv-a', phase: 'harvested' });
+  });
+
+  it('keeps holding an unresolved-delivery claim of a dead producer', async () => {
+    const f = await prAuthorFixture();
+    const a = f.launch('inv-a');
+    a.sendUnharvested();
+    a.killLauncher();
+    expect(f.holder('inv-b')).toMatchObject({ holding: true, invocationId: 'inv-a', phase: 'sent_unharvested' });
+    const c = f.launch('inv-c');
+    c.killLauncher();
+    expect(f.holder('inv-b')).toMatchObject({ holding: true });
+  });
+
+  it('keeps holding a harvested claim while its producer launcher or bound child is live', async () => {
+    const f = await prAuthorFixture();
+    const live = f.launch('inv-live');
+    live.sendUnharvested();
+    await live.harvest();
+    expect(f.holder('inv-b')).toMatchObject({ holding: true, invocationId: 'inv-live', phase: 'harvested' });
+    live.killLauncher();
+    expect(f.holder('inv-b')).toBeUndefined();
+
+    const child = f.launch('inv-child', { childLive: true });
+    child.sendUnharvested();
+    await child.harvest();
+    child.killLauncher();
+    expect(f.holder('inv-b')).toMatchObject({ holding: true, invocationId: 'inv-child', phase: 'harvested' });
+  });
+
+  it('a stale harvested claim cannot hide a separate unresolved-delivery record on the same PR', async () => {
+    const f = await prAuthorFixture();
+    const stale = f.launch('inv-a');
+    stale.sendUnharvested();
+    await stale.harvest();
+    stale.killLauncher();
+    const unresolved = f.launch('inv-c');
+    unresolved.sendUnharvested();
+    unresolved.killLauncher();
+    expect(f.holder('inv-b')).toMatchObject({ holding: true, invocationId: 'inv-c', phase: 'sent_unharvested' });
+    expect(f.observation.readStateLightTurnObservation(f.profileKey, 'inv-a').phase).toBe('harvested');
+    expect(f.observation.readStateLightTurnObservation(f.profileKey, 'inv-c').phase).toBe('sent_unharvested');
+  });
+});
+
+describe('Issue #2750 AC22 read-only observation of the original owned Page', () => {
+  const cdp = 'http://127.0.0.1:9222';
+  const bound = 'https://chatgpt.com/c/11111111-1111-4111-8111-111111111111';
+  const otherConversation = 'https://chatgpt.com/c/22222222-2222-4222-8222-222222222222';
+  const targetId = 'ORIGINAL-OWNED-TARGET-2750';
+  const REPLY = 'Finished synthetic reply for the owned marker.';
+
+  type PageScript = {
+    /** Called once per page.url() read (one per observation round). */
+    url?: (call: number) => string;
+    reply?: (call: number) => string;
+    generating?: boolean;
+    transcriptIncomplete?: boolean;
+    assistantMarkerOwner?: 'own' | 'foreign';
+  };
+
+  async function observe(
+    options: {
+      profileKey?: string; recordCdp?: string; census?: Array<{ id: string; type: string; url: string }>;
+      stableGapMs?: number; script?: PageScript; expectAttach?: boolean;
+    } = {},
+  ) {
+    const { createHash } = await import('node:crypto');
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const fixture = await import('./state-light-turn.test-fixtures.ts');
+    const runtimeMocks = {
+      browserQueue: [] as any[],
+      cleanupOutcome: 'confirmed' as const,
+      releaseBrowser: vi.fn(async () => undefined),
+      verifyProfile: vi.fn(async () => ({ state: 'verified' as const })),
+    };
+    vi.doMock('./browser-session.ts', () => fixture.createBrowserSessionModuleMock(runtimeMocks));
+    vi.doMock('./own-target-attach.ts', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./own-target-attach.ts')>();
+      return {
+        ...actual,
+        attachOwnTarget: vi.fn(async (chromium: any, attachOptions: any) =>
+          actual.__testAttachOwnTargetFixture(chromium, attachOptions, true)),
+      };
+    });
+    vi.doMock('./ui-adapter.ts', async (original) => fixture.buildUiAdapterTestMock(
+      await original<typeof import('./ui-adapter.ts')>(), runtimeMocks,
+    ));
+    vi.resetModules();
+    const selectors = await import('./product-page-selectors.ts');
+    const base = await import('./state-light-turn-base.ts');
+
+    const root = mkdtempSync(join(tmpdir(), 'opk-2750-observe-'));
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
+    const script = options.script ?? {};
+    let urlCalls = 0;
+    const ownMarker = fixture.TEST_OWNED_MARKER;
+    const actions: Array<ReturnType<typeof vi.fn>> = [];
+    const trackedLocator = (overrides: Record<string, unknown> = {}) => {
+      const locator = fixture.scalarLocator(overrides);
+      actions.push(locator.click, locator.fill, locator.press);
+      return locator;
+    };
+    let evaluateReads = 0;
+    const nodes = trackedLocator({
+      evaluateAll: vi.fn(async () => {
+        evaluateReads += 1;
+        const call = Math.max(1, urlCalls);
+        const assistantText = (script.reply ?? (() => REPLY))(call);
+        const userText = script.assistantMarkerOwner === 'foreign'
+          ? 'OPKTURNV1' + '22'.repeat(16) + '\n\nOTHER PROMPT' : ownMarker + '\n\nPROMPT';
+        const rows = [
+          { role: 'user', text: 'historical prompt', key: 'data-message-id:hist-user-2750' },
+          { role: 'assistant', text: 'historical reply', key: 'data-message-id:hist-assistant-2750' },
+          { role: 'user', text: userText, key: 'data-message-id:own-user-2750' },
+          { role: 'assistant', text: assistantText, key: 'data-message-id:own-assistant-2750' },
+        ];
+        return {
+          rows: rows.map((row, domIndex) => ({
+            ...row, domIndex, complete: script.transcriptIncomplete !== true,
+            completionReady: script.generating !== true && row.role === 'assistant',
+            continuationVisible: false,
+          })),
+          pageTurnEvidence: {
+            generationInProgress: script.generating === true,
+            observedAssistantNodes: 2, continueGeneratingVisible: false,
+          },
+        };
+      }),
+    });
+    const page: any = {
+      __fakeBrowserGptPage: true,
+      url: vi.fn(() => { urlCalls += 1; return (script.url ?? (() => bound))(urlCalls); }),
+      isClosed: vi.fn(() => false),
+      close: vi.fn(async () => undefined),
+      goto: vi.fn(async () => undefined),
+      waitForTimeout: vi.fn(async () => undefined),
+      getByRole: vi.fn(() => trackedLocator()),
+      getByText: vi.fn(() => trackedLocator()),
+      locator: vi.fn((selector: string) => selector === selectors.MESSAGE_NODE_SELECTOR ? nodes : trackedLocator()),
+    };
+    const harness = fixture.enqueueBrowserForTurn(runtimeMocks, page);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (new URL(String(input)).pathname !== '/json/list') throw new Error('unexpected_cdp_metadata_request');
+      return new Response(JSON.stringify(options.census ?? [{ id: targetId, type: 'page', url: bound }]), { status: 200 });
+    });
+    const record: any = {
+      schema: 'state-light-turn-observation/v1', version: 1, invocation_id: 'inv-observe-2750',
+      profile_key: 'profile-key-2750', marker: ownMarker, phase: 'sent_unharvested',
+      send_count: 1, send_witness: 'owned_marker', conversation_url: bound,
+      owned_target: {
+        id: targetId, created: true, initial_route: bound,
+        cdp_sha256: createHash('sha256').update(options.recordCdp ?? cdp, 'utf8').digest('hex'),
+      },
+      transitioned_at: new Date().toISOString(), transition_reason: 'owned_marker_observed',
+    };
+    try {
+      const witness = await base.observeOriginalOwnedPageReadOnly({
+        record, profileKey: options.profileKey ?? 'profile-key-2750', cdp,
+        deadlineMs: Date.now() + 30_000, stableGapMs: options.stableGapMs ?? 1,
+      });
+      return {
+        witness, page, actions, releaseBrowser: runtimeMocks.releaseBrowser, harness,
+        queuedBrowsers: runtimeMocks.browserQueue.length, fetchCalls: fetchSpy.mock.calls.length, evaluateReads,
+      };
+    } finally {
+      fetchSpy.mockRestore();
+      vi.unstubAllEnvs();
+      vi.doUnmock('./browser-session.ts');
+      vi.doUnmock('./own-target-attach.ts');
+      vi.doUnmock('./ui-adapter.ts');
+      vi.resetModules();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  const neverActed = (run: Awaited<ReturnType<typeof observe>>) => {
+    expect(run.page.close).not.toHaveBeenCalled();
+    expect(run.page.goto).not.toHaveBeenCalled();
+    expect(run.page.bringToFront).not.toHaveBeenCalled();
+    for (const action of run.actions) expect(action).not.toHaveBeenCalled();
+  };
+
+  it('two identical finished reads are page_finished carrying only the reply length, then the browser is released', async () => {
+    const run = await observe();
+    expect(run.witness).toEqual({
+      state: 'page_finished', evidence: 'stable_finished_owned_generation', reply_length: REPLY.length,
+    });
+    expect(JSON.stringify(run.witness)).not.toContain(REPLY);
+    expect(run.evaluateReads).toBeGreaterThanOrEqual(2);
+    neverActed(run);
+    expect(run.releaseBrowser).toHaveBeenCalledTimes(1);
+    expect(run.releaseBrowser).toHaveBeenCalledWith(run.harness.browser, expect.any(Number));
+  });
+
+  it('a profile key that differs from the original record is refused before any CDP or browser work', async () => {
+    const run = await observe({ profileKey: 'some-other-profile-key' });
+    expect(run.witness).toEqual({ state: 'page_unverified', evidence: 'profile_key_mismatch' });
+    expect(run.fetchCalls).toBe(0);
+    expect(run.queuedBrowsers).toBe(1);
+    expect(run.releaseBrowser).not.toHaveBeenCalled();
+  });
+
+  it('a different CDP endpoint than the pinned hash is refused before any CDP or browser work', async () => {
+    const run = await observe({ recordCdp: 'http://127.0.0.1:9333' });
+    expect(run.witness).toEqual({ state: 'page_unverified', evidence: 'cdp_mismatch' });
+    expect(run.fetchCalls).toBe(0);
+    expect(run.queuedBrowsers).toBe(1);
+    expect(run.releaseBrowser).not.toHaveBeenCalled();
+  });
+
+  it('an original target missing from the census never attaches a browser or opens a Page', async () => {
+    const run = await observe({ census: [{ id: 'SOME-SIBLING-TARGET', type: 'page', url: bound }] });
+    expect(run.witness).toEqual({ state: 'page_unverified', evidence: 'original_target_absent' });
+    expect(run.fetchCalls).toBe(1);
+    expect(run.queuedBrowsers).toBe(1);
+    expect(run.releaseBrowser).not.toHaveBeenCalled();
+    neverActed(run);
+  });
+
+  it('a Page redirected to another supported conversation is conversation_unavailable', async () => {
+    const run = await observe({ script: { url: () => otherConversation } });
+    expect(run.witness).toEqual({ state: 'conversation_unavailable', evidence: 'original_page_redirected' });
+    expect(run.evaluateReads).toBe(0);
+    neverActed(run);
+    expect(run.releaseBrowser).toHaveBeenCalledTimes(1);
+  });
+
+  it('a Page that left every conversation stays page_unverified, not conversation_unavailable', async () => {
+    const run = await observe({ script: { url: () => 'https://chatgpt.com/' } });
+    expect(run.witness).toEqual({ state: 'page_unverified', evidence: 'original_page_not_on_bound_conversation' });
+    neverActed(run);
+    expect(run.releaseBrowser).toHaveBeenCalledTimes(1);
+  });
+
+  it('a reply that changes between the two reads is page_unverified reply_still_changing', async () => {
+    const run = await observe({ script: { reply: (call) => call < 2 ? REPLY : REPLY + ' and more' } });
+    expect(run.witness).toEqual({ state: 'page_unverified', evidence: 'reply_still_changing' });
+    neverActed(run);
+    expect(run.releaseBrowser).toHaveBeenCalledTimes(1);
+  });
+
+  it('active generation is page_unverified and never reaches a finished verdict', async () => {
+    const run = await observe({ script: { generating: true } });
+    expect(run.witness).toEqual({ state: 'page_unverified', evidence: 'generation_active_or_unknown' });
+    neverActed(run);
+    expect(run.releaseBrowser).toHaveBeenCalledTimes(1);
+  });
+
+  it('an incomplete transcript is page_unverified transcript_incomplete', async () => {
+    const run = await observe({ script: { transcriptIncomplete: true } });
+    expect(run.witness).toEqual({ state: 'page_unverified', evidence: 'transcript_incomplete' });
+    neverActed(run);
+    expect(run.releaseBrowser).toHaveBeenCalledTimes(1);
+  });
+
+  it('a reply under a foreign marker is never attributed to the original owned prompt', async () => {
+    const run = await observe({ script: { assistantMarkerOwner: 'foreign' } });
+    expect(run.witness.state).toBe('page_unverified');
+    expect(run.witness).not.toHaveProperty('reply_length');
+    neverActed(run);
+    expect(run.releaseBrowser).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Issue #2750 parseBoundIssueSelector', () => {
+  it('parses owner/repo#number, lower-casing the repo and trimming whitespace', async () => {
+    const { parseBoundIssueSelector } = await import('./state-light-turn-base.ts');
+    expect(parseBoundIssueSelector(undefined)).toBeUndefined();
+    expect(parseBoundIssueSelector('Acme/Widgets#2750')).toEqual({ repo: 'acme/widgets', issue: 2750 });
+    expect(parseBoundIssueSelector('  chetwerikoff/orchestrator-pack#1  ')).toEqual({
+      repo: 'chetwerikoff/orchestrator-pack', issue: 1,
+    });
+    expect(parseBoundIssueSelector('a.b_c-d/e.f_g-h#9999999999')).toEqual({ repo: 'a.b_c-d/e.f_g-h', issue: 9_999_999_999 });
+  });
+
+  it.each([
+    '', 'acme/widgets', 'acme/widgets#', 'acme/widgets#0', 'acme/widgets#007', 'acme/widgets#-3',
+    'acme/widgets#12345678901', 'acme/widgets#1.5', 'acme/widgets#12x', 'widgets#7', 'acme/widgets/extra#7',
+    'acme widgets#7', 'acme/wid gets#7', '#7', 'https://github.com/acme/widgets/issues/7',
+  ])('rejects the malformed selector %j with input_invalid', async (value) => {
+    const { parseBoundIssueSelector } = await import('./state-light-turn-base.ts');
+    expect(() => parseBoundIssueSelector(value)).toThrow('input_invalid:bound_issue_selector_invalid');
   });
 });

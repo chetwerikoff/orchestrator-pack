@@ -3,19 +3,24 @@ import './toolchain/native-entrypoint-preflight.ts';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { settleCliMain } from './chatgpt-browser-turn/cli-main.ts';
-import { lstatSync, realpathSync } from 'node:fs';
+import { realpathSync } from 'node:fs';
 import { runProcess } from './kernel/subprocess.ts';
 import {
-  invocationReceiptLocatorPath,
-  isWakeableTerminalEnvelopePath,
+  launchConfigFromArgv,
   parseFlagArgv,
   readHandoffReceipt,
   readInvocationReceiptLocator,
+  readRefusalCompanion,
+  REFUSAL_COMPANION_ENV,
+  resolveDurableArtifactPath,
+  sameHandoffIdentity,
+  validateLaunchPreSpawn,
   type HandoffReceipt,
-  unwakeableTerminalEnvelopeHint,
+  type LaunchPreSpawnValidation,
 } from './flow-manager-long-running-child.ts';
 import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
 import {
+  parseBoundIssueSelector,
   parsePrAuthorBindingPair,
   prAuthorHeadMismatch,
   prelaunchPrAuthorOccupant,
@@ -57,6 +62,7 @@ const CLI = {
     { flag: '--new-chat' },
     { flag: '--predecessor-invocation-id', value: 'id' },
     { flag: '--predecessor-attempt-identity', value: 'id' },
+    { flag: '--bound-issue', value: 'owner/repo#number' },
     { flag: '--repo', value: 'owner/repo' },
     { flag: '--pr', value: 'number' },
   ],
@@ -75,15 +81,13 @@ function refuse(reason: string): number {
   return 2;
 }
 
-/** Any historical or uncertain path is occupied, even with identical run/attempt IDs. */
-function pathIsOccupied(path: string): boolean {
-  try {
-    lstatSync(path); // unlike existsSync, also identifies dangling symlinks
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-    throw error;
-  }
+/** After a launcher may have started: known wrapper code, never a hidden child code or zero-SEND claim. */
+const POSTSPAWN_RECONCILE_STEP = 'physical SEND unknown (POSSIBLY_DELIVERED; no resend license): run the original-invocation '
+  + 'owner wait (wait --invocation-id <id> --owner-task-id <task> --owner-dispatch-id <dispatch> --profile <key> --cdp <url>), '
+  + 'inspect the original Page and the exact bound GitHub target before any new SEND';
+
+function refusePostspawn(code: string): number {
+  return refuse(code + '; nextStep: ' + POSTSPAWN_RECONCILE_STEP);
 }
 
 async function waitForReceipt(
@@ -116,6 +120,7 @@ export async function spawnDetachedLauncher(launcherArgs: readonly string[]): Pr
       args: ['--experimental-strip-types', launcherPath, ...launcherArgs],
       cwd: repoRoot,
       inheritParentEnv: true,
+      env: { [REFUSAL_COMPANION_ENV]: 'v1' },
       allowEmptyStdout: true,
       timeoutMs: 120_000,
       onSpawn: (pid) => { launcherPid = pid; },
@@ -138,6 +143,8 @@ export async function spawnDetachedLauncher(launcherArgs: readonly string[]): Pr
     ],
     cwd: repoRoot,
     inheritParentEnv: true,
+    // The detached launcher's stderr is discarded; ask it for one bounded refusal companion.
+    env: { [REFUSAL_COMPANION_ENV]: 'v1' },
     allowEmptyStdout: false,
     timeoutMs: 10_000,
   });
@@ -149,6 +156,8 @@ export async function spawnDetachedLauncher(launcherArgs: readonly string[]): Pr
 
 export interface BrowserAdapterDependencies {
   spawnLauncher?: typeof spawnDetachedLauncher;
+  /** Shared in-process launcher pre-spawn validation seam; production uses the launcher's own validator. */
+  validatePreSpawn?: (launcherArgs: readonly string[]) => LaunchPreSpawnValidation;
   /** PR-author (#2718) prelaunch seams; production uses the pack card, scripts/gh and /proc. */
   selectedRepository?: () => string;
   readPrAuthorHead?: PrAuthorHeadReader;
@@ -178,24 +187,15 @@ export async function runBrowserAdapter(
   const options = parseFlagArgv(argv);
   const runIdentity = requiredOption(options, 'run-identity');
   const attemptIdentity = requiredOption(options, 'attempt-identity');
-  const handoffReceipt = requiredOption(options, 'handoff-receipt');
   const invocationId = requiredOption(options, 'invocation-id');
+  let handoffReceipt: string;
+  let terminalEnvelope: string;
   try {
-    if (pathIsOccupied(handoffReceipt) || pathIsOccupied(invocationReceiptLocatorPath(invocationId))) {
-      return refuse('occupied_handoff_or_invocation_use_fresh_id');
-    }
+    handoffReceipt = resolveDurableArtifactPath(requiredOption(options, 'handoff-receipt'));
+    terminalEnvelope = resolveDurableArtifactPath(requiredOption(options, 'terminal-envelope'));
   } catch (error) {
-    return refuse('launch_occupancy_uncertain: ' + (error instanceof Error ? error.message : String(error)));
-  }
-  const terminalEnvelope = requiredOption(options, 'terminal-envelope');
-  // Mirror the launcher's existing two-part fixture gate; never relax production wake-path checks.
-  const fixtureRoot = process.env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT;
-  const trustedFixtureRoot = process.env.OPK_FM_LONG_CHILD_TEST_GATE === 'fixture-root-v1'
-    && typeof fixtureRoot === 'string' && isAbsolute(fixtureRoot)
-    ? resolve(fixtureRoot)
-    : undefined;
-  if (!isWakeableTerminalEnvelopePath(terminalEnvelope, trustedFixtureRoot)) {
-    return refuse('terminal_envelope_name_not_wakeable: ' + unwakeableTerminalEnvelopeHint(terminalEnvelope).hint);
+    return refuse('durable_artifact_root_invalid: ' + (error instanceof Error ? error.message : String(error))
+      + '; nextStep: set HOME to an absolute directory');
   }
   const browserOutput = requiredOption(options, 'output');
   const profile = requiredOption(options, 'profile');
@@ -204,13 +204,18 @@ export async function runBrowserAdapter(
   const cwd = typeof options.get('cwd') === 'string' ? options.get('cwd') as string : repoRoot;
   const ownerTaskId = options.has('owner-task-id') ? requiredOption(options, 'owner-task-id') : undefined;
   const ownerDispatchId = options.has('owner-dispatch-id') ? requiredOption(options, 'owner-dispatch-id') : undefined;
+  if (!ownerTaskId?.trim()) {
+    return refuse('owner_task_id_required; nextStep: pass the upstream-admitted --owner-task-id for this managed launch');
+  }
+  if (!ownerDispatchId?.trim()) {
+    return refuse('owner_dispatch_id_required; nextStep: pass the upstream-admitted --owner-dispatch-id for this managed launch');
+  }
   const predecessorInvocation = options.get('predecessor-invocation-id');
   const predecessorAttempt = options.get('predecessor-attempt-identity');
   const hasPredecessor = typeof predecessorInvocation === 'string' && typeof predecessorAttempt === 'string';
   if ((predecessorInvocation !== undefined || predecessorAttempt !== undefined)
-    && (!hasPredecessor || !ownerTaskId || predecessorInvocation === invocationId
-      || predecessorAttempt === attemptIdentity)) {
-    return refuse('predecessor_exact_pair_same_task_required');
+    && (!hasPredecessor || predecessorInvocation === invocationId)) {
+    return refuse('predecessor_invocation_and_attempt_required; nextStep: supply the exact earlier invocation and attempt selector, then let its durable locator provide its original Run and owner pair');
   }
   // #2718: --repo/--pr is an atomic optional pair. Absent = unbound (unchanged);
   // present = PR AUTHOR, admitted only for an explicit worktree whose branch is
@@ -221,13 +226,38 @@ export async function runBrowserAdapter(
   );
   if (prAuthorPair.error) return refuse(prAuthorPair.error + '; nextStep: ' + PR_AUTHOR_PAIR_NEXT_STEP);
   const prAuthor = prAuthorPair.binding;
+  const selectRepository = (): string => (deps.selectedRepository ?? (() => resolveTargetContext().repository))().toLowerCase();
+  // Upstream Task/Dispatch-bound managed Issue target; never guessed from prompt, URL or GitHub activity.
+  let boundIssue: ReturnType<typeof parseBoundIssueSelector>;
+  try {
+    boundIssue = parseBoundIssueSelector(typeof options.get('bound-issue') === 'string'
+      ? options.get('bound-issue') as string : undefined);
+  } catch {
+    return refuse('bound_issue_selector_invalid; nextStep: pass --bound-issue <owner/repo>#<number> from the upstream Task/Dispatch binding, or omit it');
+  }
+  if (boundIssue && prAuthor) {
+    return refuse('bound_issue_conflicts_with_pr_author; nextStep: pass either --repo/--pr (PR author) or --bound-issue (Issue author/reviewer), not both');
+  }
+  if (boundIssue) {
+    let selectedRepository: string;
+    try {
+      selectedRepository = selectRepository();
+    } catch (error) {
+      return refuse('bound_issue_target_card_unavailable: ' + (error instanceof Error ? error.message : String(error))
+        + '; nextStep: set OPK_PROJECT_ID to the project whose card repository owns the Issue');
+    }
+    if (selectedRepository !== boundIssue.repo) {
+      return refuse('bound_issue_repository_not_selected_card; nextStep: --bound-issue repository must equal the selected card repository '
+        + selectedRepository);
+    }
+  }
   if (prAuthor) {
     if (typeof options.get('cwd') !== 'string') {
       return refuse('pr_author_cwd_required; nextStep: pass --cwd <worktree> whose branch is the PR head ref');
     }
     let selectedRepository: string;
     try {
-      selectedRepository = (deps.selectedRepository ?? (() => resolveTargetContext().repository))().toLowerCase();
+      selectedRepository = selectRepository();
     } catch (error) {
       return refuse('pr_author_target_card_unavailable: ' + (error instanceof Error ? error.message : String(error))
         + '; nextStep: set OPK_PROJECT_ID to the project whose card repository owns the PR');
@@ -274,11 +304,10 @@ export async function runBrowserAdapter(
   if (typeof options.get('project-url') === 'string') browserArgs.push('--project-url', options.get('project-url') as string);
   if (options.get('new-chat') === true) browserArgs.push('--new-chat');
   if (prAuthor) browserArgs.push('--repo', prAuthor.repo, '--pr', String(prAuthor.pr));
+  if (boundIssue) browserArgs.push('--bound-issue', `${boundIssue.repo}#${boundIssue.issue}`);
   if (hasPredecessor) browserArgs.push(
     '--predecessor-invocation-id', predecessorInvocation as string,
     '--predecessor-attempt-identity', predecessorAttempt as string,
-    '--predecessor-run-identity', runIdentity,
-    '--predecessor-owner-task-id', ownerTaskId!,
   );
 
   const launcherArgs = [
@@ -304,21 +333,41 @@ export async function runBrowserAdapter(
     ...browserArgs,
   ];
 
+  // One shared in-process launcher pre-spawn validation, before detachment. It reserves nothing;
+  // the launcher alone reserves the invocation key when it re-runs the same validator.
+  let validation: LaunchPreSpawnValidation;
+  try {
+    validation = (deps.validatePreSpawn ?? ((args) => validateLaunchPreSpawn(launchConfigFromArgv(args.slice(1)))))(launcherArgs);
+  } catch (error) {
+    return refuse('launch_arguments_invalid: ' + (error instanceof Error ? error.message : String(error))
+      + '; nextStep: correct the adapter arguments and relaunch the same invocation id');
+  }
+  if (!validation.ok) {
+    return refuse(validation.code + '; nextStep: ' + String(validation.details.nextStep));
+  }
+
   // Require the newly started OS process as a witness, not merely a matching old receipt.
-  // Synchronous launcher refusal is an exit status (2), never handoff acceptance.
   let spawn: LauncherSpawnObservation;
   try {
     spawn = await (deps.spawnLauncher ?? spawnDetachedLauncher)(launcherArgs);
   } catch (error) {
-    return refuse('launcher_start_failed: ' + (error instanceof Error ? error.message : String(error)));
+    return refusePostspawn('launcher_start_failed: ' + (error instanceof Error ? error.message : String(error)));
   }
-  if (spawn.exitCode === 2) return refuse('launcher_pre_spawn_refused_use_fresh_id');
   if (!Number.isSafeInteger(spawn.launcherPid) || spawn.launcherPid <= 1) {
-    return refuse('launcher_process_identity_unavailable');
+    return refusePostspawn('launcher_process_identity_unavailable');
   }
-  const receipt = await waitForReceipt(handoffReceipt, runIdentity, attemptIdentity, invocationId);
-  if (!receipt || receipt.launcher_pid !== spawn.launcherPid) {
-    return refuse('handoff_missing_or_new_launcher_pid_mismatch');
+  const receipt = spawn.exitCode === 2 ? null
+    : await waitForReceipt(handoffReceipt, runIdentity, attemptIdentity, invocationId);
+  if (!receipt) {
+    // Authenticated same-invocation/Run/attempt launcher pre-SEND refusal: relay its observed code.
+    const companion = readRefusalCompanion(handoffReceipt, {
+      runIdentity, attemptIdentity, invocationId, launcherPid: spawn.launcherPid,
+    });
+    if (companion) return refuse(companion.code + '; nextStep: ' + companion.nextStep);
+    return refusePostspawn(spawn.exitCode === 2 ? 'launcher_refused_without_companion' : 'handoff_receipt_missing');
+  }
+  if (receipt.launcher_pid !== spawn.launcherPid) {
+    return refusePostspawn('handoff_new_launcher_pid_mismatch');
   }
   let receiptLocator: string;
   try {
@@ -326,7 +375,7 @@ export async function runBrowserAdapter(
     receiptLocator = bound.path;
     if (bound.locator.handoff_receipt_path !== resolve(handoffReceipt)
       || bound.locator.terminal_envelope_path !== resolve(terminalEnvelope)
-      || JSON.stringify(bound.receipt) !== JSON.stringify(receipt)
+      || !sameHandoffIdentity(bound.receipt, receipt)
       || bound.receipt.launcher_pid !== spawn.launcherPid
       || bound.receipt.child_cwd !== realpathSync(cwd)
       || bound.receipt.owner_task_id !== ownerTaskId
@@ -334,7 +383,7 @@ export async function runBrowserAdapter(
       throw new Error('identity_or_provenance_mismatch');
     }
   } catch (error) {
-    return refuse('receipt_locator_readback_failed: ' + (error instanceof Error ? error.message : String(error)));
+    return refusePostspawn('receipt_locator_readback_failed: ' + (error instanceof Error ? error.message : String(error)));
   }
   process.stdout.write(JSON.stringify({
     schema: 'flow-manager-browser-gpt-long-run-accepted/v1',
