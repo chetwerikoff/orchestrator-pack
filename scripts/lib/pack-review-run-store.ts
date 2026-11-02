@@ -1795,11 +1795,15 @@ function parseRecord(
   const logicalSourceVersions = [PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION];
   if (reviewRound && (logicalSourceVersions.includes(accountingVersion ?? '')
       || logicalSourceVersions.includes(reviewRound.accountingVersion ?? ''))) {
+    // Supplemental reviews may carry the cycle's historical source version but
+    // never consume a logical ordinal. Only required GPT rounds have cap identity.
+    const supplemental = automaticBudgetDisposition === 'non_consuming_explicit'
+      && logicalRoundOrdinal === undefined && logicalRoundCap === undefined;
     if (accountingVersion !== reviewRound.accountingVersion
-        || reviewCycleId === undefined
-        || logicalRoundOrdinal !== reviewRound.roundOrdinal
-        || logicalRoundCap !== PACK_REVIEW_LOGICAL_CAPS[reviewRound.tier]
-        || resolvedReviewer !== 'gpt') {
+        || resolvedReviewer !== 'gpt'
+        || (!supplemental && (reviewCycleId === undefined
+          || logicalRoundOrdinal !== reviewRound.roundOrdinal
+          || logicalRoundCap !== PACK_REVIEW_LOGICAL_CAPS[reviewRound.tier]))) {
       throw new Error(`corrupt pack review run record at ${path}: GPT logical source version/round identity mismatch`);
     }
   }
