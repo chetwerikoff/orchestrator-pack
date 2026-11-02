@@ -1774,6 +1774,19 @@ describe('supervised Task launch assistant', () => {
         ...remaining.slice(lastReadIndex + 1),
       ];
     };
+    // The captured OpenCode 1.18.35 fixture stays immutable. Project only the
+    // pack's newly enforced terminal policies into the synthetic native output.
+    const newBash = FIXTURE_FORBIDDEN_OPEN_CODE_BASH.filter((pattern) => !pattern.includes('bsk'))
+      .map((pattern) => ({ permission: 'bash', pattern, action: 'deny' }));
+    const newTools = ['codex', 'agent-launch'].map((permission) => ({ permission, pattern: '*', action: 'deny' }));
+    const withCurrentSafetyDenies = (rules: FixtureRule[]): FixtureRule[] => {
+      const base = withSyntheticReadDenies(rules);
+      const lastBash = base.findLastIndex((rule) => rule.permission === 'bash');
+      const insert = [...base.slice(0, lastBash + 1), ...newBash, ...base.slice(lastBash + 1)];
+      // Current native output preserves the canonical tool-output rule at the
+      // tail, exactly as the old historical fixture does.
+      return [...insert.slice(0, -1), ...newTools, insert[insert.length - 1]!];
+    };
     const selectedDataRoot = join(tmpdir(), 'opk2447-synthetic-xdg-data');
     const runtimePattern = pathKind === 'tilde' ? '~/.local/share/opencode/tool-output/*'
       : pathKind === 'data' || pathKind === 'foreign-data'
@@ -1804,9 +1817,14 @@ describe('supervised Task launch assistant', () => {
         : typeof rules === 'object' && rules !== null
           ? Object.entries(rules).map(([pattern, action]) => ({ permission, pattern, action: String(action) }))
           : []);
-    expect(legacyRules).toHaveLength(97);
+    expect(legacyRules).toHaveLength(123);
     expect(legacyRules[3]).toEqual(toolOutput);
-    const withoutToolOutput = legacyRules.filter((rule) =>
+    for (const newRule of [...newBash, ...newTools]) expect(legacyRules).toContainEqual(newRule);
+    const historicalRules = legacyRules.filter((rule) =>
+      ![...newBash, ...newTools].some((newRule) => newRule.permission === rule.permission
+        && newRule.pattern === rule.pattern && newRule.action === rule.action));
+    expect(historicalRules).toHaveLength(97);
+    const withoutToolOutput = historicalRules.filter((rule) =>
       !(rule.permission === toolOutput.permission && rule.pattern === toolOutput.pattern && rule.action === toolOutput.action));
     // Only the two new read overrides may differ from the captured 1.18.35 ordering.
     const contextualWithReadDenies = withSyntheticReadDenies(fixture.contextual.permission);
@@ -1854,7 +1872,7 @@ describe('supervised Task launch assistant', () => {
             const name = args[3] ?? '';
             const resolved = JSON.parse(JSON.stringify(fixture.contextual)) as FixtureAgent;
             resolved.name = name;
-            resolved.permission = withSyntheticReadDenies(resolved.permission);
+            resolved.permission = withCurrentSafetyDenies(resolved.permission);
             if (name !== 'general' && name !== 'explore') {
               if (drift === 'other-order') {
                 const question = resolved.permission.findIndex((rule) => rule.permission === 'question');
