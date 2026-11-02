@@ -106,9 +106,13 @@ runner when the supervised manager will park on review completion. The session i
 exact already-owned supervised identity; never infer it from branch/worktree/title/PID. If that
 binding is unavailable, omit `--session-id`, keep the runner foregrounded/observed, consume its
 terminal result directly, and do not park waiting for `workerNotification`. Required
-reviewer sources are fresh project chats owned by that runner. A findings-bearing
-logical round gets one fresh GPT fixer conversation distinct from the
-implementation conversation and every reviewer conversation. A code-required
+reviewer sources are fresh project chats owned by that runner. A logical round
+gets one fresh GPT fixer conversation distinct from implementation and source
+reviewers **only if** the canonical persisted exact-PR-head effective projection
+contains one or more blocking `FIX_NOW` groups. The fixer receives the bound
+review COMMENT's one-entry-per-group `FIX_NOW` packet; raw duplicate findings,
+`DEFER`, `REJECT`, and advisory-only groups alone never trigger a fixer.
+Unverified triage retains the original union and its blocking policy. A code-required
 findings fix advances to a proven strict-descendant head with green required CI;
 an independently credentialed final-cap Issue-only scope correction can instead
 settle on the original head through scoped reconcile and its original cap.
