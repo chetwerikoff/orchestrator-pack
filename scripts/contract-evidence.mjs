@@ -3,8 +3,6 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolveTargetContext } from './lib/target-context.ts';
-import { isCommandSafe } from './lib/reverify-command-resolution.ts';
 import { extractAtJsonPath } from './external-output-shape-guard.mjs';
 import {
   LEGACY_LIST_REL_PATH,
@@ -505,7 +503,7 @@ function redactCaptureContent(content) {
 
 /**
  * @param {string} markdown
- * @param {{ repoRoot?: string, manifestPath?: string, legacyListPath?: string, draftPath?: string, projectId?: string, env?: NodeJS.ProcessEnv }} [options]
+ * @param {{ repoRoot?: string, manifestPath?: string, legacyListPath?: string, draftPath?: string }} [options]
  */
 export function checkContractEvidence(markdown, options = {}) {
   const repoRoot = options.repoRoot ?? path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -616,20 +614,9 @@ export function checkContractEvidence(markdown, options = {}) {
         errors.push(`${rowLabel}: NEW evidence cannot target external producer ${bindingProducer}`);
         continue;
       }
-      // A target producer is owned only by the validated, explicitly selected project card.
-      // Do not amend the pack producer registry or accept an Issue-declared producer as authority.
-      let selectedTarget = null;
       if (!repoOwned.includes(bindingProducer)) {
-        try {
-          selectedTarget = resolveTargetContext({ projectId: options.projectId, env: options.env });
-        } catch (error) {
-          errors.push(`${rowLabel}: producer ${bindingProducer} requires a valid selected project card; select/correct the card and retry: ${error instanceof Error ? error.message : String(error)}`);
-          continue;
-        }
-        if (selectedTarget.contractEvidenceProducer?.name !== bindingProducer) {
-          errors.push(`${rowLabel}: producer ${bindingProducer} is not declared by the selected project card; declare/correct contractEvidenceProducer.name and boundaryCommand in that card, then retry`);
-          continue;
-        }
+        errors.push(`${rowLabel}: producer ${bindingProducer} is not in the repo-owned registry`);
+        continue;
       }
       const newIdentity = canonicalBindingIdentity(row, 'structured');
       recordBindingIdentity(identities, newIdentity, row, 'structured', rowLabel, errors);
@@ -641,23 +628,6 @@ export function checkContractEvidence(markdown, options = {}) {
           `${rowLabel}: NEW(produced-by AC#${acNumber}) must name a matching producer-emission assertion for this binding`,
         );
         continue;
-      }
-      if (selectedTarget) {
-        const section = acceptanceCriterionSection(markdown, acNumber);
-        const emission = parseProducerEmissionBlocks(section ?? '').find(
-          (block) => producerEmissionIsComplete(block) && producerEmissionMatchesRow(block, row),
-        );
-        const independent = (emission?.['producer-command'] ?? '').trim();
-        const proof = (emission?.['proof-command'] ?? emission?.command ?? '').trim();
-        if (
-          independent !== selectedTarget.contractEvidenceProducer.boundaryCommand
-          || independent === proof
-          || !isCommandSafe(independent, selectedTarget.primaryRoot)
-          || !isCommandSafe(proof, selectedTarget.primaryRoot)
-        ) {
-          errors.push(`${rowLabel}: target producer proof must use a safe executable proof-command and an independent producer-command exactly matching the selected card's boundaryCommand; repair the card/emission and safe proof, then retry`);
-          continue;
-        }
       }
       continue;
     }

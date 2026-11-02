@@ -9,7 +9,6 @@ import { checkTierGateGuard, checkWorkerSafetyFloor, formatTierGatePassMessage, 
 import { canonicalizeEntry } from './pr-scope-declaration.ts';
 import { runProcessSync } from './kernel/subprocess.ts';
 import { checkContractEvidence } from './contract-evidence-validator.mjs';
-import { checkContractEvidence as checkLegacyContractEvidence } from './contract-evidence.mjs';
 import { runContractEvidenceReverify } from './lib/contract-evidence-reverify.ts';
 import { isPrHeadNetworkSandboxAvailable } from './lib/reverify-sandbox.ts';
 
@@ -210,8 +209,8 @@ describe('current substantive Issue floor', () => {
       const targetIssue = makeIssue('target-status');
       const floorOptions = { repoRoot: packRoot, projectId, env };
       expect(checkTierGateGuard(targetIssue, floorOptions)).toMatchObject({ ok: true, errors: [] });
-      expect(checkContractEvidence(targetIssue, floorOptions).ok).toBe(true);
-      expect(checkLegacyContractEvidence(targetIssue, floorOptions).ok).toBe(true);
+      // Validate through the actual tier-gate evidence consumer, not the governed legacy entrypoint.
+      expect(checkContractEvidence(targetIssue, floorOptions)).toMatchObject({ ok: true, errors: [], skipped: false });
 
       const cli = runProcessSync({
         command: process.execPath,
@@ -238,20 +237,27 @@ describe('current substantive Issue floor', () => {
 
       putCard({ ...card, contractEvidenceProducer: undefined });
       expect(checkTierGateGuard(targetIssue, floorOptions).errors.join('\n')).toContain('not declared by the selected project card');
+      expect(checkContractEvidence(targetIssue, floorOptions).errors.join('\n'))
+        .toContain('not declared by the selected project card');
       expect(reverify(targetIssue).rows[0]).toMatchObject({ status: 'unverified', reason: 'unsupported-producer' });
       putCard(card);
 
       const badBinding = targetIssue.replace('binding-id: target-status:', 'binding-id: other-producer:');
       expect(checkTierGateGuard(badBinding, floorOptions).errors.join('\n')).toContain('does not match binding-id');
+      expect(checkContractEvidence(badBinding, floorOptions).errors.join('\n')).toContain('does not match binding-id producer');
       expect(reverify(badBinding).rows[0]).toMatchObject({ status: 'unverified', reason: 'unsupported-producer' });
 
       const wrongIndependent = makeIssue('target-status', 'node ' + producerDir + '/structured-value.mjs');
       expect(checkTierGateGuard(wrongIndependent, floorOptions).ok).toBe(false);
+      expect(checkContractEvidence(wrongIndependent, floorOptions).errors.join('\n'))
+        .toContain('target producer proof must use a safe executable proof-command');
       expect(reverify(wrongIndependent, { forceProducerUnreachable: true }).rows[0])
         .toMatchObject({ status: 'unverified', reason: 'non-genuine-proof' });
 
       const unsafe = makeIssue('target-status', boundaryCommand, 'sh -c unsafe');
       expect(checkTierGateGuard(unsafe, floorOptions).ok).toBe(false);
+      expect(checkContractEvidence(unsafe, floorOptions).errors.join('\n'))
+        .toContain('target producer proof must use a safe executable proof-command');
       expect(reverify(unsafe).rows[0]).toMatchObject({ status: 'unverified', reason: 'unsafe-or-undeclared-command' });
 
       const echoOnly = makeIssue('target-status', boundaryCommand, 'node ' + producerDir + '/echo-expected.mjs');
@@ -260,7 +266,7 @@ describe('current substantive Issue floor', () => {
 
       const packIssue = makeIssue('orchestrator-pack');
       expect(checkTierGateGuard(packIssue, floorOptions).ok).toBe(true);
-      expect(checkLegacyContractEvidence(packIssue, floorOptions).ok).toBe(true);
+      expect(checkContractEvidence(packIssue, floorOptions)).toMatchObject({ ok: true, errors: [], skipped: false });
       expect(checkTierGateGuard(valid, floorOptions).ok).toBe(true);
     } finally {
       rmSync(temp, { recursive: true, force: true });
