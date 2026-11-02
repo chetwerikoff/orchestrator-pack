@@ -5598,7 +5598,25 @@ export async function maybeAdmitPackReviewBodyAmendment(
     // Only a genuine behavior-criteria change admits a new review. A full
     // mismatch elsewhere must still deassert success, except for the separately
     // proven prior same-head Issue-only resolution / §11 incident settlement.
-    if (cycle.settlementKind === 'same_head_issue_resolution') return null;
+    if (terminal.reviewVerdict === 'findings' && priorRun.reviewRound
+        && (livePr.headSha === terminal.targetSha
+          || cycle.settlementKind === 'same_head_issue_resolution')) {
+      // The only criteria-equal body exception is an independently verified,
+      // authorized #2428 post-terminal Issue-only scope correction. It is not
+      // a generic equal-criteria shortcut for completed green statuses.
+      try {
+        const proof = await resolveSameHeadIssueResolution(
+          input, options, authority, priorRun, livePr.headSha,
+        );
+        if (proof.correctedBodyDigest === nextDigest
+            && (cycle.settlementKind !== 'same_head_issue_resolution'
+              || (authority.publication?.status === 'succeeded'
+                && authority.publication.terminalRunId === priorRun.id
+                && authority.publication.publicationDigest === proof.publicationDigest))) {
+          return null; // The existing final-cap owner commits/reads status.
+        }
+      } catch { /* Unproved exception retains the full-body mismatch veto. */ }
+    }
     return confirmUnreviewedBodyNonSuccess('amendment_unverified_body_mismatch');
   }
   let liveTier: PackReviewTier;
@@ -5839,6 +5857,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
   // preflight body snapshot, not a revision tag or an amended current Issue.
   let verifiedFinalIssue: { issueNumber: number; digest: string } | undefined;
   let verifiedScopeOnlyIncident: { reviewedBody: string; issueNumber: number } | undefined;
+  let sameHeadPublicationDigest: string | undefined;
   if (logicalAccounting && authority.cycle?.frozenTier !== 'T1'
       && currentHead !== authority.terminal.targetSha) {
     try {
@@ -5982,24 +6001,22 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       const digest = computeBoundIssueSnapshotHash(liveIssue.body);
       let expectedDigest: string | undefined = frozen.snapshotHash;
       if (completedFinalFindings && cycle.settlementKind === 'same_head_issue_resolution') {
-        // The completed #2428 Issue-only resolution reviewed B0 but expressly
-        // settled owner-edited B1. Its durable completion time bounds the last
-        // accepted body edit; a later amendment must not inherit that status.
+        // The accepted corrected B1 is bound by the original authorized
+        // COMMENT+REVIEW proof digest, not an Issue updated_at/edit-history
+        // guess. Preserve this digest when publishing status on descendants.
         if (!priorRun.reviewRound || !cycle.reviewStageCompletedAtUtc) {
-          throw new Error('completed same-head Issue resolution source or completion time missing');
+          throw new Error('completed same-head Issue resolution source or completion missing');
         }
-        const revision = await resolveFinalCapIssueBodyRevision({
-          sourceRepoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
-          issueNumber, terminalizedAt: priorRun.completedAtUtc,
-          frozenBodyHash: frozen.snapshotHash,
-        }, process.env.OPK_VITEST_HARNESS === '1'
-          ? input.fixtureSameHeadIssueResolutionRunner ?? runProcess : runProcess);
-        const completedAt = Date.parse(cycle.reviewStageCompletedAtUtc);
-        if (!Number.isFinite(completedAt)) {
-          throw new Error('completed same-head Issue resolution time invalid');
+        const proof = await resolveSameHeadIssueResolution(
+          input, options, authority, priorRun, currentHead,
+        );
+        if (authority.publication?.status !== 'succeeded'
+            || authority.publication.terminalRunId !== priorRun.id
+            || authority.publication.publicationDigest !== proof.publicationDigest) {
+          throw new Error('accepted same-head corrected-body publication digest changed');
         }
-        expectedDigest = Date.parse(revision.editedAt) <= completedAt
-          ? computeBoundIssueSnapshotHash(revision.body) : undefined;
+        expectedDigest = proof.correctedBodyDigest;
+        sameHeadPublicationDigest = proof.publicationDigest;
       }
       if (digest !== expectedDigest && prNumber === 2656 && issueNumber === 2655) {
         const reviewedBody = readFileSync(frozen.snapshotPath!, 'utf8');
@@ -6212,6 +6229,13 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
     if (authority.currentHeadSha === reviewedHeadSha) {
       try {
         const proof = await resolveSameHeadIssueResolution(input, options, authority, priorRun);
+        verifiedFinalIssue = { issueNumber: priorRun.reviewRound!.issueNumber,
+          digest: proof.correctedBodyDigest };
+        if (completedFinalFindings && (authority.publication?.status !== 'succeeded'
+            || authority.publication.terminalRunId !== priorRun.id
+            || authority.publication.publicationDigest !== proof.publicationDigest)) {
+          throw new Error('completed same-head proof differs from its accepted publication');
+        }
         if (!completedFinalFindings) {
           authority = settleLogicalPackReviewFindingsByStrictDescendant({
             prNumber, expectedTransitionSeq: authority.transitionSeq, reviewedHeadSha,
@@ -6226,8 +6250,8 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         );
       } catch (error) {
         return { prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true, settled: false,
-          reason: 'final_cap_strict_descendant_required', detail: describeError(error),
-          nextAction: 'provide complete exact-run trusted Issue-only dispositions, post-terminal body revision and current-head green CI, or advance to a proven strict descendant; rerun scoped reconcile' };
+          reason: 'same_head_resolution_unproven', detail: describeError(error),
+          nextAction: 'verify the original exact-run sources, canonical terminal REVIEW ID/timestamp, frozen Issue digest, corrected REST Issue scope, and one authorized post-terminal disposition COMMENT; recheck current-head CI and rerun scoped exact-head reconcile. Only a real code fix belongs on a strict descendant' };
       }
     }
     if (!completedFinalFindings) {
@@ -6261,7 +6285,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
     }
     return publishFinalCapStatus(
       'Required pack-review stage completed; strict descendant of reviewed findings.',
-      sha256Bytes(stableJson({
+      sameHeadPublicationDigest ?? sha256Bytes(stableJson({
         runId: priorRun.id, reviewedHeadSha, publicationHead: authority.currentHeadSha,
         settlementKind: 'strict_descendant',
       })),
@@ -8838,7 +8862,8 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
             && authority.terminal.reviewVerdict === 'findings'
             && authority.terminal.targetSha !== target.headSha;
           const originalDigestMatches = Boolean(bound && bound === authoritative.snapshotDigest);
-          if (!originalDigestMatches && !scopeOnlyIncident) return false;
+          if (!originalDigestMatches && !scopeOnlyIncident
+              && authority.cycle?.settlementKind !== 'same_head_issue_resolution') return false;
           const body = process.env.OPK_VITEST_HARNESS === '1'
             ? input.fixtureIssueBody
             : (await resolveCurrentIssueFields(
