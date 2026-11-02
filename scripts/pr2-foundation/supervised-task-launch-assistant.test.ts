@@ -340,6 +340,8 @@ function deps(input: {
     adapter: input.adapter ?? runtimeAdapter(),
     commandPreflight: () => ({ status: 'ok', value: true }),
     repositoryPreflight: async () => ({ status: 'ok', value: true }),
+    installManagerPushGuard: () => ({ status: 'ok', value: true }),
+    restoreClaudeManagerGuard: () => ({ status: 'ok', value: true }),
     resolveProfile: (workClass, env, startMode) => resolveExecutorProfile(workClass, env, startMode),
     observeManagerRun: async () => input.managerRun ?? ({ status: 'ok', value: { runId: 'run-1' } }),
     proveManagerTaskMembership: async () => input.managerMembership ?? ({ status: 'ok', value: { taskId: 'task-1' } }),
@@ -1954,11 +1956,11 @@ describe('supervised Task launch assistant', () => {
       return { ok: false, stdout: '', stderr: '' };
     }, () => true);
     expect(result).toMatchObject({ status: 'ok', evidence: { exactContext: true } });
-    expect(calls).toContainEqual(['opencode', 'debug', 'config']);
+    expect(calls).toContainEqual([FIXTURE_OPENCODE_BIN, 'debug', 'config']);
     expect(calls.filter((args) => args[1] === 'debug' && args[2] === 'agent')).toHaveLength(4);
-    expect(calls).toContainEqual(['opencode', 'debug', 'agent', 'general']);
-    expect(calls).toContainEqual(['opencode', 'debug', 'agent', 'explore']);
-    expect(calls).toContainEqual(['opencode', 'debug', 'paths']);
+    expect(calls).toContainEqual([FIXTURE_OPENCODE_BIN, 'debug', 'agent', 'general']);
+    expect(calls).toContainEqual([FIXTURE_OPENCODE_BIN, 'debug', 'agent', 'explore']);
+    expect(calls).toContainEqual([FIXTURE_OPENCODE_BIN, 'debug', 'paths']);
   });
   it('probe surface equals spawn surface', async () => {
     const profile = resolveSemanticExecutorProfile({ surface: 'task', names: profileNamesForTask('t2'), env: opencodeProfileEnv('t2') });
@@ -5011,7 +5013,7 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
       expect(permission?.read?.['*.env.*']).toBe('deny');
     }
     expect(openCodeLaunchHasFleetBrowserDenies({
-      command, agentName: 'pack-opk-b5-selected',
+      command, agentName: 'pack-opk-b5-selected', executable: FIXTURE_OPENCODE_BIN,
       inlineConfigJson: JSON.stringify(inline),
     })).toBe(true);
     expect(f.nativePanes).toHaveLength(1);
@@ -5043,7 +5045,7 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
         model: 'fixture-opencode-model', variant: 'fixture-opencode-effort',
       });
       expect(openCodeLaunchHasFleetBrowserDenies({
-        command, agentName: 'pack-opk-b5-selected', inlineConfigJson,
+        command, agentName: 'pack-opk-b5-selected', inlineConfigJson, executable: FIXTURE_OPENCODE_BIN,
       })).toBe(true);
       const binding = openCodeControlFromCommand(command);
       expect(binding).toMatchObject({ agent: 'pack-opk-b5-selected', session });
@@ -5054,14 +5056,14 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
       ]);
       if (explicit) {
         const quotedData = "'" + dataRoot.replaceAll("'", "'\\''") + "'";
-        expect(command).toContain(` XDG_DATA_HOME=${quotedData} opencode --hostname 127.0.0.1`);
+        expect(command).toContain(` XDG_DATA_HOME=${quotedData} ${FIXTURE_OPENCODE_BIN} --hostname 127.0.0.1`);
         expect(openCodeLaunchHasFleetBrowserDenies({
           command: command.replace(`XDG_DATA_HOME=${quotedData}`, `XDG_DATA_HOME=${dataRoot}`),
-          agentName: 'pack-opk-b5-selected', inlineConfigJson,
+          agentName: 'pack-opk-b5-selected', inlineConfigJson, executable: FIXTURE_OPENCODE_BIN,
         })).toBe(false);
       } else {
         expect(command).not.toContain('XDG_DATA_HOME=');
-        expect(command).toContain("XDG_STATE_HOME='/tmp/opk-2661-disposable-state' opencode --hostname");
+        expect(command).toContain(`XDG_STATE_HOME='/tmp/opk-2661-disposable-state' ${FIXTURE_OPENCODE_BIN} --hostname`);
       }
     }
   });
