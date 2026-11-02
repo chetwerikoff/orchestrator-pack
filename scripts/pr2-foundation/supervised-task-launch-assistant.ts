@@ -1019,8 +1019,8 @@ export async function runSupervisedTaskLaunchAssistant(
   const restoration = input.workClass !== 'merge' && Boolean(input.worktreeSelector && !input.existingTerminal && earlyCurrent);
   let restoreBefore: { readonly selected: RestoreWorktreeIdentity; readonly census: RestoreQuiescenceWitness } | null = null;
   if (restoration && earlyCurrent) {
-    const refuse = (cause: string, extra: Readonly<Record<string, unknown>> = {}): EdgeResult<true> => ({
-      status: 'continue', cause, actor: 'operator', evidence: extra,
+    const refuse = (cause: string, extra: Readonly<Record<string, unknown>> = {}): Omit<Extract<EdgeResult<true>, { status: 'continue' }>, 'status'> => ({
+      cause, actor: 'operator', evidence: extra,
       nextAction: { kind: 'reconcile_dispatch',
         note: 'verify the exact Issue/old and new Task/Run/assignment, native dispatch-show/worker-show, all-workspace orca terminal list and Linux /proc; quiesce and retry one operator-serialized --worktree launch' },
     });
@@ -1200,7 +1200,7 @@ export async function runSupervisedTaskLaunchAssistant(
       || prepared.value.id !== restoreBefore.selected.id || !prepared.value.path
       || resolve(prepared.value.path) !== resolve(restoreBefore.selected.path)) {
       return continued(input, 'dispatch_admission_final', {
-        status: 'continue', cause: 'worktree_restore_final_identity_changed', actor: 'operator', evidence: {},
+        cause: 'worktree_restore_final_identity_changed', actor: 'operator', evidence: {},
         nextAction: { kind: 'reconcile_dispatch', note: 'reinspect old/new Task, exact Dispatch and selected worktree without worker-start; retry only after serialized quiescence' },
       }, resources, startedAtMs, timings, deps.now);
     }
@@ -1209,7 +1209,7 @@ export async function runSupervisedTaskLaunchAssistant(
       resources, startedAtMs, timings, deps.now);
     if (finalCensus.value.terminalFingerprint !== restoreBefore.census.terminalFingerprint) {
       return continued(input, 'dispatch_admission_final', {
-        status: 'continue', cause: 'worktree_restore_terminal_inventory_changed', actor: 'operator', evidence: {},
+        cause: 'worktree_restore_terminal_inventory_changed', actor: 'operator', evidence: {},
         nextAction: { kind: 'reconcile_dispatch', note: 'reinspect the full all-workspace Orca inventory and /proc before a new operator-serialized attempt' },
       }, resources, startedAtMs, timings, deps.now);
     }
