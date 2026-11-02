@@ -19,7 +19,7 @@ import {
 } from '../lib/worker-assignment-store.ts';
 import { evaluateReadiness } from './readiness-evaluator.ts';
 import { withCrashRecoverableFileLock } from './journal-lock.ts';
-import { readTerminalGoneDispatch, runSupervisedWorkerStart } from './supervised-worker-start.ts';
+import { inspectExternalTerminalStop, readTerminalGoneDispatch, runSupervisedWorkerStart } from './supervised-worker-start.ts';
 
 const roots: string[] = [];
 const canonicalTerminal = 'term_operator_owned';
@@ -1421,5 +1421,112 @@ describe('Issue #2696 exact native exited orphaned terminal proof', () => {
     expect(result.ok).toBe(false);
     expect(execute).not.toHaveBeenCalled();
     expect(currentWorkerAssignment(file, 2696)).toEqual(previous);
+  });
+});
+
+describe('Issue #2754 AC6 fresh-instance external stop boundary', () => {
+  it.each([
+    { name: 'exact but native close/abandon not proved', altered: 'none',
+      status: 'unsupported', reason: 'external_stop_native_generation_bound_close_abandon_unproven' },
+    { name: 'foreign terminal incarnation', altered: 'generation',
+      status: 'stop_unknown', reason: 'external_stop_terminal_generation_or_workspace_unproven' },
+    { name: 'foreign Dispatch owner', altered: 'owner',
+      status: 'stop_unknown', reason: 'external_stop_dispatch_terminal_binding_unproven' },
+    { name: 'Run membership missing', altered: 'membership',
+      status: 'stop_unknown', reason: 'external_stop_task_run_membership_unproven' },
+    { name: 'stale Issue assignment', altered: 'assignment',
+      status: 'stop_unknown', reason: 'external_stop_assignment_stale' },
+    { name: 'recycled handle between native reads', altered: 'adapter-generation',
+      status: 'stop_unknown', reason: 'external_stop_runtime_identity_changed' },
+    { name: 'unavailable native run read', altered: 'run-unavailable',
+      status: 'stop_unknown', reason: 'external_stop_run_unproven' },
+  ] as const)('never closes a pane for $name', async ({ altered, status, reason }) => {
+    const base = root();
+    const env = { ...process.env, OPK_BASE_DIR: base };
+    const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
+    const published = await publishCurrentWorkerAssignment({
+      file, repository: 'chetwerikoff/orchestrator-pack', issueNumber: 2754,
+      taskId: 'task-external-stop', kind: 'local', provider: 'orca',
+      bindingKey: 'dispatch-external-stop', role: 'worker',
+    });
+    if (!published.ok) throw new Error(published.reason);
+    const handle = 'terminal-external-stop';
+    const worktreeId = 'repo::exact-external-stop';
+    const generation = 'incarnation-external-stop';
+    const nativeCalls: string[][] = [];
+    const terminal = {
+      handle, incarnationId: altered === 'adapter-generation'
+        ? 'incarnation-reused-foreign' : generation,
+      worktreePath: base, worktreeId, title: 'external worker', status: 'running' as const,
+    };
+    // Fresh runtime instance: no ownedForStop entry or guessed stop authority.
+    const native = new OrcaTaskRuntimeAdapter({
+      env, runJson: ((args: readonly string[]): OrcaJsonResponse => {
+        nativeCalls.push([...args]);
+        if (args[0] === 'terminal' && args[1] === 'show')
+          return { ok: true, result: { terminal } };
+        return { ok: false, error: { code: 'unsupported_operation', message: 'no native stop capability' } };
+      }) as never,
+    });
+    const inspect = vi.fn(async (argv: readonly string[]) => {
+      nativeCalls.push([...argv]);
+      const op = argv.slice(0, 2).join(' ');
+      let result: Record<string, unknown>;
+      switch (op) {
+        case 'orchestration run-show':
+          if (altered === 'run-unavailable') return { ok: false, stdout: '' };
+          result = { run: { id: 'run-external-stop' } };
+          break;
+        case 'orchestration task-list':
+          result = { runId: 'run-external-stop', tasks: altered === 'membership'
+            ? [{ id: 'other-task' }] : [{ id: 'task-external-stop' }] };
+          break;
+        case 'orchestration dispatch-show':
+          result = { dispatch: {
+            id: 'dispatch-external-stop', taskId: 'task-external-stop',
+            run_id: 'run-external-stop', status: 'dispatched',
+          } };
+          break;
+        case 'orchestration worker-show':
+          result = {
+            dispatch: { id: 'dispatch-external-stop', status: 'dispatched' },
+            worker: { agent_terminal_handle: handle, worktree_id: worktreeId },
+            terminal: { handle },
+            observation: { exactWorker: true, status: 'live' },
+            terminalResource: {
+              terminalHandle: handle, worktreeId,
+              originDispatchId: 'dispatch-external-stop',
+              ownerDispatchId: altered === 'owner' ? 'foreign-dispatch' : 'dispatch-external-stop',
+            },
+          };
+          break;
+        case 'worktree show':
+          result = { worktree: { id: worktreeId, path: base } };
+          break;
+        case 'terminal show':
+          result = { terminal: { ...terminal,
+            incarnationId: altered === 'generation' ? 'foreign-generation' : generation } };
+          break;
+        default:
+          return { ok: false, stdout: '', stderr: 'unsupported read' };
+      }
+      return { ok: true, stdout: envelope(result) };
+    });
+    const output = await inspectExternalTerminalStop({
+      repository: 'chetwerikoff/orchestrator-pack', projectId: 'orchestrator-pack',
+      issueNumber: 2754, role: 'worker', runId: 'run-external-stop',
+      taskId: 'task-external-stop', dispatchId: 'dispatch-external-stop',
+      assignmentId: published.assignment.assignmentId,
+      assignmentGeneration: published.assignment.generation + (altered === 'assignment' ? 1 : 0),
+      worktreeId, worktreePath: base,
+      terminalHandle: handle, terminalGeneration: generation,
+      env, adapter: native, inspect,
+    });
+    expect(output).toMatchObject({ ok: false, status, reason });
+    expect(output.nextAction).toContain('coordinator/operator');
+    expect(nativeCalls.every((argv) => argv[0] !== 'terminal' || argv[1] !== 'close')).toBe(true);
+    expect(nativeCalls.some((argv) => argv.includes('abandon'))).toBe(false);
+    expect(currentWorkerAssignment(file, 2754)).toEqual(published.assignment);
+    if (altered === 'assignment') expect(inspect).not.toHaveBeenCalled();
   });
 });
