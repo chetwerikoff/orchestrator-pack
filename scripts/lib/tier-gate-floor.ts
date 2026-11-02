@@ -10,6 +10,8 @@ import { parseIssueScopeFences } from '@orchestrator-pack/shared/lib/issue_parse
 export interface TierGateFloorOptions {
   repoRoot?: string;
   draftPath?: string;
+  projectId?: string;
+  env?: Readonly<NodeJS.ProcessEnv>;
 }
 
 function hasFence(text: string, name: string): boolean {
@@ -85,6 +87,8 @@ export function checkContractEvidenceFloor(
   const result = checkContractEvidence(draftText, {
     repoRoot: options.repoRoot ?? process.cwd(),
     draftPath: options.draftPath,
+    projectId: options.projectId,
+    env: options.env,
   }) as { ok: boolean; errors: string[]; skipped?: boolean };
   if (result.ok || result.skipped) return { ok: true, errors: [] };
   return {
