@@ -210,6 +210,12 @@ registrations use only native selected-repository `git worktree prune`;
 locked/live/dirty worktrees are preserved. See
 [operator commands](target_repo_setup.md#operator-serialized-quiescent-dirty-worktree-handover-issue-2754).
 
+The existing scoped `supervised-worker-start.ts stop-external` CLI (syntax in
+`docs/target_repo_setup.md`) provides fresh-instance **read-only** exact
+Issue/Run/Task/assignment/Dispatch/worktree/terminal-generation admission.
+It currently returns `unsupported` or `stop_unknown` with the supported
+coordinator/operator remedy: no installed generation-safe close plus same-Dispatch
+abandon has been proven, so this CLI does **not** claim or effect `stopped`.
 An externally bound stop must re-verify terminal handle **and generation**,
 Issue, Task, Run, assignment, Dispatch and worktree. Where the installed Orca
 producer supports both exact effects, close the exact pane, abandon its
