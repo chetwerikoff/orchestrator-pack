@@ -2479,7 +2479,9 @@ export async function runWait(options: {
   readonly ownerWaitDependencies?: OwnerWaitDependencies;
 }): Promise<void> {
   const taskBound = options.ownerTaskId !== undefined || options.ownerDispatchId !== undefined;
-  if (taskBound && (!options.ownerTaskId?.trim() || !options.ownerDispatchId?.trim())) {
+  // Task-only correlation stays a legal diagnostic wait; only the full pair can reach the reaper.
+  if (taskBound && (!options.ownerTaskId?.trim()
+    || (options.ownerDispatchId !== undefined && !options.ownerDispatchId.trim()))) {
     throw new Error('wait_owner_identity_required');
   }
   const explicit = options.terminalEnvelopePath !== undefined || options.handoffReceiptPath !== undefined;
@@ -2518,7 +2520,7 @@ export async function runWait(options: {
     : null;
   if (taskBound && (!initialReceipt
     || initialReceipt.owner_task_id !== options.ownerTaskId
-    || initialReceipt.owner_dispatch_id !== options.ownerDispatchId
+    || (options.ownerDispatchId !== undefined && initialReceipt.owner_dispatch_id !== options.ownerDispatchId)
     || !initialReceipt.invocation_id?.trim()
     || (!indexed && initialReceipt.invocation_id !== options.invocationId)
     || initialReceipt.completion_mode !== COMPLETION_MODE)) {
@@ -2569,7 +2571,7 @@ export async function runWait(options: {
   }
   if (taskBound && (!handoff || !sameHandoffIdentity(initialReceipt, handoff)
     || handoff.owner_task_id !== options.ownerTaskId
-    || handoff.owner_dispatch_id !== options.ownerDispatchId
+    || (options.ownerDispatchId !== undefined && handoff.owner_dispatch_id !== options.ownerDispatchId)
     || (!indexed && handoff.invocation_id !== options.invocationId)
     || (envelope?.observed_invocation_id !== undefined
       && envelope.observed_invocation_id !== handoff.invocation_id)
@@ -2579,7 +2581,12 @@ export async function runWait(options: {
   // Only a Task-bound wait over a managed original receipt can ever reach the reaper; legacy,
   // direct and unbound waits stay diagnostic-only.
   let ownerWait: OwnerWaitOutcome | undefined;
-  if (!envelope && taskBound && handoff && initialReceipt) {
+  if (!envelope && taskBound && handoff && initialReceipt && options.ownerDispatchId === undefined) {
+    ownerWait = {
+      effect: 'none', reason: 'owner_dispatch_required',
+      nextStep: 'rerun this wait with both the original --owner-task-id and --owner-dispatch-id; a Task-only wait is diagnostic-only',
+    };
+  } else if (!envelope && taskBound && handoff && initialReceipt) {
     ownerWait = await ownerWaitReap({
       runIdentity: options.runIdentity, attemptIdentity: options.attemptIdentity,
       ownerTaskId: options.ownerTaskId!, ownerDispatchId: options.ownerDispatchId!,

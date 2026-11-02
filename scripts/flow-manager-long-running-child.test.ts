@@ -2806,10 +2806,10 @@ describe('Issue #2478: invocation-addressable launcher evidence', () => {
   });
 });
 describe('Issue #2750 owner-wait pair validation', () => {
-  it('rejects a one-sided Task/Dispatch identity before locator or receipt lookup', async () => {
+  it('rejects a Dispatch without its Task or a blank Dispatch before locator or receipt lookup', async () => {
     await expect(runWait({
       runIdentity: 'pair-run', attemptIdentity: 'pair-attempt',
-      invocationId: 'pair-invocation', ownerTaskId: 'task-only', deadlineMs: 1,
+      invocationId: 'pair-invocation', ownerTaskId: 'task-only', ownerDispatchId: ' ', deadlineMs: 1,
     })).rejects.toThrow('wait_owner_identity_required');
 
     await expect(runWait({
@@ -3264,7 +3264,6 @@ describe('Issue #2750 owner-wait reaper matrix (AC1-AC3)', () => {
       { name: 'wrong Task', extra: { ownerTaskId: 'task-wrong' }, message: 'wait_receipt_owner_mismatch' },
       { name: 'wrong Dispatch', extra: { ownerDispatchId: 'dispatch-wrong' }, message: 'wait_receipt_owner_mismatch' },
       { name: 'swapped pair', extra: { ownerTaskId: OWNER_DISPATCH, ownerDispatchId: OWNER_TASK }, message: 'wait_receipt_owner_mismatch' },
-      { name: 'Task without Dispatch', extra: { ownerDispatchId: undefined as unknown as string }, message: 'wait_owner_identity_required' },
       { name: 'blank Dispatch', extra: { ownerDispatchId: '  ' }, message: 'wait_owner_identity_required' },
       { name: 'owner pair without the retained invocation id', extra: { invocationId: undefined as unknown as string }, message: 'wait_invocation_identity_required' },
     ];
@@ -3274,6 +3273,20 @@ describe('Issue #2750 owner-wait reaper matrix (AC1-AC3)', () => {
       const base = ownerWaitOptions(fx, { launcherProbe });
       const options = Object.fromEntries(Object.entries({ ...base, ...extra }).filter(([, v]) => v !== undefined)) as WaitOptions;
       await expect(runWait(options)).rejects.toThrow(message);
+      expect(launcherProbe.stat).not.toHaveBeenCalled();
+      expect(existsSync(fx.envelopePath)).toBe(false);
+      expect(kill).not.toHaveBeenCalled();
+    });
+
+    it('keeps a Task-only wait diagnostic-only: no launcher observation, envelope or signal', async () => {
+      const fx = ownerWaitFixture('task-only');
+      const launcherProbe = deadProbe();
+      const { ownerDispatchId: _omitted, ...taskOnly } = ownerWaitOptions(fx, { launcherProbe });
+      const out = await captureWait(taskOnly as WaitOptions);
+      expect(out).toMatchObject({
+        terminal: false,
+        owner_wait: { effect: 'none', reason: 'owner_dispatch_required', no_signal_sent: true },
+      });
       expect(launcherProbe.stat).not.toHaveBeenCalled();
       expect(existsSync(fx.envelopePath)).toBe(false);
       expect(kill).not.toHaveBeenCalled();

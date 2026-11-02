@@ -280,6 +280,8 @@ export async function cancelOwnedGenerationFromReceipt(
  * cross-process Stop authority: without an independent original tab and active
  * generation witness every valid request returns a non-success no-op.
  */
+const PREPARED_CANCEL_LOCATOR_MODULE = new URL('../flow-manager-long-running-child.ts', import.meta.url).href;
+
 export async function runStateLightCancellation(
   argv: readonly string[],
   dependencies: BrowserTurnCancellationDependencies = {},
@@ -380,8 +382,16 @@ async function runPreparedOnlyCancellation(argv: readonly string[]): Promise<num
 
   let profileKey: string;
   try {
-    const launcher = await import('../flow-manager-long-running-child.ts');
-    const bound = launcher.readInvocationReceiptLocator({
+    // Locator-only read of the launcher module: this cancel path never reaches the launcher's
+    // browser probes, so it is loaded by resolved URL rather than as a Browser-turn graph edge.
+    const { readInvocationReceiptLocator } = await import(PREPARED_CANCEL_LOCATOR_MODULE) as {
+      readonly readInvocationReceiptLocator: (input: {
+        readonly invocationId: string; readonly runIdentity: string; readonly attemptIdentity: string;
+        readonly ownerTaskId: string; readonly ownerDispatchId: string;
+      }) => { readonly receipt: { readonly invocation_id?: string; readonly owner_task_id?: string;
+        readonly owner_dispatch_id?: string } };
+    };
+    const bound = readInvocationReceiptLocator({
       invocationId,
       runIdentity: values.get('--run-identity')!,
       attemptIdentity: values.get('--attempt-identity')!,
