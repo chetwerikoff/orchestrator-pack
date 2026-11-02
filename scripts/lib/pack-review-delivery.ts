@@ -19,6 +19,7 @@ import {
   type PackReviewJournalOutcome,
   isPackReviewUnfinishedTerminalRun,
   projectPackReviewEffectiveFindings,
+  appendPackReviewDeferredTodos,
   PACK_REVIEW_ACTIVE_STATUSES,
   type PackReviewRunRecord,
   type PackReviewRunStatus,
@@ -365,6 +366,9 @@ export interface PackReviewDeliveryResult {
   journalOutcome: PackReviewJournalOutcome;
   githubReviewId?: number | string;
   githubReviewUrl?: string;
+  /** Non-gating local TODO failure; no required-status gate is introduced. */
+  todoAppendError?: string;
+  todoManualNextAction?: string;
 }
 
 interface PackReviewVerdictClassification {
@@ -802,7 +806,8 @@ export async function deliverPackReviewVerdict(
     throw new Error(`pack review run ${options.run.id} has no valid persisted verdict to resume`);
   }
   const payload = resumedPayload ?? options.payload;
-  const classification = classifyPackReviewPayload(payload,options.run);
+  const savedRun = safeGetPackReviewRun(options.run.id,options) ?? options.run;
+  const classification = classifyPackReviewPayload(payload,savedRun);
   const supplemental = supplementalRun(options.run);
   const intermediateRoundPending = !classification.blocking && packReviewRunNeedsAnotherRequiredRound(options.run);
   const projectedRequiredStatus: PackReviewRequiredStatusState = intermediateRoundPending
@@ -822,6 +827,16 @@ export async function deliverPackReviewVerdict(
       run: safeGetPackReviewRun(options.run.id, options),
       journalOutcome: journal.outcome,
     };
+  }
+
+  // The run's valid triage is already durable. TODO is advisory and idempotent
+  // under the existing store lock; a failed local append cannot block delivery.
+  let todoAppendError: string | undefined;
+  try {
+    const todo = appendPackReviewDeferredTodos(options.run.id,storeOptions(options));
+    todoAppendError = todo.error;
+  } catch (error) {
+    todoAppendError = describeError(error);
   }
 
   const githubKey = githubCommentIdempotencyKey(options.run);
@@ -889,8 +904,8 @@ export async function deliverPackReviewVerdict(
     && completedResumeChannelOutcome(options.run, 'workerNotification', workerKey);
   if (!supplemental && !workerNotificationComplete) {
     try {
-      const projected = options.run.reviewRound
-        ? projectPackReviewEffectiveFindings(options.run) : null;
+      const projected = savedRun.reviewRound
+        ? projectPackReviewEffectiveFindings(savedRun) : null;
       const notified = await options.notifyWorker({
         message: [
           `Pack review completed for PR #${options.run.prNumber}.`,
@@ -941,6 +956,10 @@ export async function deliverPackReviewVerdict(
     run: terminalRun,
     journalOutcome: journal.outcome,
     ...(githubReview ? { githubReviewId: githubReview.id, githubReviewUrl: githubReview.url } : {}),
+    ...(todoAppendError ? {
+      todoAppendError,
+      todoManualNextAction: 'manually append missing DEFER group line to the selected-project review-todo.md; recheck the original run/group IDs, never start a new review',
+    } : {}),
   };
 }
 
