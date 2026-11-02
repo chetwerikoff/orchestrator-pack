@@ -56,6 +56,7 @@ import {
   EXECUTOR_FAMILY_DESCRIPTORS,
   profileNamesForTask,
   profileNamesForSmoke,
+  pinnedProbeCommand,
   resolveSemanticExecutorProfile,
   withMergeExecutorProfileDefaults,
 } from '../executor-profile-policy.ts';
@@ -6029,9 +6030,14 @@ function withWorld(options: Parameters<typeof pushWorld>[0], body: (world: PushW
 }
 
 describe('Issue #2754 AC5 production dirty manager restore (read-only Git)', () => {
-  it.each(['same-task', 'new-task'] as const)(
-    'preserves branch, HEAD, tracked and untracked bytes for a verified %s handover',
-    (mode) => withWorld({ install: false }, async (world) => {
+  it.each([
+    { label: 'same manager Task', taskKind: 'manager', mode: 'same-task' },
+    { label: 'new manager Task', taskKind: 'manager', mode: 'new-task' },
+    { label: 'same worker Task', taskKind: 'worker', mode: 'same-task' },
+    { label: 'new worker Task', taskKind: 'worker', mode: 'new-task' },
+  ] as const)(
+    'preserves branch, HEAD, tracked and untracked bytes for $label',
+    (scenario) => withWorld({ install: false }, async (world) => {
       const tracked = join(world.manager, 'src', 'app.ts');
       const untracked = join(world.manager, 'operator-recovery.diff');
       writeFileSync(tracked, TS_BEFORE + '// preserved operator edit\n');
@@ -6048,9 +6054,10 @@ describe('Issue #2754 AC5 production dirty manager restore (read-only Git)', () 
         projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
         issueNumber: 2754, taskId: 'task-old', assignmentId: 'prior-2754',
         generation: 1, kind: 'local', provider: 'orca', bindingKey: 'dispatch-old',
-        role: 'orchestrator', createdAtUtc: '2026-11-02T00:00:00.000Z',
+        role: scenario.taskKind === 'manager' ? 'orchestrator' : 'worker',
+        createdAtUtc: '2026-11-02T00:00:00.000Z',
       };
-      const currentTask = mode === 'same-task' ? 'task-old' : 'task-new';
+      const currentTask = scenario.mode === 'same-task' ? 'task-old' : 'task-new';
       const worktreeId = 'repo::manager';
       const calls: string[][] = [];
       const execute = async (
@@ -6091,9 +6098,9 @@ describe('Issue #2754 AC5 production dirty manager restore (read-only Git)', () 
       };
       const prepared = await prepareWorktreeWithOrca({
         repository: 'chetwerikoff/orchestrator-pack', issueNumber: 2754,
-        taskId: currentTask, managerTaskRunId: 'run-1', managerRefresh: true,
-        worktreeSelector: 'id:' + worktreeId, defaultBranch: 'trunk',
-        reuseAssignment: prior,
+        taskId: currentTask, managerRefresh: scenario.taskKind === 'manager',
+        ...(scenario.taskKind === 'manager' ? { managerTaskRunId: 'run-1', defaultBranch: 'trunk' } : {}),
+        worktreeSelector: 'id:' + worktreeId, reuseAssignment: prior,
       }, execute);
       expect(prepared).toMatchObject({
         status: 'ok',
@@ -6112,6 +6119,75 @@ describe('Issue #2754 AC5 production dirty manager restore (read-only Git)', () 
         ['worker-start', 'terminal', 'dispatch-start'].includes(args[2]!))).toBe(false);
     })(),
   );
+});
+
+describe('Issue #2754 AC11-AC12 pinned OpenCode task and smoke policy', () => {
+  it('uses the same selected binary for task/smoke probes and actual spawn overlay', () => {
+    const binary = FIXTURE_OPENCODE_BIN;
+    const descriptor = EXECUTOR_FAMILY_DESCRIPTORS.opencode;
+    for (const selected of [
+      { surface: 'task' as const, names: profileNamesForTask('t2') },
+      { surface: 'smoke' as const, names: profileNamesForSmoke('routine') },
+      { surface: 'smoke' as const, names: profileNamesForSmoke('complex') },
+    ]) {
+      const resolved = resolveSemanticExecutorProfile({
+        surface: selected.surface, names: selected.names,
+        env: {
+          [selected.names[0]]: 'opencode', [selected.names[1]]: 'fixture-opencode-model',
+          [selected.names[2]]: 'fixture-opencode-effort', PACK_EXECUTOR_OPENCODE_BIN: binary,
+        },
+      });
+      expect(resolved.ok).toBe(true);
+      if (!resolved.ok) continue;
+      expect(resolved.profile.opencodeExecutable).toBe(binary);
+      expect(pinnedProbeCommand(resolved.profile, descriptor.catalogCommand)).toEqual([binary, 'models']);
+      const probes = selected.surface === 'task'
+        ? descriptor.capabilityProbeCommands : descriptor.smokeCapabilityProbeCommands;
+      for (const argv of probes) expect(pinnedProbeCommand(resolved.profile, argv)[0]).toBe(binary);
+      const invocation = buildExecutorCommand(resolved.profile);
+      expect(invocation.executable).toBe(binary);
+      expect(invocation.command).toContain(' ' + binary + ' --hostname 127.0.0.1');
+      expect(openCodeLaunchHasFleetBrowserDenies(invocation)).toBe(true);
+      expect(openCodeLaunchHasFleetBrowserDenies({
+        ...invocation, executable: '/tmp/other/opencode',
+      })).toBe(false);
+    }
+  });
+
+  it('places precise denies after inherited wildcard and specific tool allows', () => {
+    const inherited = {
+      bash: { '*': 'allow', codex: 'allow', 'codex *': 'allow',
+        'agent-launch': 'allow', 'agent-launch *': 'allow' },
+      codex: 'allow', 'agent-launch': 'allow', skill: 'allow', read: 'allow',
+    };
+    const overlay = buildOpenCodeAgentOverlay({
+      executable: FIXTURE_OPENCODE_BIN, agentName: 'pack-opk-2754',
+      model: 'fixture-opencode-model', effort: 'fixture-opencode-effort',
+      baseline: { name: 'build', mode: 'primary', permission: inherited },
+    });
+    const config = JSON.parse(overlay.inlineConfigJson ?? '{}') as {
+      permission: unknown; agent: Record<string, { permission: unknown }>;
+    };
+    expect(openCodeLaunchHasFleetBrowserDenies(overlay)).toBe(true);
+    for (const permission of [
+      config.permission, config.agent['pack-opk-2754']?.permission,
+      config.agent.general?.permission, config.agent.explore?.permission,
+    ]) {
+      expect(openCodeFleetBrowserDenyRulesAreTerminal(permission)).toBe(true);
+    }
+    const selected = config.agent['pack-opk-2754']!.permission as {
+      bash: Record<string, string>; codex: Record<string, string>;
+      'agent-launch': Record<string, string>; skill: Record<string, string>;
+    };
+    expect(selected.bash['*']).toBe('allow');
+    expect(selected.bash.codex).toBe('deny');
+    expect(selected.bash['codex *']).toBe('deny');
+    expect(selected.bash['agent-launch']).toBe('deny');
+    expect(selected.bash['agent-launch *']).toBe('deny');
+    expect(selected.codex['*']).toBe('deny');
+    expect(selected['agent-launch']['*']).toBe('deny');
+    expect(selected.skill['browser-skill']).toBe('deny');
+  });
 });
 
 describe('Issue #2754 AC7 same-second distinct-worktree B5 snapshot race', () => {
