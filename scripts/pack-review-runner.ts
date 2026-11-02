@@ -4746,38 +4746,55 @@ async function readFinalCapRequiredStatus(
   repoSlug: string,
   headSha: string,
 ): Promise<string | undefined> {
-  if (input.fixtureRequiredStatusReader) {
-    return trim(await input.fixtureRequiredStatusReader(headSha)).toLowerCase() || undefined;
+  // A transient GitHub 409/read outage is not a verdict. Retry only this
+  // observation, never a POST, reviewer send or logical-round commit. Callers
+  // revalidate current PR/head/cycle and their Issue binding after the read.
+  const readOnce = async (): Promise<string | undefined> => {
+    if (input.fixtureRequiredStatusReader) {
+      return trim(await input.fixtureRequiredStatusReader(headSha)).toLowerCase() || undefined;
+    }
+    const result = await runProcess({
+      command: resolveTrackedGhWrapper(),
+      args: ['api', `repos/${repoSlug}/commits/${headSha}/status`],
+      cwd: input.sourceRepoRoot,
+      inheritParentEnv: true,
+      allowEmptyStdout: false,
+      timeoutMs: 30_000,
+    });
+    const output = await requireProcess(result, `gh api commit status ${headSha}`);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(output);
+    } catch {
+      throw new Error('final-cap commit status returned invalid JSON');
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('final-cap commit status returned invalid object');
+    }
+    const statuses = (parsed as { statuses?: unknown }).statuses;
+    if (!Array.isArray(statuses)) {
+      throw new Error('final-cap commit status returned no status list');
+    }
+    // GitHub combined-status entries are newest first; only this exact
+    // context can confirm the review owner's required status.
+    const current = statuses.find((entry: unknown) =>
+      entry !== null && typeof entry === 'object' && !Array.isArray(entry)
+        && (entry as { context?: unknown }).context === PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+    ) as { state?: unknown } | undefined;
+    return current ? trim(current.state).toLowerCase() || undefined : undefined;
+  };
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await readOnce();
+    } catch (error) {
+      if (attempt === 3) throw error;
+      // Deterministic offline fixtures need no wall-clock delay.
+      if (process.env.OPK_VITEST_HARNESS !== '1') {
+        await new Promise<void>((resolveWait) => setTimeout(resolveWait, attempt * 150));
+      }
+    }
   }
-  const result = await runProcess({
-    command: resolveTrackedGhWrapper(),
-    args: ['api', `repos/${repoSlug}/commits/${headSha}/status`],
-    cwd: input.sourceRepoRoot,
-    inheritParentEnv: true,
-    allowEmptyStdout: false,
-    timeoutMs: 30_000,
-  });
-  const output = await requireProcess(result, `gh api commit status ${headSha}`);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(output);
-  } catch {
-    throw new Error('final-cap commit status returned invalid JSON');
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('final-cap commit status returned invalid object');
-  }
-  const statuses = (parsed as { statuses?: unknown }).statuses;
-  if (!Array.isArray(statuses)) {
-    throw new Error('final-cap commit status returned no status list');
-  }
-  // GitHub's combined-status endpoint orders commit statuses newest first.
-  // Inspect this one exact context, not the aggregate status of unrelated CI.
-  const current = statuses.find((entry: unknown) =>
-    entry !== null && typeof entry === 'object' && !Array.isArray(entry)
-      && (entry as { context?: unknown }).context === PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-  ) as { state?: unknown } | undefined;
-  return current ? trim(current.state).toLowerCase() || undefined : undefined;
+  throw new Error('exact-head GitHub status could not be observed');
 }
 
 /** Repair an old cap-one success using exact-head evidence, never a new run. */
