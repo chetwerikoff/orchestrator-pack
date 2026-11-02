@@ -652,7 +652,12 @@ export function openCodeAgentConfigFromInfo(baseline: Readonly<Record<string, un
 }
 
 
-/** Preserve inherited permissions; append precise executable-token denies last. */
+/**
+ * Shell command text is not an executable identity. A prefixed Bash command,
+ * subshell or environment wrapper can run codex/agent-launch without matching
+ * any finite leading-token glob. Keep non-Bash permissions, but fail closed for
+ * Bash on these OpenCode agents until native executable-level control exists.
+ */
 export function withOpenCodeFleetBrowserDenies(permission: unknown): Record<string, unknown> {
   const inherited = record(permission) ? permission : {};
   const appendDeny = (value: unknown, pattern: string): Record<string, unknown> => {
@@ -667,7 +672,11 @@ export function withOpenCodeFleetBrowserDenies(permission: unknown): Record<stri
   const bashPatterns = executablePatterns.flatMap((pattern) => [`${pattern}`, `${pattern} *`]);
   return {
     ...inherited,
-    bash: bashPatterns.reduce<unknown>((rules, pattern) => appendDeny(rules, pattern), inherited.bash),
+    // Do not carry inherited Bash allow/ask (including '*' or 'git *').
+    // Even an apparently benign command prefix can hide a second executable.
+    // Specific denials remain visible for native diagnostics; the final
+    // wildcard denial covers arbitrary wrappers before any shell effect.
+    bash: appendDeny(bashPatterns.reduce<unknown>((rules, pattern) => appendDeny(rules, pattern), {}), '*'),
     codex: appendDeny(inherited.codex, '*'),
     'agent-launch': appendDeny(inherited['agent-launch'], '*'),
     skill: appendDeny(inherited.skill, 'browser-skill'),
