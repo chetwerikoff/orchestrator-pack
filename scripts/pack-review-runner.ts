@@ -4731,6 +4731,10 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
       || reviewRuns.length !== 1 || reviewRuns[0]![1] !== run.id
       || reviewHeads.length !== 1 || reviewHeads[0]![1] !== run.targetSha
       || !review.body.includes('## Pack review — findings')
+      // The original authenticated REVIEW must attest a 2/3 frozen quorum.
+      // A later run-store edit cannot reinterpret an observed 3/3 terminal.
+      || (round.cardinality === 3 && round.settledSourceCount === 2
+        && !/^Sources: 2\/3 \(degraded after timeout\)$/m.test(review.body))
       || review.body.includes('Mode: supplemental advisory review')
       || (run.githubReviewReconciliation?.commentBody
         && review.body !== run.githubReviewReconciliation.commentBody)) {
@@ -5217,6 +5221,8 @@ async function verifyOriginalGptGithubSourcesAndReview(
     && reviewRuns.length === 1 && reviewRuns[0]![1] === run.id
     && reviewHeads.length === 1 && reviewHeads[0]![1] === run.targetSha
     && review.body.startsWith(requiredHeading)
+    && !(round.cardinality === 3 && round.settledSourceCount === 2
+      && !/^Sources: 2\/3 \(degraded after timeout\)$/m.test(review.body))
     && !review.body.includes('Mode: supplemental advisory review')
     && (!run.githubReviewReconciliation?.commentBody
       || review.body === run.githubReviewReconciliation.commentBody));
@@ -6176,8 +6182,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
 
   // A non-descendant has never been eligible for final-cap success. Keep that
   // existing refusal ahead of body-validation errors and status publication.
-  if (logicalFinalFindings && authority.cycle?.frozenTier !== 'T1'
-      && authority.terminal
+  if (logicalFinalFindings && authority.terminal
       && currentHead !== authority.terminal.targetSha) {
     const strict = await resolvePackReviewStrictDescendant({
       repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
@@ -6197,8 +6202,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
   let verifiedFinalIssue: { issueNumber: number; digest: string } | undefined;
   let verifiedScopeOnlyIncident: { reviewedBody: string; issueNumber: number } | undefined;
   let sameHeadPublicationDigest: string | undefined;
-  if (logicalAccounting && authority.cycle?.frozenTier !== 'T1'
-      && currentHead !== authority.terminal.targetSha) {
+  if (logicalAccounting && currentHead !== authority.terminal.targetSha) {
     try {
       const cycle = authority.cycle;
       const terminal = authority.terminal;
@@ -9129,7 +9133,6 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
     // Reuse the same final-cap evidence and publication decision as scoped
     // reconciliation. Do not let start settle first or swallow its refusal.
     const finalFindings = authority.cycle?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
-      && authority.cycle.frozenTier !== 'T1'
       && authority.terminal?.reviewVerdict === 'findings'
       && (['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)
         || (authority.cycle.state === 'closed' && authority.cycle.reviewStageComplete === true
@@ -11509,7 +11512,6 @@ export async function resetPackReview(input: Record<string, unknown>): Promise<R
   const authoritativeTier = tierRank[liveTier] > tierRank[authority.cycle.frozenTier]
     ? liveTier : authority.cycle.frozenTier;
   const completed = authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
-    && authority.cycle.frozenTier !== 'T1'
     && authority.cycle.state === 'closed'
     && authority.cycle.reviewStageComplete === true
     && authority.cycle.consumedRoundOrdinals?.length === authority.cycle.frozenCap
