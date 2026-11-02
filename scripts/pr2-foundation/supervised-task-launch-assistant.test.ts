@@ -446,7 +446,7 @@ const FIXTURE_FORBIDDEN_OPEN_CODE_BASH = [
   'agent-launch', '/agent-launch', '/*/agent-launch', '~?agent-launch', '~?*/agent-launch', 'env agent-launch',
 ].flatMap((pattern) => [pattern, `${pattern} *`]);
 const FIXTURE_FORBIDDEN_OPEN_CODE_PERMISSIONS = {
-  bash: Object.fromEntries(FIXTURE_FORBIDDEN_OPEN_CODE_BASH.map((pattern) => [pattern, 'deny'])),
+  bash: { ...Object.fromEntries(FIXTURE_FORBIDDEN_OPEN_CODE_BASH.map((pattern) => [pattern, 'deny'])), '*': 'deny' },
   codex: { '*': 'deny' },
   'agent-launch': { '*': 'deny' },
   skill: { 'browser-skill': 'deny' },
@@ -1973,15 +1973,20 @@ describe('supervised Task launch assistant', () => {
     };
     // The captured OpenCode 1.18.35 fixture stays immutable. Project only the
     // pack's newly enforced terminal policies into the synthetic native output.
-    const newBash = FIXTURE_FORBIDDEN_OPEN_CODE_BASH.filter((pattern) => !pattern.includes('bsk'))
-      .map((pattern) => ({ permission: 'bash', pattern, action: 'deny' }));
+    const newBash = [
+      ...FIXTURE_FORBIDDEN_OPEN_CODE_BASH.map((pattern) => ({ permission: 'bash', pattern, action: 'deny' })),
+      { permission: 'bash', pattern: '*', action: 'deny' },
+    ];
     const newTools = ['codex', 'agent-launch'].map((permission) => ({ permission, pattern: '*', action: 'deny' }));
     const withCurrentSafetyDenies = (rules: FixtureRule[]): FixtureRule[] => {
       const base = withSyntheticReadDenies(rules);
-      const lastBash = base.findLastIndex((rule) => rule.permission === 'bash');
-      const insert = [...base.slice(0, lastBash + 1), ...newBash, ...base.slice(lastBash + 1)];
-      // Current native output preserves the canonical tool-output rule at the
-      // tail, exactly as the old historical fixture does.
+      const firstBash = base.findIndex((rule) => rule.permission === 'bash');
+      const beforeBash = firstBash < 0 ? base.length : firstBash;
+      const insertAt = base.slice(0, beforeBash).filter((rule) => rule.permission !== 'bash').length;
+      const nonShell = base.filter((rule) => rule.permission !== 'bash');
+      const insert = [...nonShell.slice(0, insertAt), ...newBash, ...nonShell.slice(insertAt)];
+      // No inherited Bash allow survives; the historical terminal tool-output
+      // rule is still last and all non-Bash permissions retain their order.
       return [...insert.slice(0, -1), ...newTools, insert[insert.length - 1]!];
     };
     const selectedDataRoot = join(tmpdir(), 'opk2447-synthetic-xdg-data');
@@ -2014,22 +2019,23 @@ describe('supervised Task launch assistant', () => {
         : typeof rules === 'object' && rules !== null
           ? Object.entries(rules).map(([pattern, action]) => ({ permission, pattern, action: String(action) }))
           : []);
-    expect(legacyRules).toHaveLength(123);
     expect(legacyRules[3]).toEqual(toolOutput);
     for (const newRule of [...newBash, ...newTools]) expect(legacyRules).toContainEqual(newRule);
-    const historicalRules = legacyRules.filter((rule) =>
-      ![...newBash, ...newTools].some((newRule) => newRule.permission === rule.permission
-        && newRule.pattern === rule.pattern && newRule.action === rule.action));
-    expect(historicalRules).toHaveLength(97);
-    const withoutToolOutput = historicalRules.filter((rule) =>
-      !(rule.permission === toolOutput.permission && rule.pattern === toolOutput.pattern && rule.action === toolOutput.action));
-    // Only the two new read overrides may differ from the captured 1.18.35 ordering.
+    expect(legacyRules.filter((rule) => rule.permission === 'bash')).toEqual(newBash);
+    // This synthetic fixture projects only the new Bash policy; all other
+    // captured OpenCode 1.18.35 semantics remain unchanged.
     const contextualWithReadDenies = withSyntheticReadDenies(fixture.contextual.permission);
-    expect(withoutToolOutput).toEqual(contextualWithReadDenies.slice(0, -1));
+    const historicalNonShell = legacyRules.filter((rule) => rule.permission !== 'bash'
+      && !newTools.some((newRule) => newRule.permission === rule.permission
+        && newRule.pattern === rule.pattern && newRule.action === rule.action));
+    const contextualNonShell = contextualWithReadDenies.filter((rule) => rule.permission !== 'bash');
+    expect(historicalNonShell).toEqual(contextualNonShell);
     expect(openCodeAgentSemantics({ ...fixture.baseline, permission: legacyExpected }))
       .not.toBe(openCodeAgentSemantics(fixture.contextual));
-    expect(openCodeAgentSemantics({ ...fixture.baseline, permission: [...withoutToolOutput, toolOutput] }))
-      .toBe(openCodeAgentSemantics({ ...fixture.contextual, permission: contextualWithReadDenies }));
+    const projected = withCurrentSafetyDenies(fixture.contextual.permission);
+    expect(openCodeAgentSemantics({ ...fixture.baseline, permission: [...legacyRules.filter((rule) =>
+      !(rule.permission === toolOutput.permission && rule.pattern === toolOutput.pattern && rule.action === toolOutput.action)), toolOutput] }))
+      .toBe(openCodeAgentSemantics({ ...fixture.contextual, permission: projected }));
     if (drift === 'inherited-allow') {
       const inherited = { permission: 'external_directory', pattern: '~/already-allowed/*', action: 'allow' };
       const baselineIndex = fixture.baseline.permission.findIndex((rule) => rule.permission === 'question');
@@ -2227,7 +2233,7 @@ describe('supervised Task launch assistant', () => {
     });
     expect(agent?.permission).toMatchObject({
       edit: 'allow',
-      bash: { '*': 'ask', ...FIXTURE_FORBIDDEN_OPEN_CODE_PERMISSIONS.bash },
+      bash: FIXTURE_FORBIDDEN_OPEN_CODE_PERMISSIONS.bash,
       codex: { '*': 'deny' }, 'agent-launch': { '*': 'deny' },
       skill: { 'browser-skill': 'deny' },
       read: { '*.env': 'deny', '*.env.*': 'deny' },
@@ -2240,7 +2246,7 @@ describe('supervised Task launch assistant', () => {
   });
 
 
-  it('appends precise browser denies after inherited allows without changing other permissions', () => {
+  it('denies all Bash wrappers after inherited broad allows while preserving non-shell permissions', () => {
     const invocation = buildOpenCodeAgentOverlay({
       executable: FIXTURE_OPENCODE_BIN, agentName: 'pack-opk-fixture',
       baseline: {
@@ -2274,8 +2280,17 @@ describe('supervised Task launch assistant', () => {
     expect(agent.model).toBe('fixture/provider-model');
     expect(agent.variant).toBe('high');
     expect(agent.prompt).toBe('original prompt');
-    expect(Object.entries(agent.permission.bash).slice(-deniedBash.length)).toEqual(deniedBash.map((pattern) => [pattern, 'deny']));
-    expect(agent.permission.bash).toMatchObject({ 'bsk*': 'allow', 'git *': 'allow', '*': 'allow' });
+    expect(Object.entries(agent.permission.bash).slice(-(deniedBash.length + 1)))
+      .toEqual([...deniedBash.map((pattern) => [pattern, 'deny']), ['*', 'deny']]);
+    expect(agent.permission.bash).toEqual(FIXTURE_FORBIDDEN_OPEN_CODE_PERMISSIONS.bash);
+    for (const wrapped of ['OPK_FLAG=1 codex exec', 'env -i codex exec',
+      'command agent-launch', "sh -c 'agent-launch dangerous'", 'git status; codex exec']) {
+      // The native permission for arbitrary Bash text is the wildcard deny,
+      // not an incomplete pattern dictionary claimed to parse shell grammar.
+      const rules = Object.entries(agent.permission.bash);
+      expect(rules.at(-1)).toEqual(['*', 'deny']);
+      expect(rules.some(([pattern, action]) => pattern === '*' && action === 'allow'), wrapped).toBe(false);
+    }
     expect(agent.permission.skill).toEqual({ 'fixture-safe': 'allow', '*': 'allow', 'browser-skill': 'deny' });
     expect(agent.permission.edit).toBe('allow');
     const readRules = Object.entries(agent.permission.read);
@@ -2355,12 +2370,8 @@ describe('supervised Task launch assistant', () => {
             const globalRules = flatten(inline.permission);
             const agentRules = flatten(inline.agent?.[name]?.permission);
             if (drift === 'bash-order' && !isChild) {
-              const denyIndex = agentRules.findIndex((rule) => rule.permission === 'bash' && rule.pattern === 'bsk *');
-              const wildcardIndex = agentRules.findIndex((rule) => rule.permission === 'bash' && rule.pattern === '*' && rule.action !== 'deny');
-              if (denyIndex >= 0 && wildcardIndex >= 0 && denyIndex > wildcardIndex) {
-                const [deny] = agentRules.splice(denyIndex, 1);
-                agentRules.splice(wildcardIndex, 0, deny!);
-              }
+              // A later wildcard allow must never overrule fail-closed Bash.
+              agentRules.push({ permission: 'bash', pattern: '*', action: 'allow' });
             }
             const removeOne = (source: SyntheticRule[], scope: string, pattern: string) => {
               const index = source.findIndex((rule) => rule.permission === scope && rule.pattern === pattern);
