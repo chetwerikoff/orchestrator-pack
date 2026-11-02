@@ -558,7 +558,7 @@ export function packReviewDeliveryNeedsResume(run: PackReviewRunRecord): boolean
         && Boolean(trim(slot.invocationId))
       ));
   }
-  const classification = classifyPackReviewPayload(payload);
+  const classification = classifyPackReviewPayload(payload,run);
   if (run.status !== classification.terminalStatus) return true;
   if (supplementalRun(run)) {
     return completedGithubCommentReview(run) === null
