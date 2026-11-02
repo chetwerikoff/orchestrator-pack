@@ -9,6 +9,7 @@ import {
   PACK_REVIEW_CAP_MAP_VERSION,
   PACK_REVIEW_LEGACY_CAP_MAP_VERSION,
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+  PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
   acknowledgePackReviewReset,
   beginPackReviewBodyAmendmentContinuation,
   commitPackReviewAuthorityTransition,
@@ -632,6 +633,33 @@ describe('Issue #1417 explicit extra-review legacy helper', () => {
       headSha: sha('b'),
       options: storeOptions,
     })).toThrow(/exact current head/);
+  });
+});
+
+describe('Issue #2761 tiered GPT source accounting (separate from logical cycle caps)', () => {
+  it.each([
+    ['T1', 1, 1], ['T2', 1, 2], ['T3', 1, 3], ['T3', 2, 3],
+  ] as const)('new %s round %s selects %s source slots', (tier, roundOrdinal, expected) => {
+    expect(selectPackReviewGptSourceCardinality({
+      reviewer:'gpt',tier,roundOrdinal,
+      accountingVersion:PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
+    })).toBe(expected);
+    expect(selectPackReviewGptSourceCardinality({
+      reviewer:'gpt',tier,roundOrdinal,
+      accountingVersion:PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+    })).toBe(3);
+  });
+
+  it('rejects T1/T2 second ordinal and unknown source versions', () => {
+    for (const tier of ['T1','T2'] as const) {
+      expect(() => selectPackReviewGptSourceCardinality({
+        reviewer:'gpt',tier,roundOrdinal:2,
+        accountingVersion:PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
+      })).toThrow(/round ordinal exceeds logical tier cap/);
+    }
+    expect(() => selectPackReviewGptSourceCardinality({
+      reviewer:'gpt',tier:'T3',roundOrdinal:1,accountingVersion:'unknown-version',
+    })).toThrow(/unknown GPT source accounting version/);
   });
 });
 
