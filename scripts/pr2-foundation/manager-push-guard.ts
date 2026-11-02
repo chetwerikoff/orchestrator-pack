@@ -883,8 +883,11 @@ export function installManagerPushGuard(request: ManagerPushGuardInstallRequest)
     return refuse('manager_push_guard_default_branch_changed',
       `this manager worktree is bound to default branch ${recordedDefault}, not ${defaultBranch}; do not rebind it silently. Recreate the manager worktree for the selected project, then rerun the supervised launch`, evidence);
   }
+  // Never expose an effective sibling hook until the complete local guard
+  // metadata and the generated hook are in place. Another manager observing
+  // its sibling's changed hooksPath can then prove it is the sibling's own B5.
   const writes: Array<[string, string]> = [
-    ['core.hooksPath', hooksDir], [KEY.installed, 'true'], [KEY.defaultBranch, defaultBranch],
+    [KEY.installed, 'true'], [KEY.defaultBranch, defaultBranch],
   ];
   const fetchUrl = git(worktree, ['remote', 'get-url', 'origin']);
   const pushUrl = git(worktree, ['remote', 'get-url', '--push', 'origin']);
@@ -913,6 +916,11 @@ export function installManagerPushGuard(request: ManagerPushGuardInstallRequest)
       rollbackExtension();
       return refuse('manager_push_guard_config_write_failed', 'repair the manager worktree config file, then rerun the supervised launch', evidence);
     }
+  }
+  if (!git(worktree, ['config', '--worktree', 'core.hooksPath', hooksDir]).ok) {
+    rollbackExtension();
+    return refuse('manager_push_guard_config_write_failed',
+      'repair worktree-local core.hooksPath before activating the manager guard, then retry launch', evidence);
   }
 
   // Observe the effective result; never claim protection from a file's presence alone.
