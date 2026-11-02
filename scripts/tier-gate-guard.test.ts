@@ -102,6 +102,47 @@ describe('current substantive Issue floor', () => {
     expect(corrected.stdout).toContain('tier-gate guard: PASS T2');
   });
 
+  it('does not confuse narrative run_check() with a run ID, but rejects executable/structured runtime IDs', () => {
+    const prose = valid
+      .replace('## Goal\nShip it.', '## Goal\nThe named function run_check() documents the API.')
+      .replace(
+        '  - action: run | expected: pass',
+        '  - action: Describe the function run_check() | expected: run_check() is documented',
+      );
+    const baseRun = runProcessSync({
+      command: process.execPath,
+      args: ['--experimental-strip-types', fileURLToPath(new URL('./tier-gate-guard.ts', import.meta.url)), '--text', prose],
+      inheritParentEnv: true,
+    });
+    const noNameRun = runProcessSync({
+      command: process.execPath,
+      args: ['--experimental-strip-types', fileURLToPath(new URL('./tier-gate-guard.ts', import.meta.url)), '--text',
+        prose.replaceAll('run_check()', 'the named function')],
+      inheritParentEnv: true,
+    });
+    expect(baseRun.exitCode).toBe(0);
+    expect(noNameRun.exitCode).toBe(0);
+    expect(baseRun.stdout).toContain('tier-gate guard: PASS T2');
+    expect(checkTierGateGuard(prose).ok).toBe(true);
+
+    for (const line of [
+      '  - action: resume run_123abcd | expected: complete',
+      '  - action: inspect result | expected: runtime-id: term_88da12',
+      '  - action: inspect --msg-id=msg_f312ba | expected: complete',
+    ]) {
+      const withId = valid.replace('  - action: run | expected: pass', line);
+      const result = runProcessSync({
+        command: process.execPath,
+        args: ['--experimental-strip-types', fileURLToPath(new URL('./tier-gate-guard.ts', import.meta.url)), '--text', withId],
+        inheritParentEnv: true,
+      });
+      expect(result.exitCode, line).toBe(1);
+      expect(result.stderr).toContain('replace with stable non-session-bound inputs and rerun the guard');
+    }
+    expect(checkTierGateGuard(valid.replace('  - action: run | expected: pass',
+      '  - action: resume run_123abcd | expected: complete')).ok).toBe(false);
+  });
+
   it('accepts below-the-ladder work without tier review while retaining substantive floors', () => {
     const noTier = valid.replace(
       'tier: T2\nfailure-type: local-behavior\nsize: single-component-design-judgment',
