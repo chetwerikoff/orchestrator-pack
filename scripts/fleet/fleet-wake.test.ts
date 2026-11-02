@@ -3523,8 +3523,16 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     const first = await run(), repeat = await run();
     expect([...texts(first.calls, manager.handle), ...texts(repeat.calls, manager.handle)])
       .toEqual([expect.stringContaining('ended state ok')]);
-    expect(first.result).toMatchObject({ paneWakeAttempts: 1, paneWakeConfirmed: 1 });
-    expect(repeat.result).toMatchObject({ paneWakeAttempts: 0, paneWakeConfirmed: 0 });
+    // Named Wake is independent of the ordinary coordinator STOPPED alarm result.
+    // Require the actual text+Enter send and confirming Enter, with no replay.
+    expect(sendsTo(first.calls, manager.handle)).toEqual([
+      ['terminal', 'send', '--terminal', manager.handle, '--text',
+        expect.stringContaining('ended state ok'), '--enter'],
+      ['terminal', 'send', '--terminal', manager.handle, '--enter'],
+    ]);
+    expect(sendsTo(repeat.calls, manager.handle)).toHaveLength(0);
+    expect(first.result).toEqual({ state: 'nothing_stopped' });
+    expect(repeat.result).toEqual({ state: 'nothing_stopped' });
     expect(store.readParkedWakeEventStatus('terminal-path:' + manager.handle + ':' + landed.path)).toBe('sent');
   });
 
@@ -3547,9 +3555,17 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     const first = await run(), repeat = await run();
     expect([...texts(first.calls, manager.handle), ...texts(repeat.calls, manager.handle)])
       .toEqual([expect.stringContaining('ended state checks-completed')]);
-    expect(first.result).toMatchObject({ paneWakeAttempts: 1, paneWakeConfirmed: 1 });
-    expect(repeat.result).toMatchObject({ paneWakeAttempts: 0, paneWakeConfirmed: 0 });
-    expect(store.hasParkedWakeEvent('event:' + manager.handle + ':ci:42:' + head + ':1730000000000')).toBe(true);
+    // Named Wake is independent of the ordinary coordinator STOPPED alarm result.
+    // Require the actual text+Enter send and confirming Enter, with no replay.
+    expect(sendsTo(first.calls, manager.handle)).toEqual([
+      ['terminal', 'send', '--terminal', manager.handle, '--text',
+        expect.stringContaining('ended state checks-completed'), '--enter'],
+      ['terminal', 'send', '--terminal', manager.handle, '--enter'],
+    ]);
+    expect(sendsTo(repeat.calls, manager.handle)).toHaveLength(0);
+    expect(first.result).toEqual({ state: 'nothing_stopped' });
+    expect(repeat.result).toEqual({ state: 'nothing_stopped' });
+    expect(store.readParkedWakeEventStatus('event:' + manager.handle + ':ci:42:' + head + ':1730000000000')).toBe('sent');
   });
 
   it('B9-1: STOPPED-first shared handle/path marks suppress later PARKED, re-park and STOPPED replay', async () => {
