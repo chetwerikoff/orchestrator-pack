@@ -12,7 +12,7 @@ import { openCodeControlFromCommand } from '../orca-runtime/adapter.ts';
 import { lastFleetParkedLine, ownPaneOutcome } from '../fleet/fleet-sweep.ts';
 import type { OrcaJsonResponse } from '../orca-runtime/native.ts';
 import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
-import { runSupervisedWorkerStart, type SupervisedWorkerStartResult } from './supervised-worker-start.ts';
+import { readTerminalGoneDispatch, runSupervisedWorkerStart, type SupervisedWorkerStartResult } from './supervised-worker-start.ts';
 import { installManagerPushGuard, restoreManagerPushGuardForClaude } from './manager-push-guard.ts';
 import {
   currentWorkerAssignment, publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath,
@@ -2397,7 +2397,7 @@ describe('supervised Task launch assistant', () => {
         env,
         startMode,
         async (args) => {
-          if (args[0] === 'opencode' && args.length === 2 && args[1] === '--help') {
+          if (args[0] === FIXTURE_OPENCODE_BIN && args.length === 2 && args[1] === '--help') {
             return { ok: true, stdout: 'Usage: opencode --variant NAME\n' };
           }
           return opencodeProbeResult(args, true);
@@ -3674,6 +3674,9 @@ The words Firefighter universal appear here only as prose.`;
       if (cwd === '/tmp/primary' && args.join(' ') === 'git remote get-url origin') {
         return { ok: true, stdout: 'git@github.com:chetwerikoff/orchestrator-pack.git\n', stderr: '' };
       }
+      if (cwd === '/tmp/primary' && args.join(' ') === 'git worktree prune --expire=now') {
+        return { ok: true, stdout: '', stderr: '' };
+      }
       if (cwd !== path) return { ok: false, stdout: '', stderr: 'wrong cwd' };
       const command = args.join(' ');
       if (command === 'git rev-parse --show-toplevel') return { ok: true, stdout: `${path}\n`, stderr: '' };
@@ -3706,7 +3709,8 @@ The words Firefighter universal appear here only as prose.`;
       value: { id: 'repo::manager-2024', setupWitness: 'same_invocation_complete' },
       evidence: { branch: 'manager-2024' },
     });
-    expect(calls[3]).toEqual([
+    expect(calls[3]).toEqual(['git', 'worktree', 'prune', '--expire=now']);
+    expect(calls[4]).toEqual([
       'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'manager-2024',
       '--base-branch', 'origin/main', '--issue', '2024', '--setup', 'run', '--json',
     ]);
@@ -4268,7 +4272,10 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
         return { ok: true, stdout: (cwd ?? '') + '\n' };
       if (joined === 'git remote get-url origin')
         return { ok: true, stdout: 'git@github.com:chetwerikoff/orchestrator-pack.git\n' };
-      if (joined.startsWith('orca worktree create '))
+      if (joined === 'git worktree prune --expire=now' && cwd === '/tmp/primary') {
+        return { ok: true, stdout: '' };
+      }
+      if (joined.startsWith('orca worktree create ')
         return { ok: true, stdout: okEnvelope({ worktree: { id: 'repo::fresh-manager', path: root } }) };
       if (joined === 'git worktree list --porcelain')
         return { ok: true, stdout: [
@@ -4280,11 +4287,37 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
       return { ok: false, stdout: '', stderr: 'unexpected ' + joined };
     });
     expect(outcome).toMatchObject({ status: 'continue', cause: 'manager_worktree_dirty' });
+    expect(commands.filter((argv) => argv.join(' ') === 'git worktree prune --expire=now')).toHaveLength(1);
     expect(commands.some((argv) => argv[0] === 'git' && ['merge', 'reset', 'rebase', 'stash'].includes(argv[1]!))).toBe(false);
     expect(commands.some((argv) => argv.join(' ') === 'git status --porcelain=v1 --untracked-files=all')).toBe(true);
   });
 
 });
+
+function exactEmptyWorkerRestoreCensusFixture(expectedPath: string) {
+  let terminalLists = 0;
+  let processScans = 0;
+  const censusAdapter = new OrcaTaskRuntimeAdapter({
+    runJson: <T>(args: readonly string[]): OrcaJsonResponse<T> => {
+      if (args.join(' ') !== 'terminal list') {
+        throw new Error('unexpected synthetic terminal census operation: ' + args.join(' '));
+      }
+      terminalLists += 1;
+      return { ok: true, result: { terminals: [], totalCount: 0, truncated: false } as T };
+    },
+  });
+  return {
+    observe: (path: string) => {
+      expect(path).toBe(expectedPath);
+      return observeQuiescentRestoreCensus(censusAdapter, path, (canonicalPath) => {
+        expect(canonicalPath).toBe(realpathSync(expectedPath));
+        processScans += 1;
+        return [];
+      }, 'linux');
+    },
+    counts: () => ({ terminalLists, processScans }),
+  };
+}
 
 describe('Issue #2655 worker existing-worktree relaunch', () => {
   const bound = (): WorkerAssignment => ({
@@ -4318,33 +4351,46 @@ describe('Issue #2655 worker existing-worktree relaunch', () => {
           }
           if (argv[2] === 'worker-show') {
             return { ok: true, stdout: okEnvelope({
-              dispatch: { status: 'failed' },
-              worker: { worktree_id: 'repo::existing', state: 'abandoned', stage: 'terminal_missing' },
+              dispatch: { id: 'ctx_3761867313e2', status: 'failed' },
+              worker: { agent_terminal_handle: 'term-old', worktree_id: 'repo::existing', state: 'abandoned', stage: 'terminal_missing' },
               terminal: null, observation: { exactWorker: false, status: 'missing' },
             }) };
           }
         }
         return fixture.execute(argv, timeout, env, cwd);
       };
+      const previous = bound();
+      const census = exactEmptyWorkerRestoreCensusFixture(root);
+      const previousTerminal: DispatchObservation = { kind: 'present', dispatchId: previous.bindingKey, status: 'failed' };
       let started = 0;
       const outcome = await runSupervisedTaskLaunchAssistant({
         ...launchInput('t2'),
         taskId: 'task_6af384b00044', worktreeName: undefined, worktreeSelector: 'id:repo::existing',
       }, {
         ...deps({
-          currentAssignment: bound(),
+          currentAssignment: previous,
+          dispatch: [{ kind: 'absent' }, previousTerminal, { kind: 'absent' }, previousTerminal],
           adapter: runtimeAdapter({ worker: { ...worker, workspacePath: root } }),
           onSupervised: () => { started += 1; },
         }),
+        proveTerminalGone: (assignment) => readTerminalGoneDispatch(assignment,
+          (args) => execute(['orca', ...args])),
+        resolveRestoreWorktree: async (selector) => {
+          expect(selector).toBe('id:repo::existing');
+          return { status: 'ok', value: { id: 'repo::existing', path: root } };
+        },
+        observeRestoreQuiescence: census.observe,
         prepareWorktree: (request) => prepareWorktreeWithOrca(request, execute),
       });
       expect(outcome).toMatchObject({
         outcome: 'ready', resources: { taskId: 'task_6af384b00044', worktreePath: root },
       });
       expect(started).toBe(1);
-      expect(inspected.map((call) => call.slice(0, 3))).toEqual([
-        ['orca', 'orchestration', 'dispatch-show'], ['orca', 'orchestration', 'worker-show'],
-      ]);
+      expect(inspected.filter((call) => call[2] === 'dispatch-show')).toHaveLength(3);
+      expect(inspected.filter((call) => call[2] === 'worker-show')).toHaveLength(3);
+      expect(inspected.every((call) => call.includes(call[2] === 'dispatch-show'
+        ? previous.taskId : previous.bindingKey))).toBe(true);
+      expect(census.counts()).toEqual({ terminalLists: 2, processScans: 2 });
       expect(readFileSync(testFile)).toEqual(before);
       expect(readFileSync(untracked)).toEqual(beforeUntracked);
       expect(fixture.mergeTransitions()).toBe(0);
@@ -4441,8 +4487,8 @@ describe('Issue #2655 real parsed Cursor reboot route', () => {
       });
       const nativeCalls: string[][] = [];
       const oldShow = {
-        dispatch: { status: 'failed', last_heartbeat_at: null },
-        worker: { state: 'abandoned', stage: 'terminal_missing', worktree_id: 'repo::existing' },
+        dispatch: { id: 'ctx_3761867313e2', status: 'failed', last_heartbeat_at: null },
+        worker: { agent_terminal_handle: 'term-old', state: 'abandoned', stage: 'terminal_missing', worktree_id: 'repo::existing' },
         terminal: null, observation: { exactWorker: false, status: 'missing' },
       };
       const inspect = async (argv: readonly string[]) => {
@@ -4479,16 +4525,25 @@ describe('Issue #2655 real parsed Cursor reboot route', () => {
           status: 'failed', operation: 'resolve_assignment_worker', reason: 'assignment_target_unresolved',
         })),
       });
+      const census = exactEmptyWorkerRestoreCensusFixture(root);
+      const oldDispatch: DispatchObservation = { kind: 'present', dispatchId: prev.assignment.bindingKey, status: 'failed' };
       const selectedModes: string[] = [];
       let realStarts = 0;
       const outcome = await runSupervisedTaskLaunchAssistant(input, {
-        ...deps({ adapter, currentAssignment: prev.assignment }),
+        ...deps({ adapter, currentAssignment: prev.assignment,
+          dispatch: [{ kind: 'absent' }, oldDispatch, { kind: 'absent' }, oldDispatch] }),
         resolveProfile: (workClass, inherited, mode) => {
           selectedModes.push(mode ?? 'default');
           return resolveLiveExecutorProfile(workClass, inherited, mode, async (argv) => ({
             ok: true, stdout: argv[0] === 'cursor-agent' ? 'model-medium\n' : '',
           }));
         },
+        proveTerminalGone: (assignment) => readTerminalGoneDispatch(assignment, inspect),
+        resolveRestoreWorktree: async (selector) => {
+          expect(selector).toBe('id:repo::existing');
+          return { status: 'ok', value: { id: 'repo::existing', path: root } };
+        },
+        observeRestoreQuiescence: census.observe,
         prepareWorktree: (request) => prepareWorktreeWithOrca(request, execute),
         runSupervisedStart: (start) => runSupervisedWorkerStart({
           ...start, inspect, execute: async () => {
@@ -4510,6 +4565,7 @@ describe('Issue #2655 real parsed Cursor reboot route', () => {
       } });
       expect(selectedModes).toEqual(['exact_terminal_worktree']);
       expect(realStarts).toBe(1);
+      expect(census.counts()).toEqual({ terminalLists: 2, processScans: 2 });
       expect(currentWorkerAssignment(file, 2655)).toMatchObject({
         bindingKey: 'dispatch-new', generation: prev.assignment.generation + 1,
       });
@@ -4642,6 +4698,9 @@ describe('Issue #2655 r02 fresh PR remote head', () => {
       if (cmd === 'git remote get-url origin') return {
         ok: true, stdout: 'git@github.com:chetwerikoff/orchestrator-pack.git\n',
       };
+      if (cmd === 'git worktree prune --expire=now' && cwd === root) {
+        return { ok: true, stdout: '' };
+      }
       if (cmd.startsWith('gh pr list ')) return {
         ok: true, stdout: JSON.stringify(options.noPr ? [] :
           options.duplicate ? [{ number: 2656 }, { number: 2657 }] : [{ number: 2656 }]),
@@ -4712,6 +4771,9 @@ describe('Issue #2655 r02 fresh PR remote head', () => {
         setupWitness: 'same_invocation_complete',
       }, evidence: { branch: 'fresh-local-2655' },
     });
+    expect(f.calls.filter((c) => c.argv.join(' ') === 'git worktree prune --expire=now')).toEqual([
+      { argv: ['git', 'worktree', 'prune', '--expire=now'], cwd: '/tmp/primary' },
+    ]);
     const created = f.calls.find((c) => c.argv.slice(0, 3).join(' ') === 'orca worktree create');
     expect(created?.argv).toContain('origin/' + branch);
     expect(created?.argv).toContain('--issue');
