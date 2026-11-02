@@ -2960,10 +2960,19 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     const frozen = f.frozenBody;
     f.transports.issue.body = frozen;
     f.input.fixtureIssueBody = frozen;
+    // Exercise the completed-stage digest guard with a genuinely owned start.
+    // An unowned preacquired claim must fail earlier for a different reason.
+    const rollbackClaim = acquireReviewStartClaim({
+      projectId: 'orchestrator-pack', prNumber, headSha: reviewedHead,
+      surface: 'fixture-owned-rollback', startReason: 'fixture-completed-stage-rollback',
+      reviewRuns: listPackReviewRuns(f.options),
+    });
+    expect(rollbackClaim.acquired, JSON.stringify(rollbackClaim)).toBe(true);
     const outcome = await startPackReview({
       ...f.input, headSha: reviewedHead, fixtureRepoSlug: repository,
       fixturePostReviewHeadSha: reviewedHead,
       fixturePostReviewPrBody: `Closes #${issueNumber}`, claimMode: 'preacquired',
+      preacquiredClaim: rollbackClaim,
     });
     expect(outcome).toMatchObject({
       ok: false, reason: 'stage_complete_issue_body_unverified', requiredStatusState: 'error',
@@ -3212,7 +3221,13 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     ['source COMMENT edited', (f) => { f.transports.sourceProofs[0]!.comment.updatedAt = '2026-10-08T20:40:03Z'; }],
     ['source COMMENT wrong author', (f) => { f.transports.sourceProofs[1]!.comment.actorLogin = 'untrusted'; }],
     ['source COMMENT other invocation', (f) => { f.transports.sourceProofs[2]!.comment.body += '\nwrong invocation'; }],
-    ['current body drift', (f) => { f.transports.issue.body += '\nnew revision'; }],
+    ['current body drift', (f) => {
+      // Preserve complete behavior criteria while drifting unrelated Issue prose,
+      // testing the REST-body guard rather than the criteria-specific refusal.
+      f.transports.issue.body = f.transports.issue.body.replace(
+        '## Acceptance criteria', 'Unrelated prose outside criteria.\n\n## Acceptance criteria',
+      );
+    }],
     ['wrong disposition revision', (f) => { f.transports.comment.body = f.transports.comment.body.replace('The live r12 Issue', 'The live r11 Issue'); }],
     ['no corrected root in Issue', (f) => { f.transports.issue.body = revisedBody.replace('tests/spot/test_field_benchmark_r13.py', 'other.py'); }],
     ['same-r12 extra unreviewed allowed root', (f) => {
