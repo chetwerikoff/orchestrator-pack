@@ -105,6 +105,36 @@ function planBody(scenarios: readonly { action: string; expected: string }[]): s
 
 // Issue #2555: these are the exact action/expected values from Issue #2548 r03,
 // before its named YAML blocks were reformatted into pipe-form smoke scenarios.
+describe('Issue #2751 smoke-plan prose vs executable runtime identity', () => {
+  const make = (scenario: string) => [
+    '```behavior-kind', 'action-producing', '```',
+    '```smoke-test-plan', 'scenarios:', scenario, '```',
+  ].join('\n');
+
+  it('accepts narrative function names and ordinary scenario prose', () => {
+    const narrative = make('  - action: Explain run_check() helper | expected: run_check() is a function');
+    const withoutName = make('  - action: Explain the helper | expected: it is a function');
+    expect(checkSmokeTestPlan(narrative).ok).toBe(true);
+    expect(checkSmokeTestPlan(withoutName).ok).toBe(true);
+    expect(resolveSmokeRequirement(narrative).requirement).toBe('required');
+  });
+
+  it('rejects run-owned IDs in structured witnesses and executable targets, not arbitrary words', () => {
+    for (const scenario of [
+      '  - action: resume run_abc12345 | expected: terminal result',
+      '  - action: inspect --term-id=term_9876ab | expected: terminal result',
+      '  - action: inspect result | expected: runtime-id: msg_4321cd',
+    ]) {
+      const checked = checkSmokeTestPlan(make(scenario));
+      expect(checked.ok, scenario).toBe(false);
+      expect(checked.errors.join('\n')).toContain('stable non-session-bound inputs');
+      expect(resolveSmokeRequirement(make(scenario)).reason).toBe('invalid_smoke_plan');
+    }
+    expect(checkSmokeTestPlan(make('  - action: run_check() | expected: function returns true')).ok).toBe(true);
+    expect(checkSmokeTestPlan(make('scenarios:\n  - name: broken')).ok).toBe(false);
+  });
+});
+
 describe('Issue #2555 named YAML smoke plans', () => {
   const expectedFrom2548 = [
   {
