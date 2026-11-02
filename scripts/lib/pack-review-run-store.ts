@@ -2422,6 +2422,14 @@ function buildUpdatedPackReviewRun(
       ? updatedAt
       : String(fields.heartbeatAtUtc ?? existing.heartbeatAtUtc),
   };
+  if (existing.gptTriageAttempt && fields.gptTriageAttempt
+      && !isDeepStrictEqual(existing.gptTriageAttempt,fields.gptTriageAttempt)) {
+    throw new Error(`corrupt pack review run record at ${path}: triage attempt is immutable`);
+  }
+  if (existing.gptTriage && fields.gptTriage
+      && !isDeepStrictEqual(existing.gptTriage,fields.gptTriage)) {
+    throw new Error(`corrupt pack review run record at ${path}: triage decision is immutable`);
+  }
   if (existing.reviewRound) {
     if (candidate.reviewRound === undefined || candidate.reviewRound === null) {
       throw new Error(`corrupt pack review run record at ${path}: frozen reviewRound cannot be removed`);
@@ -2473,6 +2481,96 @@ export function updatePackReviewRunIf(
     const next = buildUpdatedPackReviewRun(existing, nextFields, path, updatedAt);
     writeRecordUnlocked(storeRoot, next);
     return next;
+  });
+}
+
+/** Atomic, input-census-bound once-only marker, even if the child never spawns. */
+export function claimPackReviewGptTriageAttempt(
+  runId: string,
+  options: PackReviewStoreOptions = {},
+): PackReviewRunRecord | null {
+  return updatePackReviewRunIf(runId, (records) => {
+    const run = records.find((record) => record.id === runId);
+    const census = run && packReviewTriageCensus(run);
+    return Boolean(run && census && census.occurrences.length > 0
+      && !run.gptTriageAttempt && !run.gptTriage && !hasPersistedPackReviewVerdict(run)
+      && run.reviewRound?.settledSourceCount !== undefined
+      && run.reviewCycleId && run.logicalRoundOrdinal
+      && run.accountingVersion === run.reviewRound.accountingVersion
+      && run.reviewRound.sourceSlots.every((slot) => slot.lifecycle === 'terminal'));
+  }, (run) => {
+    const census = packReviewTriageCensus(run);
+    if (!census) throw new Error('triage source census disappeared under store lock');
+    return { gptTriageAttempt: {
+      schema: 'pack-review-gpt-triage-attempt/v1',
+      ...triageBoundIdentity(run,census.digest),
+      attemptedAtUtc: new Date().toISOString(),
+    }};
+  }, options);
+}
+
+export function persistPackReviewGptTriageResult(
+  runId: string,
+  groups: readonly PackReviewTriageModelGroup[],
+  options: PackReviewStoreOptions = {},
+): PackReviewRunRecord | null {
+  return updatePackReviewRunIf(runId, (records) => {
+    const run = records.find((record) => record.id === runId);
+    const census = run && packReviewTriageCensus(run);
+    return Boolean(run && census && run.gptTriageAttempt
+      && run.gptTriageAttempt.schema === 'pack-review-gpt-triage-attempt/v1'
+      && matchesTriageIdentity(run.gptTriageAttempt,run,census.digest)
+      && !run.gptTriage && !hasPersistedPackReviewVerdict(run));
+  }, (run) => ({ gptTriage: validatePackReviewTriageResult(run,groups) }), options);
+}
+
+function onePhysicalTodoField(value: string, limit = 180): string {
+  return String(value).replace(/[\r\n\t\x00-\x1f\x7f]/g,' ')
+    .replace(/\s+/g,' ').trim().slice(0,limit);
+}
+
+/** Append + identity check execute under the existing run-store lock only. */
+export function appendPackReviewDeferredTodos(
+  runId: string,
+  options: PackReviewStoreOptions = {},
+): { appended: number; skipped: number; error?: string; path?: string } {
+  const storeRoot = resolvePackReviewRunStoreRoot(options);
+  return withStoreLock(storeRoot, () => {
+    const path = recordPath(storeRoot,runId);
+    if (!existsSync(path)) return {appended:0,skipped:0,error:'run_missing'};
+    const run = parseRecord(JSON.parse(readFileSync(path,'utf8')),path);
+    const projection = projectPackReviewEffectiveFindings(run);
+    if (projection.mode !== 'triaged' || projection.deferred.length === 0) {
+      return {appended:0,skipped:0};
+    }
+    const project = normalizePackReviewProjectId(run.projectId);
+    if (project !== run.projectId) return {appended:0,skipped:0,error:'project_identity_untrusted'};
+    const todoPath = join(homedir(),'.local','state','orchestrator-session',project,'review-todo.md');
+    let appended=0, skipped=0;
+    try {
+      mkdirSync(dirname(todoPath),{recursive:true});
+      if (existsSync(todoPath) && !lstatSync(todoPath).isFile()) {
+        return {appended,skipped,error:'todo_target_not_regular_file',path:todoPath};
+      }
+      let existing = existsSync(todoPath) ? readFileSync(todoPath,'utf8') : '';
+      for (const group of projection.deferred) {
+        const identity = `runId=${run.id} groupId=${group.groupId}`;
+        if (existing.includes(identity)) {skipped++;continue;}
+        const date = (options.now ?? new Date()).toISOString().slice(0,10);
+        const line = [
+          date, `repo=${onePhysicalTodoField(run.canonicalRepository ?? '',120)}`,
+          `PR=#${run.prNumber}`,`head=${run.targetSha}`,
+          `code=${onePhysicalTodoField(group.code,90)}`,
+          identity,`reason=${onePhysicalTodoField(group.reason,240)}`,
+        ].join(' | ') + '\n';
+        appendFileSync(todoPath,line,'utf8');
+        existing += line;
+        appended++;
+      }
+      return {appended,skipped,path:todoPath};
+    } catch (error) {
+      return {appended,skipped,error:describePackReviewError(error),path:todoPath};
+    }
   });
 }
 
