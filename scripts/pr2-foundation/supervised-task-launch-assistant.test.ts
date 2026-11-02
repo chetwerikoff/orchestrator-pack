@@ -235,6 +235,73 @@ describe('Issue #2754 AC5 serialized worktree restoration', () => {
     expect(census).toBe(2);
     expect(spawned).toBe(0);
   });
+  it.each([
+    ['changed-final-census', false],
+    ['same-final-census', true],
+  ] as const)('retains B5 on refused Claude manager restore and retires it only before admitted spawn: %s', async (_case, stable) => {
+    const prior: WorkerAssignment = {
+      schema: 'orchestrator-pack/worker-assignment/v1',
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 2754, taskId: 'task-1', assignmentId: 'claude-prior-assignment',
+      generation: 1, kind: 'local', provider: 'orca', bindingKey: 'dispatch-old',
+      role: 'orchestrator', createdAtUtc: '2026-11-02T00:00:00.000Z',
+    };
+    const events: string[] = [];
+    let censuses = 0;
+    const result = await runSupervisedTaskLaunchAssistant({
+      ...launchInput('manager'), issueNumber: 2754,
+      env: profileEnv({
+        PACK_EXECUTOR_MANAGER_AGENT: 'claude',
+        PACK_EXECUTOR_MANAGER_MODEL: 'claude-opus-5-5',
+        PACK_EXECUTOR_MANAGER_EFFORT: 'medium',
+      }),
+    }, {
+      ...deps({
+        currentAssignment: prior,
+        dispatch: [
+          { kind: 'present', dispatchId: 'dispatch-old', status: 'failed' },
+          { kind: 'present', dispatchId: 'dispatch-old', status: 'failed' },
+        ],
+        adapter: runtimeAdapter({ onSpawn: () => { events.push('native-spawn'); } }),
+        onSupervised: () => { events.push('native-start'); },
+      }),
+      proveTerminalGone: async (assignment) => ({
+        taskId: assignment.taskId, dispatchId: assignment.bindingKey,
+        dispatchState: 'failed', worktreeId: 'repo::exact-worktree', workerAbsent: true,
+      }),
+      resolveRestoreWorktree: async () => ({ status: 'ok', value: {
+        id: 'repo::exact-worktree', path: '/tmp/exact-worktree',
+      } }),
+      observeRestoreQuiescence: async () => {
+        censuses += 1;
+        return { status: 'ok', value: {
+          terminalFingerprint: stable || censuses === 1 ? 'same inventory' : 'changed inventory',
+        } };
+      },
+      prepareWorktree: async () => ({ status: 'ok', value: {
+        id: 'repo::exact-worktree', selector: 'id:manager-worktree',
+        path: '/tmp/exact-worktree', setupWitness: 'proven_reuse',
+      } }),
+      restoreClaudeManagerGuard: () => {
+        events.push('guard-retired');
+        return { status: 'ok', value: true };
+      },
+    });
+    expect(censuses).toBe(2);
+    if (!stable) {
+      expect(result).toMatchObject({
+        outcome: 'continue', stage: 'dispatch_admission_final',
+        observedCause: 'worktree_restore_terminal_inventory_changed',
+      });
+      expect(events).toEqual([]);
+    } else {
+      // Claude's actual pane model/effort observation is separate from this
+      // test; the fixture proves guard-retirement ordering, not native readiness.
+      expect(events).toContain('guard-retired');
+      expect(events.indexOf('guard-retired')).toBeLessThan(events.indexOf('native-spawn'));
+    }
+  });
+
 });
 
 describe('production manager Run observation command seam', () => {
