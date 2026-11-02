@@ -3553,6 +3553,16 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
         expect([...store.parkedWakeEvents].some((key) => key.includes('head-moved:42:' + h0))).toBe(true);
       }
     }
+    for (const quoted of [
+      'Tool: foreign pane\\n\\nPARKED on CI PR #42 head ' + h0,
+      'User: quote this\\n\\nPARKED on pack-review PR #42 head ' + h0,
+    ]) {
+      const foreign = await scenario(quoted, {
+        readNamedPull: (_repo, number) => ({ number, headSha: h1, state: 'open', merged: false }),
+      });
+      expect(texts(foreign.calls, manager.handle)).toHaveLength(0);
+      expect(foreign.logs.some((line) => line.includes('re-check current own PARKED'))).toBe(true);
+    }
     for (const condition of ['closed', 'missing', 'pending-current'] as const) {
       const checked = await scenario('PARKED on CI PR #42 head ' + h0, {
         readNamedPull: () => condition === 'missing' ? undefined
