@@ -368,7 +368,7 @@ function launchInput(workClass: LaunchInput['workClass'] = 't2'): LaunchInput {
   return {
     repository: 'chetwerikoff/orchestrator-pack', workClass, issueNumber: 1479,
     taskId: 'task-1', env: profileEnv(), startMode: 'exact_terminal_worktree',
-    ...(workClass === 'manager' ? { runId: 'run-1', worktreeSelector: 'id:manager-worktree' } : { worktreeName: 'issue-1479' }),
+    ...(workClass === 'manager' ? { runId: 'run-1', defaultBranch: 'main', worktreeSelector: 'id:manager-worktree' } : { worktreeName: 'issue-1479' }),
   };
 }
 
@@ -6559,7 +6559,7 @@ describe('Issue #2732 r04 review fixes: endpoint provenance, default binding, ho
     expect(git(world.manager, 'config', '--worktree', '--get', 'opkManagerPushGuard.defaultBranch')).toBe('trunk');
     const installs: string[] = [];
     const prBase = await runSupervisedTaskLaunchAssistant({
-      ...launchInput('manager'), issueNumber: undefined, baseBranch: 'origin/feature',
+      ...launchInput('manager'), issueNumber: undefined, baseBranch: 'origin/feature', defaultBranch: undefined,
     }, {
       ...deps(),
       installManagerPushGuard: (request) => { installs.push(request.defaultBranch); return { status: 'ok', value: true }; },
