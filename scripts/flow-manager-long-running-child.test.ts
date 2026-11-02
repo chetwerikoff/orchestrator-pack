@@ -881,9 +881,10 @@ describe('flow-manager long-running child (#1164)', () => {
   it('relocates a legacy caller terminal path by basename into the durable root', async () => {
     const root = tempDir('legacy-artifact-path-');
     vi.stubEnv('XDG_STATE_HOME', join(root, 'state'));
+    vi.stubEnv('HOME', root);
     const paths = launchPaths(root, 'legacy');
     const envelope = join(root, 'legacy', 'issue-terminal.json');
-    const durableRoot = join(root, 'state', 'orchestrator-pack');
+    const durableRoot = join(root, '.local', 'state', 'orchestrator-pack');
     const fixture = nodeFixture('process.exit(0)');
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const code = await runLaunch({
@@ -908,16 +909,16 @@ describe('flow-manager long-running child (#1164)', () => {
     ['unoverridden', 'none'],
     ['root-only', 'root'],
     ['gate-only', 'gate'],
-  ] as const)('accepts suffix-valid legacy paths and uses XDG_STATE_HOME for durable artifacts: %s', async (id, mode) => {
+  ] as const)('accepts suffix-valid legacy paths and ignores scratch XDG_STATE_HOME for durable artifacts: %s', async (id, mode) => {
     const root = tempDir('opk-2440-legacy-root-');
     const paths = launchPaths(root, id);
     const marker = join(root, 'should-start.txt');
     const fixture = markedChildFixture(marker, makeTurnResult());
     const xdgStateHome = join(root, 'xdg-state');
-    const env: Record<string, string> = { XDG_STATE_HOME: xdgStateHome, ...(mode === 'root' ? { [CLI_FIXTURE_ROOT_ENV]: root }
+    const env: Record<string, string> = { HOME: root, XDG_STATE_HOME: xdgStateHome, ...(mode === 'root' ? { [CLI_FIXTURE_ROOT_ENV]: root }
       : mode === 'gate' ? { [CLI_FIXTURE_GATE_ENV]: 'fixture-root-v1' } : {}) };
     const outcome = await runLauncherCli(cliLaunchArgs(paths, fixture), env);
-    const durableRoot = join(xdgStateHome, 'orchestrator-pack');
+    const durableRoot = join(root, '.local', 'state', 'orchestrator-pack');
     expect(outcome.code).toBe(0);
     expect(existsSync(join(durableRoot, basename(paths.receipt)))).toBe(true);
     expect(readTerminalEnvelope(join(durableRoot, basename(paths.envelope)))).toMatchObject({
@@ -3694,13 +3695,13 @@ describe('Issue #2750 durable artifact root and permissions (AC19/AC20)', () => 
 
   const absoluteXdg = '/synthetic/xdg-state';
   const resolverRows: ReadonlyArray<{ name: string; env: NodeJS.ProcessEnv; expected?: string; throws?: string }> = [
-    { name: 'absolute XDG_STATE_HOME', env: { XDG_STATE_HOME: absoluteXdg, HOME: '/synthetic/home' }, expected: '/synthetic/xdg-state/orchestrator-pack' },
-    { name: 'XDG_STATE_HOME with dot segments', env: { XDG_STATE_HOME: '/synthetic/a/../xdg-state/./', HOME: '/synthetic/home' }, expected: '/synthetic/xdg-state/orchestrator-pack' },
+    { name: 'absolute XDG_STATE_HOME ignored', env: { XDG_STATE_HOME: absoluteXdg, HOME: '/synthetic/home' }, expected: '/synthetic/home/.local/state/orchestrator-pack' },
+    { name: 'XDG_STATE_HOME with dot segments ignored', env: { XDG_STATE_HOME: '/synthetic/a/../xdg-state/./', HOME: '/synthetic/home' }, expected: '/synthetic/home/.local/state/orchestrator-pack' },
     { name: 'XDG_STATE_HOME unset', env: { HOME: '/synthetic/home' }, expected: '/synthetic/home/.local/state/orchestrator-pack' },
     { name: 'XDG_STATE_HOME empty', env: { XDG_STATE_HOME: '', HOME: '/synthetic/home' }, expected: '/synthetic/home/.local/state/orchestrator-pack' },
-    { name: 'relative XDG_STATE_HOME (never silently falls back to HOME)', env: { XDG_STATE_HOME: 'relative/state', HOME: '/synthetic/home' }, throws: 'durable_root_xdg_state_home_not_absolute' },
-    { name: 'dot XDG_STATE_HOME', env: { XDG_STATE_HOME: '.', HOME: '/synthetic/home' }, throws: 'durable_root_xdg_state_home_not_absolute' },
-    { name: 'HOME missing', env: {}, throws: 'durable_root_home_unavailable' },
+    { name: 'relative XDG_STATE_HOME ignored', env: { XDG_STATE_HOME: 'relative/state', HOME: '/synthetic/home' }, expected: '/synthetic/home/.local/state/orchestrator-pack' },
+    { name: 'dot XDG_STATE_HOME ignored', env: { XDG_STATE_HOME: '.', HOME: '/synthetic/home' }, expected: '/synthetic/home/.local/state/orchestrator-pack' },
+    { name: 'HOME missing despite valid XDG', env: { XDG_STATE_HOME: absoluteXdg }, throws: 'durable_root_home_unavailable' },
     { name: 'HOME blank', env: { HOME: '   ' }, throws: 'durable_root_home_unavailable' },
     { name: 'HOME relative', env: { HOME: 'home/che' }, throws: 'durable_root_home_unavailable' },
     { name: 'fixture gate without a root is inert', env: { OPK_FM_LONG_CHILD_TEST_GATE: 'fixture-root-v1', HOME: '/synthetic/home' }, expected: '/synthetic/home/.local/state/orchestrator-pack' },
@@ -3815,7 +3816,7 @@ describe('Issue #2750 durable artifact root and permissions (AC19/AC20)', () => 
     const tmpBefore = join(root, 'tmp-before');
     const tmpAfter = join(root, 'tmp-after');
     for (const directory of [home, xdg, tmpBefore, tmpAfter]) mkdirSync(directory, { recursive: true, mode: 0o700 });
-    const durable = join(xdg, 'orchestrator-pack');
+    const durable = join(home, '.local', 'state', 'orchestrator-pack');
     const invocation = 'inv-2750-production';
     const profile = join(root, 'profile');
     const cdp = 'http://127.0.0.1:9222';
@@ -3902,7 +3903,7 @@ describe('Issue #2750 durable artifact root and permissions (AC19/AC20)', () => 
     const home = join(root, 'home');
     const xdg = join(root, 'xdg');
     mkdirSync(home, { recursive: true, mode: 0o700 });
-    const durable = ensureDurableArtifactRoot(join(xdg, 'orchestrator-pack'));
+    const durable = ensureDurableArtifactRoot(join(home, '.local', 'state', 'orchestrator-pack'));
     // A synthetic read-only `orca` on PATH answers worker-show for the live original Dispatch.
     const fakeBin = join(root, 'bin');
     mkdirSync(fakeBin, { recursive: true });
@@ -4098,8 +4099,8 @@ describe('Issue #2750 managed adapter refusal matrix (AC10-AC13, AC17)', () => {
       build: (ctx) => [...ctx.args, '--repo', 'other/repo', '--pr', '7'],
     },
     {
-      name: 'durable_artifact_root_invalid (relative XDG_STATE_HOME)', code: 'durable_artifact_root_invalid', build: (ctx) => ctx.args,
-      setup: () => { vi.stubEnv('OPK_FM_LONG_CHILD_TEST_GATE', undefined); vi.stubEnv('OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT', undefined); vi.stubEnv('XDG_STATE_HOME', 'relative/state'); },
+      name: 'durable_artifact_root_invalid (HOME unavailable)', code: 'durable_artifact_root_invalid', build: (ctx) => ctx.args,
+      setup: () => { vi.stubEnv('OPK_FM_LONG_CHILD_TEST_GATE', undefined); vi.stubEnv('OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT', undefined); vi.stubEnv('HOME', undefined); vi.stubEnv('XDG_STATE_HOME', 'relative/state'); },
     },
   ];
 
@@ -4307,15 +4308,17 @@ describe('Issue #2750 managed adapter refusal matrix (AC10-AC13, AC17)', () => {
       expect(result.stdout).not.toContain('accepted/v1');
     });
 
-    it('resolves a legacy /tmp/opencode-style caller path to its basename under the XDG durable root in accepted/v1', async () => {
+    it('Issue #2763: launcher, wrapper and fleet-wake share HOME despite OpenCode scratch XDG', async () => {
       const root = tempDir('opk-2750-accept-prod-');
-      const xdg = join(root, 'xdg');
-      const durable = join(xdg, 'orchestrator-pack');
+      const scratchXdg = '/tmp/opk-opencode-state-x';
+      const durable = join(root, '.local', 'state', 'orchestrator-pack');
       vi.stubEnv('OPK_FM_LONG_CHILD_TEST_GATE', undefined);
       vi.stubEnv('OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT', undefined);
-      vi.stubEnv('XDG_STATE_HOME', xdg);
+      vi.stubEnv('HOME', root);
+      vi.stubEnv('XDG_STATE_HOME', scratchXdg);
       vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
       stubOwnerStoreEnv(root);
+      expect(resolveDurableArtifactRoot()).toBe(durable);
       const legacy = join(root, 'legacy', 'opencode');
       const args = [
         '--run-identity', 'run-d', '--attempt-identity', 'attempt-d', '--invocation-id', 'inv-d',
@@ -4326,14 +4329,18 @@ describe('Issue #2750 managed adapter refusal matrix (AC10-AC13, AC17)', () => {
       ];
       const spawnLauncher = vi.fn(async (launcherArgs: readonly string[]) => {
         const at = (flag: string): string => launcherArgs[launcherArgs.indexOf(flag) + 1]!;
-        // The adapter hands the launcher the resolved durable paths, never the legacy directory.
+        // Wrapper and launcher resolve the same HOME root, never the scratch XDG or legacy directory.
+        expect(resolveDurableArtifactRoot({ HOME: root, XDG_STATE_HOME: scratchXdg })).toBe(durable);
         expect(at('--handoff-receipt')).toBe(join(durable, 'd-handoff.json'));
         expect(at('--terminal-envelope')).toBe(join(durable, 'd-terminal.json'));
-        writeHandoffArtifacts({
+        const launcherConfig = validateLaunchPreSpawn(launchConfigFromArgv(launcherArgs.slice(1)));
+        expect(launcherConfig).toMatchObject({ ok: true, config: { terminalEnvelopeRoot: durable, terminalEnvelopePath: at('--terminal-envelope') } });
+        const artifacts = writeHandoffArtifacts({
           terminalRoot: durable, dir: join(durable, 'd'), invocation: 'inv-d', run: 'run-d', attempt: 'attempt-d',
           receiptPath: at('--handoff-receipt'), envelopePath: at('--terminal-envelope'),
           receipt: { launcher_pid: 4321, child_cwd: realpathSync(root) },
         });
+        writePrivateJson(artifacts.envelopePath, launcherTerminal(artifacts));
         return { launcherPid: 4321 };
       });
       const result = await runAdapter(args, baseDeps(spawnLauncher));
@@ -4343,6 +4350,10 @@ describe('Issue #2750 managed adapter refusal matrix (AC10-AC13, AC17)', () => {
         receipt_locator: invocationReceiptLocatorPath('inv-d', durable),
       });
       expect(statSync(durable).mode & 0o777).toBe(0o700);
+      expect(listTerminalEnvelopes(undefined, () => undefined)).toEqual([
+        expect.objectContaining({ path: join(durable, 'd-terminal.json'), invocationId: 'inv-d',
+          runIdentity: 'run-d', handoffReceiptPath: join(durable, 'd-handoff.json') }),
+      ]);
       expect(existsSync(join(root, 'legacy'))).toBe(false);
     });
   });
