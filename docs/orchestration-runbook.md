@@ -90,7 +90,7 @@ manager -> manager profile
 T1 worker -> T1 profile
 T2 worker -> T2 profile
 T3 worker -> T3 profile
-merge Task -> merge profile (default OpenCode / openai/gpt-6-luna / high)
+merge Task -> merge profile (default OpenCode / openai/gpt-6-luna / medium)
 routine smoke -> routine-smoke profile
 complex smoke -> complex-smoke profile
 ```
