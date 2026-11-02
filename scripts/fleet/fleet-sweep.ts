@@ -125,6 +125,8 @@ export interface FleetSweepOptions {
   readonly executor?: OrcaExecutor;
   readonly store?: FleetPollingStore;
   readonly terminals?: readonly FleetTerminal[];
+  /** Read-only hint for an excluded primary-root agent; never promotes it to a unit. */
+  readonly onMissingPrimaryBinding?: (terminal: FleetTerminal) => void;
   /**
    * Opt-in isolation: a selected non-primary pane whose screen cannot be read is reported here and
    * left out of the observations instead of failing the whole sweep. Without it the read error throws.
@@ -827,6 +829,20 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
     terminals, options.primary, options.projectId,
     coordinatorHandle, architectHandle, bindingExecutor,
   );
+  // The caller's existing log is the recovery surface for missing Dispatch evidence.
+  // Report only agent-looking primary candidates, not the coordinator/architect.
+  if (options.onMissingPrimaryBinding) {
+    const root = normalizedPath(options.primary);
+    const reported = new Set<string>();
+    for (const terminal of terminals) {
+      if (!terminal.worktreePath || normalizedPath(terminal.worktreePath) !== root
+        || terminal.handle === coordinatorHandle || terminal.handle === architectHandle
+        || !looksLikeAgentPane(terminal.title) || primaryBindings.has(terminal.handle)
+        || reported.has(terminal.handle)) continue;
+      reported.add(terminal.handle);
+      options.onMissingPrimaryBinding(terminal);
+    }
+  }
   const selected = selectAgentTerminals(
     terminals,
     options.primary,

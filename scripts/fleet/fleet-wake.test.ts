@@ -3603,6 +3603,51 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     }
   });
 
+  it('B9-3: Tool/User-quoted CI/pack-review never reaches 30-minute Reminder; own unmatched park still does', async () => {
+    const h = 'a'.repeat(40);
+    const readNamedPull = (_repo: string, number: number) => ({
+      number, headSha: h, state: 'open' as const, merged: false,
+    });
+    for (const kind of ['CI', 'pack-review'] as const) {
+      const own = 'PARKED on ' + kind + ' PR #42 head ' + h;
+      for (const prefix of ['Tool: foreign pane', 'User: quote this'] as const) {
+        const quoted = prefix + '\n\n' + own;
+        const store = new MemoryWakeStore();
+        const options = { readNamedPull, now: () => 0 };
+        const initial = await scenario(quoted, options, store);
+        const elapsed = await scenario(quoted, { ...options, now: () => 1_800_000 }, store);
+        expect(sendsTo(initial.calls, manager.handle)).toHaveLength(0);
+        expect(sendsTo(elapsed.calls, manager.handle)).toHaveLength(0);
+        expect(elapsed.logs.some((line) => line.includes('not a foreign/quoted park line'))).toBe(true);
+      }
+      const store = new MemoryWakeStore();
+      expect(texts((await scenario(own, { readNamedPull, now: () => 0 }, store)).calls, manager.handle))
+        .toHaveLength(0);
+      const reminder = await scenario(own, { readNamedPull, now: () => 1_800_000 }, store);
+      expect(texts(reminder.calls, manager.handle)).toHaveLength(1);
+      expect(texts(reminder.calls, manager.handle)[0]).toContain('Reminder: parked 30 min');
+    }
+  });
+
+  it('B9-3: closed or merged same-head named PR preserves exact producer terminal recheck', async () => {
+    const sha = 'd'.repeat(40);
+    for (const kind of ['CI', 'pack-review'] as const) {
+      for (const merged of [false, true]) {
+        const readNamedPull = (_repo: string, number: number) => ({
+          number, headSha: sha, state: 'closed' as const, merged,
+        });
+        const observed = await scenario('PARKED on ' + kind + ' PR #42 head ' + sha, {
+          readNamedPull, checkRunsFinishedAt: () => 123,
+          readPackReviewStage: () => ({ state: 'success', description: 'exact terminal head' }),
+        });
+        expect(texts(observed.calls, manager.handle)).toHaveLength(1);
+        expect(texts(observed.calls, manager.handle)[0])
+          .toContain(kind === 'CI' ? 'checks-completed' : 'stage-success');
+        expect(texts(observed.calls, manager.handle)[0]).not.toContain('head moved');
+      }
+    }
+  });
+
   it('B9-3: named CI/pack-review H0 to H1 rechecks once for any predecessor check state', async () => {
     const h0 = 'a'.repeat(40), h1 = 'b'.repeat(40);
     for (const kind of ['CI', 'pack-review']) {
@@ -4779,7 +4824,7 @@ describe('Issue #2749 B9-6: exact primary-root near-effect Dispatch admission', 
     cwd: workerBase + '/two/child', lifecycleOutcome: 'success', turnResultState: 'ok',
   };
   const exercise = (
-    phase: 'stable' | 'unbound' | 'before-text' | 'before-enter'
+    phase: 'stable' | 'unbound' | 'unreadable-census' | 'before-text' | 'before-enter'
       | 'rebind-before-text' | 'rebind-before-enter',
     store = new MemoryWakeStore(), screen = park,
   ) => {
@@ -4792,6 +4837,7 @@ describe('Issue #2749 B9-6: exact primary-root near-effect Dispatch admission', 
         if (phase === 'rebind-before-text' && listReads >= 2) binding = 'B';
       }
       if (args[0] === 'orchestration' && args[1] === 'worker-list') {
+        if (phase === 'unreadable-census') return commandResult('', false);
         return commandResult(JSON.stringify({ ok: true, result: {
           workers: assigned ? [{ agentTerminalHandle: rootAgent.handle, taskId: 'task-b9-' + binding,
             dispatchId: 'dispatch-b9-' + binding, dispatchStatus: 'dispatched' }] : [],
@@ -4839,6 +4885,15 @@ describe('Issue #2749 B9-6: exact primary-root near-effect Dispatch admission', 
     expect(sendsTo(first.calls, rootAgent.handle)).toHaveLength(2);
     expect(deliveredText((await exercise('stable', store)).calls)).toHaveLength(0);
     expect(deliveredText((await exercise('unbound')).calls)).toHaveLength(0);
+  });
+
+  it('B9-6: initial unbound or unreadable primary Dispatch gets log-only recheck, never a native Send', async () => {
+    for (const phase of ['unbound', 'unreadable-census'] as const) {
+      const observed = await exercise(phase);
+      expect(sendsTo(observed.calls, rootAgent.handle)).toHaveLength(0);
+      expect(observed.logs.some((line) => line.includes('handle="primary-b9"')
+        && line.includes('worker-list/worker-show/run-show Dispatch/Run binding'))).toBe(true);
+    }
   });
 
   it('B9-6: an owned primary GPT park followed by an idle prompt Wakes once, then stays quiet', async () => {

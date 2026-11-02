@@ -1039,10 +1039,18 @@ describe('Issue #2749 B9-5/B9-6: observed idle and primary Dispatch-only selecti
       const options = { projectId: 'project', primary, terminals, executor,
         coordinatorHandle: coordinator.handle, architectHandle: architect.handle, workspaceRe,
         store: new MemoryPollingStore() };
-      expect(runFleetSweep(options).map((row) => row.handle)).toEqual(['bound']);
+      const missing: string[] = [];
+      expect(runFleetSweep({ ...options,
+        onMissingPrimaryBinding: (terminal) => { missing.push(terminal.handle); },
+      }).map((row) => row.handle)).toEqual(['bound']);
+      expect(missing).toEqual(['title-only']);
       expect(collectFleetDiagnostics(options).map((row) => row.handle)).toEqual(['bound']);
       const withoutDispatch = primaryOrcaExecutor(terminals, screens, []);
-      expect(runFleetSweep({ ...options, executor: withoutDispatch })).toEqual([]);
+      const entirelyUnbound: string[] = [];
+      expect(runFleetSweep({ ...options, executor: withoutDispatch,
+        onMissingPrimaryBinding: (terminal) => { entirelyUnbound.push(terminal.handle); },
+      })).toEqual([]);
+      expect(entirelyUnbound).toEqual(['bound', 'title-only']);
       expect(collectFleetDiagnostics({ ...options, executor: withoutDispatch })).toEqual([]);
     }
     const duplicate = primaryOrcaExecutor(terminals, screens, [worker, worker]);

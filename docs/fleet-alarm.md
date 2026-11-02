@@ -109,9 +109,9 @@ original-receipt/current-native-owner-bound non-`ok`
 member; it shares the same recipient/path suppression without certifying
 triplet completion.
 
-**Named PR head changes.** For own `PARKED on CI PR #N head H0` or
-`PARKED on pack-review PR #N head H0`, only an open, unmerged
-selected-repository PR #N with a current head H1 is a match. If H1 differs,
+**Named PR head changes.** For an **own** `PARKED on CI PR #N head H0` or
+`PARKED on pack-review PR #N head H0`, a **moved-head** advisory requires an
+open, unmerged selected-repository PR #N with current head H1. If H1 differs,
 send at most one marked **head-moved** advisory naming H1 and requiring a
 re-read of PR #N CI followed by a re-park on the current head. A completed,
 cancelled, pending or unknown H0 run cannot prove H1 green and never selects
@@ -119,7 +119,10 @@ another recipient. Confirm the same live H1, exact own named park and native
 binding before text+Enter and again before the confirming Enter; a missed
 first effect is not marked delivered and an attempted first effect cannot be
 rearmed merely because the second was withheld. When H0 remains the head,
-the incumbent exact-head CI and pack-review producer rules apply. The
+the incumbent exact-head CI and pack-review producer rules apply **even after
+the PR closes or merges without changing that head**. A closed PR whose head
+moved cannot receive a head-moved advisory. Quoted/non-own named PR lines
+neither Wake nor trigger a 30-minute Reminder. The
 PR-less `PARKED on CI on <sha40>` form retains its original semantics.
 The separate #2731 STOPPED current-head CI fallback remains available for
 Issue-linked readable-zero-assignment and Issue-less unambiguous pull owners.

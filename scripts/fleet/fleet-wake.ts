@@ -1403,17 +1403,20 @@ function resolveParkEvent(
       ? resolved('review-submitted', 'review-' + producer.reviewId,
         'review:' + producer.number + ':' + producer.reviewId) : undefined;
   }
-  // A named old PR head is an ended wait target regardless of whether H0
-  // checks completed, failed, were cancelled or were never observed.
+  // Only a moved-head advisory requires an open PR. A closed/merged PR
+  // that retains the exact parked SHA still uses its incumbent terminal
+  // CI/pack-review producer result, never a fabricated head-moved event.
   if ((producer.kind === 'ci' || producer.kind === 'pack-review') && producer.number && producer.sha) {
     const pull = (options.readNamedPull ?? readNativePull)(repo, producer.number);
-    if (!pull || pull.number !== producer.number || pull.state !== 'open'
-      || pull.merged || !SHA40.test(pull.headSha)) return undefined;
-    if (pull.headSha !== producer.sha) return {
-      label: producer.label, terminalState: 'head-moved', evidence: pull.headSha,
-      eventId: 'head-moved:' + producer.number + ':' + producer.sha,
-      currentHeadSha: pull.headSha,
-    };
+    if (!pull || pull.number !== producer.number || !SHA40.test(pull.headSha)) return undefined;
+    if (pull.headSha !== producer.sha) {
+      if (pull.state !== 'open' || pull.merged) return undefined;
+      return {
+        label: producer.label, terminalState: 'head-moved', evidence: pull.headSha,
+        eventId: 'head-moved:' + producer.number + ':' + producer.sha,
+        currentHeadSha: pull.headSha,
+      };
+    }
   }
   if (producer.kind === 'pack-review' && producer.sha) {
     const stage = (options.readPackReviewStage ?? readPackReviewStatus)(repo, producer.sha);
@@ -1844,6 +1847,7 @@ async function wakeNamedParkedProducers(
     if (!namedPrOwn) {
       log('named PR Wake withheld for ' + pane.handle
         + ': re-check current own PARKED on PR #' + producer!.number + ', not a foreign/quoted park line');
+      continue; // Quoted named waits cannot reach a 30-minute Reminder either.
     }
     let match: ProducerResolution | undefined;
     // Re-observe this same native pane AND its actual last own PARKED line
@@ -1868,10 +1872,11 @@ async function wakeNamedParkedProducers(
           && producer.number && producer.sha) {
           const repo = namedRepository(options.config);
           const pull = repo && (options.readNamedPull ?? readNativePull)(repo, producer.number);
-          if (!pull || pull.number !== producer.number || pull.state !== 'open'
-            || pull.merged || pull.headSha !== (match?.currentHeadSha ?? producer.sha)) {
+          if (!pull || pull.number !== producer.number || !SHA40.test(pull.headSha)
+            || pull.headSha !== (match?.currentHeadSha ?? producer.sha)
+            || (match?.currentHeadSha !== undefined && (pull.state !== 'open' || pull.merged))) {
             log('named PR Wake withheld for ' + pane.handle
-              + ': re-check open PR #' + producer.number + ' and its exact current head');
+              + ': re-check PR #' + producer.number + ' and its exact current head');
             return false;
           }
         }
@@ -1880,7 +1885,8 @@ async function wakeNamedParkedProducers(
         if (pane.ownParkObservation && ownWait !== pane.wait) return false;
         // Neither the first Send nor the confirming Enter may be authorized
         // by a later tool/user quotation that merely ends in the same text.
-        if ((producer?.kind === 'gpt' || producer?.kind === 'gpt-multi')
+        if ((producer?.kind === 'gpt' || producer?.kind === 'gpt-multi'
+          || ((producer?.kind === 'ci' || producer?.kind === 'pack-review') && producer.number))
           && (!pane.ownParkObservation || ownWait !== pane.wait)) return false;
         return lastFleetParkedLine(screen) === pane.wait || ownWait === pane.wait;
       } catch { return false; }
@@ -2415,6 +2421,10 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     const unreadableSelected: FleetTerminal[] = [];
     try {
       observations = runFleetSweep({
+        onMissingPrimaryBinding: (terminal) => {
+          log('primary-root unit withheld handle=' + JSON.stringify(terminal.handle)
+            + ': re-check selected coordinator + worker-list/worker-show/run-show Dispatch/Run binding');
+        },
         onUnreadable: (terminal, _error, primaryBound) => {
           unreadableSelected.push(terminal);
           // A primary-bound pane keeps its legacy silent treatment; only others are reported.
