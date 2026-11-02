@@ -2732,7 +2732,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
   const signature = 'c1218bc3453f2182a38b07ff4c4bbe8a24da86a2777fcaa9cb6d88ec9d37cc9e';
   const code = '228:r13-test-outside-allowed-roots';
   const syntheticCriteria = '\n## Acceptance criteria\n\n- Synthetic behavior criteria remain unchanged across the disposition.\n';
-  const revisedBody = '<!-- source-revision: r12 -->\n```allowed-roots\ntests/spot/test_field_benchmark_r13.py\n```\n```denylist\nvendor/**\npackages/core/**\n```\n' + syntheticCriteria;
+  const revisedBody = '<!-- source-revision: r12 -->\n```allowed-roots\nsrc/**\ntests/spot/test_field_benchmark_r13.py\n```\n```denylist\nvendor/**\npackages/core/**\n```\n' + syntheticCriteria;
   const terminalAt = '2026-10-08T20:40:00Z';
   const fingerprint = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
   // Captured raw source payload, PR245 comment6068701751, updated_at2026-10-08T20:44:03Z.
@@ -2747,7 +2747,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
   function fixture(settings: { scopeType?: string; scopePath?: string; allowedRoot?: string; denylist?: string[]; summary?: string; details?: string; dispositionSignature?: string; frozenBodyOverride?: string } = {}) {
     const scopePath = settings.scopePath ?? witnessSource.findings[0]!.path;
     const allowedRoot = settings.allowedRoot ?? scopePath;
-    const liveBody = `<!-- source-revision: r12 -->\n\`\`\`allowed-roots\n${allowedRoot}\n\`\`\`\n\`\`\`denylist\n${(settings.denylist ?? ['vendor/**', 'packages/core/**']).join('\n')}\n\`\`\`\n` + syntheticCriteria;
+    const liveBody = `<!-- source-revision: r12 -->\n\`\`\`allowed-roots\nsrc/**\n${allowedRoot}\n\`\`\`\n\`\`\`denylist\n${(settings.denylist ?? ['vendor/**', 'packages/core/**']).join('\n')}\n\`\`\`\n` + syntheticCriteria;
     const root = mkdtempSync(join(tmpdir(), 'pack-review-2428-'));
     roots.push(root);
     const storeRoot = join(root, 'store');
@@ -2818,7 +2818,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
             source_comment_receipt: sourceProofs[ordinal - 1]!.receipt } };
       }),
     } }, options);
-    setPackReviewRunTerminal(run.id, 'changes_requested', { reviewVerdict: 'findings', findingCount: 2, findings }, { ...options, now: new Date(terminalAt) });
+    setPackReviewRunTerminal(run.id, 'changes_requested', { reviewVerdict: 'findings', findingCount: 2, findings }, { ...options, now: new Date('2026-10-08T20:46:00Z') });
     authority = commitPackReviewTerminal({
       prNumber, expectedTransitionSeq: authority.transitionSeq, status: 'changes_requested', findingCount: 2, options,
       terminal: { schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal', runId: run.id,
@@ -2844,7 +2844,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       html_url: `https://github.com/${repository}/pull/${prNumber}#issuecomment-6068301792`,
       user: { login: 'chetwerikoff' }, author_association: 'OWNER',
       created_at: '2026-10-08T20:50:00Z', updated_at: '2026-10-08T20:51:48Z',
-      body: `R1 FIXED in code.\n\n## R2 dispositions — run \`${run.id}\`, head \`${reviewedHead}\`\n\nTerminal REVIEW: \`${reviewId}\`\nReviewed Issue digest: \`${computeBoundIssueSnapshotHash(frozenBody)}\`\nCorrected Issue revision: \`r12\`\n\n- **FIXED — blocking scope finding \`${code}\`** (source signature \`${sourceSignature}\`). The live r12 Issue now includes only \`${allowedRoot}\` in \`allowed-roots\`, under the operator amendment note.${allowedRoot === scopePath ? '' : ` This root covers \`${scopePath}\`.`} No code or behavior change was made for this disposition.\n- **DEFER — non-blocking \`field:ambiguous-complete-window-undercount\`**.`,
+      body: `R1 FIXED in code.\n\n## R2 dispositions — run \`${run.id}\`, head \`${reviewedHead}\`\n\nTerminal REVIEW: \`${reviewId}\`\nReviewed Issue digest: \`${computeBoundIssueSnapshotHash(frozenBody)}\`\nCorrected Issue revision: \`r12\`\n\n- **FIXED — blocking scope finding \`${code}\`** (source signature \`${sourceSignature}\`). The live r12 Issue now includes \`${allowedRoot}\` in \`allowed-roots\`, under the operator amendment note.${allowedRoot === scopePath ? '' : ` This root covers \`${scopePath}\`.`} No code or behavior change was made for this disposition.\n- **DEFER — non-blocking \`field:ambiguous-complete-window-undercount\`**.`,
     };
     const issue = { node_id: 'fixture-issue-node', number: issueNumber, html_url: `https://github.com/${repository}/issues/${issueNumber}`,
       repository_url: `https://api.github.com/repos/${repository}`, body: liveBody };
@@ -2935,6 +2935,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
 
   it('settles the observed final R2 same-head Issue-only scope correction and publishes status', async () => {
     const f = fixture();
+    expect(Date.parse(getPackReviewRun(f.run.id, f.options)?.completedAtUtc ?? '')).toBeGreaterThan(
+      Date.parse(f.transports.review.submittedAt),
+    );
     const before = getPackReviewRun(f.run.id, f.options);
     expect(before?.findings[0]).toMatchObject({ category: 'scope', fingerprint: signature, body: expect.stringContaining('type: scope\n') });
     const result = await reconcileStalePackReviewRuns(f.input);
@@ -2949,6 +2952,45 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     const settled = readPackReviewAuthority(prNumber, f.options);
     await reconcileStalePackReviewRuns(f.input);
     expect(readPackReviewAuthority(prNumber, f.options)?.transitionSeq).toBe(settled?.transitionSeq);
+  });
+
+
+  it('Issue #2748: removing a frozen allowed root cannot use a disposition-only correction', async () => {
+    const f = fixture();
+    f.transports.issue.body = f.transports.issue.body.replace('src/**\n', '');
+    f.input.fixtureIssueBody = f.transports.issue.body;
+    const original = readPackReviewAuthority(prNumber, f.options);
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({
+      settled: false, reason: 'same_head_resolution_unproven',
+      detail: expect.stringContaining('unrelated changes beyond the exact disposition scope roots'),
+    }));
+    expect(readPackReviewAuthority(prNumber, f.options)).toEqual(original);
+    expect(f.statuses).toEqual([]);
+  });
+
+  it('Issue #2748: reactions cannot change an accepted same-head publication digest', async () => {
+    const f = fixture();
+    const first = await reconcileStalePackReviewRuns(f.input);
+    expect(first.results).toContainEqual(expect.objectContaining({ settled: true }));
+    const settled = readPackReviewAuthority(prNumber, f.options);
+    Object.assign(f.transports.comment, { reactions: { total_count: 1, '+1': 1 } });
+    const again = await reconcileStalePackReviewRuns(f.input);
+    expect(again.results).toContainEqual(expect.objectContaining({ settled: true }));
+    expect(readPackReviewAuthority(prNumber, f.options)?.transitionSeq).toBe(settled?.transitionSeq);
+    expect(f.statuses.filter((status) => status.state === 'success')).toHaveLength(1);
+  });
+
+  it('Issue #2748: changed disposition body cannot reuse an accepted digest', async () => {
+    const f = fixture();
+    const first = await reconcileStalePackReviewRuns(f.input);
+    expect(first.results).toContainEqual(expect.objectContaining({ settled: true }));
+    const settled = readPackReviewAuthority(prNumber, f.options);
+    f.transports.comment.body += '\nA new unreviewed disposition claim';
+    const again = await reconcileStalePackReviewRuns(f.input);
+    expect(again.results).toContainEqual(expect.objectContaining({ settled: false }));
+    expect(readPackReviewAuthority(prNumber, f.options)?.transitionSeq).toBe(settled?.transitionSeq);
+    expect(f.statuses.filter((status) => status.state === 'success')).toHaveLength(1);
   });
 
   it('Issue #2748: completed B1 same-head resolution rejects rollback to frozen B0', async () => {
@@ -3216,6 +3258,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     ['wrong corrected revision marker', (f) => { f.transports.comment.body = f.transports.comment.body.replace('Corrected Issue revision: `r12`', 'Corrected Issue revision: `r11`'); }],
     ['canonical REVIEW wrong commit', (f) => { f.transports.review.commitId = HEAD; }],
     ['canonical REVIEW wrong actor', (f) => { f.transports.review.userLogin = 'other-principal'; }],
+    ['canonical REVIEW timestamp missing', (f) => { f.transports.review.submittedAt = ''; }],
     ['canonical REVIEW wrong run', (f) => { f.transports.review.body = f.transports.review.body.replace(f.run.id, 'prr-elsewhere'); }],
     ['canonical REVIEW wrong verdict', (f) => { f.transports.review.body = f.transports.review.body.replace('Pack review — findings', 'Pack review — no findings'); }],
     ['source COMMENT edited', (f) => { f.transports.sourceProofs[0]!.comment.updatedAt = '2026-10-08T20:40:03Z'; }],
