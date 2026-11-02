@@ -352,7 +352,7 @@ Never reset, clean, stash or refresh the retained dirty worktree.
 For a selected **vanished** temporary worktree registration only, inspect
 `git -C "$REPO_ROOT" worktree list --porcelain`, distinguish a truly missing
 directory from a locked/live/dirty worktree, and use native
-`git -C "$REPO_ROOT" worktree prune` on that same repository. If location
+`git -C "$REPO_ROOT" worktree prune --expire=now` on that same repository. If location
 or retention is ambiguous, stop for operator inspection; do not delete a
 registered worktree directory or a bespoke registry entry.
 
