@@ -248,20 +248,20 @@ export function validatePackReviewTriageResult(
         || !['FIX_NOW','DEFER','REJECT'].includes(value.decision)
         || typeof value.reason !== 'string' || !value.reason.trim()
         || value.reason.length > 400) throw new Error('invalid triage group');
-    const members = value.members.map((member) => {
+    const members = value.members.map((member: { slotId: string; index: number }) => {
       if (!member || typeof member.slotId !== 'string' || !Number.isInteger(member.index)
           || member.index < 0) throw new Error('invalid triage member');
       return `${member.slotId}:${member.index}`;
     }).sort();
     if (new Set(members).size !== members.length) throw new Error('duplicated triage member');
-    const originals = members.map((key) => {
+    const originals = members.map((key: string) => {
       const found = byKey.get(key);
       if (!found || assigned.has(key)) throw new Error('unknown or repeated triage occurrence');
       assigned.add(key);
       return found;
     });
     const originalBlocking = originals.some(isOriginallyBlockingPackReviewFinding);
-    const protectedBlocking = originals.some((finding) =>
+    const protectedBlocking = originals.some((finding: Record<string, unknown>) =>
       isOriginallyBlockingPackReviewFinding(finding) && protectedTriageHarm(finding));
     const reason = value.reason.trim();
     const codeEvidence = value.codeEvidence;
@@ -273,11 +273,11 @@ export function validatePackReviewTriageResult(
         throw new Error('blocking downgrade lacks verified exact-head evidence or is protected');
       }
     }
-    const code = originals.map((finding) => String(finding.code ?? finding.signature ?? '').trim())
+    const code = originals.map((finding: Record<string, unknown>) => String(finding.code ?? finding.signature ?? '').trim())
       .find(Boolean) ?? 'UNSPECIFIED';
     groups.push({
       groupId: triageGroupId(run,members), members,
-      slotIds: [...new Set(members.map((key) => key.split(':')[0]!))].sort(),
+      slotIds: [...new Set<string>(members.map((key: string) => key.split(':')[0]!))].sort(),
       decision: value.decision, reason, code,
       ...(verifiedCode ? { codeEvidence } : {}),
       ...(value.lowImpact === true ? { lowImpact: true } : {}),
