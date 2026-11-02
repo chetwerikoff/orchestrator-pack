@@ -3200,14 +3200,13 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     mutate(f);
     const before = readPackReviewAuthority(prNumber, f.options);
     const result = await reconcileStalePackReviewRuns(f.input);
-    // Once the original same-head decision has already passed but the Issue
-    // mutates during status observation, refuse at the later publication guard.
-    const expectedReason = _name === 'current body drift'
-      ? 'status_not_published' : 'same_head_resolution_unproven';
+    // The REST proof and current body must agree before any completion
+    // transition. A changed body is not merely a failed status POST.
     expect(result.results).toContainEqual(expect.objectContaining({
-      settled: false, reason: expectedReason, nextAction: expect.any(String),
+      settled: false, reason: 'same_head_resolution_unproven',
+      nextAction: expect.any(String),
       ...(_name === 'current body drift'
-        ? { detail: 'final_cap_head_or_authority_changed_before_status' } : {}),
+        ? { detail: 'same-head corrected Issue body or current PR head changed before settlement' } : {}),
     }));
     expect(readPackReviewAuthority(prNumber, f.options)).toEqual(before);
     expect(f.statuses.some((request) => request.state === 'success')).toBe(false);
