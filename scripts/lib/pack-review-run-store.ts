@@ -2308,7 +2308,14 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       ...(input.logicalRoundCap ? { logicalRoundCap: input.logicalRoundCap } : {}),
       ...(input.resolvedReviewer ? { resolvedReviewer: input.resolvedReviewer } : {}),
       ...(input.resolvedReviewerSource ? { resolvedReviewerSource: input.resolvedReviewerSource } : {}),
-      ...(input.reviewRound ? { reviewRound: input.reviewRound } : {}),
+      // Freeze the caller-selected source generation together with the round
+      // when creating a record. An omitted round version is only filled at
+      // creation; previously persisted versions are never migrated on read.
+      ...(input.reviewRound ? { reviewRound: {
+        ...input.reviewRound,
+        ...(input.reviewRound.accountingVersion === undefined && input.accountingVersion
+          ? { accountingVersion: input.accountingVersion } : {}),
+      } } : {}),
       ...(input.boundIssueSnapshotDigest ? { boundIssueSnapshotDigest: input.boundIssueSnapshotDigest } : {}),
       runnerPid: process.pid,
       createdAt: now,
