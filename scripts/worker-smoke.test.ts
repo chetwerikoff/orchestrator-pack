@@ -122,6 +122,10 @@ describe('Issue #2751 smoke-plan prose vs executable runtime identity', () => {
   it('rejects run-owned IDs in structured witnesses and executable targets, not arbitrary words', () => {
     for (const scenario of [
       '  - action: resume run_abc12345 | expected: terminal result',
+      '  - action: run run_123abcd | expected: complete',
+      '  - action: node scripts/report-run.mjs run_123abcd | expected: complete',
+      '  - action: node scripts/check.mjs --session=run_abc12345 | expected: complete',
+      '  - action: inspect output | expected: run_abc12345',
       '  - action: inspect --term-id=term_9876ab | expected: terminal result',
       '  - action: inspect result | expected: runtime-id: msg_4321cd',
     ]) {
