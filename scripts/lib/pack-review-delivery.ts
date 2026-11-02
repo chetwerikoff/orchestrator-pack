@@ -18,6 +18,7 @@ import {
   type PackReviewDeliveryOutcome,
   type PackReviewJournalOutcome,
   isPackReviewUnfinishedTerminalRun,
+  projectPackReviewEffectiveFindings,
   PACK_REVIEW_ACTIVE_STATUSES,
   type PackReviewRunRecord,
   type PackReviewRunStatus,
@@ -81,7 +82,7 @@ function packReviewRequiredStatusOutcomeReason(run: PackReviewRunRecord): string
   if (hasPersistedPackReviewVerdict(run) || PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(run.status)) {
     const payload = packReviewJournaledPayload(run);
     if (!payload) return null;
-    const classification = classifyPackReviewPayload(payload);
+    const classification = classifyPackReviewPayload(payload,run);
     if (!classification.blocking && packReviewRunNeedsAnotherRequiredRound(run)) {
       return 'status_pending_round_restored';
     }
@@ -443,10 +444,15 @@ export function isNonBlockingPackReviewFinding(value: unknown): boolean {
   return severity === 'warning' || severity === 'info' || severity === 'non-blocking';
 }
 
-export function classifyPackReviewPayload(payload: PackReviewTerminalPayload): PackReviewVerdictClassification {
-  const blocking = payload.findings.length > 0
-    ? payload.findings.some((finding) => !isNonBlockingPackReviewFinding(finding))
-    : payload.verdict === 'findings';
+export function classifyPackReviewPayload(
+  payload: PackReviewTerminalPayload,
+  run?: PackReviewRunRecord,
+): PackReviewVerdictClassification {
+  const projected = run?.reviewRound ? projectPackReviewEffectiveFindings(run) : null;
+  const blocking = projected?.mode === 'triaged' ? projected.blocking
+    : payload.findings.length > 0
+      ? payload.findings.some((finding) => !isNonBlockingPackReviewFinding(finding))
+      : payload.verdict === 'findings';
   if (blocking) {
     return {
       terminalStatus: 'changes_requested',
@@ -796,7 +802,7 @@ export async function deliverPackReviewVerdict(
     throw new Error(`pack review run ${options.run.id} has no valid persisted verdict to resume`);
   }
   const payload = resumedPayload ?? options.payload;
-  const classification = classifyPackReviewPayload(payload);
+  const classification = classifyPackReviewPayload(payload,options.run);
   const supplemental = supplementalRun(options.run);
   const intermediateRoundPending = !classification.blocking && packReviewRunNeedsAnotherRequiredRound(options.run);
   const projectedRequiredStatus: PackReviewRequiredStatusState = intermediateRoundPending
@@ -883,13 +889,19 @@ export async function deliverPackReviewVerdict(
     && completedResumeChannelOutcome(options.run, 'workerNotification', workerKey);
   if (!supplemental && !workerNotificationComplete) {
     try {
+      const projected = options.run.reviewRound
+        ? projectPackReviewEffectiveFindings(options.run) : null;
       const notified = await options.notifyWorker({
         message: [
           `Pack review completed for PR #${options.run.prNumber}.`,
           `Run: ${options.run.id}`,
           `Head: ${options.run.targetSha}`,
-          `Verdict: ${payload.verdict}`,
-          `Findings: ${payload.findingCount}`,
+          `Verdict: ${payload.verdict} (raw immutable)`,
+          `Findings: ${payload.findingCount} (original source occurrences)`,
+          `Effective FIX_NOW groups: ${projected?.mode === 'triaged'
+            ? projected.effectiveBlockingGroupCount : 'not triaged; original union applies'}`,
+          ...(projected?.mode === 'triaged'
+            ? projected.fixNow.map((group) => `FIX_NOW ${group.groupId} ${group.code}: ${group.reason}`) : []),
           `Pack-review status: ${projectedRequiredStatus}`,
         ].join('\n'),
         idempotencyKey: workerKey,
@@ -953,7 +965,7 @@ async function publishPackReviewTerminalRequiredStatus(
   if (supplementalRun(run)) return null;
   const payload = packReviewJournaledPayload(run);
   if (!payload) return null;
-  const classification = classifyPackReviewPayload(payload);
+  const classification = classifyPackReviewPayload(payload,run);
   const intermediateRoundPending = !classification.blocking && packReviewRunNeedsAnotherRequiredRound(run);
   const projectedState: PackReviewRequiredStatusState = intermediateRoundPending
     ? 'pending'
