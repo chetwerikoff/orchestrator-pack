@@ -1939,6 +1939,11 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
         expect(source).toMatchObject({ lifecycle: 'invocation_started', invocationId: first.invocationId });
         expect(source.terminalResult).toBeUndefined();
       }
+      // Independent admission and two terminal sources are not a canonical
+      // aggregate verdict; the frozen T2/T3 cap cannot be spent here.
+      const authorityBeforeLastSource = readPackReviewAuthority(1276, { storeRoot });
+      expect(authorityBeforeLastSource?.cycle?.consumedRoundOrdinals).toEqual([]);
+      expect(trace.map((entry) => entry.slotId)).toEqual(['source-01', 'source-02', 'source-03']);
       releases.get('source-01')?.();
       const result = await pending;
       const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
@@ -1949,6 +1954,122 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       }
     },
   );
+
+  it('Issue #2748: source-02/03 bind at 30s intervals while source-01 bind remains unresolved', async () => {
+    const storeRoot = tempRoot('opk-gpt-blocked-bind-2748-');
+    harnessEnv(storeRoot, path.join(storeRoot, 'github-review.json'));
+    selectProjectCard(storeRoot);
+    delete process.env.PACK_GPT_BROWSER_PROJECT_URL;
+    process.env.PACK_GPT_BROWSER_PROFILE = path.join(storeRoot, 'browser-profile');
+    process.env.PACK_GPT_BROWSER_CDP = 'http://127.0.0.1:9222';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    let unblockFirst!: () => void;
+    const firstBindHeld = new Promise<void>((resolve) => { unblockFirst = resolve; });
+    let firstBindEntered = false;
+    const trace: Array<{ slotId: string; invocationId: string; at: number }> = [];
+    const fixtureAttempts: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
+    // Measure against the batch invocation, not vi.waitFor's fake-timer ticks.
+    const started = Date.now();
+    const pending = startPackReview(pluralStart(storeRoot, path.join(storeRoot, 'github-review.json'), {
+      fixtureGptAdmissionReadObservation: () => { throw new Error('must not read an admission predecessor'); },
+      fixtureReviewBySourceSlot: fixtureAttempts,
+      fixtureBeforeGptInvocationBound: async ({ slotId }: { slotId: string }) => {
+        if (slotId === 'source-01') {
+          firstBindEntered = true;
+          await firstBindHeld;
+        }
+      },
+      fixtureAfterGptInvocationBound: ({ slotId, invocationId }: { slotId: string; invocationId: string }) => {
+        trace.push({ slotId, invocationId, at: Date.now() });
+        fixtureAttempts[slotId] = [{ stdout: successfulCleanReviewPayload(invocationId), exitCode: 0 }];
+      },
+    }));
+    await vi.waitFor(() => expect(firstBindEntered).toBe(true));
+    expect(trace).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(trace).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() => expect(trace.map((entry) => entry.slotId)).toEqual(['source-02']));
+    expect(trace[0]!.at - started).toBeGreaterThanOrEqual(30_000);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.waitFor(() => expect(trace.map((entry) => entry.slotId)).toEqual(['source-02', 'source-03']));
+    expect(trace[1]!.at - trace[0]!.at).toBeGreaterThanOrEqual(30_000);
+    expect(trace[1]!.at - trace[0]!.at).toBeLessThan(31_000);
+    expect(new Set(trace.map((entry) => entry.invocationId)).size).toBe(2);
+    const runId = listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })[0]!.id;
+    const stored = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot })!;
+    expect(stored.reviewRound!.sourceSlots[0]!.lifecycle).toBe('planned');
+    expect(stored.reviewRound!.sourceSlots.slice(1).every((slot) => slot.invocationId)).toBe(true);
+    expect(readPackReviewAuthority(1276, { storeRoot })?.cycle?.consumedRoundOrdinals).toEqual([]);
+    unblockFirst();
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    const settled = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot })!;
+    expect(settled.reviewRound?.sourceSlots.map((slot) => slot.lifecycle)).toEqual(['terminal', 'terminal', 'terminal']);
+    expect(settled.reviewRound?.sourceSlots.map((slot) => slot.attemptOrdinal)).toEqual([1, 1, 1]);
+    expect(new Set(settled.reviewRound!.sourceSlots.map((slot) => slot.invocationId)).size).toBe(3);
+  });
+
+
+  it('Issue #2748: zero-send retry preserves spacing after independent initial source starts', async () => {
+    const storeRoot = tempRoot('opk-gpt-zero-send-spacing-2748-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    selectProjectCard(storeRoot);
+    delete process.env.PACK_GPT_BROWSER_PROJECT_URL;
+    process.env.PACK_GPT_BROWSER_PROFILE = path.join(storeRoot, 'browser-profile');
+    process.env.PACK_GPT_BROWSER_CDP = 'http://127.0.0.1:9222';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const fixtureAttempts: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
+    const trace: Array<{ slotId: string; attemptOrdinal: number; invocationId: string; at: number }> = [];
+    const started = Date.now();
+    const pending = startPackReview(pluralStart(storeRoot, capture, {
+      fixtureGptAdmissionReadObservation: () => { throw new Error('sibling admission must not serialize'); },
+      fixtureReviewBySourceSlot: fixtureAttempts,
+      fixtureAfterGptInvocationBound: ({ slotId, attemptOrdinal, invocationId }: {
+        slotId: string; attemptOrdinal: number; invocationId: string;
+      }) => {
+        trace.push({ slotId, attemptOrdinal, invocationId, at: Date.now() });
+        if (slotId === 'source-01' && attemptOrdinal === 1) {
+          fixtureAttempts[slotId] = [{ stdout: JSON.stringify({
+            schema: 'turn-result/v1', state: 'profile_busy', scope: 'profile',
+            cause: 'profile_busy', invocation_id: invocationId, send_count: 0,
+          }), exitCode: 13 }];
+        } else if (slotId === 'source-01') {
+          const first = fixtureAttempts[slotId]?.[0];
+          if (!first) throw new Error('missing first zero-send collision fixture');
+          fixtureAttempts[slotId] = [first, { stdout: successfulCleanReviewPayload(invocationId), exitCode: 0 }];
+        } else {
+          fixtureAttempts[slotId] = [{ stdout: successfulCleanReviewPayload(invocationId), exitCode: 0 }];
+        }
+      },
+    }));
+    await vi.waitFor(() => expect(trace).toHaveLength(1));
+    expect(trace[0]).toMatchObject({ slotId: 'source-01', attemptOrdinal: 1 });
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(trace).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() => expect(trace).toHaveLength(2));
+    expect(trace[1]).toMatchObject({ slotId: 'source-02', attemptOrdinal: 1 });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.waitFor(() => expect(trace).toHaveLength(3));
+    expect(trace[2]).toMatchObject({ slotId: 'source-03', attemptOrdinal: 1 });
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(trace).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() => expect(trace).toHaveLength(4));
+    expect(trace[3]).toMatchObject({ slotId: 'source-01', attemptOrdinal: 2 });
+    expect(trace[1]!.at - trace[0]!.at).toBeGreaterThanOrEqual(30_000);
+    expect(trace[2]!.at - trace[1]!.at).toBeGreaterThanOrEqual(30_000);
+    expect(trace[3]!.at - trace[2]!.at).toBeGreaterThanOrEqual(30_000);
+    expect(new Set(trace.map((entry) => entry.invocationId)).size).toBe(4);
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot })!;
+    expect(run.reviewRound!.sourceSlots.map((slot) => slot.attemptOrdinal)).toEqual([2, 1, 1]);
+  });
 
   it.each([true, false].flatMap((published) => [true, false].map((sendAttempted) => ({ published, sendAttempted }))))(
     'censuses attempted zero-count sources without a second send (published $published, attempt flag $sendAttempted)', async ({ published, sendAttempted }) => {
@@ -2055,8 +2176,50 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     const statusStates: string[] = [];
     const notifications: string[] = [];
     const earlyObservations: string[] = [];
+    // This timing fixture also expects a final success POST. Model the
+    // original credentialed GitHub COMMENTs and canonical REVIEW explicitly:
+    // browser-terminal output or a local journal is not public evidence.
+    const sourceComments: PackGptSourceGithubComment[] = [];
+    const sourceTransport: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => 'browser-gpt-bot',
+      listComments: async () => [...sourceComments],
+      getComment: async (id) => {
+        const found = sourceComments.find((comment) => comment.id === id);
+        if (!found) throw new Error('missing synthetic source COMMENT');
+        return found;
+      },
+    };
+    const reviews: GithubReviewSummary[] = [];
+    const reviewTransport: GithubReviewTransport = {
+      resolveActorLogin: async () => 'pack-review-bot',
+      listReviews: async () => [...reviews],
+      postReview: async ({ body, commitId }) => {
+        const id = 127611 + reviews.length;
+        const url = `https://github.com/chetwerikoff/orchestrator-pack/pull/1276#pullrequestreview-${id}`;
+        reviews.push({
+          id, body, commitId, state: 'COMMENTED', userLogin: 'pack-review-bot',
+          submittedAt: new Date().toISOString(), url,
+        });
+        return { id, url };
+      },
+      dismissReview: async () => { throw new Error('synthetic REVIEW dismissal not authorized'); },
+    };
 
     const result = await startPackReview(pluralStart(storeRoot, capture, {
+      fixtureGptSourceCommentTransport: sourceTransport,
+      fixtureGithubReviewTransport: reviewTransport,
+      fixtureBeforeGptSourceCommentCensus: ({ identity }) => {
+        if (sourceComments.some((comment) => comment.body.includes(`invocation=${identity.invocationId}`))) return;
+        const ordinal = Number(identity.slotId.slice(-2));
+        const id = 127600 + ordinal;
+        const createdAt = new Date().toISOString();
+        sourceComments.push({
+          id, body: formatPackGptSourceCommentEnvelope(identity, 'NO_FINDINGS'),
+          actorLogin: 'browser-gpt-bot', createdAt, updatedAt: createdAt,
+          url: `https://github.com/chetwerikoff/orchestrator-pack/pull/1276#issuecomment-${id}`,
+          issueUrl: 'https://api.github.com/repos/chetwerikoff/orchestrator-pack/issues/1276',
+        });
+      },
       fixtureRequiredStatusWriter: async (request) => {
         statusStates.push(request.state);
       },
@@ -4779,6 +4942,33 @@ describe('Issue #2496 r03 genuine GPT source delivery and status observation', (
     delete process.env.PACK_GPT_BROWSER_CHAT_URL;
     const statuses: string[] = [];
     let observed: string | undefined;
+    // Explicit synthetic GitHub surfaces: an original COMMENT and a canonical
+    // REVIEW must both exist and match the immutable run, even in Vitest.
+    const sourceComments: PackGptSourceGithubComment[] = [];
+    const sourceTransport: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => 'browser-gpt-bot',
+      listComments: async () => [...sourceComments],
+      getComment: async (id) => {
+        const found = sourceComments.find((comment) => comment.id === id);
+        if (!found) throw new Error('synthetic original source missing');
+        return found;
+      },
+    };
+    const reviews: GithubReviewSummary[] = [];
+    const reviewTransport: GithubReviewTransport = {
+      resolveActorLogin: async () => 'pack-review-bot',
+      listReviews: async () => [...reviews],
+      postReview: async ({ body, commitId }) => {
+        const id = prNumber * 10 + 11 + reviews.length;
+        const url = `https://github.com/chetwerikoff/orchestrator-pack/pull/${prNumber}#pullrequestreview-${id}`;
+        reviews.push({
+          id, body, commitId, state: 'COMMENTED', userLogin: 'pack-review-bot',
+          submittedAt: new Date().toISOString(), url,
+        });
+        return { id, url };
+      },
+      dismissReview: async () => { throw new Error('synthetic REVIEW dismissal not authorized'); },
+    };
     const input = {
       projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: repoRoot,
       prNumber, headSha: HEAD_A, reviewerOverride: 'gpt' as const,
@@ -4789,7 +4979,20 @@ describe('Issue #2496 r03 genuine GPT source delivery and status observation', (
       fixtureIssueNumber: prNumber,
       fixtureIssueTitle: "[T2] Same head status", fixtureIssueBody: '```complexity-tier\ntier: T2\n```',
       claimMode: 'preacquired' as const,
-      fixtureGithubReviewId: 249601,
+      fixtureGptSourceCommentTransport: sourceTransport,
+      fixtureGithubReviewTransport: reviewTransport,
+      fixtureBeforeGptSourceCommentCensus: async ({ identity }: { identity: PackGptSourceIdentity }) => {
+        if (sourceComments.some((comment) => comment.body.includes(`invocation=${identity.invocationId}`))) return;
+        const ordinal = Number(identity.slotId.slice(-2));
+        const id = prNumber * 10 + ordinal;
+        const createdAt = new Date().toISOString();
+        sourceComments.push({
+          id, body: formatPackGptSourceCommentEnvelope(identity, 'NO_FINDINGS'),
+          actorLogin: 'browser-gpt-bot', createdAt, updatedAt: createdAt,
+          url: `https://github.com/chetwerikoff/orchestrator-pack/pull/${prNumber}#issuecomment-${id}`,
+          issueUrl: `https://api.github.com/repos/chetwerikoff/orchestrator-pack/issues/${prNumber}`,
+        });
+      },
       fixtureReviewBySourceSlot: {
         'source-01': [{ stdout: successfulCleanReviewPayload('inv-2496-gpt-source-01') }],
         'source-02': [{ stdout: successfulCleanReviewPayload('inv-2496-gpt-source-02') }],
@@ -4811,6 +5014,21 @@ describe('Issue #2496 r03 genuine GPT source delivery and status observation', (
       getObserved: () => observed,
     };
   }
+
+  it.each(['source', 'review'] as const)(
+    'Issue #2748: missing modeled original %s GitHub evidence cannot confirm success in harness',
+    async (missing) => {
+      const f = fixture(249606);
+      const result = await startPackReview({
+        ...f.input,
+        ...(missing === 'source'
+          ? { fixtureGptSourceCommentTransport: undefined }
+          : { fixtureGithubReviewTransport: undefined }),
+      });
+      expect(result.publicationVerified).not.toBe(true);
+      expect(f.statuses).not.toContain('success');
+    },
+  );
 
   it('gpt-verified-delivery-and-notification-only-nonblocking', async () => {
     const f = fixture(249601);
@@ -4858,13 +5076,34 @@ describe('Issue #2496 r03 genuine GPT source delivery and status observation', (
       fixtureRequiredStatusReader: async () => undefined,
     });
     expect(result).toMatchObject({
-      ok: true, created: true, reason: 'completed',
+      ok: false, created: true, reason: 'status_not_published:current_head_status_unconfirmed',
       publicationVerified: false,
       publicationReason: 'status_not_published:current_head_status_unconfirmed',
       nextAction: expect.any(String),
     });
     expect(result).not.toHaveProperty('publicationHeadSha');
     expect(f.statuses.filter((state) => state === 'success')).toHaveLength(2);
+  });
+
+
+  it('Issue #2748: persistent fresh-run 409 status observation cannot report completed', async () => {
+    const f = fixture(249607);
+    let reads = 0;
+    const result = await startPackReview({
+      ...f.input,
+      fixtureRequiredStatusReader: async () => {
+        reads += 1;
+        throw new Error('HTTP 409: persistent synthetic exact-head status conflict');
+      },
+    });
+    expect(result).toMatchObject({
+      ok: false, created: true, publicationVerified: false,
+      nextAction: expect.any(String), httpStatus: 409,
+    });
+    expect(result.reason).not.toBe('completed');
+    expect(result).not.toHaveProperty('publicationHeadSha');
+    expect(reads).toBeGreaterThanOrEqual(3);
+    expect(f.statuses).toContain('success');
   });
 
   it('status-failed-comment-success-reposts via the same GPT journaled PR-led resume', async () => {
@@ -4880,7 +5119,7 @@ describe('Issue #2496 r03 genuine GPT source delivery and status observation', (
     };
     const first = await startPackReview({ ...f.input, fixtureRequiredStatusWriter: writer });
     expect(first).toMatchObject({
-      ok: true, created: true, publicationVerified: false,
+      ok: false, created: true, publicationVerified: false,
       publicationReason: 'status_not_published:failed_required_status_channel',
     });
     expect(f.statuses.filter((state) => state === 'success')).toHaveLength(1);
@@ -4922,7 +5161,7 @@ describe('Issue #2496 r03 genuine GPT source delivery and status observation', (
       },
     });
     expect(result).toMatchObject({
-      ok: true, created: true, publicationVerified: false,
+      ok: false, created: true, publicationVerified: false,
       publicationReason: expect.stringContaining('status_not_published'),
     });
     expect(result).not.toHaveProperty('publicationHeadSha');
@@ -5162,6 +5401,99 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
     expect(f.reviewBodies).toHaveLength(1);
     expect(f.statusStates).toEqual(['success']);
   });
+
+  it('Issue #2748: ordinary verdict read retries two transient exact-head 409s without another source send', async () => {
+    const f = seed(3);
+    let reads = 0;
+    const result = await reconcileStalePackReviewRuns({
+      ...f.input,
+      fixtureRequiredStatusReader: async () => {
+        reads += 1;
+        if (reads <= 2) throw new Error('HTTP 409: temporary GitHub status outage');
+        return f.statusStates.at(-1);
+      },
+    });
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: f.runId, recovered: true, statusReconciled: true,
+        reason: 'gpt_source_comments_recovered_and_delivered',
+      }),
+    ]));
+    expect(reads).toBeGreaterThanOrEqual(3);
+    expect(f.statusStates).toEqual(['success']);
+    expect(f.reviewBodies).toHaveLength(1);
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.cycle?.consumedRoundOrdinals)
+      .toEqual([1]);
+  });
+
+  it('Issue #2748: ordinary 409 retry refuses changed closing-Issue bytes on the same head', async () => {
+    const f = seed(3);
+    let reads = 0;
+    const input = { ...f.input };
+    input.fixtureRequiredStatusReader = async () => {
+      reads += 1;
+      if (reads === 1) {
+        input.fixtureIssueBody = f.input.fixtureIssueBody + '\nUnreviewed body amendment';
+        throw new Error('HTTP 409: synthetic status read interruption');
+      }
+      return f.statusStates.at(-1);
+    };
+    const result = await reconcileStalePackReviewRuns(input);
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({ runId: f.runId, statusReconciled: false }),
+    ]));
+    expect(reads).toBeGreaterThanOrEqual(2);
+    expect(f.reviewBodies).toHaveLength(1);
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.cycle?.consumedRoundOrdinals)
+      .toEqual([1]);
+  });
+
+  it.each(['edited-source', 'deleted-source', 'dismissed-review', 'rebound-review'] as const)(
+    'Issue #2748: ordinary final-required 409 readback refuses invalidated GitHub %s evidence',
+    async (mode) => {
+      const f = seed(3);
+      const input = { ...f.input };
+      let reads = 0;
+      const originalReviewTransport = input.fixtureGithubReviewTransport!;
+      const invalidate = () => {
+        if (mode === 'edited-source') {
+          f.comments[0]!.body += '\nEdited after original credentialed source delivery';
+        } else if (mode === 'deleted-source') {
+          f.comments.splice(0, 1);
+        } else {
+          input.fixtureGithubReviewTransport = {
+            ...originalReviewTransport,
+            listReviews: async () => (await originalReviewTransport.listReviews()).map((review) => ({
+              ...review,
+              ...(mode === 'dismissed-review'
+                ? { state: 'DISMISSED' }
+                : { commitId: HEAD_B }),
+            })),
+          };
+        }
+      };
+      input.fixtureRequiredStatusReader = async () => {
+        reads += 1;
+        if (reads === 1) {
+          invalidate();
+          throw new Error('HTTP 409: synthetic GitHub status read race');
+        }
+        return f.statusStates.at(-1);
+      };
+      const result = await reconcileStalePackReviewRuns(input);
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({ runId: f.runId, statusReconciled: false }),
+      ]));
+      expect(reads).toBeGreaterThanOrEqual(2);
+      expect(f.reviewBodies).toHaveLength(1);
+      expect(f.statusStates).toEqual(['success']);
+      expect(listPackReviewRuns(f.options)).toHaveLength(1);
+      expect(readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.cycle?.consumedRoundOrdinals)
+        .toEqual([1]);
+    },
+  );
 
   it('prefers a credentialed 3/3 census even after degraded-quorum grace', async () => {
     const f = seed(3);
@@ -6296,6 +6628,22 @@ describe('Issue #2659 ARCH23:01 old cooldown history versus a newer partial sour
     }, options);
     vi.setSystemTime(new Date('2026-10-12T00:20:00.000Z'));
 
+    // Independently model the exact original canonical REVIEW, not a journal ACK.
+    const reviews: GithubReviewSummary[] = [];
+    const reviewTransport: GithubReviewTransport = {
+      resolveActorLogin: async () => 'pack-review-bot',
+      listReviews: async () => [...reviews],
+      postReview: async ({ body, commitId }) => {
+        const id = prNumber * 10 + 11 + reviews.length;
+        const url = `https://github.com/${repository}/pull/${prNumber}#pullrequestreview-${id}`;
+        reviews.push({
+          id, body, commitId, state: 'COMMENTED', userLogin: 'pack-review-bot',
+          submittedAt: new Date().toISOString(), url,
+        });
+        return { id, url };
+      },
+      dismissReview: async () => { throw new Error('synthetic REVIEW dismissal not authorized'); },
+    };
     const launches: string[] = [];
     const attempts: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
     const result = await startPackReview({
@@ -6307,6 +6655,7 @@ describe('Issue #2659 ARCH23:01 old cooldown history versus a newer partial sour
       fixtureRepoSlug: repository, fixtureIssueNumber: prNumber,
       fixtureIssueTitle: '[T2] Same-head cooldown recovery', fixtureIssueBody: issueBody,
       fixtureGptSourceCommentTransport: sourceTransport,
+      fixtureGithubReviewTransport: reviewTransport,
       fixtureGptAttemptObserver: async () => ({
         state: 'continuation_eligible' as const, replacementEligible: false,
         initialLaunchSlotIds: ['source-02', 'source-03'],
@@ -6345,6 +6694,7 @@ describe('Issue #2659 ARCH23:01 old cooldown history versus a newer partial sour
       fixturePrState: 'OPEN', fixturePrBody: 'Closes #' + prNumber,
       fixtureIssueNumber: prNumber, fixtureIssueTitle: '[T2] Amended B1 behavior',
       fixtureIssueBody: B1,
+      fixtureGithubReviewTransport: reviewTransport,
       fixtureRequiredStatusReader: async () => publicStatus,
       fixtureRequiredStatusWriter: async (request: { state: string }) => {
         publicStatus = request.state;
@@ -6508,6 +6858,21 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
         return comment;
       },
     };
+    const reviews: GithubReviewSummary[] = [];
+    const reviewTransport: GithubReviewTransport = {
+      resolveActorLogin: async () => 'pack-review-bot',
+      listReviews: async () => [...reviews],
+      postReview: async ({ body, commitId }) => {
+        const id = prNumber * 10 + 11 + reviews.length;
+        const url = `https://github.com/${repository}/pull/${prNumber}#pullrequestreview-${id}`;
+        reviews.push({
+          id, body, commitId, state: 'COMMENTED', userLogin: 'pack-review-bot',
+          submittedAt: new Date().toISOString(), url,
+        });
+        return { id, url };
+      },
+      dismissReview: async () => { throw new Error('synthetic REVIEW dismissal not authorized'); },
+    };
     const firstSource = await resolvePackGptSourceComment({
       identity: { repository, prNumber, headSha: HEAD_A, runId, slotId: 'source-01', invocationId: originalSource01 },
       transport: sourceTransport,
@@ -6588,6 +6953,7 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       fixturePrState: 'OPEN', fixtureRepoSlug: repository,
       fixtureIssueNumber: prNumber, fixtureIssueTitle: "Independent linked Issue", fixtureIssueBody: issueBody,
       fixtureGptSourceCommentTransport: sourceTransport,
+      fixtureGithubReviewTransport: reviewTransport,
       // Supplying an observation-reader fixture keeps the real 30s admission interval.
       // Admission itself must not consult the unreadable state-light observation.
       fixtureGptAdmissionReadObservation: () => { throw new Error('synthetic state-light unavailable'); },
