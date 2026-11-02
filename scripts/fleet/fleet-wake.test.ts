@@ -267,7 +267,10 @@ function realOpenCodePane(kind: 'ack' | 'tool'): string {
 describe('fleet alarm', () => {
   // Incident identity on synthetic screens only; all Orca effects are intercepted.
   const architectHandle = 'term_721dce76-e932-460a-8ebe-e9f80da9f056';
-  const architect: FleetTerminal = { handle: architectHandle, title: 'Claude Code architect', worktreePath: primary };
+  // #2422 tests explicit architect exclusion for an otherwise eligible workspace
+  // worker. A primary-root title alone is no longer a B9-6 Dispatch unit.
+  const architect: FleetTerminal = { handle: architectHandle, title: 'Claude Code architect',
+    worktreePath: `${workerBase}/architect` };
 
   it.each([true, false])('excludes the idle incident architect only when configured: %s (#2422)', async (exclude) => {
     const observed = await tick({
@@ -433,7 +436,7 @@ describe('fleet alarm', () => {
     expect(second.result).toMatchObject({ state: 'same_stopped_set', coordinator: 'coord' });
     expect(sends(second.calls)).toHaveLength(0);
   });
-  it('excludes the coordinator while sweeping agent panes in the same primary worktree', async () => {
+  it('B9-6: excludes coordinator and unbound primary-root agent titles from a fleet alarm', async () => {
     const workspacePrimary = '/home/che/orca/workspaces/project/fixture';
     const observed = await tick({
       config: config({ primary: workspacePrimary }),
@@ -448,11 +451,13 @@ describe('fleet alarm', () => {
         stopped: 'done\n>',
       },
     });
-    expect(observed.result).toMatchObject({ state: 'sent', coordinator: 'coord', count: 1 });
-    const message = sends(observed.calls)[0]![sends(observed.calls)[0]!.indexOf('--text') + 1]!;
-    expect(message).toContain('STOPPED stopped OC | fixture-stopped');
-    expect(message).not.toContain('fixture-coordinator');
-    expect(message).not.toContain('fixture-agent');
+    // Without the exact native selected-project Dispatch/Run join, neither
+    // primary-root agent title can become a fleet unit, even though the
+    // coordinator is correctly excluded by handle.
+    expect(observed.result).toMatchObject({ state: 'nothing_stopped' });
+    expect(sends(observed.calls)).toHaveLength(0);
+    expect(observed.calls.some((call) => call[1] === 'read'
+      && (call.includes('stopped') || call.includes('agent')))).toBe(false);
   });
 
   it('suppresses the same stopped set while coordinator is busy, then sends when the set changes', async () => {
@@ -1121,10 +1126,13 @@ describe('Issue #2463 parked-producer compatibility with r05', () => {
   const setting = config({ selectedRepository: 'test/project' });
   const textTo = (calls: readonly string[][]) => sendsTo(calls, 'one')
     .filter((row) => row.includes('--text')).map((row) => row[row.indexOf('--text') + 1]!);
-  it('observes a finished pack-review run without Task/owner proof and deduplicates the same event', async () => {
+  it('observes a finished current-head pack-review PR with native PR evidence and deduplicates', async () => {
     const store = new MemoryWakeStore();
     const step = () => tick({ store, config: setting, terminals: [terminals[0]!, terminals[1]!],
       screens: { coord: 'idle', one: 'PARKED on pack-review PR #268 head ' + head },
+      // A named PR now requires a live open/unmerged exact-head witness;
+      // a historical check result without that PR cannot select a recipient.
+      readNamedPull: (_repo, number) => ({ number, headSha: head, state: 'open', merged: false }),
       readPackReviewStage: () => ({ state: 'success', description: 'completed' }),
     });
     expect(textTo((await step()).calls)[0]).toContain('stage-success');
