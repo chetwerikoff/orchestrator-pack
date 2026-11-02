@@ -2305,6 +2305,13 @@ export async function prepareWorktreeWithOrca(
   }
   const repositoryId = matches[0]!.id;
   const repositoryRoot = matches[0]!.path;
+  // Git owns registration retirement: its native non-expiring prune preserves
+  // live, locked and dirty linked worktrees and only removes stale metadata.
+  // Never run this from another repository or remove registration directories ourselves.
+  const pruned = await execute(['git', 'worktree', 'prune'], undefined, undefined, repositoryRoot);
+  if (!pruned.ok) return worktreeContinue('worktree_registry_prune_failed',
+    { selectedRepository: repository, registeredRoot: repositoryRoot },
+    'inspect git worktree list --porcelain in this selected repository, repair the stale registration with native git worktree prune, then retry; preserve live and locked worktrees');
   // The ordinary fresh path still uses origin/<default>. The exceptional PR
   // path must positively identify the only Issue-closing PR and fetched SHA
   // before invoking the native worktree-create mutation.
