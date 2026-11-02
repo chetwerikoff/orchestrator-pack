@@ -4527,7 +4527,6 @@ describe('Issue #2689 r03 exact native terminal -> canonical Issue assignment ->
             actor: 'orchestrator', nextAction: { kind: 'reconcile_worktree_setup' } };
         },
         finalizeProfile: async (profile) => ({ status: 'ok', value: profile }),
-        installManagerPushGuard: () => ({ status: 'ok', value: true }),
         runSupervisedStart: (args) => runSupervisedWorkerStart({
           ...args,
           inspect: async (argv) => ({ ok: true, stdout: JSON.stringify({ ok: true,
@@ -4546,7 +4545,7 @@ describe('Issue #2689 r03 exact native terminal -> canonical Issue assignment ->
       };
       const launched = await runSupervisedTaskLaunchAssistant({
         repository, projectId: 'orchestrator-pack', workClass: 'manager',
-        runId: 'run-2689', taskId, issueNumber: issue, defaultBranch: 'main',
+        runId: 'run-2689', taskId, issueNumber: issue,
         worktreeSelector: 'path:' + worktreePath, existingTerminal: handle,
         startMode: 'exact_terminal_worktree', env,
       }, deps);
