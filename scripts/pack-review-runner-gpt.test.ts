@@ -2116,8 +2116,50 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     const statusStates: string[] = [];
     const notifications: string[] = [];
     const earlyObservations: string[] = [];
+    // This timing fixture also expects a final success POST. Model the
+    // original credentialed GitHub COMMENTs and canonical REVIEW explicitly:
+    // browser-terminal output or a local journal is not public evidence.
+    const sourceComments: PackGptSourceGithubComment[] = [];
+    const sourceTransport: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => 'browser-gpt-bot',
+      listComments: async () => [...sourceComments],
+      getComment: async (id) => {
+        const found = sourceComments.find((comment) => comment.id === id);
+        if (!found) throw new Error('missing synthetic source COMMENT');
+        return found;
+      },
+    };
+    const reviews: GithubReviewSummary[] = [];
+    const reviewTransport: GithubReviewTransport = {
+      resolveActorLogin: async () => 'pack-review-bot',
+      listReviews: async () => [...reviews],
+      postReview: async ({ body, commitId }) => {
+        const id = 127611 + reviews.length;
+        const url = `https://github.com/chetwerikoff/orchestrator-pack/pull/1276#pullrequestreview-${id}`;
+        reviews.push({
+          id, body, commitId, state: 'COMMENTED', userLogin: 'pack-review-bot',
+          submittedAt: new Date().toISOString(), url,
+        });
+        return { id, url };
+      },
+      dismissReview: async () => { throw new Error('synthetic REVIEW dismissal not authorized'); },
+    };
 
     const result = await startPackReview(pluralStart(storeRoot, capture, {
+      fixtureGptSourceCommentTransport: sourceTransport,
+      fixtureGithubReviewTransport: reviewTransport,
+      fixtureBeforeGptSourceCommentCensus: ({ identity }) => {
+        if (sourceComments.some((comment) => comment.body.includes(`invocation=${identity.invocationId}`))) return;
+        const ordinal = Number(identity.slotId.slice(-2));
+        const id = 127600 + ordinal;
+        const createdAt = new Date().toISOString();
+        sourceComments.push({
+          id, body: formatPackGptSourceCommentEnvelope(identity, 'NO_FINDINGS'),
+          actorLogin: 'browser-gpt-bot', createdAt, updatedAt: createdAt,
+          url: `https://github.com/chetwerikoff/orchestrator-pack/pull/1276#issuecomment-${id}`,
+          issueUrl: 'https://api.github.com/repos/chetwerikoff/orchestrator-pack/issues/1276',
+        });
+      },
       fixtureRequiredStatusWriter: async (request) => {
         statusStates.push(request.state);
       },
