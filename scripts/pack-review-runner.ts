@@ -5208,6 +5208,8 @@ async function observePackReviewVerdictDelivery(options: {
   readHead: () => Promise<string>; writeRequiredStatus: PackReviewRequiredStatusWriter;
   /** An incumbent journaled resume, not a just-failed first delivery, owns retry. */
   resumeFailedStatus?: boolean;
+  /** A delegated reconcile has already made its bounded status repair. */
+  readOnlyStatusConfirmation?: boolean;
 }): Promise<{ verified: boolean; reason: string; requiredStatusState?: 'pending' | 'success' | 'failure' }> {
   const unresolved = (reason: string) => ({ verified: false as const, reason });
   const load = () => getPackReviewRun(options.runId, {
@@ -5270,6 +5272,11 @@ async function observePackReviewVerdictDelivery(options: {
     if (run.deliveryOutcomes.requiredStatus?.state === 'failed'
         && options.resumeFailedStatus !== true) {
       return unresolved('status_not_published:failed_required_status_channel');
+    }
+    // The inner source-recovery reconciler already owned one restoration.
+    // A second observer may re-read but must not issue a third same-start POST.
+    if (options.readOnlyStatusConfirmation) {
+      return unresolved('status_not_published:current_head_status_unconfirmed');
     }
     try {
       const restored = await restorePackReviewAuthoritativeRequiredStatus({
@@ -10748,6 +10755,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
             prNumber: target.prNumber, headSha: target.headSha,
             repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
             readHead: readProjectionHead,
+            readOnlyStatusConfirmation: true,
             writeRequiredStatus: input.fixtureRequiredStatusWriter ?? ((request) =>
               publishPackReviewRequiredStatus({
                 repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
@@ -10763,6 +10771,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         // publication separately, never claiming an exact-head green. Missing
         // or altered GitHub evidence cannot borrow this accepted-run result.
         const acceptedUnpublished = !verified && !supplemental && verdictExists
+          && !sameRoundGptRun && !reconcileError
           && recovered.reviewVerdict === 'clean'
           && recovered.deliveryOutcomes.githubComment?.state === 'succeeded'
           && await verifyOrdinaryRequiredSuccessBinding(recovered, input, {
