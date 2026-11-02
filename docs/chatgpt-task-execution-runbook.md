@@ -123,7 +123,9 @@ For indexed waits use `readInvocationReceiptLocator` with independently expected
 receipt invocation instead of selecting an index. Reject foreign, missing,
 blank and legacy owner Task, and recheck owner and original/final receipt
 identity before any result. Preserve ordinary unbound legacy waits; do not
-add a candidate lister, receipt schema or registry.
+add a candidate lister, receipt schema or registry. Receipts, locators and
+terminal envelopes all resolve under `$XDG_STATE_HOME/orchestrator-pack/` (or
+`~/.local/state/orchestrator-pack/`); a caller path contributes only its basename.
 
 ## Per-turn execution contract
 

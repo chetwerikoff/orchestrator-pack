@@ -5,7 +5,10 @@ import { EventEmitter } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import {
+  WORKER_ASSIGNMENT_SCHEMA, WORKER_ASSIGNMENT_STORE_SCHEMA, resolveWorkerAssignmentStorePath, workerAssignmentKey,
+} from '../lib/worker-assignment-store.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -47,13 +50,14 @@ import {
   COMPOSER_SELECTOR, SEND_BUTTON_SELECTOR, MESSAGE_NODE_SELECTOR,
   MESSAGE_AUTHOR_ROLE_ATTR, USER_MESSAGE_STYLE, RENDERED_CONVERSATION_TURN_SECTION_SELECTOR,
   USER_MESSAGE_SELECTOR, ASSISTANT_MESSAGE_SELECTOR, ASSISTANT_TURN_ANCESTOR_XPATH,
-  RENDERED_STOP_BUTTON_SELECTOR,
+  RENDERED_STOP_BUTTON_SELECTOR, ASSISTANT_TURN_ACTION_SELECTOR,
 } from './product-page-selectors.ts';
 import { publishWitnessedStateLight429, readStateLightAccountCooldown, __testComposerMutation, __testSendDelivery, atomicSnapshotSignature, classifyPageObservation, keyedHarvestCandidate, readPageObservation, revalidateKeyedHarvest, runStateLightTurn, type AtomicTranscriptSnapshot } from './state-light-turn-base.ts';
 import {
-  admitStateLightTurnObservation, bindStateLightOwnedTarget, readStateLightTurnObservation,
-  transitionStateLightTurnObservation,
+  acquireObservationMutation, admitStateLightTurnObservation, bindStateLightOwnedTarget,
+  readStateLightTurnObservation, releaseObservationMutation, transitionStateLightTurnObservation,
 } from './state-light-turn-observation.ts';
+import { runStateLightCancellation } from './state-light-cancellation.ts';
 import {
   __setStateLightPrAuthorHooksForTest, findOtherPrAuthorHolder, isExactLivePrAuthorLauncher,
   prAuthorHeadEffect, prAuthorHeadMismatch, prelaunchPrAuthorOccupant, PR_AUTHOR_CANONICAL_ENTRY,
@@ -1929,11 +1933,11 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
 
   it.each([
     ['composer-still-absent', 'send_failed', 'composer_unavailable'],
-    ['redirect', 'ui_contract_mismatch', 'owned_conversation_identity_mismatch'],
+    ['redirect', 'ui_contract_mismatch', 'conversation_unavailable'],
     ['network', 'ui_contract_mismatch', 'network_changed'],
     ['navigation-throw', 'driver_error', 'unexpected navigation failure'],
     ['lost-page', 'driver_error', 'Target closed'],
-    ['late-redirect', 'ui_contract_mismatch', 'owned_conversation_identity_mismatch'],
+    ['late-redirect', 'ui_contract_mismatch', 'conversation_unavailable'],
     ['late-close', 'driver_error', 'Target closed'],
     ['expired-goto', 'driver_error', 'composer_mutation_budget_exhausted'],
     ['expired-readiness', 'driver_error', 'composer_mutation_budget_exhausted'],
@@ -1948,6 +1952,10 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     const run = await fullTurn(scenario);
     expect(run.goto).toHaveBeenCalledTimes(1);
     expect(run.result).toMatchObject({ state, cause, send_count: 0 });
+    if (cause === 'conversation_unavailable') {
+      expect(run.result.next_action).toMatch(/fresh chat/u);
+      expect(run.result).not.toHaveProperty('recovery_available');
+    }
     if (scenario === 'expired-readiness') {
       // No time remains for even one post-goto composer DOM probe.
       expect(run.postReopenComposerProbes).toBe(0);
@@ -3879,6 +3887,23 @@ describe('Issue #2718 PR-author PRE-SEND gate in the production turn', () => {
     expect(reads).toBeGreaterThanOrEqual(4);
   });
 
+  it('records the GitHub effect baseline from the final pre-SEND head refresh, not the earlier gate read', async () => {
+    fixture.launch('inv-baseline', { admit: false });
+    const receiptPath = join(fixture.root, 'term', 'inv-baseline.receipt.json');
+    vi.stubEnv('OPK_FM_LONG_CHILD_HANDOFF_RECEIPT', receiptPath);
+    const head = (sha: string): PrAuthorHeadObservation => ({
+      state: 'open', sha, headRepo: 'acme/widgets', headRef: 'feature', baseRepo: 'acme/widgets',
+    });
+    let reads = 0;
+    // The gate read sees A; the final dispatch-boundary refresh sees B; later polls keep B.
+    const readHead = vi.fn(async () => { reads += 1; return head(reads === 1 ? 'a'.repeat(40) : 'b'.repeat(40)); });
+    const { press, result } = await runBoundTurn('inv-baseline', readHead, true);
+    expect(result.send_count).toBe(1);
+    expect(press).toHaveBeenCalledTimes(1);
+    const receipt = JSON.parse(readFileSync(receiptPath, 'utf8')) as { github_effect_baseline?: { head_sha?: string } };
+    expect(receipt.github_effect_baseline).toMatchObject({ head_sha: 'b'.repeat(40) });
+  });
+
   it('refuses conversation_busy/pr_author_occupied naming the holder, with zero composer mutation or SEND', async () => {
     fixture.launch('inv-holder');
     fixture.claim('inv-holder');
@@ -3916,5 +3941,745 @@ describe('Issue #2718 PR-author PRE-SEND gate in the production turn', () => {
       '--invocation-id', 'inv-partial', '--repo', 'acme/widgets',
     ]);
     expect(result).toMatchObject({ state: 'input_invalid', cause: 'pr_author_binding_pair_partial', send_count: 0 });
+  });
+});
+
+describe('Issue #2750 AC7 prepared-phase exact-owner cancellation race', () => {
+  const OWNER = { task: 'task-2750', dispatch: 'dispatch-2750', handle: 'term-owner-2750' };
+  let root: string;
+  let ownerEnv: NodeJS.ProcessEnv;
+  /** The selected assignment store currently binds `taskId` to `dispatchId`. */
+  function bindAssignment(taskId: string, dispatchId: string): void {
+    const file = resolveWorkerAssignmentStorePath('orchestrator-pack', ownerEnv);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify({
+      schema: WORKER_ASSIGNMENT_STORE_SCHEMA, revision: 1,
+      assignments: { [workerAssignmentKey(taskId, dispatchId)]: {
+        schema: WORKER_ASSIGNMENT_SCHEMA, projectId: 'orchestrator-pack', repository: 'acme/widgets', issueNumber: 2750,
+        taskId, assignmentId: 'assignment-2750', generation: 1, kind: 'local', provider: 'orca',
+        bindingKey: dispatchId, role: 'worker', createdAtUtc: '2026-11-02T00:00:00.000Z',
+      } },
+    }) + '\n');
+  }
+  const nativeDispatch = (overrides: { status?: string; observation?: string; handle?: string } = {}) => ({
+    dispatch: { id: OWNER.dispatch, taskId: OWNER.task, status: overrides.status ?? 'dispatched' },
+    observation: { status: overrides.observation ?? 'live', exactWorker: true },
+    terminal: { handle: overrides.handle ?? OWNER.handle },
+  });
+  let ownerDeps: { env: NodeJS.ProcessEnv; dispatchWitness: (id: string) => Promise<Record<string, unknown> | undefined>; invokingTerminalHandle?: string };
+  let profile: string;
+  const cdp = 'http://127.0.0.1:9222';
+  let profileKey: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'opk-2750-ac7-'));
+    profile = join(root, 'profile');
+    profileKey = configuredProfileKey(profile, cdp);
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
+    vi.stubEnv('OPK_FM_LONG_CHILD_TEST_GATE', 'fixture-root-v1');
+    vi.stubEnv('OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT', join(root, 'term'));
+    mkdirSync(join(root, 'term', 'browser-gpt-receipts'), { recursive: true, mode: 0o700 });
+    ownerEnv = { HOME: root, OPK_BASE_DIR: join(root, 'opk-base'), OPK_PROJECT_ID: 'orchestrator-pack' };
+    bindAssignment(OWNER.task, OWNER.dispatch);
+    ownerDeps = { env: ownerEnv, dispatchWitness: async () => nativeDispatch(), invokingTerminalHandle: OWNER.handle };
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+    mocks.browserQueue.length = 0;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  /** Original launcher locator + owner-bound handoff receipt + admitted (prepared) record. */
+  function seed(id: string, options: { locator?: boolean; admit?: boolean } = {}) {
+    if (options.locator !== false) {
+      const identity = { run_identity: 'run-' + id, attempt_identity: 'attempt-' + id };
+      const receipt = join(root, 'term', id + '.receipt.json');
+      writeFileSync(receipt, JSON.stringify({
+        schema: 'flow-manager-long-running-child-handoff/v1', ...identity,
+        launcher_started_at: new Date().toISOString(), handoff_committed_at: new Date().toISOString(),
+        completion_mode: 'browser-turn-result-v1', invocation_id: id, launcher_pid: process.pid,
+        child_cwd: root, owner_task_id: OWNER.task, owner_dispatch_id: OWNER.dispatch,
+      }), { mode: 0o600 });
+      writeFileSync(join(root, 'term', 'browser-gpt-receipts',
+        createHash('sha256').update(id, 'utf8').digest('hex') + '.json'), JSON.stringify({
+        schema: 'flow-manager-long-running-child-locator/v1', invocation_id: id, ...identity,
+        handoff_receipt_path: receipt, terminal_envelope_path: join(root, 'term', id + '.terminal.json'),
+      }), { mode: 0o600 });
+    }
+    if (options.admit !== false) {
+      admitStateLightTurnObservation({ profileKey, invocationId: id, marker: MARKER });
+    }
+  }
+  const preparedArgv = (id: string, overrides: Record<string, string> = {}) => {
+    const flags: Record<string, string> = {
+      '--invocation-id': id, '--run-identity': 'run-' + id, '--attempt-identity': 'attempt-' + id,
+      '--owner-task-id': OWNER.task, '--owner-dispatch-id': OWNER.dispatch,
+      '--profile': profile, '--cdp': cdp, ...overrides,
+    };
+    return ['--prepared-only', ...Object.entries(flags).flat()];
+  };
+  async function cancel(argv: string[]) {
+    // Swap (not spy) stdout so a nested call inside a captured turn leaves the outer capture intact.
+    const previous = process.stdout.write;
+    const writes: string[] = [];
+    process.stdout.write = ((chunk: unknown) => { writes.push(String(chunk)); return true; }) as typeof process.stdout.write;
+    try {
+      const code = await runStateLightCancellation(argv, { preparedOwner: ownerDeps });
+      return { code, out: JSON.parse(writes.at(-1) ?? '{}') as Record<string, unknown> };
+    } finally {
+      process.stdout.write = previous;
+    }
+  }
+  const phase = (id: string) => readStateLightTurnObservation(profileKey, id);
+
+  it('cancel winner commits prepared -> not_sent and the producer dispatch boundary then throws before any click', async () => {
+    seed('inv-win');
+    const { code, out } = await cancel(preparedArgv('inv-win'));
+    expect(code).toBe(0);
+    expect(out).toMatchObject({
+      state: 'cancelled_before_dispatch', cause: 'cancelled_before_dispatch', send_count: 0,
+      invocation_id: 'inv-win', owner_task_id: OWNER.task, owner_dispatch_id: OWNER.dispatch,
+    });
+    expect(phase('inv-win')).toMatchObject({
+      phase: 'not_sent', send_count: 0, transition_reason: 'cancelled_before_dispatch',
+    });
+    const harness = createHarness('click', 'owned_user_node');
+    await expect(__testSendDelivery.dispatchStateLightSendAndObserveDelivery({
+      page: harness.page, composer: harness.composer, sendButton: harness.sendButton, hasSendButton: true,
+      marker: MARKER, baselineUserNodeCount: 1, sendWaitMs: 1_000, invocationDeadlineMs: Date.now() + 1_000,
+      deliveryProofWaitMs: 10, preSendAlertsAlreadyMarked: true,
+      onDispatch: () => {
+        transitionStateLightTurnObservation({
+          profileKey, invocationId: 'inv-win', phase: 'dispatching', reason: 'dispatch_boundary_entered',
+        });
+      },
+    })).rejects.toThrow('observation_phase_transition_invalid');
+    expect(harness.sendButton.click).not.toHaveBeenCalled();
+    expect(harness.composer.press).not.toHaveBeenCalled();
+    expect(phase('inv-win').phase).toBe('not_sent');
+  });
+
+  it('a repeated cancel is idempotent success with zero Send', async () => {
+    seed('inv-repeat');
+    expect((await cancel(preparedArgv('inv-repeat'))).code).toBe(0);
+    const before = phase('inv-repeat');
+    const { code, out } = await cancel(preparedArgv('inv-repeat'));
+    expect(code).toBe(0);
+    expect(out).toMatchObject({ state: 'cancelled_before_dispatch', cause: 'already_cancelled', send_count: 0 });
+    expect(phase('inv-repeat')).toEqual(before);
+  });
+
+  it.each(['sending', 'dispatching'] as const)('producer won first (%s) => non-success, record untouched', async (won) => {
+    seed('inv-lost');
+    transitionStateLightTurnObservation({ profileKey, invocationId: 'inv-lost', phase: won, reason: 'producer_claim' });
+    const { code, out } = await cancel(preparedArgv('inv-lost'));
+    expect(code).toBe(13);
+    expect(out).toMatchObject({ state: 'driver_error', cause: 'cancel_not_prepared' });
+    expect(String(out.next_action)).toContain('do not resend');
+    expect(phase('inv-lost')).toMatchObject({ phase: won, transition_reason: 'producer_claim' });
+  });
+
+  it('a not_sent record that was not cancelled by the owner is not a cancel winner', async () => {
+    seed('inv-other-terminal');
+    transitionStateLightTurnObservation({
+      profileKey, invocationId: 'inv-other-terminal', phase: 'not_sent', reason: 'terminal_pre_send',
+      sendCount: 0, sendWitness: 'numeric_send_count',
+    });
+    const { code, out } = await cancel(preparedArgv('inv-other-terminal'));
+    expect(code).toBe(13);
+    expect(out).toMatchObject({ cause: 'cancel_not_prepared' });
+  });
+
+  it('refuses a held mutation lease as observation_mutation_busy without changing the record', async () => {
+    seed('inv-busy');
+    const lease = acquireObservationMutation(profileKey, 'inv-busy');
+    try {
+      const { code, out } = await cancel(preparedArgv('inv-busy'));
+      expect(code).toBe(13);
+      expect(out).toMatchObject({ cause: 'observation_mutation_busy' });
+      expect(phase('inv-busy').phase).toBe('prepared');
+    } finally {
+      releaseObservationMutation(lease);
+    }
+  });
+
+  it.each([
+    ['wrong owner task', { '--owner-task-id': 'task-foreign' }],
+    ['wrong owner dispatch', { '--owner-dispatch-id': 'dispatch-foreign' }],
+    ['wrong run identity', { '--run-identity': 'run-foreign' }],
+    ['wrong attempt identity', { '--attempt-identity': 'attempt-foreign' }],
+    ['unknown invocation id', { '--invocation-id': 'inv-nobody' }],
+  ])('foreign selector (%s) is non-success and leaves the prepared record untouched', async (_name, override) => {
+    seed('inv-foreign');
+    const { code, out } = await cancel(preparedArgv('inv-foreign', override));
+    expect(code).toBe(13);
+    expect(out).toMatchObject({ state: 'driver_error', cause: 'cancel_locator_unverified' });
+    expect(phase('inv-foreign').phase).toBe('prepared');
+  });
+
+  it.each([
+    ['Dispatch replaced in the selected store', () => { bindAssignment(OWNER.task, 'dispatch-replacement'); }, 'task_dispatch_replaced'],
+    ['stale store row: native Dispatch exited', () => { ownerDeps.dispatchWitness = async () => nativeDispatch({ observation: 'exited' }); }, 'native_dispatch_not_live'],
+    ['stale store row: native Dispatch settled', () => { ownerDeps.dispatchWitness = async () => nativeDispatch({ status: 'completed' }); }, 'native_dispatch_not_live'],
+    ['native Dispatch unreadable', () => { ownerDeps.dispatchWitness = async () => undefined; }, 'native_dispatch_unreadable'],
+    ['copied archived pair from a foreign terminal', () => { ownerDeps.invokingTerminalHandle = 'term-foreign'; }, 'invoking_terminal_not_dispatch_worker'],
+  ])('a matching archived receipt without current owner authority (%s) cannot cancel', async (_name, arrange, evidence) => {
+    seed('inv-stale-owner');
+    arrange();
+    const { code, out } = await cancel(preparedArgv('inv-stale-owner'));
+    expect(code).toBe(13);
+    expect(out).toMatchObject({ state: 'driver_error', cause: 'cancel_owner_not_current', owner_evidence: evidence });
+    expect(String(out.next_action)).toContain('do not resend');
+    expect(phase('inv-stale-owner').phase).toBe('prepared');
+  });
+
+  it('a different profile/CDP derives a foreign profile key and cannot cancel', async () => {
+    seed('inv-profile');
+    const { code, out } = await cancel(preparedArgv('inv-profile', { '--profile': join(root, 'other-profile') }));
+    expect(code).toBe(13);
+    expect(out).toMatchObject({ cause: 'cancel_observation_unverified' });
+    expect(phase('inv-profile').phase).toBe('prepared');
+  });
+
+  it('missing locator or missing observation is non-success', async () => {
+    seed('inv-no-locator', { locator: false });
+    const noLocator = await cancel(preparedArgv('inv-no-locator'));
+    expect(noLocator.code).toBe(13);
+    expect(noLocator.out).toMatchObject({ cause: 'cancel_locator_unverified' });
+    expect(phase('inv-no-locator').phase).toBe('prepared');
+    seed('inv-no-record', { admit: false });
+    const noRecord = await cancel(preparedArgv('inv-no-record'));
+    expect(noRecord.code).toBe(13);
+    expect(noRecord.out).toMatchObject({ cause: 'cancel_observation_unverified' });
+  });
+
+  it.each([
+    ['receipt-file combined', ['--receipt-file', '/nonexistent']],
+    ['unknown flag', ['--bogus', 'x']],
+    ['duplicate flag', ['--cdp', 'http://127.0.0.1:9333']],
+  ])('rejects malformed prepared-only argv (%s) with cancel_arguments_invalid', async (_name, extra) => {
+    seed('inv-argv');
+    const { code, out } = await cancel([...preparedArgv('inv-argv'), ...extra]);
+    expect(code).toBe(13);
+    expect(out).toMatchObject({ cause: 'cancel_arguments_invalid' });
+    expect(String(out.next_action)).toContain('--prepared-only');
+    expect(phase('inv-argv').phase).toBe('prepared');
+    const missing = preparedArgv('inv-argv').filter((_, index, all) => all[index] !== '--owner-dispatch-id' && all[index - 1] !== '--owner-dispatch-id');
+    expect((await cancel(missing)).out).toMatchObject({ cause: 'cancel_arguments_invalid' });
+    expect(phase('inv-argv').phase).toBe('prepared');
+  });
+
+  it('receipt mode is unchanged: a prepared record is still refused with no cancel authority', async () => {
+    seed('inv-receipt');
+    const receiptPath = join(root, 'cancel-receipt.json');
+    writeFileSync(receiptPath, JSON.stringify({
+      schema: 'browser-turn-cancellation-receipt/v1', invocation_id: 'inv-receipt',
+      configured_profile_key: profileKey, conversation_url: 'https://chatgpt.com/c/11111111-1111-1111-1111-111111111111',
+      marker: MARKER, send_count: 1,
+    }));
+    const { code, out } = await cancel(['--receipt-file', receiptPath, '--cdp', cdp]);
+    expect(code).toBe(13);
+    expect(out).toMatchObject({
+      state: 'driver_error', cause: 'cancellation_durable_identity_or_phase_mismatch', send_count: 1,
+    });
+    expect(phase('inv-receipt').phase).toBe('prepared');
+  });
+
+  it('end to end: a cancel landing between prepare and dispatch yields cancelled_before_dispatch with zero physical Send', async () => {
+    const id = 'inv-e2e-cancel';
+    seed(id, { admit: false }); // the turn admits its own prepared record and marker
+    const target = 'https://chatgpt.com/c/11111111-1111-1111-1111-111111111111';
+    let now = 20_000;
+    let composerText = '';
+    const rows = [
+      { role: 'user', text: 'older user', key: 'data-message-id:older-user-2750' },
+      { role: 'assistant', text: 'older assistant', key: 'data-message-id:older-assistant-2750' },
+    ];
+    const composer = scalarLocator({
+      count: async () => 1,
+      fill: async (text: string) => {
+        composerText = text;
+        // The exact owner's cancel wins while the producer is still pre-dispatch.
+        if (phase(id).phase === 'prepared') {
+          expect((await cancel(preparedArgv(id))).code).toBe(0);
+        }
+      },
+      innerText: async () => composerText,
+    });
+    const send = vi.fn(async () => undefined);
+    const messageNodes = {
+      count: async () => rows.length,
+      nth: (index: number) => collectionLocator(rows).nth(index),
+      evaluateAll: async () => ({
+        rows: rows.map((row, domIndex) => ({
+          ...row, domIndex, complete: true, completionReady: true, continuationVisible: false,
+        })),
+        pageTurnEvidence: { generationInProgress: false, observedAssistantNodes: 1, continueGeneratingVisible: false },
+      }),
+    };
+    const page = {
+      __fakeBrowserGptPage: true, url: () => target, isClosed: () => false,
+      goto: vi.fn(async () => undefined), close: vi.fn(async () => undefined),
+      waitForTimeout: async (ms: number) => { now += ms; },
+      getByRole: () => scalarLocator(), getByText: () => scalarLocator(),
+      locator: (selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: async () => 1, click: send });
+        if (selector === MESSAGE_NODE_SELECTOR) return messageNodes;
+        return scalarLocator();
+      },
+    };
+    const browserFixture = enqueueBrowserForTurn(mocks, page);
+    Object.assign(browserFixture.context, { pages: () => [page] });
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      '--profile', profile, '--cdp', cdp, '--input', join(root, 'synthetic-prompt.txt'),
+      '--output', join(root, 'reply.txt'), '--chat-url', target,
+      '--invocation-id', id, '--timeout-ms', '180000',
+    ]);
+    expect(send, JSON.stringify(result)).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ cause: 'cancelled_before_dispatch', send_count: 0 });
+    expect(result.send_attempted).not.toBe(true);
+    expect(String(result.next_action)).toContain('fresh invocation id');
+    expect(phase(id)).toMatchObject({ phase: 'not_sent', transition_reason: 'cancelled_before_dispatch' });
+  });
+});
+
+describe('Issue #2750 AC22 finished long CodeMirror-virtualized reply and AC9 attachment-free harvest', () => {
+  const TARGET = 'https://chatgpt.com/c/11111111-1111-4111-8111-111111111111';
+  const REDIRECT = 'https://chatgpt.com/c/22222222-2222-4222-8222-222222222222';
+  const CDP = 'http://127.0.0.1:9222';
+  const FENCE = String.fromCharCode(96).repeat(3);
+  const REPLY_LENGTH = 24_012;
+  const HEAD = 'Long synthetic analysis follows.';
+  const TAIL = 'LONG-REPLY-DONE';
+
+  /** A document whose assembled reply is exactly REPLY_LENGTH characters. */
+  function buildLongDoc() {
+    const fixed = HEAD.length + 2 + (FENCE.length + 'python'.length + 1) + 1 + FENCE.length + 2 + TAIL.length;
+    const target = REPLY_LENGTH - fixed;
+    const lines: string[] = [];
+    let length = 0;
+    for (let index = 0; length < target - 60; index += 1) {
+      const line = `value_${String(index).padStart(4, '0')} = compute(${index})`;
+      lines.push(line);
+      length += line.length + (lines.length > 1 ? 1 : 0);
+    }
+    lines.push('z'.repeat(target - length - 1));
+    return lines.join('\n');
+  }
+  const LONG_DOC = buildLongDoc();
+  const assembleReply = (doc: string) => [HEAD, FENCE + 'python\n' + doc + '\n' + FENCE, TAIL].join('\n\n');
+
+  // Minimal rendered-DOM element: just the primitives the in-page serializer
+  // reads (tags, classes, attributes, ancestry, computed display).
+  type SelectorToken = { readonly tag?: string; readonly cls?: string; readonly attr?: string; readonly value?: string };
+  const parseToken = (token: string): SelectorToken => {
+    if (token.startsWith('.')) return { cls: token.slice(1) };
+    const attr = /^\[([\w-]+)(?:="([^"]*)")?\]$/u.exec(token);
+    if (attr) return { attr: attr[1]!, ...(attr[2] !== undefined ? { value: attr[2] } : {}) };
+    return /^[a-z][a-z0-9-]*$/iu.test(token) ? { tag: token.toUpperCase() } : { tag: '\u0000' };
+  };
+  const tokenMatches = (el: any, t: SelectorToken): boolean =>
+    (t.tag === undefined || el.tagName === t.tag)
+    && (t.cls === undefined || String(el.attributes.class ?? '').split(/\s+/u).includes(t.cls))
+    && (t.attr === undefined || (t.attr in el.attributes && (t.value === undefined || el.attributes[t.attr] === t.value)));
+  const descendantMatches = (el: any, chain: readonly SelectorToken[]): boolean => {
+    if (!tokenMatches(el, chain[chain.length - 1]!)) return false;
+    let cursor = el.parentElement;
+    for (const token of chain.slice(0, -1).reverse()) {
+      while (cursor && !tokenMatches(cursor, token)) cursor = cursor.parentElement;
+      if (!cursor) return false;
+      cursor = cursor.parentElement;
+    }
+    return true;
+  };
+  function richNode(
+    tagName: string, innerText = '', attrs: Record<string, string> = {}, shown = true, displayContents = false,
+  ): any {
+    const el: any = {
+      nodeType: 1, tagName, innerText, textContent: innerText, attributes: attrs, shown, displayContents,
+      children: [] as any[], childNodes: [] as any[], parentElement: null,
+    };
+    const styleOf = (target: any) => ({
+      visibility: 'visible',
+      display: target.displayContents ? 'contents' : target.shown ? (target.computedDisplay ?? 'block') : 'none',
+    });
+    const all = (): any[] => el.children.flatMap((child: any) => [child, ...child.querySelectorAll('*')]);
+    Object.assign(el, {
+      ownerDocument: { defaultView: { getComputedStyle: styleOf } },
+      getClientRects: () => (shown ? [{}] : []),
+      getBoundingClientRect: () => ({ height: shown ? 1 : 0 }),
+      getAttribute: (name: string) => attrs[name] ?? null,
+      hasAttribute: (name: string) => name in attrs,
+      append: (child: any) => { child.parentElement = el; el.children.push(child); el.childNodes.push(child); return el; },
+      appendText: (text: string) => { el.childNodes.push({ nodeType: 3, textContent: text, parentElement: el }); return el; },
+      querySelectorAll: (selector: string): any[] => {
+        if (selector === '*') return all();
+        const groups = selector.split(/,\s*/u).map((group) => group.trim().split(/\s+/u).map(parseToken));
+        return all().filter((candidate) => groups.some((chain) => descendantMatches(candidate, chain)));
+      },
+      querySelector: (selector: string): any => el.querySelectorAll(selector)[0] ?? null,
+    });
+    return el;
+  }
+
+  /**
+   * Live ChatGPT assistant scaffold: markdown root, DilRenderer content root, a
+   * labelled code-block action bar and a CodeMirror editor whose body is
+   * virtualized (a window of `.cm-line` rows between `.cm-gap` spacers).
+   */
+  function buildVirtualizedAssistant(options: { cmDoc?: () => string; turnFinished: () => boolean }) {
+    const outer = richNode('DIV', '');
+    const append = (parent: any, tag: string, literal = '', attrs: Record<string, string> = {}, shown = true): any => {
+      const node = richNode(tag, literal, attrs, shown);
+      parent.append(node);
+      return node;
+    };
+    const rendered = LONG_DOC.split('\n').slice(500, 520);
+    append(outer, 'H4', 'ChatGPT said:', { class: 'sr-only' });
+    // Live wrapper chain down to the DilRenderer content root, outermost first.
+    const chain: Array<Record<string, string>> = [
+      {}, { class: 'group flex min-w-0 flex-col' },
+      { class: 'MarkdownRoot-rZKhxa', 'data-markdown-text-style': 'assistant-message' },
+      { 'data-markdown-copy': 'contents' }, {},
+    ];
+    const inset = chain.reduce((parent: any, attrs) => append(parent, 'DIV', '', attrs), outer);
+    append(inset, 'DIV', '', { hidden: '' }, false);
+    const renderer = append(append(inset, 'DIV', '', { class: 'PortalBoundary-TFj9W2' }), 'DIV', '', {
+      class: 'DilRenderer-tB76Jj',
+    });
+    renderer.computedDisplay = 'flex';
+    const prose = (text: string) => {
+      const paragraph = append(renderer, 'P', text, { class: 'TextBase-hXhSqg' });
+      text.split(/(?<= )/u).forEach((word) => append(paragraph, 'SPAN', word));
+    };
+    prose(HEAD);
+    const wrapper = append(append(renderer, 'DIV'), 'DIV', '', { class: 'CodeBlock-zu1QM3' });
+    const root = append(wrapper, 'DIV', '', { 'data-code-block': 'true', 'data-markdown-copy': 'code-block' });
+    const bar = append(root, 'DIV', 'PythonRun', {
+      'data-markdown-copy': 'exclude', contenteditable: 'false', class: 'ActionBar-KWWAct',
+    });
+    append(bar, 'SVG');
+    append(bar, 'DIV', 'Python').appendText('Python');
+    const controls = append(append(bar, 'DIV'), 'DIV', '', {
+      'data-code-block-controls': 'true', role: 'presentation',
+    });
+    const tooltip = richNode('SPAN', '', { 'data-state': 'closed', class: 'contents' }, false, true);
+    controls.append(tooltip);
+    append(tooltip, 'BUTTON', '', { 'aria-label': 'Enable word wrap' });
+    append(controls, 'BUTTON', '', { 'aria-label': 'Copy code' });
+    append(controls, 'BUTTON', 'Run', { 'aria-label': 'Run code' });
+    const relative = append(root, 'DIV', '', { class: 'relative' });
+    const scroller = append(append(append(relative, 'DIV'), 'DIV', '', { class: 'cm-editor' }), 'DIV', '', {
+      class: 'cm-scroller',
+    });
+    const cmContent = append(scroller, 'DIV', rendered.join('\n'), {
+      contenteditable: 'true', role: 'textbox', 'aria-label': 'Edit code',
+      'data-language': 'python', class: 'cm-content',
+    });
+    append(cmContent, 'DIV', '', { class: 'cm-gap' });
+    for (const line of rendered) append(cmContent, 'DIV', line, { class: 'cm-line' });
+    append(cmContent, 'DIV', '', { class: 'cm-gap' });
+    append(relative, 'BUTTON', '', { 'aria-hidden': 'true', 'aria-label': 'Scroll to bottom' });
+    prose(TAIL);
+    outer.innerText = HEAD + '\n\nPython\nRun\n' + rendered.join('\n') + '\n\n' + TAIL;
+    outer.textContent = outer.innerText;
+    if (options.cmDoc) {
+      // CodeMirror 6: the editor view hangs off the content element; a read-only
+      // document read, never a scroll or a click.
+      cmContent.cmView = { view: { contentDOM: cmContent, state: { doc: { toString: options.cmDoc } } } };
+    }
+    const baseQuery = outer.querySelector.bind(outer);
+    Object.assign(outer, {
+      getAttribute: (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR
+        ? 'assistant-message' : name === 'data-message-id' ? 'own-assistant-2750-long' : null,
+      querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+        ? { getAttribute: () => 'assistant-message' } : baseQuery(selector),
+      // A finished turn carries the action bar; a streaming turn does not.
+      closest: () => ({ querySelector: (selector: string) =>
+        selector === ASSISTANT_TURN_ACTION_SELECTOR && options.turnFinished() ? {} : null }),
+    });
+    const doc = outer.ownerDocument;
+    const propagate = (node: any) => { node.ownerDocument = doc; for (const child of node.children) propagate(child); };
+    propagate(outer);
+    return outer;
+  }
+
+  const plainRow = (role: 'user' | 'assistant', key: string, text: () => string) => ({
+    getAttribute: (name: string) => {
+      if (name === MESSAGE_AUTHOR_ROLE_ATTR) return role === 'user' ? 'user-message' : 'assistant-message';
+      return name === 'data-message-id' ? key : null;
+    },
+    closest: () => ({ querySelector: () => null }),
+    querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
+      ? { getAttribute: () => role === 'user' ? 'user-message' : 'assistant-message' } : null,
+    querySelectorAll: () => [],
+    getBoundingClientRect: () => ({ height: 1 }),
+    get innerText() { return text(); },
+  });
+
+  type Scenario = 'finished' | 'streaming' | 'growing' | 'incomplete' | 'foreign' | 'redirected';
+
+  async function runLongReplyTurn(scenario: Scenario, timeoutMs: number, pollMs: number) {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2750-ac22-'));
+    const invocation = randomUUID();
+    const profile = join(root, 'profile');
+    const output = join(root, 'reply.txt');
+    const start = 20_000;
+    let now = start;
+    let composerText = '';
+    let deliveredText = '';
+    let sends = 0;
+    let postSendReads = 0;
+    let sleeps = 0;
+    let sleepsAfterSend = 0;
+    let sentAt = start;
+    const documentReads = { count: 0 };
+    const currentDoc = (): string => scenario === 'growing'
+      ? LONG_DOC + '\n# still growing ' + documentReads.count : LONG_DOC;
+    const owned = scenario === 'foreign'
+      ? () => deliveredText.replace(/OPKTURNV1[0-9a-f]+/u, 'OPKTURNV1' + '77'.repeat(16)) : () => deliveredText;
+    const history = [
+      plainRow('user', 'data-message-id:older-user-2750', () => 'older user'),
+      plainRow('assistant', 'data-message-id:older-assistant-2750', () => 'older assistant'),
+    ];
+    const ownUser = plainRow('user', 'data-message-id:own-user-2750', owned);
+    const assistant = buildVirtualizedAssistant({
+      turnFinished: () => scenario !== 'streaming',
+      cmDoc: scenario === 'incomplete' ? undefined : () => { documentReads.count += 1; return currentDoc(); },
+    });
+    const composer = scalarLocator({
+      count: async () => 1,
+      fill: async (text: string) => { composerText = text; },
+      innerText: async () => composerText,
+    });
+    const send = vi.fn(async () => {
+      sends += 1;
+      sentAt = now;
+      deliveredText = composerText;
+      composerText = '';
+    });
+    const sendButton = scalarLocator({ count: async () => 1, click: send });
+    const plainRows = () => sends
+      ? [
+        { role: 'user' as const, text: 'older user' }, { role: 'assistant' as const, text: 'older assistant' },
+        { role: 'user' as const, text: deliveredText }, { role: 'assistant' as const, text: assembleReply(LONG_DOC) },
+      ]
+      : [{ role: 'user' as const, text: 'older user' }, { role: 'assistant' as const, text: 'older assistant' }];
+    const messageNodes = {
+      count: async () => plainRows().length,
+      nth: (index: number) => collectionLocator(plainRows()).nth(index),
+      evaluateAll: async (callback: (elements: any[], args: any) => unknown, args: any) => {
+        if (sends) postSendReads += 1;
+        const elements = sends ? [...history, ownUser, assistant] : history;
+        const priorDocument = (globalThis as { document?: unknown }).document;
+        (globalThis as { document?: unknown }).document = {
+          querySelectorAll: (selector: string) => scenario === 'streaming' && sends && selector.includes('stop-button')
+            ? [{ getBoundingClientRect: () => ({ height: 1 }) }] : [],
+        };
+        try { return callback(elements, args); }
+        finally {
+          if (priorDocument === undefined) delete (globalThis as { document?: unknown }).document;
+          else (globalThis as { document?: unknown }).document = priorDocument;
+        }
+      },
+    };
+    const page = {
+      __fakeBrowserGptPage: true,
+      url: () => scenario === 'redirected' && sends ? REDIRECT : TARGET,
+      isClosed: () => false,
+      goto: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      waitForTimeout: async (ms: number) => { sleeps += 1; if (sends) sleepsAfterSend += 1; now += ms; },
+      getByRole: () => scalarLocator(),
+      getByText: () => scalarLocator(),
+      locator: (selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (selector === MESSAGE_NODE_SELECTOR) return messageNodes;
+        if (scenario === 'streaming' && sends && selector === RENDERED_STOP_BUTTON_SELECTOR) {
+          return scalarLocator({ count: async () => 1 });
+        }
+        return scalarLocator();
+      },
+    };
+    const browserFixture = enqueueBrowserForTurn(mocks, page);
+    Object.assign(browserFixture.context, { pages: () => [page] });
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
+    try {
+      const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+        '--profile', profile, '--cdp', CDP,
+        '--input', join(root, 'synthetic-prompt.txt'),
+        '--output', output, '--chat-url', TARGET,
+        '--invocation-id', invocation, '--timeout-ms', String(timeoutMs), '--poll-ms', String(pollMs),
+      ]);
+      const record = readStateLightTurnObservation(configuredProfileKey(profile, CDP), invocation);
+      const published = existsSync(output) ? readFileSync(output, 'utf8') : undefined;
+      return {
+        result, record, published, output, sends, postSendReads, sleeps, sleepsAfterSend,
+        elapsedAfterSendMs: now - sentAt, documentReads: documentReads.count, page,
+      };
+    } finally {
+      clock.mockRestore();
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+      mocks.browserQueue.length = 0;
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it('the long-reply fixture is exactly 24,012 characters and virtualized (gap rows, partial rendered lines)', () => {
+    expect(assembleReply(LONG_DOC)).toHaveLength(REPLY_LENGTH);
+    expect(LONG_DOC.split('\n').length).toBeGreaterThan(520);
+  });
+
+  it('harvests a finished 24,012-character CodeMirror-virtualized reply within the poll interval, not at the deadline', async () => {
+    const timeoutMs = 1_500_000;
+    const pollMs = 250;
+    const run = await runLongReplyTurn('finished', timeoutMs, pollMs);
+    expect(run.result, JSON.stringify(run.result)).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(run.sends).toBe(1);
+    expect(run.published).toBe(assembleReply(LONG_DOC));
+    expect(run.published).toHaveLength(REPLY_LENGTH);
+    expect(run.record).toMatchObject({ phase: 'harvested', send_count: 1 });
+    expect(run.record.primary).toBeDefined();
+    // The editor document, not the virtualized DOM rows, certified the body.
+    expect(run.documentReads).toBeGreaterThanOrEqual(2);
+    // Timing: the fake clock advances only by the loop's own sleeps, so elapsed
+    // time is the number of poll waits times the poll interval (one bounded read
+    // costs zero fake time). A few stable finished reads, nowhere near the deadline.
+    // Timing, measured on the fake clock that page.waitForTimeout advances (a
+    // bounded page read itself costs zero fake time). Everything before Send is
+    // admission/hydration; from Send onward the finished reply must settle on
+    // the first stable finished reads: at most two poll waits, each capped at
+    // 1 s by the loop (Math.min(--poll-ms, 1_000) tier), i.e. seconds, not the
+    // 1_500 s deadline.
+    expect(run.postSendReads).toBeGreaterThanOrEqual(2);
+    expect(run.postSendReads).toBeLessThanOrEqual(6);
+    expect(run.sleepsAfterSend).toBeLessThanOrEqual(3);
+    expect(run.elapsedAfterSendMs).toBeLessThanOrEqual(3 * 1_000);
+    expect(run.elapsedAfterSendMs).toBeLessThan(timeoutMs / 100);
+  });
+
+  describe.each([
+    ['still streaming (generationInProgress)', 'streaming' as const],
+    ['long but growing between reads', 'growing' as const],
+    ['incomplete transcript (virtualized row without the editor document)', 'incomplete' as const],
+    ['foreign assistant (owned marker mismatch)', 'foreign' as const],
+  ])('never harvests before the deadline: %s', (_name, scenario) => {
+    it('ends without a published reply and without a harvested record', async () => {
+      const timeoutMs = 120_000;
+      const run = await runLongReplyTurn(scenario, timeoutMs, 250);
+      expect(run.result.state, JSON.stringify(run.result)).not.toBe('ok');
+      expect(run.published).toBeUndefined();
+      expect(run.record.phase).not.toBe('harvested');
+      expect(run.record.primary).toBeUndefined();
+      // It did poll until the (fake) absolute deadline instead of settling early.
+      expect(run.postSendReads).toBeGreaterThan(6);
+      expect(run.elapsedAfterSendMs).toBeGreaterThanOrEqual(timeoutMs / 4);
+    });
+  });
+
+  it('a conversation redirected after Send is conversation_unavailable and never harvests', async () => {
+    const run = await runLongReplyTurn('redirected', 120_000, 250);
+    expect(run.result.state).not.toBe('ok');
+    expect(run.result, JSON.stringify(run.result)).toMatchObject({ cause: 'conversation_unavailable' });
+    expect(run.published).toBeUndefined();
+    expect(run.record.phase).not.toBe('harvested');
+    expect(run.page.close).not.toHaveBeenCalled();
+  });
+
+  it('AC9: an attributable page reply harvests with no attachment path anywhere', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2750-ac9-'));
+    const invocation = randomUUID();
+    const profile = join(root, 'profile');
+    const output = join(root, 'reply.txt');
+    const reply = 'ATTRIBUTABLE PAGE REPLY WITHOUT ANY ATTACHMENT';
+    let now = 20_000;
+    let composerText = '';
+    let deliveredText = '';
+    let sends = 0;
+    const rows = [
+      { role: 'user' as const, text: 'older user', key: 'data-message-id:older-user-2750-ac9' },
+      { role: 'assistant' as const, text: 'older assistant', key: 'data-message-id:older-assistant-2750-ac9' },
+    ];
+    const composer = scalarLocator({
+      count: async () => 1,
+      fill: async (text: string) => { composerText = text; },
+      innerText: async () => composerText,
+    });
+    const send = vi.fn(async () => { sends += 1; deliveredText = composerText; composerText = ''; });
+    const currentRows = () => sends ? [
+      ...rows,
+      { role: 'user' as const, text: deliveredText, key: 'data-message-id:own-user-2750-ac9' },
+      { role: 'assistant' as const, text: reply, key: 'data-message-id:own-assistant-2750-ac9' },
+    ] : rows;
+    const messageNodes = {
+      count: async () => currentRows().length,
+      nth: (index: number) => collectionLocator(currentRows()).nth(index),
+      evaluateAll: async () => ({
+        rows: currentRows().map((row, domIndex) => ({
+          ...row, domIndex, complete: true, completionReady: true, continuationVisible: false,
+        })),
+        pageTurnEvidence: {
+          generationInProgress: false,
+          observedAssistantNodes: currentRows().filter((row) => row.role === 'assistant').length,
+          continueGeneratingVisible: false,
+        },
+      }),
+    };
+    const page = {
+      __fakeBrowserGptPage: true, url: () => TARGET, isClosed: () => false,
+      goto: vi.fn(async () => undefined), close: vi.fn(async () => undefined),
+      waitForTimeout: async (ms: number) => { now += ms; },
+      getByRole: () => scalarLocator(), getByText: () => scalarLocator(),
+      locator: (selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: async () => 1, click: send });
+        if (selector === MESSAGE_NODE_SELECTOR) return messageNodes;
+        return scalarLocator();
+      },
+    };
+    const browserFixture = enqueueBrowserForTurn(mocks, page);
+    Object.assign(browserFixture.context, { pages: () => [page] });
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
+    const argv = [
+      '--profile', profile, '--cdp', CDP, '--input', join(root, 'synthetic-prompt.txt'),
+      '--output', output, '--chat-url', TARGET, '--invocation-id', invocation, '--timeout-ms', '180000',
+    ];
+    try {
+      const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, argv);
+      expect(result, JSON.stringify(result)).toMatchObject({ state: 'ok', send_count: 1 });
+      expect(readFileSync(output, 'utf8')).toBe(reply);
+      const record = readStateLightTurnObservation(configuredProfileKey(profile, CDP), invocation);
+      expect(record).toMatchObject({ phase: 'harvested', send_count: 1 });
+      expect(record.primary?.target).toBe(output);
+      // No attachment-bearing argument and no attachment-bearing field anywhere.
+      expect(argv.filter((arg) => /attach/iu.test(arg))).toEqual([]);
+      const serialized = JSON.stringify({ result, record });
+      expect(serialized).not.toMatch(/attachment/iu);
+      // Every absolute filesystem path the result and record mention is the
+      // requested --output, or lives in this test's own isolated state/profile.
+      const absolutePaths: string[] = [];
+      const collect = (value: unknown): void => {
+        if (typeof value === 'string') { if (value.startsWith('/')) absolutePaths.push(value); }
+        else if (Array.isArray(value)) value.forEach(collect);
+        else if (value && typeof value === 'object') Object.values(value).forEach(collect);
+      };
+      collect(result);
+      collect(record);
+      expect(absolutePaths.length).toBeGreaterThan(0);
+      for (const path of absolutePaths) expect(path.startsWith(root), path).toBe(true);
+    } finally {
+      clock.mockRestore();
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+      mocks.browserQueue.length = 0;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

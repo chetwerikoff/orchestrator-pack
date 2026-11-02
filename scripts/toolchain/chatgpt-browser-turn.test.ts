@@ -13,6 +13,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -47,10 +48,13 @@ import {
   quarantineOpaque,
   statusList,
   __testWriteCapability,
+  deleteIncident,
   listReadableIncidents,
+  updateIncident,
   writeIncident,
 } from '../chatgpt-browser-turn/state.ts';
 import { atomicJson, configuredProfileKey, profileDirs, sha256 } from '../chatgpt-browser-turn/storage-common.ts';
+import { STATE_LIGHT_MAX_TIMEOUT_MS } from '../chatgpt-browser-turn/state-light-fresh-conversation.ts';
 import { releaseCdpBrowser } from '../chatgpt-browser-turn/browser-session.ts';
 import {
   createPreSendSegmentBudget,
@@ -1581,6 +1585,11 @@ describe('issue 964 retained recovery binary lifecycle', () => {
     cpSync(join(repoRoot, 'scripts', 'chatgpt-browser-turn.ts'), join(retained, 'scripts', 'chatgpt-browser-turn.ts'));
     cpSync(join(repoRoot, 'scripts', 'chatgpt-browser-turn'), join(retained, 'scripts', 'chatgpt-browser-turn'), { recursive: true });
     cpSync(join(repoRoot, 'scripts', 'kernel', 'subprocess.ts'), join(retained, 'scripts', 'kernel', 'subprocess.ts'));
+    mkdirSync(join(retained, 'scripts', 'toolchain'), { recursive: true });
+    cpSync(join(repoRoot, 'scripts', 'flow-manager-long-running-child.ts'), join(retained, 'scripts', 'flow-manager-long-running-child.ts'));
+    cpSync(join(repoRoot, 'scripts', 'toolchain', 'native-entrypoint-preflight.ts'), join(retained, 'scripts', 'toolchain', 'native-entrypoint-preflight.ts'));
+    cpSync(join(repoRoot, 'scripts', 'toolchain', 'node-runtime-contract.mjs'), join(retained, 'scripts', 'toolchain', 'node-runtime-contract.mjs'));
+    cpSync(join(repoRoot, 'scripts', 'toolchain', 'node-version.json'), join(retained, 'scripts', 'toolchain', 'node-version.json'));
     cpSync(
       join(repoRoot, '.claude', 'skills', 'discuss-with-gpt', 'verify-cdp-owner.mjs'),
       join(retained, '.claude', 'skills', 'discuss-with-gpt', 'verify-cdp-owner.mjs'),
@@ -3087,9 +3096,12 @@ async function runTurnWithMocks1060(
     onBeforeSend?: () => void | Promise<void>;
     beforeDriverOnBeforeSend?: () => void | Promise<void>;
     deleteIncidentFails?: boolean;
+    /** AC5 read-only conversation Page state; defaults to not provably idle. */
+    pageIdle?: 'idle' | 'generating' | 'unready';
   } = {},
 ): Promise<{ exitCode: number; stdout: string }> {
   vi.resetModules();
+  const pageIdle = options.pageIdle ?? 'unready';
   const witnessQueue = Array.isArray(options.witness)
     ? [...options.witness]
     : [options.witness ?? 'available'];
@@ -3112,6 +3124,8 @@ async function runTurnWithMocks1060(
       loadChromium: vi.fn(() => ({ connectOverCDP: vi.fn(async () => stubBrowser) })),
       openTurnPage: vi.fn(async () => ({ page: stubPage, owned: true, provisionalId: randomUUID() })),
       runtimeWitnessSurfaceAvailable: vi.fn(async () => witnessQueue.shift() ?? 'available'),
+      readAssistantTurnGenerating: vi.fn(async () => pageIdle === 'generating'),
+      readAssistantTurnCompletionReady: vi.fn(async () => pageIdle === 'idle'),
       sendTurn: vi.fn(async (_page, _text, _config, _provisionalId, onBeforeSend) => {
         if (options.beforeDriverOnBeforeSend) await options.beforeDriverOnBeforeSend();
         if (onBeforeSend) await onBeforeSend();
@@ -3382,6 +3396,212 @@ describe('Issue #2489 legacy persisted profile_wall admission', () => {
     expect(exitCode).toBe(0);
     expect(stdout).toContain('"state":"ok"');
     expect(stdout).not.toContain('profile_wall_active');
+  });
+});
+describe('Issue #2750 AC16 ownerless fresh-orphan age fallback', () => {
+  const MAX = STATE_LIGHT_MAX_TIMEOUT_MS;
+  const turnResult = (stdout: string): Record<string, unknown> => JSON.parse(
+    stdout.trim().split(/\r?\n/u).filter(Boolean).at(-1)!,
+  );
+  // Writes a real fresh_orphan record, then pins/removes age fields with a recomputed
+  // evidence token (same body-free sha256 the store verifies) and an explicit file mtime.
+  function orphan(t0: number, fields: {
+    created_at?: string | null;
+    deadline_ms?: unknown;
+    mtime?: Date;
+    output_identity?: string;
+    cause?: string;
+  } = {}): string {
+    const { identity } = writeIncident(profileKey, {
+      kind: 'fresh_orphan', phase: 'possible_delivery', generation: 1, cause: fields.cause ?? 'orphan_fixture',
+      ...(fields.output_identity ? { output_identity: fields.output_identity } : {}),
+    });
+    const path = join(profileDirs(profileKey).records, `${identity}.json`);
+    const { evidence_token: _drop, ...base } = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+    if (fields.created_at === null) delete base.created_at;
+    else base.created_at = fields.created_at ?? new Date(t0).toISOString();
+    if ('deadline_ms' in fields) base.deadline_ms = fields.deadline_ms;
+    atomicJson(path, { ...base, evidence_token: sha256(JSON.stringify(base)) });
+    if (fields.mtime) utimesSync(path, fields.mtime, fields.mtime);
+    return identity;
+  }
+  async function turnAt(nowMs: number, name: string, output = join(root, name)): Promise<Record<string, unknown>> {
+    vi.useFakeTimers();
+    vi.setSystemTime(nowMs);
+    try {
+      return turnResult((await runTurnWithMocks1060(turnArgvFor1060(output))).stdout);
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+  const listed = (identity: string): boolean => listReadableIncidents(profileKey).some((incident) => incident.identity === identity);
+  const BLOCKED = { state: 'orphaned_fresh_turn', cause: 'fresh_orphan_unresolved' };
+  const ADMITTED = { state: 'ok', cause: 'completed' };
+
+  it('created_at + max timeout: blocks until the boundary, then advisory while the record stays listed', async () => {
+    const t0 = Date.now();
+    const identity = orphan(t0);
+    expect(await turnAt(t0 + MAX - 1, 'before.txt')).toMatchObject(BLOCKED);
+    expect(await turnAt(t0 + MAX, 'at.txt')).toMatchObject(ADMITTED);
+    expect(listed(identity)).toBe(true);
+    expect(statusList(profileKey).items?.some((item) => item.identity === identity && item.kind === 'fresh_orphan')).toBe(true);
+  });
+
+  it('a valid record deadline wins over created_at + max, in both directions', async () => {
+    const t0 = Date.now();
+    const longDeadline = orphan(t0, { deadline_ms: t0 + MAX * 2 });
+    expect(await turnAt(t0 + MAX + 1, 'long-before.txt')).toMatchObject(BLOCKED);
+    expect(await turnAt(t0 + MAX * 2 - 1, 'long-before2.txt')).toMatchObject(BLOCKED);
+    expect(await turnAt(t0 + MAX * 2, 'long-at.txt')).toMatchObject(ADMITTED);
+    expect(listed(longDeadline)).toBe(true);
+    deleteIncident(profileKey, longDeadline);
+
+    const shortDeadline = orphan(t0, { deadline_ms: t0 + 1000 });
+    expect(await turnAt(t0 + 999, 'short-before.txt')).toMatchObject(BLOCKED);
+    expect(await turnAt(t0 + 1000, 'short-at.txt')).toMatchObject(ADMITTED);
+    expect(listed(shortDeadline)).toBe(true);
+  });
+
+  it('an invalid deadline is ignored in favour of created_at; a deadline before created_at is not trusted', async () => {
+    const t0 = Date.now();
+    for (const [index, deadline] of ([0, -5, 'soon', 1.5, Number.NaN] as unknown[]).entries()) {
+      const identity = orphan(t0, { deadline_ms: deadline });
+      expect(await turnAt(t0 + MAX - 1, `inv-${index}-before.txt`)).toMatchObject(BLOCKED);
+      deleteIncident(profileKey, identity);
+    }
+    const early = orphan(t0, { deadline_ms: t0 - 10 });
+    expect(await turnAt(t0 + MAX - 1, 'early-deadline.txt')).toMatchObject(BLOCKED);
+    expect(await turnAt(t0 + MAX, 'early-deadline-at.txt')).toMatchObject(ADMITTED);
+    expect(listed(early)).toBe(true);
+  });
+
+  it('legacy record without deadline or created_at uses the record file mtime + max', async () => {
+    const t0 = Date.now();
+    const identity = orphan(t0, { created_at: null, mtime: new Date(t0 - MAX + 5000) });
+    expect(await turnAt(t0, 'legacy-before.txt')).toMatchObject(BLOCKED);
+    expect(await turnAt(t0 + 4999, 'legacy-before2.txt')).toMatchObject(BLOCKED);
+    expect(await turnAt(t0 + 5000, 'legacy-at.txt')).toMatchObject(ADMITTED);
+    expect(listed(identity)).toBe(true);
+  });
+
+  it('a rewritten updated_at (and a fresh mtime) never restarts the age when created_at is valid', async () => {
+    const t0 = Date.now();
+    const identity = orphan(t0 - MAX - 10_000);
+    updateIncident(profileKey, identity, { cause: 'touched_later' });
+    const raw = JSON.parse(readFileSync(join(profileDirs(profileKey).records, `${identity}.json`), 'utf8')) as { updated_at: string; created_at: string };
+    expect(Date.parse(raw.updated_at)).toBeGreaterThanOrEqual(t0 - 1);
+    expect(Date.parse(raw.created_at)).toBe(t0 - MAX - 10_000);
+    expect(await turnAt(t0, 'updated-at.txt')).toMatchObject(ADMITTED);
+    expect(listed(identity)).toBe(true);
+  });
+
+  it('future, corrupt or unreadable age evidence stays blocking', async () => {
+    const t0 = Date.now();
+    const future = orphan(t0, { created_at: new Date(t0 + MAX).toISOString() });
+    expect(await turnAt(t0 + MAX * 2 - 1, 'future-created.txt')).toMatchObject(BLOCKED);
+    deleteIncident(profileKey, future);
+
+    const farDeadline = orphan(t0, { deadline_ms: Number.MAX_SAFE_INTEGER });
+    expect(await turnAt(t0 + MAX * 10, 'far-deadline.txt')).toMatchObject(BLOCKED);
+    deleteIncident(profileKey, farDeadline);
+
+    const corrupt = orphan(t0, { created_at: 'not-a-date', mtime: new Date(t0 + MAX) });
+    expect(await turnAt(t0 + MAX * 2 - 1, 'corrupt-future-mtime.txt')).toMatchObject(BLOCKED);
+    deleteIncident(profileKey, corrupt);
+
+    const corruptFresh = orphan(t0, { created_at: 'not-a-date', mtime: new Date(t0) });
+    expect(await turnAt(t0 + MAX - 1, 'corrupt-fresh-mtime.txt')).toMatchObject(BLOCKED);
+    expect(listed(corruptFresh)).toBe(true);
+  });
+
+  it('an expired orphan does not lift independent blockers on the same profile', async () => {
+    const t0 = Date.now();
+    const output = join(root, 'orphan-output-block.txt');
+    const expired = orphan(t0, { created_at: new Date(t0 - MAX - 1).toISOString() });
+    const blockingOutput = orphan(t0, {
+      created_at: new Date(t0 - MAX - 1).toISOString(),
+      output_identity: destinationIdentity(output).identity,
+    });
+    expect(await turnAt(t0, 'other.txt')).toMatchObject(ADMITTED);
+    expect(await turnAt(t0, 'blocked.txt', output)).toMatchObject({
+      state: 'recovery_required', cause: 'destination_bound_to_unresolved_delivery',
+    });
+    expect(listed(expired)).toBe(true);
+    expect(listed(blockingOutput)).toBe(true);
+
+    const recent = orphan(t0, { created_at: new Date(t0).toISOString() });
+    expect(await turnAt(t0 + 1, 'recent-with-expired.txt')).toMatchObject(BLOCKED);
+    expect(listed(recent)).toBe(true);
+  });
+});
+
+describe('Issue #2750 AC5 dead-producer idle conversation custody', () => {
+  const CONVERSATION = 'https://chatgpt.com/c/fixture-conv';
+  const turnResult = (stdout: string): Record<string, unknown> => JSON.parse(
+    stdout.trim().split(/\r?\n/u).filter(Boolean).at(-1)!,
+  );
+  /** A PID that has positively exited (ESRCH), not a reused or foreign live process. */
+  function deadPid(): number {
+    for (let pid = 4_194_000; pid > 4_000_000; pid -= 1) {
+      try {
+        process.kill(pid, 0);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ESRCH') return pid;
+      }
+    }
+    throw new Error('no_unused_pid_fixture');
+  }
+  /** One mixed-purpose record: stale conversation occupancy AND unresolved possible delivery. */
+  function mixedIncident(originalOutput: string, owner: { pid: number } | null = { pid: deadPid() }): string {
+    return writeIncident(profileKey, {
+      kind: 'active_owner', phase: 'possible_delivery', generation: 1, invocation_id: 'inv-original-2750',
+      output_identity: destinationIdentity(originalOutput).identity, conversation_id: CONVERSATION,
+      lock_key: `conversation:${CONVERSATION}`,
+      ...(owner ? { owner: { pid: owner.pid, started_at: new Date().toISOString(), nonce: randomUUID() } } : {}),
+    }).identity;
+  }
+  const record = (identity: string): Record<string, unknown> | undefined => listReadableIncidents(profileKey)
+    .find((incident) => incident.identity === identity)?.record as Record<string, unknown> | undefined;
+  const turn = async (output: string, pageIdle: 'idle' | 'generating' | 'unready') => turnResult(
+    (await runTurnWithMocks1060(turnArgvFor1060(output), { pageIdle })).stdout,
+  );
+  const BUSY = { state: 'conversation_busy', cause: 'conversation_incident_active' };
+
+  it('releases only the stale custody of a dead producer on a positively idle Page; the delivery blocker stays', async () => {
+    const original = join(root, 'ac5-original.txt');
+    const identity = mixedIncident(original);
+    expect(await turn(join(root, 'ac5-distinct.txt'), 'idle')).toMatchObject({ state: 'ok', cause: 'completed' });
+    const kept = record(identity)!;
+    expect(kept).toMatchObject({
+      kind: 'active_owner', phase: 'possible_delivery', conversation_id: CONVERSATION,
+      output_identity: destinationIdentity(original).identity,
+    });
+    expect(kept.conversation_custody_released).toMatchObject({ at: expect.any(String) });
+    // The original output and its uncertain delivery are not erased or granted resend rights.
+    expect(await turn(original, 'idle')).toMatchObject({
+      state: 'recovery_required', cause: 'destination_bound_to_unresolved_delivery', incident_id: identity,
+    });
+    // A later distinct turn passes ordinary admission without a fresh Page proof.
+    expect(await turn(join(root, 'ac5-later.txt'), 'unready')).toMatchObject({ state: 'ok', cause: 'completed' });
+    expect(record(identity)).toBeDefined();
+  });
+
+  it.each([
+    ['generating Page', 'generating'],
+    ['unknown/unready Page', 'unready'],
+  ] as const)('a dead producer whose conversation Page is a %s keeps conversation_busy custody', async (_name, pageIdle) => {
+    const identity = mixedIncident(join(root, `ac5-${pageIdle}-original.txt`));
+    expect(await turn(join(root, `ac5-${pageIdle}-distinct.txt`), pageIdle)).toMatchObject({ ...BUSY, incident_id: identity });
+    expect(record(identity)).not.toHaveProperty('conversation_custody_released');
+  });
+
+  it.each([
+    ['live producer', (): { pid: number } | null => ({ pid: process.ppid })],
+    ['ownerless/foreign record', (): { pid: number } | null => null],
+  ] as const)('a %s is never released even on an idle Page', async (_name, owner) => {
+    const identity = mixedIncident(join(root, 'ac5-holder-original.txt'), owner());
+    expect(await turn(join(root, 'ac5-holder-distinct.txt'), 'idle')).toMatchObject({ ...BUSY, incident_id: identity });
+    expect(record(identity)).not.toHaveProperty('conversation_custody_released');
   });
 });
 
