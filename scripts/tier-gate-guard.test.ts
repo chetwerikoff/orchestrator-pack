@@ -133,6 +133,10 @@ describe('current substantive Issue floor', () => {
 
     for (const line of [
       '  - action: resume run_123abcd | expected: complete',
+      '  - action: run run_123abcd | expected: complete',
+      '  - action: node scripts/report-run.mjs run_123abcd | expected: complete',
+      '  - action: node scripts/check.mjs --session=run_abc12345 | expected: complete',
+      '  - action: inspect output | expected: run_abc12345',
       '  - action: inspect result | expected: runtime-id: term_88da12',
       '  - action: inspect --msg-id=msg_f312ba | expected: complete',
     ]) {
