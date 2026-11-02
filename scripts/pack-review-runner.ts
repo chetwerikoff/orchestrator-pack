@@ -92,6 +92,10 @@ import type { ExplicitDeadReviewerTakeover } from './lib/review-start-claim-cli.
 import {
   PACK_REVIEW_ACTIVE_STATUSES,
   createPackReviewRun,
+  projectPackReviewEffectiveFindings,
+  appendPackReviewDeferredTodos,
+  claimPackReviewGptTriageAttempt,
+  persistPackReviewGptTriageResult,
   derivePackReviewGptCoverage,
   derivePackReviewNoJudgmentBudgetOutcome,
   getPackReviewRun,
@@ -2257,7 +2261,7 @@ async function findJournaledDeliveryResumeCandidate(options: {
     if (process.env.OPK_VITEST_HARNESS === '1' && !options.fixtureRequiredStatusReader) continue;
     const payload = packReviewJournaledPayload(candidate);
     if (!payload) continue;
-    const classification = classifyPackReviewPayload(payload);
+    const classification = classifyPackReviewPayload(payload,candidate);
     const intermediate = !classification.blocking
       && logicalGptSourceAccounting(candidate.accountingVersion)
       && Number.isInteger(candidate.logicalRoundOrdinal)
@@ -4230,7 +4234,7 @@ async function recoverStaleGptSourceComments(options: {
   bindCredentialedGptExecutionProvenance(persistedBeforeAggregate, {
     projectId: options.projectId, storeRoot: options.storeRoot,
   });
-  const classification = classifyPackReviewPayload(aggregate);
+  const classification = classifyPackReviewPayload(aggregate,persistedBeforeAggregate);
   setPackReviewRunTerminal(options.run.id, classification.terminalStatus, {
     reviewVerdict: aggregate.verdict,
     findingCount: aggregate.findingCount,
@@ -4418,7 +4422,8 @@ async function commitRecoveredGptAuthority(options: {
       findings: payload.findings,
       automaticBudgetDisposition: options.run.automaticBudgetDisposition,
     }),
-    status: classifyPackReviewPayload(payload).terminalStatus,
+    status: classifyPackReviewPayload(payload,
+      getPackReviewRun(options.run.id, { projectId: options.projectId, storeRoot: options.storeRoot }) ?? options.run).terminalStatus,
     findingCount: payload.findingCount,
     options: authorityOptions,
   });
@@ -5062,7 +5067,7 @@ async function ensurePromotedRoundPublicPending(input: {
       || input.run.logicalRoundCap >= authority.cycle.frozenCap
       || !outstandingPackReviewCycle(input.run, input.storeRoot)) return;
   const payload = packReviewJournaledPayload(input.run);
-  if (!payload || classifyPackReviewPayload(payload).blocking) return;
+  if (!payload || classifyPackReviewPayload(payload,input.run).blocking) return;
   if (await currentLiveHead() !== input.run.targetSha.toLowerCase()) {
     throw new Error('promoted required-status repair requires the current PR head');
   }
@@ -5267,7 +5272,7 @@ async function observePackReviewVerdictDelivery(options: {
   if (!posted || run.deliveryOutcomes.githubComment?.state !== 'succeeded') {
     return unresolved('review_comment_not_published');
   }
-  const classification = classifyPackReviewPayload(payload);
+  const classification = classifyPackReviewPayload(payload,run);
   const intermediate = !classification.blocking
     && (outstandingPackReviewCycle(run, options.storeRoot)
       || (logicalGptSourceAccounting(run.accountingVersion)
@@ -7933,7 +7938,7 @@ export async function reconcileStalePackReviewRuns(
           const newer = beforeOrder.kind === 'newer' ? beforeOrder.run : null;
           const winnerOutcome = newer?.deliveryOutcomes.requiredStatus;
           const winnerPayload = newer ? packReviewJournaledPayload(newer) : null;
-          const classification = winnerPayload ? classifyPackReviewPayload(winnerPayload) : null;
+          const classification = winnerPayload ? classifyPackReviewPayload(winnerPayload,newer!) : null;
           const expectedStatus = beforeOrder.kind === 'none' ? 'error'
             : beforeOrder.kind === 'newer'
               && current.deliveryOutcomes.requiredStatus?.reason === 'newer_run_authoritative'
@@ -9928,7 +9933,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
             findings: typedResumePayload.findings,
             automaticBudgetDisposition: resumeCandidate.automaticBudgetDisposition,
           }),
-          status: classifyPackReviewPayload(typedResumePayload).terminalStatus,
+          status: classifyPackReviewPayload(typedResumePayload,resumeCandidate).terminalStatus,
           findingCount: typedResumePayload.findingCount,
           options: authorityOptions,
         });
@@ -10919,7 +10924,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
       }));
       const coverage = derivePackReviewGptCoverage(run.reviewRound);
 
-      if (coverage?.kind === 'partial' && classifyPackReviewPayload(payload).blocking) {
+      if (coverage?.kind === 'partial' && classifyPackReviewPayload(payload,run).blocking) {
         // Blocking findings affect the eventual verdict, never the pre-grace
         // source census. Keep any sub-cardinality blocking evidence pending
         // until the existing scoped reconcile/grace path owns settlement.
@@ -10950,7 +10955,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
       // Harvest failures are an immediate terminal overlay. They are deliberately
       // evaluated before ordinary incompleteness so partial evidence is retained
       // without waiting for the shared source grace.
-      if (diagnostics.harvestIncidents.length > 0 && !classifyPackReviewPayload(payload).blocking) {
+      if (diagnostics.harvestIncidents.length > 0 && !classifyPackReviewPayload(payload,run).blocking) {
         payload = { ...payload, harvestIncidents: diagnostics.harvestIncidents };
         const posted = await postGithubReview({
           repoRoot: target.sourceRepoRoot,
@@ -11000,7 +11005,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
       }
 
       if (diagnostics.nonHarvestIncompleteSources.length > 0
-          && !classifyPackReviewPayload(payload).blocking) {
+          && !classifyPackReviewPayload(payload,run).blocking) {
         if (coverage?.kind === 'partial') {
           // Ordinary partial evidence is not a terminal failure and does not gain
           // quorum merely because every slot is already terminal. Keep the run
@@ -11168,7 +11173,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
           focusedResolutionRunId: carryover.replay.kind === 'merge_composite' ? run.id : undefined,
         } : undefined,
       }),
-      status: classifyPackReviewPayload(payload).terminalStatus,
+      status: classifyPackReviewPayload(payload,run).terminalStatus,
       findingCount: payload.findingCount,
       options: authorityOptions,
     });
@@ -11237,7 +11242,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
           storeRoot,
           request: value,
         }));
-        const stillPending = !classifyPackReviewPayload(payload).blocking
+        const stillPending = !classifyPackReviewPayload(payload,deliveryRun).blocking
           && outstandingPackReviewCycle(deliveryRun, storeRoot);
         return deliver(stillPending
           ? { ...request, message: request.message.replace(
@@ -11259,7 +11264,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
     // to pending; every reviewer kind requires the exact public read-back.
     const amendmentNeedsPublicProof = Boolean(authority.cycle?.amendmentOrigin);
     const confirmRequiredStatus = reviewer === 'gpt' || amendmentNeedsPublicProof
-      || (!classifyPackReviewPayload(payload).blocking
+      || (!classifyPackReviewPayload(payload,deliveryRun).blocking
         && outstandingPackReviewCycle(deliveryRun, storeRoot));
     const confirmation = confirmRequiredStatus
       ? await observePackReviewVerdictDelivery({
