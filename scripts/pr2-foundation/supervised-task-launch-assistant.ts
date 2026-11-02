@@ -45,7 +45,7 @@ import {
   type ExecutorRoute,
   type SemanticExecutorProfile,
 } from '../executor-profile-policy.ts';
-import { installManagerPushGuard } from './manager-push-guard.ts';
+import { installManagerPushGuard, restoreManagerPushGuardForClaude } from './manager-push-guard.ts';
 import { runSupervisedWorkerStart, readTerminalGoneDispatch, type SupervisedWorkerStartResult, type WorkerStartMode } from './supervised-worker-start.ts';
 import type { TerminalGoneAssignmentEvidence } from '../lib/worker-assignment-runtime.ts';
 
@@ -146,7 +146,7 @@ export interface ExecutorProfile {
   readonly effort?: string;
   readonly agentName?: string;
   readonly inlineConfigJson?: string;
-  /** Profile-pinned absolute OpenCode binary spawned and probed; absent means bare `opencode`. */
+  /** Required profile-pinned absolute OpenCode binary, shared by all probes and spawn. */
   readonly executable?: string;
   readonly providerArgs?: readonly string[];
   readonly names: readonly [string, string, string];
@@ -298,8 +298,10 @@ export interface LaunchDependencies {
   /** Native exact-Dispatch/worker-absent witness, not an assignment/store guess. */
   readonly proveTerminalGone?: (assignment: WorkerAssignment) => Promise<TerminalGoneAssignmentEvidence | null>;
   readonly prepareWorktree: (input: WorktreePreparationRequest) => Promise<EdgeResult<PreparedWorktree>>;
-  /** Manager-only pre-push guard (Issue #2732); installed and observed on fresh and `--existing-terminal` placement. */
+  /** Non-Claude manager push guard; a resolved Claude-family manager is the local route. */
   readonly installManagerPushGuard?: (input: ManagerPushGuardRequest) => Promise<EdgeResult<true>> | EdgeResult<true>;
+  /** Restore recorded B5 hooks only on an existing Claude-family manager worktree. */
+  readonly restoreClaudeManagerGuard?: (worktreePath: string) => Promise<EdgeResult<true>> | EdgeResult<true>;
   readonly finalizeProfile?: (profile: ExecutorProfile, worktreePath: string, resumeSession?: string, dataRoot?: string) => Promise<EdgeResult<ExecutorProfile>>;
   readonly adapter: RuntimeAdapter;
   readonly runSupervisedStart: typeof runSupervisedWorkerStart;
@@ -992,7 +994,24 @@ export async function runSupervisedTaskLaunchAssistant(
   };
   const prepared = await checkpoint('worktree_prepare', timings, deps.now, async (): Promise<EdgeResult<PreparedWorktree>> => {
     const placed = await prepareStep();
-    if (placed.status !== 'ok' || input.workClass !== 'manager' || !deps.installManagerPushGuard) return placed;
+    if (placed.status !== 'ok' || input.workClass !== 'manager') return placed;
+    if (profile.family === 'claude') {
+      // A fresh Claude manager has no B5 binding. Reuse must restore the exact
+      // previously recorded original hooks before this local route can start.
+      if (placed.value.setupWitness !== 'proven_reuse') return placed;
+      if (!placed.value.path || !deps.restoreClaudeManagerGuard) return {
+        status: 'continue', cause: 'manager_local_hooks_unobserved', actor: 'operator', evidence: {},
+        nextAction: { kind: 'reconcile_worktree_setup',
+          note: 'inspect this worktree core.hooksPath and B5 originalHooksPath; restore inherited hooks before retrying Claude manager launch' },
+      };
+      const restored = await deps.restoreClaudeManagerGuard(placed.value.path);
+      return restored.status === 'ok' ? placed : restored;
+    }
+    if (!deps.installManagerPushGuard) return {
+      status: 'continue', cause: 'manager_push_guard_unobserved', actor: 'operator', evidence: {},
+      nextAction: { kind: 'reconcile_worktree_setup',
+        note: 'restore the guarded non-Claude manager route before starting a manager' },
+    };
     // The selected project's default only: a PR-head base branch must never stand in for it.
     const defaultBranch = text(input.defaultBranch);
     const guard = placed.value.path && defaultBranch
@@ -2544,6 +2563,13 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       return installed.ok ? { status: 'ok', value: true, evidence: installed.evidence } : {
         status: 'continue', cause: installed.cause, actor: 'operator', evidence: installed.evidence,
         nextAction: { kind: 'reconcile_worktree_setup', note: installed.note },
+      };
+    },
+    restoreClaudeManagerGuard: (worktreePath) => {
+      const restored = restoreManagerPushGuardForClaude(worktreePath);
+      return restored.ok ? { status: 'ok', value: true, evidence: restored.evidence } : {
+        status: 'continue', cause: restored.cause, actor: 'operator', evidence: restored.evidence,
+        nextAction: { kind: 'reconcile_worktree_setup', note: restored.note },
       };
     },
     prepareWorktree: async (request) => prepareWorktreeWithOrca(
