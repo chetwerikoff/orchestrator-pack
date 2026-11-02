@@ -417,7 +417,7 @@ export function selectAgentTerminals(
   primary: string,
   workspaceRe: RegExp = defaultWorkspaceRegex(primary),
   coordinatorHandle?: string,
-  coordinatorTitleRe: RegExp = DEFAULT_ORCHESTRATOR_TITLE_RE,
+  _coordinatorTitleRe: RegExp = DEFAULT_ORCHESTRATOR_TITLE_RE,
   architectHandle?: string,
   primaryBindings: ReadonlyMap<string, string> = new Map(),
 ): FleetTerminal[] {
