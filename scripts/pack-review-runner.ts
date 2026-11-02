@@ -5630,8 +5630,8 @@ export async function maybeAdmitPackReviewBodyAmendment(
         );
         if (proof.correctedBodyDigest === nextDigest
             && (cycle.settlementKind !== 'same_head_issue_resolution'
-              || (authority.publication?.status === 'succeeded'
-                && authority.publication.terminalRunId === priorRun.id
+              || authority.publication?.status !== 'succeeded'
+              || (authority.publication.terminalRunId === priorRun.id
                 && authority.publication.publicationDigest === proof.publicationDigest))) {
           return null; // The existing final-cap owner commits/reads status.
         }
@@ -6030,9 +6030,13 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         const proof = await resolveSameHeadIssueResolution(
           input, options, authority, priorRun, currentHead,
         );
-        if (authority.publication?.status !== 'succeeded'
-            || authority.publication.terminalRunId !== priorRun.id
-            || authority.publication.publicationDigest !== proof.publicationDigest) {
+        // A canonical terminal may have closed the stage before its first
+        // status POST succeeded. Permit that *same proven* disposition to
+        // finish publication; only a previously confirmed success can bind
+        // the accepted immutable corrected-body projection digest.
+        if (authority.publication?.status === 'succeeded'
+            && (authority.publication.terminalRunId !== priorRun.id
+              || authority.publication.publicationDigest !== proof.publicationDigest)) {
           throw new Error('accepted same-head corrected-body publication digest changed');
         }
         expectedDigest = proof.correctedBodyDigest;
@@ -6253,9 +6257,9 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         const proof = await resolveSameHeadIssueResolution(input, options, authority, priorRun);
         verifiedFinalIssue = { issueNumber: priorRun.reviewRound!.issueNumber,
           digest: proof.correctedBodyDigest };
-        if (completedFinalFindings && (authority.publication?.status !== 'succeeded'
-            || authority.publication.terminalRunId !== priorRun.id
-            || authority.publication.publicationDigest !== proof.publicationDigest)) {
+        if (completedFinalFindings && authority.publication?.status === 'succeeded'
+            && (authority.publication.terminalRunId !== priorRun.id
+              || authority.publication.publicationDigest !== proof.publicationDigest)) {
           throw new Error('completed same-head proof differs from its accepted publication');
         }
         if (!completedFinalFindings) {
