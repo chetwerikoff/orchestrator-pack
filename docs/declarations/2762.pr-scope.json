@@ -1,0 +1,21 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2762,
+  "declared_paths": [
+    "docs/orchestration-runbook.md",
+    "scripts/executor-profile-policy.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "docs/orchestration-runbook.md",
+    "scripts/"
+  ],
+  "source_revision": "aa3bda28a48d2e468f7b9ffca7d92fcaa9a71b26"
+}
