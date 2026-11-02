@@ -6082,7 +6082,7 @@ describe('Issue #2754 AC7 same-second distinct-worktree B5 snapshot race', () =>
         target.on('exit', (code) => {
           if (code !== 0) reject(new Error('B5 snapshot worker exited: ' + code));
         });
-      }))));
+      })));
       expect(Atomics.load(view, 0)).toBe(2);
       expect(results).toEqual([{ ok: true, evidence: expect.any(Object) },
         { ok: true, evidence: expect.any(Object) }]);
