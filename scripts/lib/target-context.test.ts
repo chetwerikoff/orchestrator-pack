@@ -135,7 +135,7 @@ describe('target context', () => {
     expect(Object.isFrozen(declared.contractEvidenceProducer)).toBe(true);
 
     for (const bad of [[], { name: '', boundaryCommand: 'node tests/x.mjs' },
-      { name: 'target-status', boundaryCommand: 'node tests/x.mjs\\nrm file' }]) {
+      { name: 'target-status', boundaryCommand: ['node tests/x.mjs', 'rm file'].join(String.fromCharCode(10)) }]) {
       writeFileSync(target.cardPath, JSON.stringify({ ...target.card, contractEvidenceProducer: bad }), 'utf8');
       expect(codeOf(() => resolveTargetContext({ projectId: 'synthetic-b13', env: target.env })))
         .toBe('card-invalid');
