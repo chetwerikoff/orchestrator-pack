@@ -47,6 +47,8 @@ import {
   setPackReviewRunTerminal,
   terminalizePackReviewStaleRun,
   updatePackReviewRun,
+  validatePackReviewTriageResult,
+  type PackReviewRunRecord,
   type PackReviewGptRoundRecord,
 } from './lib/pack-review-run-store.js';
 import { acquireReviewStartClaim, testReviewStartClaimOwnership } from './lib/review-start-claim-store.js';
@@ -7838,5 +7840,72 @@ describe('Issue #2719 CLI and manager interpretation of primary and secondary re
     for (const record of [settled, { ...settled, schema: PACK_GPT_REVIEW_RESULT_SCHEMA }]) {
       expect(classifyExecuteIssueManagerRecord(record, reviewContext)).toMatchObject({ exitCode: 0 });
     }
+  });
+});
+
+describe('Issue #2761: blocking triage requires independent causal evidence', () => {
+  const authenticHead = () => {
+    const result = runProcessSync({
+      command: 'git', args: ['-C', repoRoot, 'rev-parse', 'HEAD'],
+      inheritParentEnv: true, timeoutMs: 10_000,
+    });
+    expect(result.ok).toBe(true);
+    return result.stdout.trim();
+  };
+  const triageRun = (summary: string, severity = 'blocking'): PackReviewRunRecord => ({
+    id: 'triage-proof-run',
+    targetSha: authenticHead(),
+    sourceRepoRoot: repoRoot,
+    reviewCycleId: 'triage-proof-cycle',
+    logicalRoundOrdinal: 1,
+    reviewRound: {
+      schema: 'pack-review-gpt-round/v1', reviewer: 'gpt', tier: 'T1',
+      roundOrdinal: 1, cardinality: 1, issueNumber: 2761,
+      boundIssueSnapshotDigest: 'a'.repeat(64),
+      sourceSlots: [{
+        slotId: 'source-01', ordinal: 1, lifecycle: 'terminal',
+        terminalClass: 'complete_findings',
+        payload: { findings: [{ type: 'quality', code: 'triage-proof',
+          severity, summary, details: summary }] },
+      }],
+    },
+  } as unknown as PackReviewRunRecord);
+
+  it.each([
+    'Required pack-review check reports success before source comments are verified',
+    'Worker remains blocked indefinitely after lost Browser-GPT response',
+    'failed required CI job exits 0 so the PR can merge',
+    'An authorized operation writes outside its declared scope',
+  ])('rejects REJECT and economic DEFER for a blocking claim even with an authentic unrelated line: %s', (summary) => {
+    const run = triageRun(summary);
+    const citation = "scripts/pack-review-runner.ts:1 import './toolchain/native-entrypoint-preflight.ts';";
+    const shown = runProcessSync({ command: 'git',
+      args: ['-C', repoRoot, '--no-pager', 'show', run.targetSha + ':scripts/pack-review-runner.ts'],
+      inheritParentEnv: true, timeoutMs: 10_000,
+    });
+    expect(shown.ok).toBe(true);
+    expect(shown.stdout.split('\\n')[0]).toContain("native-entrypoint-preflight.ts");
+    for (const decision of ['REJECT', 'DEFER'] as const) {
+      expect(() => validatePackReviewTriageResult(run, [{
+        members: [{ slotId: 'source-01', index: 0 }], decision,
+        reason: 'Model asserts this is safe', codeEvidence: citation, lowImpact: true,
+      }])).toThrow(/blocking downgrade lacks independent causal or low-harm proof/);
+    }
+    expect(validatePackReviewTriageResult(run, [{
+      members: [{ slotId: 'source-01', index: 0 }],
+      decision: 'FIX_NOW', reason: 'Retain original blocking consequence',
+    }]).groups).toEqual([expect.objectContaining({ decision: 'FIX_NOW' })]);
+  });
+
+  it('allows a model DEFER on a genuinely original nonblocking source finding', () => {
+    const run = triageRun('Optional cosmetic label is truncated', 'warning');
+    const result = validatePackReviewTriageResult(run, [{
+      members: [{ slotId: 'source-01', index: 0 }],
+      decision: 'DEFER', reason: 'Advisory-only visual inconvenience',
+    }]);
+    expect(result.groups).toEqual([expect.objectContaining({
+      decision: 'DEFER', slotIds: ['source-01'],
+      members: ['source-01:0'],
+    })]);
   });
 });
