@@ -133,7 +133,7 @@ export interface PackReviewCycle {
   atCapHash?: string;
   reviewStageComplete?: boolean;
   reviewStageCompletedAtUtc?: string;
-  settlementKind?: 'same_head_issue_resolution';
+  settlementKind?: 'same_head_issue_resolution' | 'rewritten_head';
   reviewStartConsumed?: boolean;
   resetProvenance?: PackReviewResetProvenance;
 }
@@ -1420,6 +1420,52 @@ export function settleLogicalPackReviewFindingsByStrictDescendant(input: {
         );
       }
 
+      current.evidence = undefined;
+      current.triage = undefined;
+      current.publication = undefined;
+      return current;
+    },
+  });
+}
+
+export function settleLogicalPackReviewFindingsByRewrittenHead(input: {
+  prNumber: number;
+  expectedTransitionSeq: number;
+  reviewedHeadSha: string;
+  currentHeadSha: string;
+  options: PackReviewAuthorityOptions;
+}): PackReviewAuthorityDocument {
+  const reviewedHeadSha = normalizeSha(input.reviewedHeadSha, 'reviewedHeadSha');
+  const currentHeadSha = normalizeSha(input.currentHeadSha, 'currentHeadSha');
+  if (reviewedHeadSha === currentHeadSha) {
+    throw new PackReviewAuthorityError('findings_settlement_invalid', 'rewritten head must differ from reviewed findings head');
+  }
+  return commitPackReviewAuthorityTransition({
+    prNumber: input.prNumber,
+    expectedTransitionSeq: input.expectedTransitionSeq,
+    nextPhase: 'head_observed',
+    options: input.options,
+    mutate(current) {
+      if (current.currentHeadSha !== currentHeadSha) {
+        throw new PackReviewAuthorityError('findings_settlement_head_stale', current.currentHeadSha);
+      }
+      const cycle = current.cycle;
+      if (!cycle || !isLogicalRoundCycle(cycle)
+          || cycle.state !== 'open_findings'
+          || cycle.reviewStageComplete === true
+          || cycleConsumedCount(cycle) < 1
+          || cycleConsumedCount(cycle) >= cycle.frozenCap
+          || current.terminal?.reviewVerdict !== 'findings'
+          || current.terminal.targetSha !== reviewedHeadSha) {
+        throw new PackReviewAuthorityError(
+          'findings_settlement_invalid',
+          'rewritten head requires the exact unfinished pre-cap logical findings checkpoint',
+        );
+      }
+      cycle.state = 'open';
+      cycle.closedAtUtc = undefined;
+      cycle.atCapHash = undefined;
+      cycle.settlementKind = 'rewritten_head';
       current.evidence = undefined;
       current.triage = undefined;
       current.publication = undefined;
