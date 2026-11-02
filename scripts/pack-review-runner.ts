@@ -4673,6 +4673,9 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
   if (!sourceTransport) throw new Error('original GitHub source transport unavailable');
   let latestTerminalFindingsCommentMs = Number.NEGATIVE_INFINITY;
   for (const slot of round.sourceSlots) {
+    // An authenticated, already-frozen historical 2/3 quorum carries one
+    // non-complete slot by design. Never request a missing COMMENT for it.
+    if (slot.terminalClass !== 'complete_clean' && slot.terminalClass !== 'complete_findings') continue;
     const invocationId = trim(slot.invocationId);
     const identity = gptSourceIdentity({
       repoSlug: options.repoSlug, prNumber: run.prNumber, headSha: run.targetSha,
@@ -4809,9 +4812,19 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
     throw new Error('trusted post-terminal author disposition census unavailable');
   }
   const census = censusValue.flat().map(githubEvidenceObject);
-  const blockers = payload.findings.filter((finding) =>
-    !['warning', 'info', 'non-blocking'].includes(trim(finding.severity)));
-  if (blockers.length === 0) throw new Error('terminal blocking findings missing');
+  const effective = projectPackReviewEffectiveFindings(run);
+  const effectiveMemberKeys = effective.mode === 'triaged'
+    ? new Set(effective.fixNow.flatMap((group) => group.members)) : undefined;
+  const originalOrdinals = new Map<string,number>();
+  const blockers = payload.findings.filter((finding) => {
+    const originalBlocking = !['warning', 'info', 'non-blocking'].includes(trim(finding.severity));
+    const slotId = trim(finding.sourceSlotId);
+    const ordinal = originalOrdinals.get(slotId) ?? 0;
+    originalOrdinals.set(slotId,ordinal+1);
+    if (!originalBlocking) return false;
+    return effectiveMemberKeys === undefined || effectiveMemberKeys.has(`${slotId}:${ordinal}`);
+  });
+  if (blockers.length === 0) throw new Error('terminal effective blocking findings missing');
   const scope = parseIssueBody(revision.body);
   const candidates = census.filter((comment) => {
     const author = comment.user && typeof comment.user === 'object'
