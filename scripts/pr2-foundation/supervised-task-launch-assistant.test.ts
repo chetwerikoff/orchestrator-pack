@@ -533,7 +533,7 @@ function freshRepoFixture(input: {
         stderr: '',
       };
     }
-    if (command === 'git worktree prune') return {
+    if (command === 'git worktree prune --expire=now') return {
       ok: input.pruneOk !== false, stdout: '', stderr: input.pruneOk === false ? 'fixture: locked prune failed' : '',
     };
     if (command === 'git status --porcelain=v1 --untracked-files=all') {
@@ -680,9 +680,6 @@ function managerReuseFixture(input: {
         ? { ok: false, stdout: '', stderr: 'origin/main unresolved' }
         : { ok: true, stdout: `${originMain}\n`, stderr: '' };
     }
-    if (command === 'git worktree prune') return {
-      ok: input.pruneOk !== false, stdout: '', stderr: input.pruneOk === false ? 'fixture: locked prune failed' : '',
-    };
     if (command === 'git status --porcelain=v1 --untracked-files=all') {
       return { ok: true, stdout: input.status ?? '', stderr: '' };
     }
@@ -3303,7 +3300,7 @@ The words Firefighter universal appear here only as prose.`;
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt',
     }, fixture.execute);
     expect(result.status).toBe('ok');
-    expect(fixture.calls[3]).toEqual({ argv: ['git', 'worktree', 'prune'], cwd: REGISTERED_ORCA_ROOT });
+    expect(fixture.calls[3]).toEqual({ argv: ['git', 'worktree', 'prune', '--expire=now'], cwd: REGISTERED_ORCA_ROOT });
     expect(fixture.calls[4]?.argv.slice(0, 3)).toEqual(['orca', 'worktree', 'create']);
 
     const failed = freshRepoFixture({ pruneOk: false });
@@ -3697,10 +3694,7 @@ The words Firefighter universal appear here only as prose.`;
           stderr: '',
         };
       }
-      if (command === 'git worktree prune') return {
-      ok: input.pruneOk !== false, stdout: '', stderr: input.pruneOk === false ? 'fixture: locked prune failed' : '',
-    };
-    if (command === 'git status --porcelain=v1 --untracked-files=all') {
+      if (command === 'git status --porcelain=v1 --untracked-files=all') {
         return { ok: true, stdout: '', stderr: '' };
       }
       return { ok: false, stdout: '', stderr: `unexpected: ${command}` };
