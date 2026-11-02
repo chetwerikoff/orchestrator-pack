@@ -39,6 +39,7 @@ const ISSUE_BODY = [
   'advisory-prior: T1',
   '```',
 ].join('\n');
+const T3_ISSUE_BODY = ISSUE_BODY.replaceAll('T1', 'T3');
 const originalEnv = { ...process.env };
 const roots: string[] = [];
 
@@ -170,6 +171,16 @@ function baseStart(storeRoot: string, transport: PackGptSourceCommentTransport) 
     fixtureGithubReviewId: 9001,
     fixtureRequiredStatusWriter: async () => {},
     fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+  };
+}
+
+/** Fresh three-source coverage now belongs to T3; historical seeded T1 rounds below stay 3/3. */
+function threeSourceStart(storeRoot: string, transport: PackGptSourceCommentTransport) {
+  return {
+    ...baseStart(storeRoot, transport),
+    tier: 'T3' as const,
+    fixtureIssueTitle: '[T3] Source comment fixture',
+    fixtureIssueBody: T3_ISSUE_BODY,
   };
 }
 
@@ -398,7 +409,7 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
     const workerWrites: unknown[] = [];
     const transport = dynamicTransport(publications);
     const result = await startPackReview({
-      ...baseStart(storeRoot, transport),
+      ...threeSourceStart(storeRoot, transport),
       fixtureGithubReviewTransport: finalReviewTransport(review),
       fixtureRequiredStatusWriter: async (request) => { statusWrites.push(request); },
       fixtureWorkerNotifier: async (request) => {
@@ -468,7 +479,7 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
     const statusWrites: unknown[] = [];
     const transport = dynamicTransport(publications, census);
     const result = await startPackReview({
-      ...baseStart(storeRoot, transport),
+      ...threeSourceStart(storeRoot, transport),
       fixturePostReviewHeadSha: 'b'.repeat(40),
       fixtureReviewBySourceSlot: {
         'source-01': [{ stdout: '', exitCode: 13 }],
@@ -550,7 +561,7 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
     const workerWrites: unknown[] = [];
     const transport = dynamicTransport(publications);
     const common = {
-      ...baseStart(storeRoot, transport),
+      ...threeSourceStart(storeRoot, transport),
       fixtureGithubReviewTransport: finalReviewTransport(review),
       fixtureRequiredStatusWriter: async (request: unknown) => { statusWrites.push(request); },
       fixtureWorkerNotifier: async (request: unknown) => {
@@ -655,7 +666,7 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
     const census = { listCalls: 0 };
     const transport = dynamicTransport(publications, census);
     const result = await startPackReview({
-      ...baseStart(storeRoot, transport),
+      ...threeSourceStart(storeRoot, transport),
       fixtureGithubReviewTransport: finalReviewTransport({ posts: 0 }),
       fixtureReviewBySourceSlot: {
         'source-01': [{ stdout: zeroSendTerminal('wrong-source-01'), exitCode: 13 }, { stdout: sentTerminal() }],

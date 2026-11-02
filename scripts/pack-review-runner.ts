@@ -6180,9 +6180,13 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
     };
   }
 
-  // A non-descendant has never been eligible for final-cap success. Keep that
-  // existing refusal ahead of body-validation errors and status publication.
-  if (logicalFinalFindings && authority.terminal
+  // Preserve native T1's established continuation refusal; the authenticated
+  // GPT T1 source-final path uses the same strict-descendant proof as T2/T3.
+  const sourceBoundT1 = priorRun.resolvedReviewer === 'gpt'
+    && frozenLogicalGptSourceIdentity(priorRun);
+  // A non-descendant cannot settle an eligible final-cap GPT source review.
+  if (logicalFinalFindings && (authority.cycle.frozenTier !== 'T1' || sourceBoundT1)
+      && authority.terminal
       && currentHead !== authority.terminal.targetSha) {
     const strict = await resolvePackReviewStrictDescendant({
       repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
@@ -6202,7 +6206,8 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
   let verifiedFinalIssue: { issueNumber: number; digest: string } | undefined;
   let verifiedScopeOnlyIncident: { reviewedBody: string; issueNumber: number } | undefined;
   let sameHeadPublicationDigest: string | undefined;
-  if (logicalAccounting && currentHead !== authority.terminal.targetSha) {
+  if (logicalAccounting && (authority.cycle.frozenTier !== 'T1' || sourceBoundT1)
+      && currentHead !== authority.terminal.targetSha) {
     try {
       const cycle = authority.cycle;
       const terminal = authority.terminal;
@@ -7598,12 +7603,12 @@ export async function reconcileStalePackReviewRuns(
         } catch {
           // GitHub unavailable: never infer a clean first-attempt census.
         }
-        const failedReason = 'gpt_source_non_complete:after_grace_zero_usable:0/3';
+        const failedReason = `gpt_source_non_complete:after_grace_zero_usable:0/${run.reviewRound.cardinality}`;
         const virtualFailed = beforeZero
           ? { ...beforeZero, status: 'failed' as const, failureReason: failedReason }
           : null;
         const authorized = recovery.graceExpired
-          && recovery.reason === 'gpt_sources_incomplete_after_grace:0/3'
+          && recovery.reason === `gpt_sources_incomplete_after_grace:0/${run.reviewRound.cardinality}`
           && beforeZero && isPackReviewRunStale(beforeZero)
           && currentHead === beforeZero.targetSha.toLowerCase()
           && provenFirstAttemptZeroSendCensus(
@@ -9132,7 +9137,14 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
       && authority.currentHeadSha.toLowerCase() === target.headSha.toLowerCase();
     // Reuse the same final-cap evidence and publication decision as scoped
     // reconciliation. Do not let start settle first or swallow its refusal.
+    // Native T1 retains its established at-cap continuation response; the
+    // source-credentialed GPT T1 final round is now eligible for #2748 proof.
+    const lastCapRun = authority.terminal?.runId
+      ? getPackReviewRun(authority.terminal.runId, { projectId, storeRoot }) : null;
+    const finalGptT1 = lastCapRun?.resolvedReviewer === 'gpt'
+      && frozenLogicalGptSourceIdentity(lastCapRun);
     const finalFindings = authority.cycle?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+      && (authority.cycle.frozenTier !== 'T1' || finalGptT1)
       && authority.terminal?.reviewVerdict === 'findings'
       && (['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)
         || (authority.cycle.state === 'closed' && authority.cycle.reviewStageComplete === true
