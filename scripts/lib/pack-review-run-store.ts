@@ -259,9 +259,10 @@ function matchesTriageIdentity(
 }
 
 /** Whole-result validator: one exact member per original occurrence; no invented finding. */
-export function validatePackReviewTriageResult(
+function validatePackReviewTriageResultInternal(
   run: PackReviewRunRecord,
   groupsValue: readonly PackReviewTriageModelGroup[],
+  evidenceMode: 'write' | 'replay',
 ): PackReviewGptTriageRecord {
   const census = packReviewTriageCensus(run);
   if (!census || census.occurrences.length === 0
@@ -295,7 +296,9 @@ export function validatePackReviewTriageResult(
     const reason = value.reason.trim();
     const codeEvidence = value.codeEvidence;
     const verifiedCode = typeof codeEvidence === 'string'
-      && verifiedExactHeadTriageCodeLine(run,codeEvidence);
+      && (evidenceMode === 'write'
+        ? verifiedExactHeadTriageCodeLine(run,codeEvidence)
+        : /^([A-Za-z0-9._+@/-]+):([1-9][0-9]*)\s+([^\r\n]{6,240})$/.test(codeEvidence));
     if (originalBlocking && value.decision !== 'FIX_NOW') {
       if (!verifiedCode || (value.decision === 'DEFER'
           && (protectedBlocking || value.lowImpact !== true))) {
@@ -319,6 +322,14 @@ export function validatePackReviewTriageResult(
     schema:'pack-review-gpt-triage/v1', ...identity,
     groups: groups.sort((a,b) => a.groupId.localeCompare(b.groupId)),
   };
+}
+
+/** Only the persistence boundary can verify against Git; replay stays pure. */
+export function validatePackReviewTriageResult(
+  run: PackReviewRunRecord,
+  groupsValue: readonly PackReviewTriageModelGroup[],
+): PackReviewGptTriageRecord {
+  return validatePackReviewTriageResultInternal(run, groupsValue, 'write');
 }
 
 /** One bounded projection for classification, fixer intake and delivery replay. */
@@ -350,7 +361,7 @@ export function projectPackReviewEffectiveFindings(run: PackReviewRunRecord): {
       decision:group.decision,reason:group.reason,
       codeEvidence:group.codeEvidence,lowImpact:group.lowImpact,
     }));
-    const verified = validatePackReviewTriageResult(run,parsedGroups);
+    const verified = validatePackReviewTriageResultInternal(run,parsedGroups,'replay');
     if (JSON.stringify(verified) !== JSON.stringify(saved)) return fallback();
     const occurrences = new Map(raw.occurrences.map((row) => [row.key,row.finding] as const));
     const fixNow = verified.groups.filter((group) => group.decision === 'FIX_NOW'
@@ -2479,7 +2490,27 @@ function buildUpdatedPackReviewRun(
   } else if (candidate.reviewRound !== undefined && candidate.reviewRound !== null) {
     candidate.reviewRound = normalizePackReviewGptRoundRecord(candidate.reviewRound, path);
   }
-  return parseRecord(candidate, path);
+  const parsed = parseRecord(candidate, path);
+  if (!existing.gptTriage && parsed.gptTriage) {
+    // Generic store writers cannot bypass the one-time exact-head proof check.
+    // Replays never need filesystem access, but this new persisted decision does.
+    const groups = parsed.gptTriage.groups.map((group) => ({
+      members: group.members.map((key) => {
+        const hit = /^([^:]+):(\d+)$/.exec(key);
+        if (!hit) throw new Error('invalid persisted triage occurrence');
+        return {slotId:hit[1]!,index:Number(hit[2])};
+      }),
+      decision:group.decision,reason:group.reason,
+      codeEvidence:group.codeEvidence,lowImpact:group.lowImpact,
+    }));
+    const verified = validatePackReviewTriageResult(parsed,groups);
+    if (!isDeepStrictEqual(parsed.gptTriage,verified)
+        || !parsed.gptTriageAttempt
+        || !matchesTriageIdentity(parsed.gptTriageAttempt,parsed,verified.rawFindingsDigest)) {
+      throw new Error(`corrupt pack review run record at ${path}: unverified persisted triage`);
+    }
+  }
+  return parsed;
 }
 
 export function updatePackReviewRun(
