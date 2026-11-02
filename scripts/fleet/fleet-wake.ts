@@ -56,7 +56,7 @@ import {
 } from './chat-error-banners.ts';
 import { readChatBinding } from '../chatgpt-browser-turn/chat-bindings.ts';
 import { listCurrentWorkerAssignmentRecords, resolveWorkerAssignmentStorePath, type WorkerAssignmentRecord } from '../lib/worker-assignment-store.ts';
-import { TERMINAL_SCHEMA, isWakeableTerminalEnvelopePath, readHandoffReceipt } from '../flow-manager-long-running-child.ts';
+import { TERMINAL_SCHEMA, isWakeableTerminalEnvelopePath, readHandoffReceipt, resolveDurableArtifactRoot } from '../flow-manager-long-running-child.ts';
 
 export interface FleetWakeConfig {
   readonly projectId: string;
@@ -624,7 +624,26 @@ export interface TerminalEnvelopeEvent {
   readonly delivery?: string;
 }
 
-export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeEvent[] {
+/** Other pack state under the one durable root; never terminal-envelope storage, never scanned. */
+const NON_ENVELOPE_STATE_DIRECTORIES: ReadonlySet<string> = new Set(['chatgpt-browser-turn', 'browser-gpt-receipts']);
+
+/**
+ * Terminal envelopes live under the single durable root (`$XDG_STATE_HOME/orchestrator-pack`, else
+ * `~/.local/state/orchestrator-pack`); there is no second root. An unresolvable root (relative or
+ * empty XDG, no HOME) never throws into the tick: it logs one diagnostic and scans nothing.
+ */
+export function listTerminalEnvelopes(
+  explicitRoot?: string,
+  diagnostic: (message: string) => void = (message) => { process.stderr.write(`${message}\n`); },
+): TerminalEnvelopeEvent[] {
+  let root: string;
+  try {
+    root = explicitRoot ?? resolveDurableArtifactRoot();
+  } catch (error) {
+    const reason = (error instanceof Error ? error.message : String(error)).split(';')[0];
+    diagnostic(`DIAG state=unverified reason=terminal_envelope_root_unresolved evidence=${reason}`);
+    return [];
+  }
   const pending = [root];
   const events: TerminalEnvelopeEvent[] = [];
   while (pending.length > 0) {
@@ -638,7 +657,7 @@ export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeE
     for (const entry of entries) {
       const path = join(directory, entry.name);
       if (entry.isDirectory()) {
-        pending.push(path);
+        if (!NON_ENVELOPE_STATE_DIRECTORIES.has(entry.name)) pending.push(path);
         continue;
       }
       if (!entry.isFile() || !isWakeableTerminalEnvelopePath(path, root)) continue;
@@ -2465,7 +2484,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       // panes are already excluded from agent selection by the sweep.
       log('DIAG state=unverified reason=diagnostic_unreadable evidence=read_only_projection_failure');
     }
-    const envelopes = (options.listTerminalEnvelopes ?? listTerminalEnvelopes)();
+    const envelopes = (options.listTerminalEnvelopes ?? (() => listTerminalEnvelopes(undefined, log)))();
     const tickOptions: FleetAlarmTickOptions = { ...options, listTerminalEnvelopes: () => envelopes };
     await wakeNamedParkedProducers(tickOptions, observations, terminals, store, executor, sleepMs, log, bareShellHandles, wakeCounts, unreadableSelected);
     await wakeOriginalTerminalFailures(tickOptions, observations, terminals, executor, store, sleepMs, log, bareShellHandles, wakeCounts);

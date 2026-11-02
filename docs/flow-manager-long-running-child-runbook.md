@@ -7,14 +7,28 @@ does not detach the Browser child independently; it starts the canonical launche
 at the supported detached boundary and waits for a committed handoff receipt
 before acknowledging transport handoff.
 
-For every Browser-GPT attempt, the caller/orchestrator must mint and retain one
-non-empty invocation identity before invoking the adapter. The adapter validates
-`--invocation-id` before detached launch or handoff acceptance and forwards those
-exact bytes to the child. The same value is reused for recovery/harvest of **that one attempt**, not
-for a second send: every real new Browser attempt must use a fresh invocation
-ID, even across run/attempt labels or profiles. An occupied key requires a
-fresh invocation ID, never deleting an old receipt or treating an old key as
-authorization to retry.
+A managed Browser-GPT launch requires the current upstream-admitted, nonempty
+Task+Dispatch pair as `--owner-task-id` and `--owner-dispatch-id`; the adapter
+correlates it with the original handoff but does not independently prove its
+freshness. Mint and retain one invocation identity before the attempt. Reuse it
+only to observe/recover that exact attempt. If delivery may have occurred,
+reconcile the original Page and exact bound GitHub target before any new Send;
+do not replace the invocation or retry while evidence is unresolved. Each
+independent physical Send has its own invocation identity. A proven occupied
+identity is not retry authority; use a new identity only for a distinct,
+admitted attempt after the original outcome is resolved.
+
+A continuation names its predecessor with `--predecessor-invocation-id` and
+`--predecessor-attempt-identity` only. The launcher reads that earlier
+invocation's original Run/Task/Dispatch from its own durable locator and
+handoff; the current Task or Run is never substituted. A positively settled
+`ok`/landed predecessor is a no-op for Stop, cleanup and resend, and never admits
+the new Send: the current Task+Dispatch is separately admitted. A missing,
+foreign, non-`ok` or unreadable predecessor refuses before Send. Every pre-spawn
+refusal prints its exact code and an executable `nextStep` on caller stderr
+(exit 2, zero Send, no accepted/v1). After a child may have started, the
+adapter prints its own wrapper code plus original-invocation wait/Page/GitHub
+reconciliation and claims neither child refusal nor zero Send.
 
 ## Package commands
 
@@ -30,8 +44,8 @@ npm run --silent flow-manager-browser-gpt-long-run -- \
   --run-identity <opaque-run-id> \
   --attempt-identity <opaque-attempt-id> \
   --invocation-id <caller-owned-invocation-id> \
-  --owner-task-id <optional-opaque-task-id> \
-  --owner-dispatch-id <optional-opaque-dispatch-id> \
+  --owner-task-id <upstream-admitted-task-id> \
+  --owner-dispatch-id <upstream-admitted-dispatch-id> \
   --handoff-receipt /absolute/path/handoff-receipt.json \
   --terminal-envelope /absolute/path/<attempt>-terminal.json \
   --output /absolute/path/reply.txt \
@@ -78,44 +92,44 @@ engine fixes; it is not the trusted engine.
 
 `flow-manager-long-running-child.ts launch` is the sole terminal-envelope writer.
 
-1. The Browser-GPT adapter forwards the exact caller-owned `--invocation-id`
-   to both launcher and Browser child. Optional `--owner-task-id` and
-   `--owner-dispatch-id` are independent, opaque caller assertions; no owner
-   is inferred from profile, cwd or environment. An inherited
+1. The managed adapter requires the current upstream-admitted `--owner-task-id`
+   and `--owner-dispatch-id` pair, forwards both to the launcher, and checks the
+   same values against the original handoff/locator. Their freshness remains the
+   existing upstream Dispatch responsibility. Legacy direct launch/wait stays
+   ownerless and diagnostic-only for effects. An inherited
    `ORCA_TERMINAL_HANDLE` is snapshotted only as optional
-   `launching_terminal_handle` routing data, never a terminal incarnation
-   or permission to wake/stop the child.
-2. Validate pairwise-distinct receipt, envelope, and Browser `--output` destinations,
-   and refuse (`terminal_envelope_name_not_wakeable`) an envelope whose file name
-   does not end in `terminal.json`: fleet-wake discovers envelopes only by that
-   suffix, so any other name parks the caller with no wake. The adapter applies
-   the same check before spawning the launcher. Nothing is sent and no file is
-   written; the refusal carries `suggested_path` and a `hint` — re-run the same
-   command with `--terminal-envelope <suggested_path>`.
+   `launching_terminal_handle` routing data, never a terminal incarnation or
+   permission to wake/stop the child.
+2. Receipt and terminal input paths contribute only their basenames. The
+   handoff, terminal and global locator resolve beneath one private
+   `$XDG_STATE_HOME/orchestrator-pack/`; with XDG unset, use
+   `~/.local/state/orchestrator-pack/`. The terminal basename must end in
+   `terminal.json` so fleet-wake can discover it. Browser `--output` remains
+   caller-selected. Pairwise aliases, basename collisions, unsafe root
+   ownership/permissions, symlinks or invalid XDG refuse before Browser spawn.
+   The adapter returns the resolved durable paths in accepted/v1.
 3. For an invocation-bearing launch, check the prospective global invocation key
-   and the same-profile, profile+CDP-keyed durable state-light observation
-   **before** Browser spawn. Refuse any occupied or uncertain key, including a
-   pre-index observation with no locator; supply a new ID rather than reusing
-   an old attempt. Atomically exclusive-create one small
-   `flow-manager-long-running-child-locator/v1` index under
-   `/tmp/opencode/browser-gpt-receipts/<sha256(invocation-id)>.json`.
-   This private (`0700` directory, `0600` index) navigation record stores
-   only invocation/run/attempt and pointers to the **original** handoff and
-   terminal paths. The index has no profile, CDP, prompt or chat transcript.
+   and same-profile, profile+CDP-keyed durable state-light observation before
+   Browser spawn. Refuse any occupied or uncertain key, including a pre-index
+   observation with no locator. Atomically exclusive-create one
+   `flow-manager-long-running-child-locator/v1` index at
+   `$XDG_STATE_HOME/orchestrator-pack/browser-gpt-receipts/<sha256(invocation-id)>.json`
+   (or the HOME fallback root). The private (`0700` directory, `0600` index)
+   navigation record stores invocation/run/attempt and pointers to the original
+   handoff and terminal. It contains no profile, CDP, prompt or chat transcript.
    Invalid, occupied, aliased, symlinked, partial or non-private indexes fail
-   closed; a partial reservation stays occupied and requires a fresh ID.
-4. Atomically create the original `flow-manager-long-running-child-handoff/v1`
-   with unchanged existing keys and additive `invocation_id`, optional
-   `owner_task_id`/`owner_dispatch_id`, `child_cwd`,
-   `launcher_pid` from the actual launcher's `process.pid`, and an optional
-   `launching_terminal_handle` hint. Read back and cross-check the original
-   receipt/index before Browser spawn or adapter handoff acknowledgment.
-   The original receipt/terminal/output destinations remain caller-selected.
+   closed; a partial reservation stays occupied.
+4. Atomically publish the original
+   `flow-manager-long-running-child-handoff/v1` with unchanged identity fields,
+   `invocation_id`, the required managed owner Task+Dispatch pair, `child_cwd`,
+   `launcher_pid` from the actual launcher process and optional
+   `launching_terminal_handle`. Read back and cross-check the receipt/index
+   before Browser spawn or adapter handoff acknowledgment. Terminal envelopes
+   are complete before becoming visible.
 5. Legacy direct `flow-manager-long-running-child.ts launch` with no invocation
-   continues its original receipt/terminal and explicit-path wait. It creates
-   no index and invents no invocation. A direct caller opting into an indexed
-   invocation also supplies `--profile` and `--cdp` for the same-profile
-   pre-spawn observation collision check.
+   retains ownerless diagnostics and creates no index. A direct caller opting
+   into an indexed invocation also supplies `--profile` and `--cdp` for the
+   same-profile pre-spawn observation collision check.
 6. Start the Browser-GPT child with stdin closed, stdout parsed in-process, stderr
    to a null sink.
 7. Start with the shared bounded startup allowance. Accept the first valid
@@ -143,50 +157,101 @@ invocation locator **before spawning**, even when every run/attempt/invocation
 ID, path and owner matches the old launch. After spawn, it compares that
 freshly observed PID with the original committed handoff's `launcher_pid`
 before emitting accepted/v1; synchronous pre-spawn refusal exit status 2
-is never accepted. An identical retry after a lost acknowledgment must
+is never accepted.
+
+The adapter runs the launcher's own pre-spawn validation in-process once,
+before detachment; it reserves nothing (only the launcher reserves the
+invocation key). Refusals come in three tiers:
+
+- proved pre-child refusal: the actual code and an executable `nextStep` on
+  the caller's stderr, exit 2, zero Send, no accepted/v1;
+- authenticated launcher pre-SEND refusal after detachment: the launcher
+  leaves one bounded, scrubbed `<resolved-handoff>.refusal.json` companion for
+  the same invocation/Run/attempt/launcher PID, and the adapter relays its
+  code and `nextStep` (exit 2, no accepted/v1); the companion is not a receipt
+  or an envelope;
+- anything after a launcher may have started (missing/foreign companion,
+  late handoff, PID or locator read-back mismatch): the adapter's own known
+  code plus original-invocation wait/Page/exact-GitHub reconciliation. Physical
+  SEND is unknown (`POSSIBLY_DELIVERED`); this is never resend authority.
+
+An identical retry after a lost acknowledgment must
 recover the **original** invocation using `wait`, not relaunch or re-send
 it. A committed handoff remains handoff evidence even if its Browser child
 later exits nonzero; it never proves a successful turn or delivery.
 
-Indexed wait uses **either** the exact invocation or the adapter-returned
-`receipt_locator`, with the original run/attempt to verify the single indexed
-attempt. It reads only the documented discovery root and existing original
-handoff/terminal files, including from a different cwd:
+Managed indexed wait reads the original invocation/Run/attempt and, when
+supplied, verifies both owner flags against the original handoff and locator.
+By default it is read-only and diagnostic. Only the owner-run `wait` may publish
+one complete-before-visible uncertainty envelope, and only when (i) the original
+handoff/locator carries both nonempty owner flags, (ii) the caller supplies both
+matching original values and the existing supervisor/native Dispatch and
+current-assignment reads corroborate that original Task+Dispatch as currently
+approved, (iii) the original launcher is positively dead (same-namespace exit
+or a distinct replacement startticks), and (iv) no terminal exists. It never
+signals or displaces a live launcher: a live, unknown or past-deadline launcher
+is reported nonterminal with an owner-reconciliation `nextStep`. Copied flag
+strings, a historical receipt, a path or a PID alone are not current authority;
+Task and Dispatch freshness stays upstream. Without that authority, continue
+with the original invocation's Page and exact GitHub reconciliation; do not
+infer success or retry. Wait reads the original keyed locator, handoff and
+terminal beneath the same resolved durable root, including from a different cwd:
 
 ```bash
 npm run --silent flow-manager-long-running-child -- wait \
-  --run-identity <id> --attempt-identity <id> \
-  --invocation-id <original-invocation-id> --deadline-ms 5000
+  --run-identity <original-run> --attempt-identity <original-attempt> \
+  --invocation-id <original-invocation-id> \
+  --owner-task-id <original-approved-task> \
+  --owner-dispatch-id <original-approved-dispatch> \
+  --profile <original-profile> --cdp <original-cdp> --deadline-ms 5000
 
 npm run --silent flow-manager-long-running-child -- wait \
-  --run-identity <id> --attempt-identity <id> \
-  --receipt-locator /tmp/opencode/browser-gpt-receipts/<sha256-id>.json \
-  --deadline-ms 5000
+  --run-identity <original-run> --attempt-identity <original-attempt> \
+  --invocation-id <original-invocation-id> \
+  --receipt-locator <resolved-state-root>/browser-gpt-receipts/<sha256-id>.json \
+  --owner-task-id <original-approved-task> \
+  --owner-dispatch-id <original-approved-dispatch> --deadline-ms 5000
 ```
 
-Do not combine locator selectors with the legacy explicit paths. An indexed
-direct launch may have preserved a relative caller-supplied handoff spelling
-inside terminal/v1. The indexed waiter checks it against the original indexed
-absolute receipt and committed launch identity without resolving that old
-relative spelling against the **waiter's** cwd; it does not rewrite legacy
-terminal payloads. An unindexed pre-upgrade or standalone direct receipt
-cannot be upgraded or silently looked up by ID; keep using its original
-explicit-path wait. The only test
-redirection is the existing two-part
-`OPK_FM_LONG_CHILD_TEST_GATE=fixture-root-v1` plus
-`OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT=<disposable-absolute-root>` fixture
-gate. A single environment variable cannot redirect production discovery.
+Optional `--profile`/`--cdp` let an owner-run wait reattach read-only to the
+exact original Page (same private profile key, CDP hash, owned target ID,
+marker and bound conversation). Only two stable reads of a finished attributed
+assistant generation count as `page_finished`; a missing, foreign or
+unreachable Page, absent flags or an active generation is `page_unverified`,
+and a redirected original conversation is `conversation_unavailable` (start a
+fresh chat; advice only). The wait never sends, stops, closes or harvests.
+GitHub evidence comes from the optional `github_effect_baseline` the driver
+adds to the original handoff before physical SEND (exact bound PR head SHA, or
+SHA-256 of the exact `--bound-issue` body). A changed exact target is
+`target_progress_observed` with attribution unverified (a concurrent writer is
+possible); a missing baseline, unchanged or unreadable target is
+`effect_unverified`. Neither proves Send or authorship; delivery stays
+`POSSIBLY_DELIVERED` unless the original record holds a verified harvested
+primary. Each wait output with an owner pair carries `owner_wait` with its
+effect, reason, `nextStep` and `no_signal_sent: true`.
 
-**Legacy explicit-path wait** remains unchanged:
+Do not combine locator selectors with legacy explicit paths. An indexed direct
+launch may have preserved a relative caller-supplied handoff spelling inside
+terminal/v1; the waiter checks it against the original indexed absolute receipt
+without resolving that old spelling against the waiter's cwd. Ownerless/direct
+or unauthenticated wait remains diagnostic-only; it never creates a terminal,
+controls a process, or authorizes a retry.
+The only test redirection is the existing two-part
+`OPK_FM_LONG_CHILD_TEST_GATE=fixture-root-v1` plus
+`OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT=<disposable-absolute-root>` fixture gate.
+
+**Legacy ownerless direct wait** remains read-only and diagnostic-only:
 
 ```bash
 npm run --silent flow-manager-long-running-child -- wait \
   --run-identity <id> \
   --attempt-identity <id> \
-  --handoff-receipt /path/handoff.json \
-  --terminal-envelope /path/<attempt>-terminal.json \
+  --handoff-receipt <caller-path>/handoff.json \
+  --terminal-envelope <caller-path>/<attempt>-terminal.json \
   --deadline-ms 5000
 ```
+
+Caller paths contribute only basenames; wait resolves artifacts under the same durable state root.
 
 Deadline expiry reports envelope absence only. It carries no success, retry, or
 launcher-loss authority. The caller's own tool/shell timeout must exceed
@@ -194,14 +259,13 @@ launcher-loss authority. The caller's own tool/shell timeout must exceed
 contract, and deadline expiry printed by the waiter itself is the only legal
 “envelope absent” evidence.
 
-### Survival boundary (demonstrated)
+### Durability boundary
 
-- normal initiating-caller exit after committed handoff;
-- caller process-tree teardown;
-- caller process-group teardown.
-
-Terminal-session teardown, containers, host reboot, and cross-host survival are
-explicitly unproven and out of scope for this version.
+The original private handoff, terminal and keyed locator live beneath the single
+XDG/HOME state root, rather than tmpfs. Browser reply output and disposable
+proof/build scratch retain their existing caller-selected lifecycle. The
+launcher commits each JSON artifact complete-before-visible with exclusive
+publication; the v1 record schemas and filenames are unchanged.
 
 ### Delivery (three states)
 

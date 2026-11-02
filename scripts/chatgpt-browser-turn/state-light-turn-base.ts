@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   appendFileSync,
   closeSync,
+  constants as fsConstants,
   existsSync,
   fsyncSync,
   linkSync,
@@ -10,11 +11,13 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  renameSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runProcess } from '../kernel/subprocess.ts';
 import {
@@ -157,12 +160,14 @@ const ACCOUNT_COOLDOWN_ACTIONABLE_MS = ACCOUNT_COOLDOWN_MS + 1_000;
 const ACCOUNT_COOLDOWN_QUIET_RESET_MS = 30 * 60_000;
 const ACCOUNT_COOLDOWN_STEPS_MS = [60_000, 120_000, 240_000, ACCOUNT_COOLDOWN_MS] as const;
 
+const CONVERSATION_UNAVAILABLE_NEXT_ACTION =
+  'conversation unavailable: the bound conversation redirected; start a fresh chat (advice only, no resend authority, '
+  + 'no recovery of the bound conversation, and any earlier Send remains possibly delivered).';
+
 const FRESH_LOCAL_POSSIBLY_DELIVERED_NEXT_ACTION =
-  'No durable ChatGPT conversation URL was bound for this invocation; delivery is POSSIBLY_DELIVERED. '
-  + 'Check expected GitHub effects first (Issue body revision, comment, commit, PR) and re-check up to 20 minutes '
-  + 'after the original Send, while also searching the project sidebar for the turn-marker chat and harvesting it if found. '
-  + 'Never click Retry or auto-resend. A new-invocation-ID manual send is allowed only if no GitHub effect and no marker chat '
-  + 'appeared by 20 minutes after Send, and only by an explicit operator/workflow decision acknowledging possibly duplicated side effects.';
+  'Delivery is POSSIBLY_DELIVERED. Reconcile the original invocation against its exact bound GitHub target and original Page; '
+  + 'use page-probe only as a diagnostic, never as proof of completion or no Send. Do not retry or create a replacement invocation; '
+  + 'if exact target or Page evidence is unavailable, ask the original Task/Dispatch owner to continue reconciliation.';
 
 // A local-chatgpt id is never a durable conversation locator. Match both the
 // current project identity and exact route; the root /c/local-chatgpt route
@@ -849,6 +854,7 @@ export async function revalidateKeyedHarvest(
             return { text: ((roots.length === 1 ? roots[0] : message) as HTMLElement).innerText, complete: true };
           };
           const unsupported = () => selected ? { text: '', complete: false } : wholeRow();
+          const virtualizedCode = new Map<Element, string>();
           const codeBodySelector = 'pre, .cm-content';
           // A runnable code block renders as CodeMirror, with no PRE.
           const isCodeMirror = (node: Element): boolean => node.tagName === 'DIV'
@@ -1054,11 +1060,35 @@ export async function revalidateKeyedHarvest(
               const bars = Array.from(codeBlockRoot.children).filter(isCodeBlockActionBar);
               if (bars.length !== 1 || !visible(pre)) return unsupported();
               if (isCodeMirror(pre)) {
-                // CodeMirror virtualizes long documents (.cm-gap placeholders):
-                // accept only a fully rendered body of plain .cm-line rows.
-                if (Array.from(pre.children).some((line) => line.tagName !== 'DIV'
-                  || !/(?:^|\s)cm-line(?:\s|$)/u.test(line.getAttribute('class') ?? ''))) return unsupported();
+                // CodeMirror virtualizes long documents: off-screen lines are
+                // .cm-gap placeholders, so a finished long reply would never
+                // serialize from the DOM (defect-log 1456). Read the editor's own
+                // document text read-only; every rendered .cm-line must appear in
+                // it, in order, or the block stays uncertifiable.
+                const lineRows = Array.from(pre.children);
+                const isLine = (line: Element): boolean => line.tagName === 'DIV'
+                  && /(?:^|\s)cm-line(?:\s|$)/u.test(line.getAttribute('class') ?? '');
+                const isGap = (line: Element): boolean => line.tagName === 'DIV'
+                  && /(?:^|\s)cm-gap(?:\s|$)/u.test(line.getAttribute('class') ?? '')
+                  && !line.textContent?.trim() && line.children.length === 0;
+                if (lineRows.some((line) => !isLine(line) && !isGap(line))) return unsupported();
                 codeEl = pre;
+                if (lineRows.some(isGap)) {
+                  const contentView = (pre as unknown as { cmView?: { rootView?: { view?: unknown }; view?: unknown } }).cmView;
+                  const editor = (contentView?.rootView?.view ?? contentView?.view) as
+                    { state?: { doc?: { toString?: () => unknown } }; contentDOM?: unknown } | undefined;
+                  const docText = editor?.contentDOM === pre ? editor.state?.doc?.toString?.() : undefined;
+                  if (typeof docText !== 'string' || !docText) return unsupported();
+                  const docLines = docText.split('\n');
+                  let cursor = 0;
+                  for (const line of lineRows.filter(isLine)) {
+                    const rendered = line.textContent ?? '';
+                    while (cursor < docLines.length && docLines[cursor] !== rendered) cursor += 1;
+                    if (cursor >= docLines.length) return unsupported();
+                    cursor += 1;
+                  }
+                  virtualizedCode.set(pre, docText);
+                }
               } else {
                 const directCodes = Array.from(pre.children).filter((node) => node.tagName === 'CODE');
                 if (directCodes.length !== 1 || pre.querySelectorAll('code').length !== 1
@@ -1163,7 +1193,7 @@ export async function revalidateKeyedHarvest(
 
               language = labels[0];
             }
-            const codeText = (codeEl as HTMLElement).innerText;
+            const codeText = virtualizedCode.get(codeEl) ?? (codeEl as HTMLElement).innerText;
             if (typeof codeText !== 'string') return unsupported();
             const backtickRuns = codeText.match(/\x60+/gu) ?? [];
             const fence = String.fromCharCode(96).repeat(Math.max(3, ...backtickRuns.map((run) => run.length + 1)));
@@ -2231,6 +2261,7 @@ export async function readPageObservation(
               return { text: ((roots.length === 1 ? roots[0] : message) as HTMLElement).innerText, complete: true };
             };
             const unsupported = () => selected ? { text: '', complete: false } : wholeRow();
+            const virtualizedCode = new Map<Element, string>();
             const codeBodySelector = 'pre, .cm-content';
             // A runnable code block renders as CodeMirror, with no PRE.
             const isCodeMirror = (node: Element): boolean => node.tagName === 'DIV'
@@ -2436,11 +2467,35 @@ export async function readPageObservation(
                 const bars = Array.from(codeBlockRoot.children).filter(isCodeBlockActionBar);
                 if (bars.length !== 1 || !visible(pre)) return unsupported();
                 if (isCodeMirror(pre)) {
-                  // CodeMirror virtualizes long documents (.cm-gap placeholders):
-                  // accept only a fully rendered body of plain .cm-line rows.
-                  if (Array.from(pre.children).some((line) => line.tagName !== 'DIV'
-                    || !/(?:^|\s)cm-line(?:\s|$)/u.test(line.getAttribute('class') ?? ''))) return unsupported();
+                  // CodeMirror virtualizes long documents: off-screen lines are
+                  // .cm-gap placeholders, so a finished long reply would never
+                  // serialize from the DOM (defect-log 1456). Read the editor's own
+                  // document text read-only; every rendered .cm-line must appear in
+                  // it, in order, or the block stays uncertifiable.
+                  const lineRows = Array.from(pre.children);
+                  const isLine = (line: Element): boolean => line.tagName === 'DIV'
+                    && /(?:^|\s)cm-line(?:\s|$)/u.test(line.getAttribute('class') ?? '');
+                  const isGap = (line: Element): boolean => line.tagName === 'DIV'
+                    && /(?:^|\s)cm-gap(?:\s|$)/u.test(line.getAttribute('class') ?? '')
+                    && !line.textContent?.trim() && line.children.length === 0;
+                  if (lineRows.some((line) => !isLine(line) && !isGap(line))) return unsupported();
                   codeEl = pre;
+                  if (lineRows.some(isGap)) {
+                    const contentView = (pre as unknown as { cmView?: { rootView?: { view?: unknown }; view?: unknown } }).cmView;
+                    const editor = (contentView?.rootView?.view ?? contentView?.view) as
+                      { state?: { doc?: { toString?: () => unknown } }; contentDOM?: unknown } | undefined;
+                    const docText = editor?.contentDOM === pre ? editor.state?.doc?.toString?.() : undefined;
+                    if (typeof docText !== 'string' || !docText) return unsupported();
+                    const docLines = docText.split('\n');
+                    let cursor = 0;
+                    for (const line of lineRows.filter(isLine)) {
+                      const rendered = line.textContent ?? '';
+                      while (cursor < docLines.length && docLines[cursor] !== rendered) cursor += 1;
+                      if (cursor >= docLines.length) return unsupported();
+                      cursor += 1;
+                    }
+                    virtualizedCode.set(pre, docText);
+                  }
                 } else {
                   const directCodes = Array.from(pre.children).filter((node) => node.tagName === 'CODE');
                   if (directCodes.length !== 1 || pre.querySelectorAll('code').length !== 1
@@ -2545,7 +2600,7 @@ export async function readPageObservation(
 
                 language = labels[0];
               }
-              const codeText = (codeEl as HTMLElement).innerText;
+              const codeText = virtualizedCode.get(codeEl) ?? (codeEl as HTMLElement).innerText;
               if (typeof codeText !== 'string') return unsupported();
               const backtickRuns = codeText.match(/\x60+/gu) ?? [];
               const fence = String.fromCharCode(96).repeat(Math.max(3, ...backtickRuns.map((run) => run.length + 1)));
@@ -4010,6 +4065,8 @@ async function navigateOwnedTurnPage(
 
 export type OwnedConversationIdentity = {
   matched: boolean;
+  /** Normalized bound conversation URL; the only locator a redirect result may expose. */
+  targetUrl?: string;
   targetUuid?: string;
   pageUuid?: string;
   pageUrl?: string;
@@ -4017,15 +4074,18 @@ export type OwnedConversationIdentity = {
 
 export function readOwnedConversationIdentity(page: any, targetChatUrl: string): OwnedConversationIdentity {
   const targetUuid = conversationUuidFromUrl(targetChatUrl);
+  let targetUrl: string | undefined;
+  try { targetUrl = normalizeConversationUrl(targetChatUrl); } catch { /* target stays unnamed */ }
   let pageUrl: string | undefined;
   try {
     pageUrl = normalizeConversationUrl(String(page.url()));
   } catch {
-    return { matched: false, targetUuid, pageUuid: undefined, pageUrl };
+    return { matched: false, ...(targetUrl ? { targetUrl } : {}), targetUuid, pageUuid: undefined, pageUrl };
   }
   const pageUuid = conversationUuidFromUrl(pageUrl);
   return {
     matched: ownedConversationIdentityMatches(pageUrl, targetChatUrl),
+    ...(targetUrl ? { targetUrl } : {}),
     targetUuid,
     pageUuid,
     pageUrl,
@@ -4055,6 +4115,10 @@ function returnOwnedConversationIdentityMismatch(
   incident: (eventClass: string, symptom: string, action?: string) => void,
   afterSend: boolean,
 ): TurnRunOutcome {
+  // AC4: a readable page URL that is not the bound conversation is a positive redirect,
+  // reported as conversation_unavailable. The foreign URL is never exposed as the locator
+  // and its transcript is never read; an unreadable URL keeps the generic mismatch cause.
+  const redirected = identity.pageUrl !== undefined;
   incident(
     'conversation_identity_mismatch',
     'owned_conversation_identity_mismatch',
@@ -4069,16 +4133,21 @@ function returnOwnedConversationIdentityMismatch(
     result: compactResult(
       'ui_contract_mismatch',
       'invocation',
-      'owned_conversation_identity_mismatch',
+      redirected ? 'conversation_unavailable' : 'owned_conversation_identity_mismatch',
       invocationId,
       profileKey,
       sendCount,
       pollCount,
       navigation,
       incidents,
-      {
-        ...(identity.pageUrl ? { conversation_id: identity.pageUrl } : {}),
-      },
+      redirected
+        ? {
+          ...(identity.targetUrl ? { conversation_id: identity.targetUrl } : {}),
+          next_action: CONVERSATION_UNAVAILABLE_NEXT_ACTION,
+        }
+        : {
+          ...(identity.pageUrl ? { conversation_id: identity.pageUrl } : {}),
+        },
       journalWriteFailed,
     ),
   };
@@ -4383,16 +4452,15 @@ async function runTurnCore(
     'invocation-id',
     'predecessor-invocation-id',
     'predecessor-attempt-identity',
-    'predecessor-run-identity',
-    'predecessor-owner-task-id',
+    'bound-issue',
     'repo',
     'pr',
   ]);
   const invocationId = stringOption(args, 'invocation-id') ?? '';
   const previousInvocation = stringOption(args, 'predecessor-invocation-id');
   const previousAttempt = stringOption(args, 'predecessor-attempt-identity');
-  const previousRun = stringOption(args, 'predecessor-run-identity');
-  const previousOwnerTask = stringOption(args, 'predecessor-owner-task-id');
+  const boundIssueOption = stringOption(args, 'bound-issue');
+  let githubBaselineRecorded = false;
   let profileKey = 'profile-unresolved';
   let browser: any;
   let page: any;
@@ -4546,9 +4614,8 @@ async function runTurnCore(
 
   try {
     if (!invocationId) throw new Error('input_invalid:invocation_id_required');
-    if ([previousInvocation, previousAttempt, previousRun, previousOwnerTask].some((value) => Boolean(value))
-      && (!previousInvocation || !previousAttempt || !previousRun || !previousOwnerTask
-        || previousInvocation === invocationId)) {
+    if ([previousInvocation, previousAttempt].some((value) => Boolean(value))
+      && (!previousInvocation || !previousAttempt || previousInvocation === invocationId)) {
       throw new Error('input_invalid:exact_predecessor_selector_required');
     }
     const baseConfig = browserConfig(args);
@@ -4657,11 +4724,10 @@ async function runTurnCore(
       };
     }
 
-    if (previousInvocation && previousAttempt && previousRun && previousOwnerTask) {
+    if (previousInvocation && previousAttempt) {
       const previous = await retireExplicitPredecessor({
         previousInvocationId: previousInvocation,
         previousAttemptIdentity: previousAttempt,
-        runIdentity: previousRun, ownerTaskId: previousOwnerTask,
         profileKey, cdp: config.cdp,
         deadlineMs: Math.min(invocationDeadlineMs, Date.now() + 20_000),
       });
@@ -5176,6 +5242,38 @@ async function runTurnCore(
       prAuthorSendHead = head;
       return null;
     };
+    // Optional additive pre-physical-SEND GitHub snapshot on the original receipt. A failed or
+    // unavailable read leaves effect_unverified; it never gates dispatch.
+    const recordGithubEffectBaseline = async (): Promise<void> => {
+      if (githubBaselineRecorded) return;
+      githubBaselineRecorded = true;
+      const receiptPath = process.env.OPK_FM_LONG_CHILD_HANDOFF_RECEIPT;
+      if (!receiptPath) return;
+      try {
+        if (prAuthorBinding && prAuthorSendHead) {
+          writeGithubEffectBaselineToReceipt({
+            receiptPath, invocationId,
+            target: { repo: prAuthorBinding.repo, kind: 'pr', number: prAuthorBinding.pr, headSha: prAuthorSendHead.sha },
+          });
+          return;
+        }
+        const bound = parseBoundIssueSelector(boundIssueOption);
+        if (!bound) return;
+        const budgetMs = Math.max(0, Math.min(15_000, invocationDeadlineMs - Date.now() - MAX_LOCAL_READ_WAIT_MS));
+        if (budgetMs <= 0) return;
+        const digest = await Promise.race([
+          (prAuthorTurnHooks.readIssueBodySha256 ?? readIssueBodySha256ViaPackGh)(bound.repo, bound.issue).catch(() => undefined),
+          new Promise<undefined>((done) => setTimeout(() => done(undefined), budgetMs)),
+        ]);
+        if (!digest) return;
+        writeGithubEffectBaselineToReceipt({
+          receiptPath, invocationId,
+          target: { repo: bound.repo, kind: 'issue', number: bound.issue, bodySha256: digest },
+        });
+      } catch {
+        // effect_unverified: the baseline is optional evidence, never an admission gate.
+      }
+    };
     // Decisive PRE-SEND (#2718): own locator visible -> persist the claim phase
     // through the existing observation writer -> one final same-repo+PR scan.
     const prAuthorPreSendGate = async (): Promise<TurnRunOutcome | null> => {
@@ -5438,6 +5536,7 @@ async function runTurnCore(
           Math.min(invocationDeadlineMs, preDispatchCutoffMs),
         ));
       }
+      await recordGithubEffectBaseline();
       assertFreshOwner();
       const sendAction = async () => await dispatchStateLightSendAndObserveDelivery({
         page, browser, composer, sendButton, hasSendButton: true, marker,
@@ -5597,6 +5696,7 @@ async function runTurnCore(
           };
         }
       }
+      await recordGithubEffectBaseline();
       let recoveryReclickArmed = false;
       const dispatchExisting = async (clickWaitMs: number) =>
         await dispatchStateLightSendAndObserveDelivery({
@@ -8438,7 +8538,20 @@ async function runTurnCore(
     const holderTimeout = error instanceof StateLightSendSlotTimeoutError ? error : undefined;
     const lostAfterSend = afterSend && browserOrPageDefinitelyLost(page, browser);
     const observedNetworkChange = !afterSend && /ERR_NETWORK_CHANGED/iu.test(message);
-    const cause = isSharedBlocked ? message : observedNetworkChange ? 'network_changed' : retirementCleanupRequired
+    // AC7: the dispatch-boundary transition lost to the exact owner's committed
+    // prepared -> not_sent cancel; it threw before any click, so nothing was sent.
+    const cancelledBeforeDispatch = message === 'observation_phase_transition_invalid'
+      && !afterSend && !sendAttempted && sendCount === 0
+      && (() => {
+        try {
+          const committed = readStateLightTurnObservation(profileKey, invocationId);
+          return committed.phase === 'not_sent'
+            && committed.transition_reason === 'cancelled_before_dispatch'
+            && (committed.send_count ?? 0) === 0;
+        } catch { return false; }
+      })();
+    const cause = cancelledBeforeDispatch ? 'cancelled_before_dispatch'
+      : isSharedBlocked ? message : observedNetworkChange ? 'network_changed' : retirementCleanupRequired
       ? message
       : afterSend
         ? lostAfterSend
@@ -8502,6 +8615,9 @@ async function runTurnCore(
             ...(isAccountCooldown && refusedCooldownUntil !== undefined
               ? { cooldown_until_ms: refusedCooldownUntil } : {}),
             ...(!sendAttempted ? { attach_attempts: attachAttempts } : {}),
+            ...(cancelledBeforeDispatch ? {
+              next_action: 'Cancelled before dispatch by the exact owner; nothing was sent. Start a fresh invocation id if still needed.',
+            } : {}),
             ...(page && pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
             ...(holderTimeout ? {
               send_slot_holder_invocation_id: holderTimeout.send_slot_holder_invocation_id,
@@ -8526,15 +8642,14 @@ async function runTurnCore(
  */
 /**
  * Optional exact predecessor handoff: the only accepted locator is the
- * caller-supplied indexed invocation+attempt in the SAME run/task. No
- * profile-wide sweep, URL selection, newPage, Send, Stop, Retry or harvest.
- * The driver alone attaches and performs the current destructive-boundary read.
+ * caller-supplied indexed invocation+attempt; its original Run and owner come
+ * from that predecessor's own durable locator and handoff, never the current
+ * Task/Run. No profile-wide sweep, URL selection, newPage, Send, Stop, Retry
+ * or harvest. The driver alone attaches and performs the destructive-boundary read.
  */
 async function retireExplicitPredecessor(input: {
   readonly previousInvocationId: string;
   readonly previousAttemptIdentity: string;
-  readonly runIdentity: string;
-  readonly ownerTaskId: string;
   readonly profileKey: string;
   readonly cdp: string;
   readonly deadlineMs: number;
@@ -8547,15 +8662,14 @@ async function retireExplicitPredecessor(input: {
     status: 'cleanup_unconfirmed' as const, ...(targetId ? { targetId } : {}), cause,
   });
   try {
-    const { readInvocationReceiptLocator, readTerminalEnvelope } =
+    const { readPredecessorReceiptLocator, readTerminalEnvelope } =
       await import('../flow-manager-long-running-child.ts');
-    const bound = readInvocationReceiptLocator({
+    const bound = readPredecessorReceiptLocator({
       invocationId: input.previousInvocationId,
-      runIdentity: input.runIdentity, attemptIdentity: input.previousAttemptIdentity,
-      ownerTaskId: input.ownerTaskId,
+      expectedAttemptIdentity: input.previousAttemptIdentity,
     });
     const terminal = readTerminalEnvelope(bound.locator.terminal_envelope_path, {
-      runIdentity: input.runIdentity, attemptIdentity: input.previousAttemptIdentity,
+      runIdentity: bound.locator.run_identity, attemptIdentity: bound.locator.attempt_identity,
     });
     original = readStateLightTurnObservation(input.profileKey, input.previousInvocationId);
     targetId = original.owned_target?.id;
@@ -8564,7 +8678,6 @@ async function retireExplicitPredecessor(input: {
       || typeof terminal?.owned_target_created !== 'boolean') return refuse('predecessor_noncreation_unproven');
     if (!terminal || terminal.observed_invocation_id !== input.previousInvocationId
       || terminal.handoff_receipt_path !== bound.locator.handoff_receipt_path
-      || bound.receipt.owner_task_id !== input.ownerTaskId
       || original.invocation_id !== input.previousInvocationId
       || pin.cdp_sha256 !== createHash('sha256').update(input.cdp, 'utf8').digest('hex')
       || terminal.owned_target_id !== pin.id || terminal.owned_target_created !== pin.created
@@ -8635,6 +8748,79 @@ async function retireExplicitPredecessor(input: {
     return refuse(guarded.cause);
   } catch {
     return refuse('target_census_failed');
+  } finally {
+    if (browser) await releaseCdpBrowser(browser, RESOURCE_CLEANUP_BOUND_MS);
+  }
+}
+
+export type OriginalPageWitnessState = 'page_finished' | 'page_unverified' | 'conversation_unavailable';
+
+export interface OriginalPageWitness {
+  readonly state: OriginalPageWitnessState;
+  readonly evidence: string;
+  /** Length of the attributed finished assistant generation; never its text. */
+  readonly reply_length?: number;
+}
+
+/**
+ * Read-only reattachment to the exact original owned Page for an owner-run wait.
+ * Caller --profile/--cdp must reproduce the original private profile key and CDP hash; the Page
+ * must be the recorded target, on the bound conversation, carrying the original marker. Only two
+ * stable finished reads of the attributed assistant generation count as `page_finished`.
+ * No newPage, Send, Stop, Retry, close or harvest; nothing is persisted.
+ */
+export async function observeOriginalOwnedPageReadOnly(input: {
+  readonly record: StateLightTurnObservationRecord;
+  readonly profileKey: string;
+  readonly cdp: string;
+  readonly deadlineMs: number;
+  readonly stableGapMs?: number;
+}): Promise<OriginalPageWitness> {
+  const unverified = (evidence: string): OriginalPageWitness => ({ state: 'page_unverified', evidence });
+  const { record } = input;
+  const pin = record.owned_target;
+  if (record.profile_key !== input.profileKey) return unverified('profile_key_mismatch');
+  if (!pin?.id || !record.marker || !record.conversation_url) return unverified('original_record_incomplete');
+  if (pin.cdp_sha256 !== createHash('sha256').update(input.cdp, 'utf8').digest('hex')) return unverified('cdp_mismatch');
+  const bound = normalizeConversationUrl(record.conversation_url);
+  let browser: any;
+  try {
+    const remaining = (): number => Math.max(1, input.deadlineMs - Date.now());
+    const census = await listCdpPageTargets(input.cdp, Math.min(MAX_LOCAL_READ_WAIT_MS, remaining()));
+    if (!census.some((target) => target.id === pin.id)) return unverified('original_target_absent');
+    const attached = await attachOwnTarget(loadChromium(), {
+      mode: 'own-target', cdp: input.cdp, newChat: false, pinnedTargetId: pin.id,
+      deadlineMs: input.deadlineMs, cleanupBudgetMs: RESOURCE_CLEANUP_BOUND_MS,
+    });
+    browser = attached.browser;
+    const page = attached.page;
+    if (!page || getOwnTargetInfo(browser)?.targetId !== pin.id) return unverified('original_target_unproven');
+    let previous: string | undefined;
+    for (let read = 0; read < 2; read += 1) {
+      if (read > 0) await new Promise((done) => setTimeout(done, Math.min(input.stableGapMs ?? 1_000, remaining())));
+      if (Date.now() >= input.deadlineMs) return unverified('deadline_before_stable_reads');
+      const url = normalizeConversationUrl(String(page.url()));
+      if (url !== bound) {
+        return url && isSupportedChatGptConversationUrl(url)
+          ? { state: 'conversation_unavailable', evidence: 'original_page_redirected' }
+          : unverified('original_page_not_on_bound_conversation');
+      }
+      const observed = await readPageObservation(page, record.marker, 0, true,
+        Math.min(input.deadlineMs, Date.now() + MAX_LOCAL_READ_WAIT_MS));
+      if (observed.transcriptIncomplete || observed.snapshot?.complete !== true) return unverified('transcript_incomplete');
+      if (observed.pageTurnEvidence?.generationInProgress !== false
+        || observed.pageTurnEvidence?.continueGeneratingVisible === true) return unverified('generation_active_or_unknown');
+      if (!observed.ownedWindowCompletionReady) return unverified('completion_not_ready');
+      const window = resolveOwnedReplyWindow(observed.messages, 0, record.marker);
+      const index = window.lastOwnedAssistantMessageIndex;
+      const text = index === null ? undefined : observed.messages[index]?.text;
+      if (window.uncertainCause || !text) return unverified(window.uncertainCause ?? 'owned_assistant_absent');
+      if (previous !== undefined && previous !== text) return unverified('reply_still_changing');
+      previous = text;
+    }
+    return { state: 'page_finished', evidence: 'stable_finished_owned_generation', reply_length: previous!.length };
+  } catch {
+    return unverified('original_page_unreachable');
   } finally {
     if (browser) await releaseCdpBrowser(browser, RESOURCE_CLEANUP_BOUND_MS);
   }
@@ -9580,20 +9766,34 @@ const PR_AUTHOR_PACK_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..
 export const PR_AUTHOR_CANONICAL_LAUNCHER = join(PR_AUTHOR_PACK_ROOT, 'scripts/flow-manager-long-running-child.ts');
 export const PR_AUTHOR_CANONICAL_ENTRY = join(PR_AUTHOR_PACK_ROOT, 'scripts/chatgpt-browser-turn/state-light-entry.ts');
 const PR_AUTHOR_PACK_GH = join(PR_AUTHOR_PACK_ROOT, 'scripts/gh');
-// Read-only mirrors of the existing launcher record shapes. The launcher module
-// itself stays outside this browser-driver import graph.
+// Schema parsing and the durable-root rule are mirrored locally (an equality test pins them to
+// the launcher's `resolveDurableArtifactRoot`) so the launcher module stays outside this
+// browser-driver import graph.
 const PR_AUTHOR_LOCATOR_SCHEMA = 'flow-manager-long-running-child-locator/v1';
 const PR_AUTHOR_HANDOFF_SCHEMA = 'flow-manager-long-running-child-handoff/v1';
 const PR_AUTHOR_TERMINAL_SCHEMA = 'flow-manager-long-running-child-terminal/v1';
 
-/** The launcher's locator directory, honoring only its existing two-part fixture gate. */
+/**
+ * Mirror of the launcher's single durable root: `$XDG_STATE_HOME/orchestrator-pack`, else
+ * `$HOME/.local/state/orchestrator-pack`, honoring only its existing two-part fixture gate.
+ * An invalid (relative) XDG_STATE_HOME throws exactly like the launcher resolver.
+ */
+export function prAuthorDurableArtifactRoot(env: NodeJS.ProcessEnv = process.env): string {
+  const fixtureRoot = env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT;
+  if (env.OPK_FM_LONG_CHILD_TEST_GATE === 'fixture-root-v1'
+    && typeof fixtureRoot === 'string' && isAbsolute(fixtureRoot)) return resolve(fixtureRoot);
+  const xdg = env.XDG_STATE_HOME;
+  if (xdg !== undefined && xdg !== '') {
+    if (!isAbsolute(xdg)) throw new Error('durable_root_xdg_state_home_not_absolute');
+    return join(resolve(xdg), 'orchestrator-pack');
+  }
+  const home = env.HOME;
+  if (typeof home !== 'string' || !home.trim() || !isAbsolute(home)) throw new Error('durable_root_home_unavailable');
+  return join(resolve(home), '.local', 'state', 'orchestrator-pack');
+}
+
 function prAuthorLocatorRoot(): string {
-  const fixtureRoot = process.env.OPK_FM_LONG_CHILD_TEST_TERMINAL_ROOT;
-  const terminalRoot = process.env.OPK_FM_LONG_CHILD_TEST_GATE === 'fixture-root-v1'
-    && typeof fixtureRoot === 'string' && fixtureRoot.startsWith('/')
-    ? resolve(fixtureRoot)
-    : '/tmp/opencode';
-  return join(terminalRoot, 'browser-gpt-receipts');
+  return join(prAuthorDurableArtifactRoot(), 'browser-gpt-receipts');
 }
 
 function readPrAuthorJson(path: string): Record<string, unknown> | undefined {
@@ -9946,9 +10146,11 @@ const PR_AUTHOR_CLAIMED_PHASES: ReadonlySet<string> = new Set([
  */
 export function prAuthorCandidateHolding(candidate: PrAuthorCandidate, nowMs = Date.now()): PrAuthorHolding {
   let phase: string;
+  let record: StateLightTurnObservationRecord;
   try {
     if (!candidate.profileKey) throw new Error('observation_profile_unresolved');
-    phase = readStateLightTurnObservation(candidate.profileKey, candidate.invocationId).phase;
+    record = readStateLightTurnObservation(candidate.profileKey, candidate.invocationId);
+    phase = record.phase;
   } catch {
     return candidate.launcherLive
       ? { holding: true, invocationId: candidate.invocationId, phase: 'observation_unreadable' }
@@ -9959,6 +10161,19 @@ export function prAuthorCandidateHolding(candidate: PrAuthorCandidate, nowMs = D
   }
   if (!(candidate.orphanChildLive || candidate.claimOnly) || !PR_AUTHOR_CLAIMED_PHASES.has(phase)) {
     return { holding: false };
+  }
+  // AC5: a dead producer's `harvested` claim with its committed primary verified can no
+  // longer SEND and has no delivery ambiguity; release only that holding. Records and
+  // receipts stay, and dispatching/sent_*/sending claims keep blocking. The next Send
+  // re-proves page idleness through its own existing checks.
+  if (phase === 'harvested' && candidate.claimOnly === true
+    && !candidate.launcherLive && !candidate.orphanChildLive && record.primary) {
+    try {
+      if (readVerifiedStateLightHarvestedPrimary({
+        profileKey: candidate.profileKey!, invocationId: candidate.invocationId,
+        marker: record.marker, target: record.primary.target,
+      })) return { holding: false };
+    } catch { /* unverifiable primary keeps the claim held */ }
   }
   return nowMs < candidate.deadlineMs ? { holding: true, invocationId: candidate.invocationId, phase } : { holding: false };
 }
@@ -10034,6 +10249,87 @@ export const readPrAuthorHeadViaPackGh: PrAuthorHeadReader = async (binding) => 
   } catch { return undefined; }
 };
 
+export type IssueBodyDigestReader = (repo: string, issue: number) => Promise<string | undefined>;
+
+/** Authenticated pack `scripts/gh` REST read of the exact Issue body; SHA-256, undefined when unreadable. */
+export const readIssueBodySha256ViaPackGh: IssueBodyDigestReader = async (repo, issue) => {
+  const result = await runProcess({
+    command: PR_AUTHOR_PACK_GH,
+    args: ['api', `repos/${repo}/issues/${issue}`],
+    cwd: PR_AUTHOR_PACK_ROOT,
+    inheritParentEnv: true,
+    allowEmptyStdout: false,
+    timeoutMs: 30_000,
+  });
+  if (!result.ok) return undefined;
+  try {
+    const body = JSON.parse(result.stdout) as { number?: unknown; body?: unknown; pull_request?: unknown };
+    if (body.number !== issue || body.pull_request !== undefined) return undefined;
+    if (body.body !== null && typeof body.body !== 'string') return undefined;
+    return createHash('sha256').update(typeof body.body === 'string' ? body.body : '', 'utf8').digest('hex');
+  } catch { return undefined; }
+};
+
+export interface BoundIssueSelector { readonly repo: string; readonly issue: number }
+
+/** `--bound-issue owner/repo#number`, the upstream Task/Dispatch-bound managed Issue target. */
+export function parseBoundIssueSelector(value: string | undefined): BoundIssueSelector | undefined {
+  if (value === undefined) return undefined;
+  const match = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9][0-9]{0,9})$/u.exec(value.trim());
+  if (!match) throw new Error('input_invalid:bound_issue_selector_invalid');
+  return { repo: match[1]!.toLowerCase(), issue: Number(match[2]) };
+}
+
+const GITHUB_EFFECT_BASELINE_SCHEMA_ID = 'opk-github-effect-baseline/v1';
+
+/**
+ * Atomically add the optional additive `github_effect_baseline` to this invocation's original
+ * handoff receipt (path passed by its own launcher). Immutable identity fields are retained; a
+ * failure only leaves the effect unverified, never an admission refusal.
+ */
+export function writeGithubEffectBaselineToReceipt(input: {
+  readonly receiptPath: string | undefined;
+  readonly invocationId: string;
+  readonly target: { readonly repo: string; readonly kind: 'issue' | 'pr'; readonly number: number;
+    readonly bodySha256?: string; readonly headSha?: string };
+}): boolean {
+  const receiptPath = input.receiptPath;
+  if (!receiptPath || !isAbsolute(receiptPath)) return false;
+  let stage: string | undefined;
+  try {
+    const current = JSON.parse(readFileSync(receiptPath, 'utf8')) as Record<string, unknown>;
+    if (current.schema !== PR_AUTHOR_HANDOFF_SCHEMA || current.invocation_id !== input.invocationId
+      || typeof current.run_identity !== 'string' || typeof current.attempt_identity !== 'string'
+      || current.github_effect_baseline !== undefined) return false;
+    const baseline = {
+      schema: GITHUB_EFFECT_BASELINE_SCHEMA_ID,
+      invocation_id: input.invocationId,
+      run_identity: current.run_identity,
+      attempt_identity: current.attempt_identity,
+      repo: input.target.repo,
+      kind: input.target.kind,
+      number: input.target.number,
+      ...(input.target.kind === 'issue' ? { body_sha256: input.target.bodySha256 } : { head_sha: input.target.headSha }),
+      captured_at: new Date().toISOString(),
+    };
+    stage = join(dirname(receiptPath), `.${basename(receiptPath)}.baseline-${process.pid}-${Date.now()}.tmp`);
+    const handle = openSync(stage, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 0o600);
+    try {
+      writeSync(handle, `${JSON.stringify({ ...current, github_effect_baseline: baseline })}\n`);
+      fsyncSync(handle);
+    } finally {
+      closeSync(handle);
+    }
+    renameSync(stage, receiptPath);
+    stage = undefined;
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (stage) try { unlinkSync(stage); } catch { /* best effort */ }
+  }
+}
+
 /** Current branch of a worktree (`git symbolic-ref`); undefined when detached/unreadable. */
 export async function readWorktreeBranch(cwd: string): Promise<string | undefined> {
   const result = await runProcess({
@@ -10079,6 +10375,7 @@ export function prAuthorHeadEffect(
 export interface PrAuthorTurnHooks {
   readHead?: PrAuthorHeadReader;
   readBranch?: (cwd: string) => Promise<string | undefined>;
+  readIssueBodySha256?: IssueBodyDigestReader;
   reader?: PrAuthorProcessReader;
   /** Deterministic barrier hooks for the bounded race fixtures. */
   beforeFinalScan?: (invocationId: string) => Promise<void> | void;

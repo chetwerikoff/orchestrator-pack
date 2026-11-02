@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   controlExitCode,
   publicationExitCode,
   turnExitCode,
+  type CommonIncidentRecordV1,
   type ControlResultV1,
   type FailureScope,
   type PublicationStatusV1,
@@ -45,7 +47,8 @@ import {
   updateIncident,
   writeIncident,
 } from './chatgpt-browser-turn/state.ts';
-import { configuredProfileKey, legacyProfileKeyAmbiguous, profileNamespaceExists, resolveConfiguredProfile, sha256 } from './chatgpt-browser-turn/storage-common.ts';
+import { configuredProfileKey, legacyProfileKeyAmbiguous, profileDirs, profileNamespaceExists, resolveConfiguredProfile, sha256 } from './chatgpt-browser-turn/storage-common.ts';
+import { STATE_LIGHT_MAX_TIMEOUT_MS } from './chatgpt-browser-turn/state-light-fresh-conversation.ts';
 import {
   runGateBCharacterization,
   bindGateBCharacterizationRecord,
@@ -290,7 +293,8 @@ function blockerBeforeSend(
   // Historical page-text walls are advisory records, never send-admission
   // authority. Keep the independent orphan/delivery ownership gates below.
   const actionableIncidents = incidents.filter(({ record }) => record.kind !== 'profile_wall');
-  const orphan = actionableIncidents.find(({ record }) => record.kind === 'fresh_orphan');
+  const orphan = actionableIncidents.find(({ identity, record }) => record.kind === 'fresh_orphan'
+    && !freshOrphanAgeAdvisory(profileKey, identity, record));
   if (orphan) {
     return {
       state: 'orphaned_fresh_turn',
@@ -323,6 +327,38 @@ function blockerBeforeSend(
     }
   }
   return null;
+}
+/** Optional additive incident field; kept outside the shared record contract type. */
+function incidentDeadlineField(deadlineMs: number): Record<string, never> {
+  return { deadline_ms: deadlineMs } as unknown as Record<string, never>;
+}
+
+// AC16: age-based policy fallback, not proof of the legacy turn's real timeout.
+// Threshold: valid positive record deadline_ms; else valid created_at + max
+// timeout; else record file mtime + max timeout. Anything invalid, unreadable
+// or in the future keeps the orphan blocking. updated_at is never consulted.
+function freshOrphanAgeAdvisory(
+  profileKey: string,
+  identity: string,
+  record: CommonIncidentRecordV1,
+  nowMs = Date.now(),
+): boolean {
+  const createdAtMs = Date.parse(record.created_at);
+  const createdValid = Number.isFinite(createdAtMs) && createdAtMs > 0;
+  // Optional additive field (absent on legacy records); contracts.ts stays unchanged.
+  const deadlineMs = (record as CommonIncidentRecordV1 & { readonly deadline_ms?: unknown }).deadline_ms;
+  if (typeof deadlineMs === 'number' && Number.isSafeInteger(deadlineMs) && deadlineMs > 0
+    && (!createdValid || deadlineMs >= createdAtMs)) {
+    return nowMs >= deadlineMs;
+  }
+  if (createdValid) return nowMs >= createdAtMs + STATE_LIGHT_MAX_TIMEOUT_MS;
+  try {
+    const modifiedAtMs = statSync(join(profileDirs(profileKey).records, `${identity}.json`)).mtimeMs;
+    return Number.isFinite(modifiedAtMs) && modifiedAtMs > 0
+      && nowMs >= modifiedAtMs + STATE_LIGHT_MAX_TIMEOUT_MS;
+  } catch {
+    return false;
+  }
 }
 
 function browserConfig(args: ParsedArgs): BrowserConfig {
@@ -360,6 +396,7 @@ function emitTurnAndCode(result: TurnResultV1): number {
 }
 
 async function runTurn(args: ParsedArgs): Promise<number> {
+  const invocationStartedAt = Date.now();
   assertAllowedOptions(args, [
     'profile', 'cdp', 'input', 'output', 'chat-url', 'new-chat', 'project-url', 'timeout-ms',
     'invocation-id',
@@ -531,6 +568,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       ...(opened.provisionalId ? { provisional_id: opened.provisionalId } : {}),
       lock_key: scheduleLock.key,
       owner: { pid: process.pid, started_at: new Date().toISOString(), nonce: scheduleLock.nonce },
+      ...(incidentDeadlineField(invocationStartedAt + config.timeoutMs)),
     });
     incidentId = created.identity;
 

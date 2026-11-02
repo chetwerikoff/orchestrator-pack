@@ -774,9 +774,8 @@ describe('state-light fresh conversation collision recovery', () => {
         '--new-chat', '--project-url', PROJECT_URL,
         '--timeout-ms', '90000', '--poll-ms', '1',
         '--predecessor-invocation-id', previousId,
+        // #2750: invocation+attempt only; the durable locator supplies the original Run and owner.
         '--predecessor-attempt-identity', 'attempt-retire-2685',
-        '--predecessor-run-identity', 'run-retire-2685',
-        '--predecessor-owner-task-id', 'task-retire-2685',
       ];
       try {
         attach.mockClear();
@@ -2013,10 +2012,13 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(redirected).toBe(true);
     expect(outcome.result).toMatchObject({
       state: 'ui_contract_mismatch',
-      cause: 'owned_conversation_identity_mismatch',
+      cause: 'conversation_unavailable',
+      next_action: expect.stringContaining('fresh chat'),
       send_count: 1,
       cleanup: 'unconfirmed',
     });
+    // The foreign URL is never reported as the conversation locator.
+    expect(outcome.result.conversation_id).not.toBe(OTHER_PROJECT_CONVERSATION_URL);
     expect(turn.getSends()).toBe(1);
     expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
     expect(turn.page.close).not.toHaveBeenCalled();
@@ -2331,7 +2333,9 @@ describe('state-light fresh conversation collision recovery', () => {
     ]);
     expect(outcome.result).toMatchObject({
       state: 'ui_contract_mismatch',
-      cause: 'owned_conversation_identity_mismatch',
+      cause: 'conversation_unavailable',
+      next_action: expect.stringContaining('fresh chat'),
+      conversation_id: SHARED_CONV,
       send_count: 0,
     });
     expect(solo.getSends()).toBe(0);
@@ -2357,10 +2361,47 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(solo.page.evaluate).toHaveBeenCalledTimes(1);
     expect(outcome.result).toMatchObject({
       state: 'ui_contract_mismatch',
-      cause: 'owned_conversation_identity_mismatch',
+      cause: 'conversation_unavailable',
+      next_action: expect.stringContaining('fresh chat'),
       send_count: 0,
     });
     expect(solo.getSends()).toBe(0);
+  });
+
+  it('Issue #2750 AC4: a redirected bound locator is conversation_unavailable advice, never a foreign harvest or locator', async () => {
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-AC4-REDIRECT'));
+    const foreignReply = 'FOREIGN-CONVERSATION-ASSISTANT-TEXT';
+    const solo = makeLoserPage('PROMPT-AC4-REDIRECT', foreignReply, undefined, true);
+    const initialUrl = solo.page.url.getMockImplementation()!;
+    let redirected = false;
+    solo.page.url.mockImplementation(() => redirected ? LOSER_CONV : initialUrl());
+    solo.page.evaluate = vi.fn(async () => { redirected = true; });
+    enqueueBrowserForTurn(mocks, solo.page);
+    const output = join(stateDir, 'ac4-redirect-reply.txt');
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--invocation-id', randomUUID(),
+      '--output', output,
+      '--chat-url', SHARED_CONV,
+      '--timeout-ms', '60000',
+      '--poll-ms', '1',
+    ]);
+    expect(redirected).toBe(true);
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'conversation_unavailable',
+      conversation_id: SHARED_CONV,
+      send_count: 0,
+    });
+    expect(outcome.result.next_action).toMatch(/fresh chat/u);
+    expect(outcome.result.next_action).toMatch(/advice only/u);
+    expect(outcome.result).not.toHaveProperty('recovery_available');
+    expect(outcome.result).not.toHaveProperty('output');
+    expect(JSON.stringify(outcome.result)).not.toContain(foreignReply);
+    expect(JSON.stringify(outcome.result)).not.toContain('22222222-2222-4222-8222-222222222222');
+    expect(solo.getSends()).toBe(0);
+    expect(solo.page.close).not.toHaveBeenCalled();
+    expect(existsSync(output)).toBe(false);
   });
 
   it('rejects a fresh-project redirect during the final pre-send alert probe', async () => {
@@ -3606,9 +3647,9 @@ describe('state-light fresh conversation collision recovery', () => {
       send_count: 1, cleanup: 'unconfirmed',
     });
     expect(outcome.result).not.toHaveProperty('conversation_id');
-    expect(outcome.result.next_action).toContain('GitHub effects first');
-    expect(outcome.result.next_action).toContain('20 minutes');
-    expect(outcome.result.next_action).toContain('project sidebar');
+    expect(outcome.result.next_action).toContain('exact bound GitHub target and original Page');
+    expect(outcome.result.next_action).toContain('page-probe only as a diagnostic');
+    expect(outcome.result.next_action).toContain('Do not retry or create a replacement invocation');
     expect(fixture.alertReads()).toBe(2);
     expect(mocks.nowMs - startMs).toBeLessThan(68_000);
     expect(fixture.getSends()).toBe(1);
@@ -3821,9 +3862,8 @@ describe('state-light fresh conversation collision recovery', () => {
     });
     expect(outcome.result).not.toHaveProperty('conversation_id');
     expect(outcome.result.next_action).toContain('POSSIBLY_DELIVERED');
-    expect(outcome.result.next_action).toContain('GitHub effects first');
-    expect(outcome.result.next_action).toContain('new-invocation-ID manual send');
-    expect(outcome.result.next_action).toContain('possibly duplicated');
+    expect(outcome.result.next_action).toContain('exact bound GitHub target and original Page');
+    expect(outcome.result.next_action).toContain('Do not retry or create a replacement invocation');
     expect(mocks.nowMs - start).toBeLessThan(90_000);
     expect(fixture.getSends()).toBe(1);
     expect(fixture.page.goto).toHaveBeenCalledTimes(fixture.gotoAtSend());
