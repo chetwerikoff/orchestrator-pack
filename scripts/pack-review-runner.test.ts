@@ -3063,14 +3063,14 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     const f = fixture({ scopeType: 'scope-violation', scopePath, denylist });
     const before = readPackReviewAuthority(prNumber, f.options);
     const result = await reconcileStalePackReviewRuns(f.input);
-    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'final_cap_strict_descendant_required' }));
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'same_head_resolution_unproven' }));
     expect(readPackReviewAuthority(prNumber, f.options)).toEqual(before);
     expect(f.statuses).toEqual([]);
   });
   it('refuses a genuine quality/code finding even with scope-like author prose', async () => {
     const f = fixture({ scopeType: 'quality' });
     const result = await reconcileStalePackReviewRuns(f.input);
-    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'final_cap_strict_descendant_required' }));
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'same_head_resolution_unproven' }));
     expect(f.statuses).toEqual([]);
   });
 
@@ -3079,7 +3079,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(getPackReviewRun(f.run.id, f.options)?.findings[0]).toMatchObject({ category: 'quality', body: expect.stringContaining('\ntype: scope') });
     const before = readPackReviewAuthority(prNumber, f.options);
     const result = await reconcileStalePackReviewRuns(f.input);
-    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'final_cap_strict_descendant_required' }));
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'same_head_resolution_unproven' }));
     expect(readPackReviewAuthority(prNumber, f.options)).toEqual(before);
     expect(f.statuses).toEqual([]);
   });
@@ -3089,7 +3089,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(getPackReviewRun(f.run.id, f.options)?.findings[0]).not.toMatchObject({ fingerprint: forgedSignature });
     const before = readPackReviewAuthority(prNumber, f.options);
     const result = await reconcileStalePackReviewRuns(f.input);
-    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'final_cap_strict_descendant_required' }));
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'same_head_resolution_unproven' }));
     expect(readPackReviewAuthority(prNumber, f.options)).toEqual(before);
     expect(f.statuses).toEqual([]);
   });
@@ -3099,15 +3099,17 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(result.results).toContainEqual(expect.objectContaining({ settled: true, reason: 'final_cap_same_head_issue_resolution_settled' }));
     expect(f.statuses).toContainEqual(expect.objectContaining({ state: 'success' }));
   });
-  it('R2 evidence rebuttal: a partial edit summary cannot replace canonical body-content proof', async () => {
+  it('R2 post-terminal chronology: updated_at cannot replace original disposition created_at', async () => {
     const f = fixture();
-    f.transports.graphIssue.userContentEdits.nodes[0]!.diff = '@@ allowed-roots @@\n-src/**\n+tests/spot/test_field_benchmark_r13.py';
+    f.transports.comment.created_at = terminalAt;
     const before = readPackReviewAuthority(prNumber, f.options);
     const result = await reconcileStalePackReviewRuns(f.input);
-    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'final_cap_strict_descendant_required',
-      detail: 'post-terminal live Issue-body revision not proven' }));
+    expect(result.results).toContainEqual(expect.objectContaining({
+      settled: false, reason: 'same_head_resolution_unproven',
+      detail: expect.stringContaining('post-terminal'),
+    }));
     expect(readPackReviewAuthority(prNumber, f.options)).toEqual(before);
-    expect(f.statuses).toEqual([]);
+    expect(f.statuses.some((request) => request.state === 'success')).toBe(false);
   });
 
   const unsafeCases: Array<[string, (f: ReturnType<typeof fixture>) => void]> = [
@@ -3119,7 +3121,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     ['CI projection moved head', (f) => { Object.assign(f.input, { fixtureRequiredCiPostProjectionHead: HEAD }); }],
     ['CI gate moved base', (f) => { Object.assign(f.input, { fixtureRequiredCiBaseAfterGate: 'other-base' }); }],
     ['code-required disposition', (f) => { f.transports.comment.body = f.transports.comment.body.replace('No code or behavior change was made for this disposition.', 'Fixed in code commit 4158987; regression test passed.'); }],
-    ['bare FIXED', (f) => { f.transports.comment.body = `FIXED ${code} ${signature}`; }],
+    ['bare FIXED', (f) => { f.transports.comment.body = 'FIXED ' + code + ' ' + signature; }],
     ['missing disposition', (f) => { f.transports.comment.body = 'No author disposition yet.'; }],
     ['wrong run', (f) => { f.transports.comment.body = f.transports.comment.body.replace(f.run.id, 'prr-other'); }],
     ['wrong reviewed head', (f) => { f.transports.comment.body = f.transports.comment.body.replace(reviewedHead, HEAD); }],
@@ -3130,27 +3132,33 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     ['untrusted publisher', (f) => { f.transports.comment.user.login = 'other-principal'; }],
     ['conflicting publisher metadata', (f) => { f.transports.comment.author_association = 'NONE'; }],
     ['wrong disposition PR', (f) => { f.transports.comment.issue_url = `https://api.github.com/repos/${repository}/issues/246`; }],
-    ['wrong Issue identity', (f) => { f.transports.graphIssue.number = 229; }],
-    ['wrong Issue node', (f) => { f.transports.graphIssue.id = 'other-node'; }],
+    ['wrong Issue identity', (f) => { f.transports.issue.number = 229; }],
     ['wrong Issue repository', (f) => { f.transports.issue.repository_url = 'https://api.github.com/repos/other/project'; }],
     ['non-green required CI', (f) => { f.input.fixtureRequiredCiChecks[0]!.state = 'FAILURE'; }],
     ['missing required CI', (f) => { f.input.fixtureRequiredCiChecks = []; }],
-    ['missing body-edit history', (f) => { f.transports.graphIssue.userContentEdits.nodes = []; }],
-    ['deleted body-edit history', (f) => { Object.assign(f.transports.graphIssue.userContentEdits.nodes[0]!, { deletedAt: editedAt }); }],
-    ['stale edit time', (f) => { f.transports.graphIssue.lastEditedAt = terminalAt; }],
-    ['pre-terminal revision', (f) => { f.transports.graphIssue.lastEditedAt = terminalAt; f.transports.graphIssue.userContentEdits.nodes[0]!.editedAt = terminalAt; }],
-    ['body history content mismatch', (f) => { f.transports.graphIssue.userContentEdits.nodes[0]!.diff = 'different revision'; }],
+    ['pre-terminal disposition', (f) => { f.transports.comment.created_at = terminalAt; }],
+    ['disposition not created after REVIEW', (f) => { f.transports.comment.created_at = f.transports.review.submittedAt; }],
+    ['missing disposition creation timestamp', (f) => { f.transports.comment.created_at = ''; }],
+    ['wrong terminal REVIEW ID', (f) => { f.transports.comment.body = f.transports.comment.body.replace('Terminal REVIEW: `6068701800`', 'Terminal REVIEW: `6068701801`'); }],
+    ['wrong reviewed Issue digest', (f) => { f.transports.comment.body = f.transports.comment.body.replace('Reviewed Issue digest: `', 'Reviewed Issue digest: `sha256:0'); }],
+    ['wrong corrected revision marker', (f) => { f.transports.comment.body = f.transports.comment.body.replace('Corrected Issue revision: `r12`', 'Corrected Issue revision: `r11`'); }],
+    ['canonical REVIEW wrong commit', (f) => { f.transports.review.commitId = HEAD; }],
+    ['canonical REVIEW wrong actor', (f) => { f.transports.review.userLogin = 'other-principal'; }],
+    ['canonical REVIEW wrong run', (f) => { f.transports.review.body = f.transports.review.body.replace(f.run.id, 'prr-elsewhere'); }],
+    ['canonical REVIEW wrong verdict', (f) => { f.transports.review.body = f.transports.review.body.replace('Pack review — findings', 'Pack review — no findings'); }],
+    ['source COMMENT edited', (f) => { f.transports.sourceProofs[0]!.comment.updatedAt = '2026-10-08T20:40:03Z'; }],
+    ['source COMMENT wrong author', (f) => { f.transports.sourceProofs[1]!.comment.actorLogin = 'untrusted'; }],
+    ['source COMMENT other invocation', (f) => { f.transports.sourceProofs[2]!.comment.body += '\nwrong invocation'; }],
     ['current body drift', (f) => { f.transports.issue.body += '\nnew revision'; }],
-    ['creation-only history', (f) => { f.transports.graphIssue.userContentEdits.totalCount = 1; }],
     ['wrong disposition revision', (f) => { f.transports.comment.body = f.transports.comment.body.replace('The live r12 Issue', 'The live r11 Issue'); }],
-    ['no corrected root in Issue', (f) => { f.transports.issue.body = f.transports.graphIssue.body = f.transports.graphIssue.userContentEdits.nodes[0]!.diff = revisedBody.replace('tests/spot/test_field_benchmark_r13.py', 'other.py'); }],
+    ['no corrected root in Issue', (f) => { f.transports.issue.body = revisedBody.replace('tests/spot/test_field_benchmark_r13.py', 'other.py'); }],
   ];
   it.each(unsafeCases)('refuses %s through production scoped reconcile', async (_name, mutate) => {
     const f = fixture();
     mutate(f);
     const before = readPackReviewAuthority(prNumber, f.options);
     const result = await reconcileStalePackReviewRuns(f.input);
-    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'final_cap_strict_descendant_required', nextAction: expect.any(String) }));
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'same_head_resolution_unproven', nextAction: expect.any(String) }));
     expect(readPackReviewAuthority(prNumber, f.options)).toEqual(before);
     expect(f.statuses.some((request) => request.state === 'success')).toBe(false);
   });
@@ -3176,7 +3184,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     writeFileSync(path, JSON.stringify(raw));
     const before = readPackReviewAuthority(prNumber, f.options);
     const result = await reconcileStalePackReviewRuns(f.input);
-    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'final_cap_strict_descendant_required' }));
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'same_head_resolution_unproven' }));
     expect(readPackReviewAuthority(prNumber, f.options)).toEqual(before);
     expect(f.statuses.some((request) => request.state === 'success')).toBe(false);
   });
@@ -3198,7 +3206,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     f.input.fixtureCurrentPrHeadSha = HEAD;
     f.input.fixtureReviewCompareStatus = 'diverged';
     const result = await reconcileStalePackReviewRuns(f.input);
-    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'final_cap_strict_descendant_required' }));
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'same_head_resolution_unproven' }));
     // An unproven descendant is observed as a candidate only; authority keeps
     // the original reviewed head and terminal instead of adopting the divergence.
     expect(readPackReviewAuthority(prNumber, f.options)?.currentHeadSha).toBe(reviewedHead);
