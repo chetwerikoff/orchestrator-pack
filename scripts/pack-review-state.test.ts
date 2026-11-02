@@ -29,6 +29,7 @@ import {
   stableJson,
   selectPackReviewEvidence,
   settleLogicalPackReviewFindingsByStrictDescendant,
+  settleLogicalPackReviewFindingsByRewrittenHead,
   stagePackReviewImmutableRecord,
   terminalConsumesCapSlot,
   validateTerminalV2,
@@ -1136,6 +1137,80 @@ describe('Issue #1887 strict-descendant findings settlement', () => {
   });
 });
 
+
+describe('Issue #2767 rewritten-head findings settlement', () => {
+  it('settles only a changed pre-cap T3 findings head without consuming round 2', () => {
+    const storeOptions = options();
+    const reviewed = sha('1');
+    const rewritten = sha('2');
+    let state = initializePackReviewAuthority({
+      prNumber: 2767, headSha: reviewed, tier: 'T3',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options: storeOptions,
+    });
+    state = commitPackReviewTerminal({
+      prNumber: 2767, expectedTransitionSeq: state.transitionSeq,
+      terminal: { ...findingsTerminal('issue-2767-round1', reviewed), logicalRoundOrdinal: 1 },
+      status: 'changes_requested', findingCount: 1, options: storeOptions,
+    });
+    expect(state.cycle).toMatchObject({
+      state: 'open_findings', frozenTier: 'T3', frozenCap: 2, consumedRoundOrdinals: [1],
+    });
+    expect(() => settleLogicalPackReviewFindingsByRewrittenHead({
+      prNumber: 2767, expectedTransitionSeq: state.transitionSeq,
+      reviewedHeadSha: reviewed, currentHeadSha: reviewed, options: storeOptions,
+    })).toThrow(/findings_settlement_invalid/);
+
+    state = observePackReviewHead({
+      prNumber: 2767, expectedTransitionSeq: state.transitionSeq,
+      headSha: rewritten, options: storeOptions,
+    });
+    expect(() => settleLogicalPackReviewFindingsByStrictDescendant({
+      prNumber: 2767, expectedTransitionSeq: state.transitionSeq,
+      reviewedHeadSha: reviewed, currentHeadSha: rewritten,
+      reviewedHeadIsAncestor: false, options: storeOptions,
+    })).toThrow(/findings_settlement_invalid/);
+    state = settleLogicalPackReviewFindingsByRewrittenHead({
+      prNumber: 2767, expectedTransitionSeq: state.transitionSeq,
+      reviewedHeadSha: reviewed, currentHeadSha: rewritten, options: storeOptions,
+    });
+    expect(state.currentHeadSha).toBe(rewritten);
+    expect(state.cycle).toMatchObject({
+      state: 'open', frozenTier: 'T3', frozenCap: 2,
+      consumedRoundOrdinals: [1], settlementKind: 'rewritten_head',
+    });
+    expect(state.cycle?.reviewStageComplete).not.toBe(true);
+    state = observePackReviewHead({
+      prNumber: 2767, expectedTransitionSeq: state.transitionSeq,
+      headSha: rewritten, options: storeOptions,
+    });
+    expect(state.terminal).toBeUndefined();
+  });
+
+  it('does not settle final-cap findings just because the head was rewritten', () => {
+    const storeOptions = options();
+    const reviewed = sha('3');
+    const rewritten = sha('4');
+    let state = initializePackReviewAuthority({
+      prNumber: 2768, headSha: reviewed, tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options: storeOptions,
+    });
+    state = commitPackReviewTerminal({
+      prNumber: 2768, expectedTransitionSeq: state.transitionSeq,
+      terminal: { ...findingsTerminal('issue-2767-final-cap', reviewed), logicalRoundOrdinal: 1 },
+      status: 'changes_requested', findingCount: 1, options: storeOptions,
+    });
+    state = observePackReviewHead({
+      prNumber: 2768, expectedTransitionSeq: state.transitionSeq,
+      headSha: rewritten, options: storeOptions,
+    });
+    expect(state.cycle?.state).toBe('at_cap_continuation_required');
+    expect(() => settleLogicalPackReviewFindingsByRewrittenHead({
+      prNumber: 2768, expectedTransitionSeq: state.transitionSeq,
+      reviewedHeadSha: reviewed, currentHeadSha: rewritten, options: storeOptions,
+    })).toThrow(/findings_settlement_invalid/);
+    expect(readPackReviewAuthority(2768, storeOptions)?.cycle?.state).toBe('at_cap_continuation_required');
+  });
+});
 
 describe('Issue #1887 logical triage is diagnostic only', () => {
   it('does not settle final-cap findings on the same head through architect DEFER or publication', () => {
