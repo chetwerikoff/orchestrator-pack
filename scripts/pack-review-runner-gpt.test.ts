@@ -1939,6 +1939,11 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
         expect(source).toMatchObject({ lifecycle: 'invocation_started', invocationId: first.invocationId });
         expect(source.terminalResult).toBeUndefined();
       }
+      // Independent admission and two terminal sources are not a canonical
+      // aggregate verdict; the frozen T2/T3 cap cannot be spent here.
+      const authorityBeforeLastSource = readPackReviewAuthority(1276, { storeRoot });
+      expect(authorityBeforeLastSource?.cycle?.consumedRoundOrdinals).toEqual([]);
+      expect(trace.map((entry) => entry.slotId)).toEqual(['source-01', 'source-02', 'source-03']);
       releases.get('source-01')?.();
       const result = await pending;
       const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
