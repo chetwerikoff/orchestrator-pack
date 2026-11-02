@@ -11195,7 +11195,7 @@ export async function resetPackReview(input: Record<string, unknown>): Promise<R
     }
     completedFindingsBodyAmended = computeBoundIssueSnapshotHash(fields.body) !== frozen.snapshotHash;
     if (!completedFindingsBodyAmended) {
-      throw new Error('completed findings reset requires an actual linked Issue body amendment');
+      throw new Error('completed findings reset requires an actual linked Issue body amendment; review stage is complete; fix commits merge on current-head CI; an extra round needs a behavior-criteria amendment');
     }
     const liveHead = process.env.OPK_VITEST_HARNESS === '1'
       ? trim((input as StartInput).fixtureCurrentPrHeadSha).toLowerCase()
