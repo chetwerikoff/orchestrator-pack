@@ -2732,7 +2732,6 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
   const signature = 'c1218bc3453f2182a38b07ff4c4bbe8a24da86a2777fcaa9cb6d88ec9d37cc9e';
   const code = '228:r13-test-outside-allowed-roots';
   const revisedBody = '<!-- source-revision: r12 -->\n```allowed-roots\ntests/spot/test_field_benchmark_r13.py\n```\n```denylist\nvendor/**\npackages/core/**\n```\n';
-  const editedAt = '2026-10-08T20:50:00Z';
   const terminalAt = '2026-10-08T20:40:00Z';
   const fingerprint = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
   // Captured raw source payload, PR245 comment6068701751, updated_at2026-10-08T20:44:03Z.
@@ -2892,6 +2891,46 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     });
     return f;
   }
+
+  it('Issue #2748: transient 409 on exact-head status read retries observation without another round', async () => {
+    const f = fixture();
+    let reads = 0;
+    Object.assign(f.input, {
+      fixtureRequiredStatusReader: async () => {
+        reads += 1;
+        if (reads <= 2) throw new Error('HTTP 409: synthetic GitHub conflict');
+        return f.statuses.at(-1)?.state;
+      },
+    });
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({
+      settled: true, reason: 'final_cap_same_head_issue_resolution_settled',
+    }));
+    expect(reads).toBeGreaterThanOrEqual(4);
+    expect(f.statuses.filter((row) => row.state === 'success')).toHaveLength(1);
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+    expect(readPackReviewAuthority(prNumber, f.options)?.cycle?.consumedRoundOrdinals).toEqual([1, 2]);
+  });
+
+  it('Issue #2748: persistent exact-head status 409 never confirms success or spends a round', async () => {
+    const f = fixture();
+    let reads = 0;
+    Object.assign(f.input, {
+      fixtureRequiredStatusReader: async () => {
+        reads += 1;
+        throw new Error('HTTP 409: persistent synthetic GitHub conflict');
+      },
+    });
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({
+      settled: false, reason: 'status_not_published',
+      detail: expect.stringContaining('final_cap_status_read_failed'),
+    }));
+    expect(reads).toBe(3);
+    expect(f.statuses.some((row) => row.state === 'success')).toBe(false);
+    expect(readPackReviewAuthority(prNumber, f.options)?.cycle?.consumedRoundOrdinals).toEqual([1, 2]);
+    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+  });
 
   it('settles the observed final R2 same-head Issue-only scope correction and publishes status', async () => {
     const f = fixture();
