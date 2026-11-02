@@ -159,76 +159,15 @@ freshly observed PID with the original committed handoff's `launcher_pid`
 before emitting accepted/v1; synchronous pre-spawn refusal exit status 2
 is never accepted.
 
-The adapter runs the launcher's own pre-spawn validation in-process once,
-before detachment; it reserves nothing (only the launcher reserves the
-invocation key). Refusals come in three tiers:
-
-- proved pre-child refusal: the actual code and an executable `nextStep` on
-  the caller's stderr, exit 2, zero Send, no accepted/v1;
-- authenticated launcher pre-SEND refusal after detachment: the launcher
-  leaves one bounded, scrubbed `<resolved-handoff>.refusal.json` companion for
-  the same invocation/Run/attempt/launcher PID, and the adapter relays its
-  code and `nextStep` (exit 2, no accepted/v1); the companion is not a receipt
-  or an envelope;
-- anything after a launcher may have started (missing/foreign companion,
-  late handoff, PID or locator read-back mismatch): the adapter's own known
-  code plus original-invocation wait/Page/exact-GitHub reconciliation. Physical
-  SEND is unknown (`POSSIBLY_DELIVERED`); this is never resend authority.
+Pre-spawn validation and refusal tiers: see [Owner wait and refusal tiers](#owner-wait-and-refusal-tiers).
 
 An identical retry after a lost acknowledgment must
 recover the **original** invocation using `wait`, not relaunch or re-send
 it. A committed handoff remains handoff evidence even if its Browser child
 later exits nonzero; it never proves a successful turn or delivery.
 
-Managed indexed wait reads the original invocation/Run/attempt and, when
-supplied, verifies both owner flags against the original handoff and locator.
-By default it is read-only and diagnostic. Only the owner-run `wait` may publish
-one complete-before-visible uncertainty envelope, and only when (i) the original
-handoff/locator carries both nonempty owner flags, (ii) the caller supplies both
-matching original values and the existing supervisor/native Dispatch and
-current-assignment reads corroborate that original Task+Dispatch as currently
-approved, (iii) the original launcher is positively dead (same-namespace exit
-or a distinct replacement startticks), and (iv) no terminal exists. It never
-signals or displaces a live launcher: a live, unknown or past-deadline launcher
-is reported nonterminal with an owner-reconciliation `nextStep`. Copied flag
-strings, a historical receipt, a path or a PID alone are not current authority;
-Task and Dispatch freshness stays upstream. Without that authority, continue
-with the original invocation's Page and exact GitHub reconciliation; do not
-infer success or retry. Wait reads the original keyed locator, handoff and
-terminal beneath the same resolved durable root, including from a different cwd:
-
-```bash
-npm run --silent flow-manager-long-running-child -- wait \
-  --run-identity <original-run> --attempt-identity <original-attempt> \
-  --invocation-id <original-invocation-id> \
-  --owner-task-id <original-approved-task> \
-  --owner-dispatch-id <original-approved-dispatch> \
-  --profile <original-profile> --cdp <original-cdp> --deadline-ms 5000
-
-npm run --silent flow-manager-long-running-child -- wait \
-  --run-identity <original-run> --attempt-identity <original-attempt> \
-  --invocation-id <original-invocation-id> \
-  --receipt-locator <resolved-state-root>/browser-gpt-receipts/<sha256-id>.json \
-  --owner-task-id <original-approved-task> \
-  --owner-dispatch-id <original-approved-dispatch> --deadline-ms 5000
-```
-
-Optional `--profile`/`--cdp` let an owner-run wait reattach read-only to the
-exact original Page (same private profile key, CDP hash, owned target ID,
-marker and bound conversation). Only two stable reads of a finished attributed
-assistant generation count as `page_finished`; a missing, foreign or
-unreachable Page, absent flags or an active generation is `page_unverified`,
-and a redirected original conversation is `conversation_unavailable` (start a
-fresh chat; advice only). The wait never sends, stops, closes or harvests.
-GitHub evidence comes from the optional `github_effect_baseline` the driver
-adds to the original handoff before physical SEND (exact bound PR head SHA, or
-SHA-256 of the exact `--bound-issue` body). A changed exact target is
-`target_progress_observed` with attribution unverified (a concurrent writer is
-possible); a missing baseline, unchanged or unreadable target is
-`effect_unverified`. Neither proves Send or authorship; delivery stays
-`POSSIBLY_DELIVERED` unless the original record holds a verified harvested
-primary. Each wait output with an owner pair carries `owner_wait` with its
-effect, reason, `nextStep` and `no_signal_sent: true`.
+Managed indexed wait and the owner-run reaper: see
+[Owner wait and refusal tiers](#owner-wait-and-refusal-tiers).
 
 Do not combine locator selectors with legacy explicit paths. An indexed direct
 launch may have preserved a relative caller-supplied handoff spelling inside
@@ -310,3 +249,71 @@ new Browser attempt, never unlink/resend an uncertain old attempt.
 
 After merge, recycle live flow-manager/worker sessions that must pick up changed
 tracked instructions.
+
+## Owner wait and refusal tiers
+
+The adapter runs the launcher's own pre-spawn validation in-process once,
+before detachment; it reserves nothing (only the launcher reserves the
+invocation key). Refusals come in three tiers:
+
+- proved pre-child refusal: the actual code and an executable `nextStep` on
+  the caller's stderr, exit 2, zero Send, no accepted/v1;
+- authenticated launcher pre-SEND refusal after detachment: the launcher
+  leaves one bounded, scrubbed `<resolved-handoff>.refusal.json` companion for
+  the same invocation/Run/attempt/launcher PID, and the adapter relays its
+  code and `nextStep` (exit 2, no accepted/v1); the companion is not a receipt
+  or an envelope;
+- anything after a launcher may have started (missing/foreign companion,
+  late handoff, PID or locator read-back mismatch): the adapter's own known
+  code plus original-invocation wait/Page/exact-GitHub reconciliation. Physical
+  SEND is unknown (`POSSIBLY_DELIVERED`); this is never resend authority.
+
+Managed indexed wait reads the original invocation/Run/attempt and, when
+supplied, verifies both owner flags against the original handoff and locator.
+By default it is read-only and diagnostic. Only the owner-run `wait` may publish
+one complete-before-visible uncertainty envelope, and only when (i) the original
+handoff/locator carries both nonempty owner flags, (ii) the caller supplies both
+matching original values and the existing supervisor/native Dispatch and
+current-assignment reads corroborate that original Task+Dispatch as currently
+approved, (iii) the original launcher is positively dead (same-namespace exit
+or a distinct replacement startticks), and (iv) no terminal exists. It never
+signals or displaces a live launcher: a live, unknown or past-deadline launcher
+is reported nonterminal with an owner-reconciliation `nextStep`. Copied flag
+strings, a historical receipt, a path or a PID alone are not current authority;
+Task and Dispatch freshness stays upstream. Without that authority, continue
+with the original invocation's Page and exact GitHub reconciliation; do not
+infer success or retry. Wait reads the original keyed locator, handoff and
+terminal beneath the same resolved durable root, including from a different cwd:
+
+```bash
+npm run --silent flow-manager-long-running-child -- wait \
+  --run-identity <original-run> --attempt-identity <original-attempt> \
+  --invocation-id <original-invocation-id> \
+  --owner-task-id <original-approved-task> \
+  --owner-dispatch-id <original-approved-dispatch> \
+  --profile <original-profile> --cdp <original-cdp> --deadline-ms 5000
+
+npm run --silent flow-manager-long-running-child -- wait \
+  --run-identity <original-run> --attempt-identity <original-attempt> \
+  --invocation-id <original-invocation-id> \
+  --receipt-locator <resolved-state-root>/browser-gpt-receipts/<sha256-id>.json \
+  --owner-task-id <original-approved-task> \
+  --owner-dispatch-id <original-approved-dispatch> --deadline-ms 5000
+```
+
+Optional `--profile`/`--cdp` let an owner-run wait reattach read-only to the
+exact original Page (same private profile key, CDP hash, owned target ID,
+marker and bound conversation). Only two stable reads of a finished attributed
+assistant generation count as `page_finished`; a missing, foreign or
+unreachable Page, absent flags or an active generation is `page_unverified`,
+and a redirected original conversation is `conversation_unavailable` (start a
+fresh chat; advice only). The wait never sends, stops, closes or harvests.
+GitHub evidence comes from the optional `github_effect_baseline` the driver
+adds to the original handoff before physical SEND (exact bound PR head SHA, or
+SHA-256 of the exact `--bound-issue` body). A changed exact target is
+`target_progress_observed` with attribution unverified (a concurrent writer is
+possible); a missing baseline, unchanged or unreadable target is
+`effect_unverified`. Neither proves Send or authorship; delivery stays
+`POSSIBLY_DELIVERED` unless the original record holds a verified harvested
+primary. Each wait output with an owner pair carries `owner_wait` with its
+effect, reason, `nextStep` and `no_signal_sent: true`.

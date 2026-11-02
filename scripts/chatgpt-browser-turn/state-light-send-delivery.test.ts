@@ -4213,66 +4213,57 @@ describe('Issue #2750 AC22 finished long CodeMirror-virtualized reply and AC9 at
   const LONG_DOC = buildLongDoc();
   const assembleReply = (doc: string) => [HEAD, FENCE + 'python\n' + doc + '\n' + FENCE, TAIL].join('\n\n');
 
-  // Same generic tree interpreter as the live-canary fixture in
-  // state-light-page-observation.test.ts: tags, classes, attributes and ancestry.
+  // Minimal rendered-DOM element: just the primitives the in-page serializer
+  // reads (tags, classes, attributes, ancestry, computed display).
+  type SelectorToken = { readonly tag?: string; readonly cls?: string; readonly attr?: string; readonly value?: string };
+  const parseToken = (token: string): SelectorToken => {
+    if (token.startsWith('.')) return { cls: token.slice(1) };
+    const attr = /^\[([\w-]+)(?:="([^"]*)")?\]$/u.exec(token);
+    if (attr) return { attr: attr[1]!, ...(attr[2] !== undefined ? { value: attr[2] } : {}) };
+    return /^[a-z][a-z0-9-]*$/iu.test(token) ? { tag: token.toUpperCase() } : { tag: '\u0000' };
+  };
+  const tokenMatches = (el: any, t: SelectorToken): boolean =>
+    (t.tag === undefined || el.tagName === t.tag)
+    && (t.cls === undefined || String(el.attributes.class ?? '').split(/\s+/u).includes(t.cls))
+    && (t.attr === undefined || (t.attr in el.attributes && (t.value === undefined || el.attributes[t.attr] === t.value)));
+  const descendantMatches = (el: any, chain: readonly SelectorToken[]): boolean => {
+    if (!tokenMatches(el, chain[chain.length - 1]!)) return false;
+    let cursor = el.parentElement;
+    for (const token of chain.slice(0, -1).reverse()) {
+      while (cursor && !tokenMatches(cursor, token)) cursor = cursor.parentElement;
+      if (!cursor) return false;
+      cursor = cursor.parentElement;
+    }
+    return true;
+  };
   function richNode(
     tagName: string, innerText = '', attrs: Record<string, string> = {}, shown = true, displayContents = false,
   ): any {
-    const children: any[] = [];
-    const node: any = {
-      nodeType: 1, tagName, innerText, textContent: innerText, children, childNodes: [] as any[],
-      parentElement: null, attributes: attrs, shown, displayContents,
-      ownerDocument: {
-        defaultView: {
-          getComputedStyle: (element: any) => ({
-            display: element.displayContents ? 'contents' : !element.shown ? 'none' : (element.computedDisplay ?? 'block'),
-            visibility: 'visible',
-          }),
-        },
-      },
-      getClientRects: () => shown ? [{}] : [],
+    const el: any = {
+      nodeType: 1, tagName, innerText, textContent: innerText, attributes: attrs, shown, displayContents,
+      children: [] as any[], childNodes: [] as any[], parentElement: null,
+    };
+    const styleOf = (target: any) => ({
+      visibility: 'visible',
+      display: target.displayContents ? 'contents' : target.shown ? (target.computedDisplay ?? 'block') : 'none',
+    });
+    const all = (): any[] => el.children.flatMap((child: any) => [child, ...child.querySelectorAll('*')]);
+    Object.assign(el, {
+      ownerDocument: { defaultView: { getComputedStyle: styleOf } },
+      getClientRects: () => (shown ? [{}] : []),
       getBoundingClientRect: () => ({ height: shown ? 1 : 0 }),
       getAttribute: (name: string) => attrs[name] ?? null,
-      hasAttribute: (name: string) => Object.hasOwn(attrs, name),
-      append(child: any) {
-        child.parentElement = node;
-        children.push(child);
-        node.childNodes.push(child);
-        return node;
+      hasAttribute: (name: string) => name in attrs,
+      append: (child: any) => { child.parentElement = el; el.children.push(child); el.childNodes.push(child); return el; },
+      appendText: (text: string) => { el.childNodes.push({ nodeType: 3, textContent: text, parentElement: el }); return el; },
+      querySelectorAll: (selector: string): any[] => {
+        if (selector === '*') return all();
+        const groups = selector.split(/,\s*/u).map((group) => group.trim().split(/\s+/u).map(parseToken));
+        return all().filter((candidate) => groups.some((chain) => descendantMatches(candidate, chain)));
       },
-      appendText(text: string) {
-        node.childNodes.push({ nodeType: 3, textContent: text, parentElement: node });
-        return node;
-      },
-      querySelectorAll(selector: string): any[] {
-        const simple = (candidate: any, token: string): boolean => {
-          if (/^[a-z][a-z0-9-]*$/iu.test(token)) return candidate.tagName === token.toUpperCase();
-          if (/^\.[a-z][a-z0-9_-]*$/iu.test(token)) {
-            return (candidate.getAttribute('class') ?? '').split(/\s+/u).includes(token.slice(1));
-          }
-          const attr = /^\[([\w-]+)(?:="([^"]*)")?\]$/u.exec(token);
-          if (attr) return candidate.hasAttribute(attr[1]!) && (attr[2] === undefined
-            || candidate.getAttribute(attr[1]!) === attr[2]);
-          return false;
-        };
-        const matches = (candidate: any): boolean => selector.split(/,\s*/u).some((group) => {
-          const chain = group.trim().split(/\s+/u);
-          if (!simple(candidate, chain.pop() ?? '')) return false;
-          let ancestor = candidate.parentElement;
-          for (let i = chain.length - 1; i >= 0; i--) {
-            while (ancestor && !simple(ancestor, chain[i]!)) ancestor = ancestor.parentElement;
-            if (!ancestor) return false;
-            ancestor = ancestor.parentElement;
-          }
-          return true;
-        });
-        const walk = (parent: any): any[] => parent.children.flatMap((child: any) =>
-          [...(matches(child) ? [child] : []), ...walk(child)]);
-        return walk(node);
-      },
-      querySelector(selector: string): any { return node.querySelectorAll(selector)[0] ?? null; },
-    };
-    return node;
+      querySelector: (selector: string): any => el.querySelectorAll(selector)[0] ?? null,
+    });
+    return el;
   }
 
   /**
@@ -4289,19 +4280,21 @@ describe('Issue #2750 AC22 finished long CodeMirror-virtualized reply and AC9 at
     };
     const rendered = LONG_DOC.split('\n').slice(500, 520);
     append(outer, 'H4', 'ChatGPT said:', { class: 'sr-only' });
-    const group = append(append(outer, 'DIV'), 'DIV', '', { class: 'group flex min-w-0 flex-col' });
-    const markdown = append(group, 'DIV', '', {
-      class: 'MarkdownRoot-rZKhxa', 'data-markdown-text-style': 'assistant-message',
-    });
-    const copyRoot = append(markdown, 'DIV', '', { 'data-markdown-copy': 'contents' });
-    const inset = append(copyRoot, 'DIV');
+    // Live wrapper chain down to the DilRenderer content root, outermost first.
+    const chain: Array<Record<string, string>> = [
+      {}, { class: 'group flex min-w-0 flex-col' },
+      { class: 'MarkdownRoot-rZKhxa', 'data-markdown-text-style': 'assistant-message' },
+      { 'data-markdown-copy': 'contents' }, {},
+    ];
+    const inset = chain.reduce((parent: any, attrs) => append(parent, 'DIV', '', attrs), outer);
     append(inset, 'DIV', '', { hidden: '' }, false);
-    const portal = append(inset, 'DIV', '', { class: 'PortalBoundary-TFj9W2' });
-    const renderer = append(portal, 'DIV', '', { class: 'DilRenderer-tB76Jj' });
+    const renderer = append(append(inset, 'DIV', '', { class: 'PortalBoundary-TFj9W2' }), 'DIV', '', {
+      class: 'DilRenderer-tB76Jj',
+    });
     renderer.computedDisplay = 'flex';
     const prose = (text: string) => {
-      const p = append(renderer, 'P', text, { class: 'TextBase-hXhSqg' });
-      for (const word of text.split(/(?<= )/u)) append(p, 'SPAN', word);
+      const paragraph = append(renderer, 'P', text, { class: 'TextBase-hXhSqg' });
+      text.split(/(?<= )/u).forEach((word) => append(paragraph, 'SPAN', word));
     };
     prose(HEAD);
     const wrapper = append(append(renderer, 'DIV'), 'DIV', '', { class: 'CodeBlock-zu1QM3' });
