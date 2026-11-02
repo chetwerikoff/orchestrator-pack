@@ -195,7 +195,7 @@ export async function runBrowserAdapter(
     terminalEnvelope = resolveDurableArtifactPath(requiredOption(options, 'terminal-envelope'));
   } catch (error) {
     return refuse('durable_artifact_root_invalid: ' + (error instanceof Error ? error.message : String(error))
-      + '; nextStep: set XDG_STATE_HOME to an absolute directory or unset it to use HOME');
+      + '; nextStep: set HOME to an absolute directory');
   }
   const browserOutput = requiredOption(options, 'output');
   const profile = requiredOption(options, 'profile');

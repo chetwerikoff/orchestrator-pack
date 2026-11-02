@@ -3698,6 +3698,7 @@ describe('Issue #2750 durable artifact root and permissions (AC19/AC20)', () => 
   const absoluteXdg = '/synthetic/xdg-state';
   const resolverRows: ReadonlyArray<{ name: string; env: NodeJS.ProcessEnv; expected?: string; throws?: string }> = [
     { name: 'absolute XDG_STATE_HOME ignored', env: { XDG_STATE_HOME: absoluteXdg, HOME: '/synthetic/home' }, expected: '/synthetic/home/.local/state/orchestrator-pack' },
+    { name: 'OpenCode scratch XDG agrees with PR-author mirror under HOME', env: { XDG_STATE_HOME: '/tmp/opk-opencode-state-x', HOME: '/synthetic/home' }, expected: prAuthorDurableArtifactRoot({ XDG_STATE_HOME: '/tmp/opk-opencode-state-x', HOME: '/synthetic/home' }) },
     { name: 'XDG_STATE_HOME with dot segments ignored', env: { XDG_STATE_HOME: '/synthetic/a/../xdg-state/./', HOME: '/synthetic/home' }, expected: '/synthetic/home/.local/state/orchestrator-pack' },
     { name: 'XDG_STATE_HOME unset', env: { HOME: '/synthetic/home' }, expected: '/synthetic/home/.local/state/orchestrator-pack' },
     { name: 'XDG_STATE_HOME empty', env: { XDG_STATE_HOME: '', HOME: '/synthetic/home' }, expected: '/synthetic/home/.local/state/orchestrator-pack' },

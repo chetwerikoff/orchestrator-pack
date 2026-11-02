@@ -55,8 +55,7 @@ export const REFUSAL_SCHEMA = 'flow-manager-long-running-child-refusal/v1' as co
 // fleet-wake scans terminal envelopes under this root by file name.
 export const TERMINAL_ENVELOPE_NAME_SUFFIX = 'terminal.json' as const;
 export const DURABLE_ARTIFACT_APP_DIR = 'orchestrator-pack' as const;
-const DURABLE_ROOT_NEXT_STEP = 'set HOME to an absolute home directory and make '
-  + '$HOME/.local/state/orchestrator-pack private (0700) and owned by you';
+const DURABLE_ROOT_NEXT_STEP = 'set HOME to an absolute directory';
 
 /**
  * The single durable root for terminal envelopes, original handoff receipts and receipt
