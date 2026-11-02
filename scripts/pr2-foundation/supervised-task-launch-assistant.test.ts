@@ -575,6 +575,10 @@ function freshRepoFixture(input: {
   failRoot?: boolean;
   failOrigin?: boolean;
   pruneOk?: boolean;
+  gitInventory?: string;
+  gitInventoryOk?: boolean;
+  prunePreview?: string;
+  prunePreviewOk?: boolean;
   setupState?: 'not_configured' | 'running' | 'absent';
   waitExitCode?: number;
   freshStatus?: string;
@@ -601,8 +605,19 @@ function freshRepoFixture(input: {
         stderr: '',
       };
     }
+    if (command === 'git worktree list --porcelain') return {
+      ok: input.gitInventoryOk !== false,
+      stdout: input.gitInventory ?? [
+        `worktree ${REGISTERED_ORCA_ROOT}`, `HEAD ${'1'.repeat(40)}`,
+        'branch refs/heads/main', '',
+      ].join('\n'),
+      stderr: input.gitInventoryOk === false ? 'fixture: inventory unavailable' : '',
+    };
+    if (command === 'git worktree prune --dry-run --verbose --expire=now') return {
+      ok: input.prunePreviewOk !== false, stdout: input.prunePreview ?? '', stderr: '',
+    };
     if (command === 'git worktree prune --expire=now') return {
-      ok: input.pruneOk !== false, stdout: '', stderr: input.pruneOk === false ? 'fixture: locked prune failed' : '',
+      ok: input.pruneOk !== false, stdout: '', stderr: input.pruneOk === false ? 'fixture: native prune failed' : '',
     };
     if (command === 'git status --porcelain=v1 --untracked-files=all') {
       return { ok: true, stdout: input.freshStatus ?? '', stderr: '' };
@@ -3362,22 +3377,63 @@ The words Firefighter universal appear here only as prose.`;
     expect(fixture.calls.map((call) => call.argv[0])).toEqual(['orca', 'git', 'git', 'git', 'orca', 'git']);
   });
 
-  it('prunes only the exact validated selected repository before fresh native creation', async () => {
+  it('skips native repository-wide prune on an ordinary fresh worktree launch', async () => {
     const fixture = freshRepoFixture();
     const result = await prepareWorktreeWithOrca({
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt',
     }, fixture.execute);
     expect(result.status).toBe('ok');
-    expect(fixture.calls[3]).toEqual({ argv: ['git', 'worktree', 'prune', '--expire=now'], cwd: REGISTERED_ORCA_ROOT });
+    expect(fixture.calls[3]).toEqual({ argv: ['git', 'worktree', 'list', '--porcelain'], cwd: REGISTERED_ORCA_ROOT });
     expect(fixture.calls[4]?.argv.slice(0, 3)).toEqual(['orca', 'worktree', 'create']);
+    expect(fixture.calls.some((call) => call.argv.includes('prune'))).toBe(false);
+  });
 
-    const failed = freshRepoFixture({ pruneOk: false });
-    const refused = await prepareWorktreeWithOrca({
+  it('prunes only after exact vanished selected-name registration and single native dry-run effect', async () => {
+    const temp = mkdtempSync(join(tmpdir(), 'opk-2754-prune-'));
+    const vanished = join(temp, 'wt');
+    const foreign = join(temp, 'retained-on-unmounted-volume');
+    const main = [`worktree ${REGISTERED_ORCA_ROOT}`, `HEAD ${'1'.repeat(40)}`, 'branch refs/heads/main', ''];
+    const entry = (path: string) => [`worktree ${path}`, `HEAD ${'2'.repeat(40)}`,
+      'branch refs/heads/recover', 'prunable gitdir file points to non-existent location', ''];
+    const invocation = {
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt',
-    }, failed.execute);
-    expect(refused).toMatchObject({ status: 'continue', cause: 'worktree_registry_prune_failed',
-      nextAction: { note: expect.stringContaining('git worktree list --porcelain') } });
-    expect(failed.calls.some((call) => call.argv.slice(0, 3).join(' ') === 'orca worktree create')).toBe(false);
+    };
+    try {
+      const inventory = [...main, ...entry(vanished)].join('\n');
+      const fixture = freshRepoFixture({
+        gitInventory: inventory,
+        prunePreview: 'Removing worktrees/wt: gitdir file points to non-existent location\n',
+      });
+      const result = await prepareWorktreeWithOrca(invocation, fixture.execute);
+      expect(result.status).toBe('ok');
+      expect(fixture.calls.map((call) => call.argv.slice(0, 3).join(' '))).toContain('git worktree prune');
+      expect(fixture.calls.filter((call) => call.argv[2] === 'prune')).toEqual([
+        { argv: ['git', 'worktree', 'prune', '--dry-run', '--verbose', '--expire=now'], cwd: REGISTERED_ORCA_ROOT },
+        { argv: ['git', 'worktree', 'prune', '--expire=now'], cwd: REGISTERED_ORCA_ROOT },
+      ]);
+
+      for (const [label, options] of [
+        ['unrelated missing registration', { gitInventory: [...main, ...entry(foreign)].join('\n') }],
+        ['more than one prunable record', { gitInventory: [...main, ...entry(vanished), ...entry(foreign)].join('\n') }],
+        ['dry-run effect not tied to selected name', { gitInventory: inventory, prunePreview: 'Removing worktrees/foreign: unavailable\n' }],
+        ['native dry-run unavailable', { gitInventory: inventory, prunePreviewOk: false }],
+      ] as const) {
+        const ambiguous = freshRepoFixture(options);
+        const refused = await prepareWorktreeWithOrca(invocation, ambiguous.execute);
+        expect(refused, label).toMatchObject({ status: 'continue', cause: 'worktree_registry_prune_ambiguous',
+          nextAction: { note: expect.stringContaining('git worktree list --porcelain') } });
+        expect(ambiguous.calls.some((call) => call.argv.includes('create') || (
+          call.argv[2] === 'prune' && !call.argv.includes('--dry-run')))).toBe(false);
+      }
+      const failed = freshRepoFixture({
+        gitInventory: inventory,
+        prunePreview: 'Removing worktrees/wt: gitdir file points to non-existent location\n',
+        pruneOk: false,
+      });
+      const refused = await prepareWorktreeWithOrca(invocation, failed.execute);
+      expect(refused).toMatchObject({ status: 'continue', cause: 'worktree_registry_prune_failed' });
+      expect(failed.calls.some((call) => call.argv[2] === 'create')).toBe(false);
+    } finally { rmSync(temp, { recursive: true, force: true }); }
   });
 
   it('accepts a fresh worktree with no setup receipt', async () => {
