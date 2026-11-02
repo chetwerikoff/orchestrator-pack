@@ -2731,7 +2731,8 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
   const reviewedHead = '491c0d17a3532d9c53d4993e05bfcdeda6ec6591';
   const signature = 'c1218bc3453f2182a38b07ff4c4bbe8a24da86a2777fcaa9cb6d88ec9d37cc9e';
   const code = '228:r13-test-outside-allowed-roots';
-  const revisedBody = '<!-- source-revision: r12 -->\n```allowed-roots\ntests/spot/test_field_benchmark_r13.py\n```\n```denylist\nvendor/**\npackages/core/**\n```\n';
+  const syntheticCriteria = '\n## Acceptance criteria\n\n- Synthetic behavior criteria remain unchanged across the disposition.\n';
+  const revisedBody = '<!-- source-revision: r12 -->\n```allowed-roots\ntests/spot/test_field_benchmark_r13.py\n```\n```denylist\nvendor/**\npackages/core/**\n```\n' + syntheticCriteria;
   const terminalAt = '2026-10-08T20:40:00Z';
   const fingerprint = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
   // Captured raw source payload, PR245 comment6068701751, updated_at2026-10-08T20:44:03Z.
@@ -2746,13 +2747,13 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
   function fixture(settings: { scopeType?: string; scopePath?: string; allowedRoot?: string; denylist?: string[]; summary?: string; details?: string; dispositionSignature?: string; frozenBodyOverride?: string } = {}) {
     const scopePath = settings.scopePath ?? witnessSource.findings[0]!.path;
     const allowedRoot = settings.allowedRoot ?? scopePath;
-    const liveBody = `<!-- source-revision: r12 -->\n\`\`\`allowed-roots\n${allowedRoot}\n\`\`\`\n\`\`\`denylist\n${(settings.denylist ?? ['vendor/**', 'packages/core/**']).join('\n')}\n\`\`\`\n`;
+    const liveBody = `<!-- source-revision: r12 -->\n\`\`\`allowed-roots\n${allowedRoot}\n\`\`\`\n\`\`\`denylist\n${(settings.denylist ?? ['vendor/**', 'packages/core/**']).join('\n')}\n\`\`\`\n` + syntheticCriteria;
     const root = mkdtempSync(join(tmpdir(), 'pack-review-2428-'));
     roots.push(root);
     const storeRoot = join(root, 'store');
     setupHarness(storeRoot);
     const options = { projectId: 'orchestrator-pack', storeRoot };
-    const frozenBody = settings.frozenBodyOverride ?? '<!-- source-revision: r12 -->\n```allowed-roots\nsrc/**\n```\n';
+    const frozenBody = settings.frozenBodyOverride ?? '<!-- source-revision: r12 -->\n```allowed-roots\nsrc/**\n```\n```denylist\nvendor/**\npackages/core/**\n```\n' + syntheticCriteria;
     captureBoundIssueSnapshot({ ...options, prNumber, prHeadSha: reviewedHead, issueNumber, issueBody: frozenBody });
     let authority = initializePackReviewAuthority({
       prNumber, headSha: reviewedHead, tier: 'T3', capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options,
@@ -2876,7 +2877,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       fixtureRequiredStatusWriter: async (request: { state: string; context: string }) => { statuses.push(request); },
       fixtureRequiredStatusReader: async (_headSha: string) => statuses.at(-1)?.state,
     };
-    return { input, options, authority, run, transports, read, statuses };
+    return { input, options, authority, run, transports, read, statuses, frozenBody };
   }
 
   // Strict-descendant status recovery cases now carry a preflight snapshot of
@@ -2956,7 +2957,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(initial.results).toContainEqual(expect.objectContaining({
       settled: true, reason: 'final_cap_same_head_issue_resolution_settled',
     }));
-    const frozen = '<!-- source-revision: r12 -->\n```allowed-roots\nsrc/**\n```\n';
+    const frozen = f.frozenBody;
     f.transports.issue.body = frozen;
     f.input.fixtureIssueBody = frozen;
     const outcome = await startPackReview({
@@ -3242,6 +3243,25 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(readPackReviewAuthority(prNumber, f.options)).toEqual(before);
     expect(f.statuses.some((request) => request.state === 'success')).toBe(false);
   });
+
+  it.each(['missing', 'duplicate'] as const)(
+    'Issue #2748: %s Acceptance criteria refuses an otherwise authorized same-head scope disposition',
+    async (mode) => {
+      const f = fixture();
+      const original = f.transports.issue.body;
+      f.transports.issue.body = mode === 'missing'
+        ? original.replace(syntheticCriteria, '')
+        : original + syntheticCriteria;
+      f.input.fixtureIssueBody = f.transports.issue.body;
+      const before = readPackReviewAuthority(prNumber, f.options);
+      const result = await reconcileStalePackReviewRuns(f.input);
+      expect(result.results).toEqual(expect.arrayContaining([
+        expect.objectContaining({ settled: false, nextAction: expect.any(String) }),
+      ]));
+      expect(f.statuses.some((request) => request.state === 'success')).toBe(false);
+      expect(readPackReviewAuthority(prNumber, f.options)).toEqual(before);
+    },
+  );
 
   it.each(['cycle', 'round-cap', 'source-coverage', 'source-identity', 'repository'])('refuses %s mismatch in disposable persisted evidence', async (kind) => {
     const f = fixture();
