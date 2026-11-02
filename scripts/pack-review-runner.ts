@@ -4504,111 +4504,249 @@ export async function resolveFinalCapIssueBodyRevision(input: {
 
 async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRunsInput, options: {
   projectId: string; storeRoot: string; repoSlug: string;
-}, authority: PackReviewAuthorityDocument, run: PackReviewRunRecord) {
+}, authority: PackReviewAuthorityDocument, run: PackReviewRunRecord, candidateHeadSha?: string) {
   const cycle = authority.cycle;
   const terminal = authority.terminal;
   const round = run.reviewRound;
+  const alreadySettled = cycle?.settlementKind === 'same_head_issue_resolution'
+    && cycle.reviewStageComplete === true && cycle.state === 'closed';
+  const currentHead = trim(candidateHeadSha ?? authority.currentHeadSha).toLowerCase();
   if (!cycle || !terminal || !round || run.id !== terminal.runId || run.runId !== run.id
       || run.projectId !== options.projectId || run.prNumber !== authority.prNumber
       || run.canonicalRepository?.toLowerCase() !== options.repoSlug.toLowerCase()
       || run.targetSha !== terminal.targetSha || run.headSha !== terminal.targetSha
-      || authority.currentHeadSha !== terminal.targetSha || run.reviewCycleId !== cycle.cycleId
+      || (!alreadySettled && (authority.currentHeadSha !== terminal.targetSha
+        || currentHead !== terminal.targetSha))
+      || run.reviewCycleId !== cycle.cycleId
       || run.accountingVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
       || round.accountingVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
       || round.tier !== cycle.frozenTier || run.logicalRoundCap !== cycle.frozenCap
       || run.logicalRoundOrdinal !== cycle.frozenCap || round.roundOrdinal !== cycle.frozenCap
       || terminal.logicalRoundOrdinal !== cycle.frozenCap || round.cardinality !== 3
+      || round.sourceSlots.length !== 3
       || derivePackReviewGptCoverage(round)?.kind !== 'complete'
       || (round.settledSourceCount !== undefined && round.settledSourceCount !== round.cardinality)
+      || !hasCredentialedGptSourceAuthority(run)
+      || cycle.consumedRoundOrdinals?.filter((ordinal) => ordinal === cycle.frozenCap).length !== 1
       || run.resolvedReviewer !== 'gpt' || !run.completedAtUtc
-      || !['changes_requested', 'commented'].includes(run.status)) throw new Error('exact final run/head/cycle/round/source identity missing');
+      || !['changes_requested', 'commented'].includes(run.status)) {
+    throw new Error('exact final run/head/cycle/round/credentialed-source identity missing');
+  }
   const payload = validatePersistedGptReviewPayload(run.id, { verdict: 'findings',
     findingCount: run.findingCount ?? -1, findings: run.findings as ReviewPayloadFinding[] }, options);
   const expectedTerminal = terminalV2FromPayload({ runId: run.id, targetSha: run.targetSha,
     logicalRoundOrdinal: run.logicalRoundOrdinal, verdict: 'findings', findingCount: payload.findingCount,
     findings: payload.findings, automaticBudgetDisposition: run.automaticBudgetDisposition });
-  if (terminal.digest !== sha256Bytes(`${stableJson(expectedTerminal)}\n`)) throw new Error('terminal finding authority changed');
-  const runner = process.env.OPK_VITEST_HARNESS === '1' ? input.fixtureSameHeadIssueResolutionRunner ?? runProcess : runProcess;
+  if (terminal.digest !== sha256Bytes(`${stableJson(expectedTerminal)}\n`)) {
+    throw new Error('terminal finding authority changed');
+  }
+  const immutable = listPackReviewImmutableRecords('terminal', { storeRoot: options.storeRoot })
+    .filter((record) => record.digest === terminal.digest
+      && (record.value as PackReviewTerminalV2 | undefined)?.runId === run.id
+      && (record.value as PackReviewTerminalV2 | undefined)?.logicalRoundOrdinal === cycle.frozenCap);
+  if (immutable.length !== 1) throw new Error('canonical terminal immutable record missing or ambiguous');
+
+  // Read original GitHub COMMENTs through their existing credentialing
+  // transport. A stored slot/receipt or public green is not a fresh source.
+  const sourceTransport = process.env.OPK_VITEST_HARNESS === '1'
+    ? input.fixtureGptSourceCommentTransport
+    : createPackGptSourceCommentTransport({
+        repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug, prNumber: run.prNumber,
+      });
+  if (!sourceTransport) throw new Error('original GitHub source transport unavailable');
+  for (const slot of round.sourceSlots) {
+    const invocationId = trim(slot.invocationId);
+    const identity = gptSourceIdentity({
+      repoSlug: options.repoSlug, prNumber: run.prNumber, headSha: run.targetSha,
+      runId: run.id, slotId: slot.slotId, invocationId,
+    });
+    const observed = await resolvePackGptSourceComment({ identity, transport: sourceTransport });
+    const recorded = slot.terminalResult && typeof slot.terminalResult === 'object'
+      && !Array.isArray(slot.terminalResult)
+      ? (slot.terminalResult as Record<string, unknown>).source_comment_receipt : null;
+    if (observed.kind !== 'credentialed' || !recorded
+        || stableJson(observed.receipt) !== stableJson(recorded)
+        || stableJson(observed.payload) !== stableJson(slot.payload)) {
+      throw new Error('original exact-run GitHub source COMMENT/actor/receipt mismatch at ' + slot.slotId);
+    }
+  }
+
+  // GitHub REVIEW is the canonical terminal COMMENT event. The review REST
+  // surface exposes submitted_at, not Issue-COMMENT created_at: compare that
+  // authoritative event timestamp with the later disposition created_at.
+  const reviewTransport = process.env.OPK_VITEST_HARNESS === '1'
+    ? input.fixtureGithubReviewTransport
+    : createGithubReviewTransport({
+        repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug, prNumber: run.prNumber,
+      });
+  if (!reviewTransport) throw new Error('canonical GitHub REVIEW transport unavailable');
+  const reviewId = run.githubReviewId ?? run.githubReviewReconciliation?.commentReviewId;
+  if (reviewId === undefined || (run.githubReviewId !== undefined
+      && run.githubReviewReconciliation?.commentReviewId !== undefined
+      && String(run.githubReviewId) !== String(run.githubReviewReconciliation.commentReviewId))) {
+    throw new Error('canonical terminal REVIEW ID missing or conflicting');
+  }
+  const reviewActor = trim(await reviewTransport.resolveActorLogin()).toLowerCase();
+  const reviews = await reviewTransport.listReviews();
+  const matches = reviews.filter((review) => String(review.id) === String(reviewId));
+  if (matches.length !== 1) throw new Error('canonical terminal REVIEW is absent or ambiguous on GitHub');
+  const review = matches[0]!;
+  const reviewRuns = [...review.body.matchAll(/^Run: `([^`]+)`$/gm)];
+  const reviewHeads = [...review.body.matchAll(/^Head: `([0-9a-f]{40})`$/gm)];
+  if (!reviewActor || review.userLogin.toLowerCase() !== reviewActor
+      || (run.githubReviewReconciliation?.actorLogin
+        && run.githubReviewReconciliation.actorLogin.toLowerCase() !== reviewActor)
+      || review.state !== 'COMMENTED' || review.commitId.toLowerCase() !== run.targetSha.toLowerCase()
+      || reviewRuns.length !== 1 || reviewRuns[0]![1] !== run.id
+      || reviewHeads.length !== 1 || reviewHeads[0]![1] !== run.targetSha
+      || !review.body.includes('## Pack review — findings')
+      || review.body.includes('Mode: supplemental advisory review')
+      || (run.githubReviewReconciliation?.commentBody
+        && review.body !== run.githubReviewReconciliation.commentBody)) {
+    throw new Error('canonical terminal COMMENT review actor/run/head/verdict not credentialed');
+  }
+  const reviewedAt = Date.parse(review.submittedAt);
+  if (!Number.isFinite(reviewedAt) || reviewedAt < Date.parse(run.completedAtUtc)) {
+    throw new Error('terminal REVIEW submitted_at is absent or precedes the terminal');
+  }
+
+  const runner = process.env.OPK_VITEST_HARNESS === '1'
+    ? input.fixtureSameHeadIssueResolutionRunner ?? runProcess : runProcess;
   const context = resolveTargetContext({ projectId: options.projectId });
-  if (context.repository.toLowerCase() !== options.repoSlug.toLowerCase()) throw new Error('selected repository identity changed');
+  if (context.repository.toLowerCase() !== options.repoSlug.toLowerCase()) {
+    throw new Error('selected repository identity changed');
+  }
   const boundPrRunner: typeof runProcess = async (request) => {
     const result = await runner(request);
     const row = githubEvidenceObject(JSON.parse(await requireProcess(result, 'same-head PR identity read')) as unknown);
     if (row.number !== run.prNumber
-        || trim(row.url).toLowerCase() !== `https://api.github.com/repos/${options.repoSlug}/pulls/${run.prNumber}`.toLowerCase()) {
+        || trim(row.url).toLowerCase()
+          !== `https://api.github.com/repos/${options.repoSlug}/pulls/${run.prNumber}`.toLowerCase()) {
       throw new Error('live PR repository/number identity mismatch');
     }
     return result;
   };
   const target = await resolveCurrentPrTarget(input.sourceRepoRoot, options.repoSlug, run.prNumber, boundPrRunner);
-  if (target.headSha !== terminal.targetSha || extractClosingIssueNumber(target.body) !== round.issueNumber) {
+  if (target.headSha !== currentHead || extractClosingIssueNumber(target.body) !== round.issueNumber) {
     throw new Error('live PR head or linked Issue changed');
+  }
+  if (currentHead !== terminal.targetSha && (!alreadySettled
+      || !await resolvePackReviewStrictDescendant({
+        repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
+        reviewedHeadSha: terminal.targetSha, currentHeadSha: currentHead,
+        fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
+      }))) {
+    throw new Error('completed same-head resolution must remain on a proven descendant');
   }
   if (!await manualPackReviewRequiredCiGreen({
     startInput: { ...input, projectId: options.projectId },
     targetContext: context,
-    target: { ...target, prBaseRef: target.baseRef, prNumber: run.prNumber, repoSlug: options.repoSlug, sourceRepoRoot: input.sourceRepoRoot },
+    target: { ...target, prBaseRef: target.baseRef, prNumber: run.prNumber,
+      repoSlug: options.repoSlug, sourceRepoRoot: input.sourceRepoRoot },
   })) throw new Error('current-head required CI not green');
-  const snapshot = resolveBoundIssueSnapshot({ projectId: options.projectId, prNumber: run.prNumber,
-    prHeadSha: run.targetSha, issueNumber: round.issueNumber });
-  if (snapshot.status !== 'found' || snapshot.snapshotHash !== round.boundIssueSnapshotDigest) throw new Error('frozen Issue snapshot identity missing');
-  const revision = await resolveFinalCapIssueBodyRevision({ sourceRepoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
-    issueNumber: round.issueNumber, terminalizedAt: run.completedAtUtc, frozenBodyHash: round.boundIssueSnapshotDigest }, runner);
-  const principal = trim(githubEvidenceObject(await readFinalCapGithubJson(input, ['api', 'user', '--jq', '.login'], runner)).login);
-  const censusValue = await readFinalCapGithubJson(input, ['api', '--paginate', '--slurp',
-    `repos/${options.repoSlug}/issues/${run.prNumber}/comments`], runner);
-  if (!Array.isArray(censusValue) || !principal) throw new Error('trusted author disposition census unavailable');
+
+  const snapshot = resolveBoundIssueSnapshot({
+    projectId: options.projectId, prNumber: run.prNumber, prHeadSha: run.targetSha,
+    issueNumber: round.issueNumber, snapshotDigest: round.boundIssueSnapshotDigest,
+  });
+  if (snapshot.status !== 'found' || snapshot.snapshotHash !== round.boundIssueSnapshotDigest
+      || snapshot.metadata?.capturePhase !== 'review-preflight'
+      || snapshot.metadata?.projectId !== options.projectId
+      || snapshot.metadata?.prNumber !== run.prNumber
+      || snapshot.metadata?.issueNumber !== round.issueNumber
+      || snapshot.metadata?.prHeadSha.toLowerCase() !== run.targetSha.toLowerCase()) {
+    throw new Error('frozen preflight Issue snapshot identity missing');
+  }
+  const revision = await resolveFinalCapIssueBodyRevision({
+    sourceRepoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
+    issueNumber: round.issueNumber, terminalizedAt: run.completedAtUtc,
+    frozenBodyHash: round.boundIssueSnapshotDigest,
+  }, runner);
+  const principal = trim(githubEvidenceObject(await readFinalCapGithubJson(
+    input, ['api', 'user', '--jq', '.login'], runner,
+  )).login);
+  const censusValue = await readFinalCapGithubJson(input, [
+    'api', '--paginate', '--slurp', `repos/${options.repoSlug}/issues/${run.prNumber}/comments`,
+  ], runner);
+  if (!Array.isArray(censusValue) || !principal) {
+    throw new Error('trusted post-terminal author disposition census unavailable');
+  }
   const census = censusValue.flat().map(githubEvidenceObject);
-  const blockers = payload.findings.filter((finding) => !['warning', 'info', 'non-blocking'].includes(trim(finding.severity)));
+  const blockers = payload.findings.filter((finding) =>
+    !['warning', 'info', 'non-blocking'].includes(trim(finding.severity)));
   if (blockers.length === 0) throw new Error('terminal blocking findings missing');
+  const scope = parseIssueBody(revision.body);
   const candidates = census.filter((comment) => {
-    if (trim(githubEvidenceObject(comment.user).login).toLowerCase() !== principal.toLowerCase()
-        || trim(comment.issue_url).toLowerCase() !== `https://api.github.com/repos/${options.repoSlug}/issues/${run.prNumber}`.toLowerCase()
+    const author = comment.user && typeof comment.user === 'object'
+      && !Array.isArray(comment.user) ? comment.user as Record<string, unknown> : {};
+    const createdAt = Date.parse(trim(comment.created_at));
+    if (trim(author.login).toLowerCase() !== principal.toLowerCase()
+        || trim(comment.issue_url).toLowerCase()
+          !== `https://api.github.com/repos/${options.repoSlug}/issues/${run.prNumber}`.toLowerCase()
         || !['OWNER', 'MEMBER', 'COLLABORATOR'].includes(trim(comment.author_association))
-        || !Number.isInteger(comment.id) || typeof comment.body !== 'string') return false;
-    // Ordinary author prose, scoped to the exact Rn/run/head section, never a new receipt.
+        || !Number.isInteger(comment.id) || typeof comment.body !== 'string'
+        || !Number.isFinite(createdAt) || createdAt <= reviewedAt) return false;
     const sections = comment.body.split(/(?=^##\s)/m).filter((section) => {
       const heading = section.split('\n')[0] ?? '';
-      return heading.startsWith(`## R${round.roundOrdinal} dispositions`) && heading.includes(`\`${run.id}\``)
-        && heading.includes(`\`${run.targetSha}\``);
+      return heading.startsWith(`## R${round.roundOrdinal} dispositions`)
+        && heading.includes('`' + run.id + '`')
+        && heading.includes('`' + run.targetSha + '`');
     });
     if (sections.length !== 1) return false;
-    const bullets = sections[0]!.split(/(?=^-\s)/m).slice(1);
+    const section = sections[0]!;
+    if (!section.includes('Terminal REVIEW: `' + String(review.id) + '`')
+        || !section.includes('Reviewed Issue digest: `' + snapshot.snapshotHash + '`')
+        || !section.includes('Corrected Issue revision: `' + revision.revision + '`')) return false;
+    const bullets = section.split(/(?=^-\s)/m).slice(1);
     return blockers.every((finding) => {
       const code = finding.body?.match(/^type: [^\n]+\ncode: ([^\n]+)\nseverity:/)?.[1];
       const signature = trim(finding.fingerprint);
-      if (!code || !/^[a-f0-9]{64}$/.test(signature) || !['scope', 'scope-violation'].includes(trim(finding.category))) return false;
-      const matches = bullets.filter((bullet) => bullet.includes(`\`${code}\``) && bullet.includes(`\`${signature}\``));
-      if (matches.length !== 1) return false;
-      const bullet = matches[0]!;
+      if (!code || !/^[a-f0-9]{64}$/.test(signature)
+          || !['scope', 'scope-violation'].includes(trim(finding.category))) return false;
+      const matching = bullets.filter((bullet) =>
+        bullet.includes('`' + code + '`') && bullet.includes('`' + signature + '`'));
+      if (matching.length !== 1) return false;
+      const bullet = matching[0]!;
       const path = normalizePath(finding.filePath ?? '');
-      const scope = parseIssueBody(revision.body);
       if (!path.ok || pathMatchesAnyPattern(path.path, [...REPOSITORY_DENYLIST, ...scope.denylist])
           || !pathMatchesAnyPattern(path.path, scope.allowed_roots ?? [])) return false;
-      // The captured ordinary scope correction names its live body revision and exact corrected root.
       return /^- \*\*FIXED — blocking scope finding /i.test(bullet)
         && bullet.includes(`The live ${revision.revision} Issue now includes`)
         && bullet.includes('No code or behavior change was made for this disposition.')
-        && !!finding.filePath && bullet.includes(`\`${finding.filePath}\``)
+        && !!finding.filePath && bullet.includes('`' + finding.filePath + '`')
         && bullet.includes('`allowed-roots`');
     });
   });
-  if (candidates.length !== 1) throw new Error('every blocker requires one trusted exact-run Issue-only disposition');
+  if (candidates.length !== 1) {
+    throw new Error('missing exactly one authorized, post-terminal, fully bound scope disposition');
+  }
   const comment = candidates[0]!;
-  const reread = githubEvidenceObject(await readFinalCapGithubJson(input, ['api',
-    `repos/${options.repoSlug}/issues/comments/${String(comment.id)}`], runner));
-  if (stableJson(reread) !== stableJson(comment)) throw new Error('author disposition changed during read');
-  const liveIssue = githubEvidenceObject(await readFinalCapGithubJson(input, ['api',
-    `repos/${options.repoSlug}/issues/${round.issueNumber}`], runner));
+  const reread = githubEvidenceObject(await readFinalCapGithubJson(input, [
+    'api', `repos/${options.repoSlug}/issues/comments/${String(comment.id)}`,
+  ], runner));
+  if (stableJson(reread) !== stableJson(comment)) {
+    throw new Error('author disposition changed during exact-comment reread');
+  }
+  const liveIssue = githubEvidenceObject(await readFinalCapGithubJson(input, [
+    'api', `repos/${options.repoSlug}/issues/${round.issueNumber}`,
+  ], runner));
   if (liveIssue.body !== revision.body || liveIssue.number !== round.issueNumber
-      || trim(liveIssue.repository_url).toLowerCase() !== `https://api.github.com/repos/${options.repoSlug}`.toLowerCase()) {
-    throw new Error('Issue body changed before settlement');
+      || trim(liveIssue.repository_url).toLowerCase()
+        !== `https://api.github.com/repos/${options.repoSlug}`.toLowerCase()) {
+    throw new Error('corrected live Issue bytes changed before settlement');
   }
   const after = await resolveCurrentPrTarget(input.sourceRepoRoot, options.repoSlug, run.prNumber, boundPrRunner);
   if (after.headSha !== target.headSha || after.baseRef !== target.baseRef
-      || extractClosingIssueNumber(after.body) !== round.issueNumber) throw new Error('PR identity changed before settlement');
-  return { runId: run.id, cycleId: cycle.cycleId, logicalRoundOrdinal: round.roundOrdinal,
-    publicationDigest: sha256Bytes(stableJson({ comment, revision, terminalDigest: terminal.digest })) };
+      || extractClosingIssueNumber(after.body) !== round.issueNumber) {
+    throw new Error('PR identity changed before settlement');
+  }
+  return {
+    runId: run.id, cycleId: cycle.cycleId, logicalRoundOrdinal: round.roundOrdinal,
+    correctedBodyDigest: computeBoundIssueSnapshotHash(revision.body),
+    publicationDigest: sha256Bytes(stableJson({
+      comment, revision, reviewId: review.id, reviewedAt: review.submittedAt, terminalDigest: terminal.digest,
+    })),
+  };
 }
 
 async function readCheckedReviewPrHead(
