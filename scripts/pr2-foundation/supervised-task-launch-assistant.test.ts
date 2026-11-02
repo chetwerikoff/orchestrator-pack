@@ -134,6 +134,72 @@ describe('Issue #2754 AC5 serialized worktree restoration', () => {
     expect(started).toBe(1);
   });
 
+  it.each([
+    { mode: 'same-task', phase: 'early', state: 'done' },
+    { mode: 'same-task', phase: 'early', state: 'completed' },
+    { mode: 'same-task', phase: 'final', state: 'done' },
+    { mode: 'same-task', phase: 'final', state: 'completed' },
+    { mode: 'new-task', phase: 'early', state: 'done' },
+    { mode: 'new-task', phase: 'early', state: 'completed' },
+    { mode: 'new-task', phase: 'final', state: 'done' },
+    { mode: 'new-task', phase: 'final', state: 'completed' },
+  ] as const)(
+    'refuses AC5 $mode restoration when predecessor is $state at $phase admission', async ({ mode, phase, state }) => {
+      const oldTask = mode === 'same-task' ? 'task-1' : 'task-old';
+      const prior: WorkerAssignment = {
+        schema: 'orchestrator-pack/worker-assignment/v1',
+        projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+        issueNumber: 2754, taskId: oldTask, assignmentId: 'completed-predecessor',
+        generation: 1, kind: 'local', provider: 'orca', bindingKey: 'dispatch-old',
+        role: 'orchestrator', createdAtUtc: '2026-11-02T00:00:00.000Z',
+      };
+      const first = phase === 'early' ? state : 'failed';
+      const old = (status: string): DispatchObservation =>
+        ({ kind: 'present', dispatchId: 'dispatch-old', status });
+      const observations: DispatchObservation[] = mode === 'same-task'
+        ? [old(first), old(state)]
+        : [{ kind: 'absent' }, old(first), { kind: 'absent' }, old(state)];
+      let goneReads = 0;
+      let spawned = 0;
+      let started = 0;
+      const result = await runSupervisedTaskLaunchAssistant({
+        ...launchInput('manager'), issueNumber: 2754,
+      }, {
+        ...deps({
+          currentAssignment: prior, dispatch: observations,
+          adapter: runtimeAdapter({ onSpawn: () => { spawned += 1; } }),
+          onSupervised: () => { started += 1; },
+        }),
+        proveManagerTaskMembership: async (_runId, taskId) => ({
+          status: 'ok', value: { taskId },
+        }),
+        proveTerminalGone: async (assignment) => ({
+          taskId: assignment.taskId, dispatchId: assignment.bindingKey,
+          dispatchState: goneReads++ === 0 ? first : state,
+          worktreeId: 'repo::exact-worktree', workerAbsent: true,
+        }),
+        resolveRestoreWorktree: async () => ({ status: 'ok', value: {
+          id: 'repo::exact-worktree', path: '/tmp/exact-worktree',
+        } }),
+        observeRestoreQuiescence: async () => ({
+          status: 'ok', value: { terminalFingerprint: 'stable foreign inventory' },
+        }),
+        prepareWorktree: async () => ({ status: 'ok', value: {
+          id: 'repo::exact-worktree', selector: 'id:manager-worktree',
+          path: '/tmp/exact-worktree', setupWitness: 'proven_reuse',
+        } }),
+      });
+      expect(result).toMatchObject({
+        outcome: 'continue',
+        stage: phase === 'early' ? 'dispatch_admission_early' : 'dispatch_admission_final',
+        observedCause: phase === 'early'
+          ? 'worktree_restore_old_dispatch_unproven' : 'worktree_restore_final_identity_changed',
+      });
+      expect(spawned).toBe(0);
+      expect(started).toBe(0);
+    },
+  );
+
   it('rejects changed all-workspace census after preparation without any terminal spawn', async () => {
     const prior: WorkerAssignment = {
       schema: 'orchestrator-pack/worker-assignment/v1',
