@@ -317,6 +317,91 @@ the current assignment fence; native circuit-break/active-start safeguards
 remain in force. New worktrees via `--worktree-name` require a clean tree after
 their setup receipt and never borrow dirty-reuse authorization.
 
+### Operator-serialized quiescent dirty-worktree handover (Issue #2754)
+
+Use the **one existing `--worktree` launch command above**, with the selected
+project, exact Issue, new or unchanged Task, optional existing manager Run and
+the same linked worktree. Serialize handovers **by operator decision**: never
+run two restorers concurrently against that same worktree. Two successful
+read-only checks do not make `worker-start` and WorkerAssignment publication
+atomic; if attempts overlap or an effect may have occurred, inspect and
+reconcile the exact native Dispatch and pane IDs with the coordinator before
+trying again. An old terminal's title, worktreePath or exited/idle state is
+not evidence that its process or a new owner is gone.
+
+Observe the **old** and **new** Task/Run membership and old terminal Dispatch
+at both admission boundaries. Run a complete cross-workspace terminal census
+using `OrcaRuntimeAdapter.listWorkersAsync({workspace: selectedPath})`
+(the native `orca terminal list --json`), not a filtered `worktree ps` or
+`terminal list --worktree` shortcut. Require untruncated complete count,
+every row's valid terminal handle/incarnation and worktreePath, and **zero**
+canonical-path matches for the selected worktree, including pinned, idle or
+exited rows. On supported Linux, independently run the existing
+`collectProcessEvidence(selectedPath)` /proc CWD-and-descendant check and
+require success and zero rows, both before handover and immediately before
+start. This census cannot detect every agent that changes CWD or is
+reparented; the operator must separately establish true quiescence. Any
+missing /proc, malformed count, retained terminal/PID or changed owner means
+**no restart**. Inspect `orca terminal list --json`,
+`orca orchestration dispatch-show --task "$OLD_TASK_ID" --json`,
+`orca orchestration worker-show --dispatch "$OLD_DISPATCH_ID" --json`,
+the current assignment and selected Git worktree, then use an approved
+exact-bound stop and request coordinator authorization for another attempt.
+Never reset, clean, stash or refresh the retained dirty worktree.
+
+For a selected **vanished** temporary worktree registration only, inspect
+`git -C "$REPO_ROOT" worktree list --porcelain`, distinguish a truly missing
+directory from a locked/live/dirty worktree, and use native
+`git -C "$REPO_ROOT" worktree prune` on that same repository. If location
+or retention is ambiguous, stop for operator inspection; do not delete a
+registered worktree directory or a bespoke registry entry.
+
+A bound external-pane stop is **not** `orca terminal stop --worktree`.
+Before any action revalidate Issue, Run, Task, current assignment, exact
+Dispatch ID, terminal handle **and incarnation**, and worktree. Where the
+installed native producer can safely close that exact generation **and**
+abandon the same Dispatch, close exactly that terminal first, abandon the
+Dispatch with the installed producer's supported exact-target command, then
+read back `terminal show`, `dispatch-show` and `worker-show`. A close
+alone, stale handle, unsupported abandon, or missing read-back is
+`partial`/`stop_unknown`, **not** a stopped certificate. Do not invent
+an abandon CLI verb; escalate to the coordinator for the installed-version
+supported sequence. Make pinned-handle recovery/closure an explicit operator
+choice, never a reboot autostart.
+
+For manager work, resolve the actual executor family first: **Claude Code**
+uses the local route without effective B5; on an existing worktree with
+recorded B5 keys, recover its original `core.hooksPath` exactly (or unset it
+if originally absent) and leave siblings' hooks alone. Non-Claude manager
+worktrees retain independent B5 hooks. If the binding is ambiguous, inspect
+`git -C "$WORKTREE_PATH" config --worktree --get core.hooksPath` and
+`git -C "$WORKTREE_PATH" config --worktree --get opkManagerPushGuard.originalHooksPath`
+and repair **that worktree only** before launch. A different manager worktree
+must keep its own guard even when both launch simultaneously.
+
+For verified published-parent Python changes B5 continues to use locked
+`uv export --frozen --offline` for the parent's `uv.lock` and isolated
+hash-locked `uv run` **without** `--offline` to permit a lawful empty-cache
+download. A failed download or version/hash check is not a formatter PASS:
+inspect the actual uv error, restore network/cache as appropriate, then
+**retry the push**, never bypass the guard. OpenCode task **and smoke**
+launches must export `PACK_EXECUTOR_OPENCODE_BIN` as the validated absolute
+installed `opencode` executable; verify probes and spawn use that exact
+binary, not a PATH-first mise version. The pack overlay also denies
+`codex`, `codex exec`, `agent-launch`, `bsk`, browser-skill and secret
+read tools even under inherited broad allows. Native permission effects
+must be observed where available; synthetic fixture maps are not proof.
+
+**AC15 remains disabled**: do not add a B5 declaration-only exception on
+the strength of a merely executed CI job. A repository administrator must
+first prove from effective `main` protection/rulesets that the exact
+current-head `PR scope guard` check is **required** and absent/failed/stale
+checks block ordinary merge, or prove an existing equivalent mandatory
+pack-owned merge authority. Until positive read-back of that configuration,
+use the existing authorized worker/PR route and generate the required
+current-Issue declaration using its canonical producer. An optional green
+scope job is not enforcement and a red one must not be overridden.
+
 ### Coordinator Run binding is independent of worker-start
 
 **Never** recover a coordinator by calling `worker-start` against the
