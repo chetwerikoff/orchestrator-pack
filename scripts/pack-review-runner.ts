@@ -1555,7 +1555,7 @@ function frozenLogicalGptSourceIdentity(run: PackReviewRunRecord): boolean {
 }
 
 /** Older distinct-head and legacy saved versions retain their original exact slot policy. */
-function frozenSavedGptSourceIdentity(run: PackReviewRunRecord): boolean {
+export function frozenSavedGptSourceIdentity(run: PackReviewRunRecord): boolean {
   const round = run.reviewRound;
   if (!round) return false;
   // Prelogical runs were saved before run-level accountingVersion existed;
