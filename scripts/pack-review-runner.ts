@@ -3558,8 +3558,8 @@ function provenFirstAttemptZeroSendCensus(
   missingFirstAttemptIdentities: readonly string[],
 ): boolean {
   const round = run.reviewRound;
-  if (!round || round.reviewer !== 'gpt' || round.cardinality !== 3
-    || round.sourceSlots.length !== 3 || round.settledSourceCount !== undefined
+  if (!round || round.reviewer !== 'gpt' || !frozenLogicalGptSourceIdentity(run)
+    || round.settledSourceCount !== undefined
     || gptUsableSourceCount(round) !== 0 || hasPersistedPackReviewVerdict(run)
     || run.reviewVerdict !== undefined || run.journalOutcome !== undefined
     || run.githubReviewId !== undefined || run.githubReviewUrl !== undefined
@@ -3673,14 +3673,14 @@ async function recoverablePostedRateLimitSlots(input: {
   const { run } = input;
   const round = run.reviewRound;
   if (!round || !hasFailedRateLimitSource(run) || round.reviewer !== 'gpt'
-    || round.cardinality !== 3 || round.sourceSlots.length !== 3
-    || new Set(round.sourceSlots.map((slot) => slot.slotId)).size !== 3
+    || !frozenLogicalGptSourceIdentity(run)
+    || new Set(round.sourceSlots.map((slot) => slot.slotId)).size !== round.cardinality
     || round.settledSourceCount !== undefined || gptUsableSourceCount(round) === 0
     || hasPersistedPackReviewVerdict(run) || !hasCredentialedGptSourceAuthority(run)) return null;
   // A judged 0/3 zero-send original with a subsequently hydrated source
   // comment has conflicting invocation evidence; it is not a retryable 1/3.
   if (run.failureReason?.startsWith('gpt_source_non_complete:')
-    && run.failureReason.endsWith(':0/3')) return null;
+    && run.failureReason.endsWith(`:0/${round.cardinality}`)) return null;
   if (process.env.OPK_VITEST_HARNESS === '1' && !input.transport) return null;
   const transport = input.transport ?? createPackGptSourceCommentTransport({
     repoRoot: input.sourceRepoRoot, repoSlug: input.repoSlug, prNumber: run.prNumber,
@@ -3803,8 +3803,7 @@ function originalRateLimitZeroJudgment(
   if (run.status !== 'failed'
     || !run.failureReason?.startsWith('gpt_source_non_complete:')
     || noJudgmentBudgetOutcome(run, storeRoot) === null
-    || round?.reviewer !== 'gpt' || round.cardinality !== 3
-    || round.sourceSlots.length !== 3) return false;
+    || round?.reviewer !== 'gpt' || !frozenLogicalGptSourceIdentity(run)) return false;
   let witnessedRateLimit = false;
   for (const slot of round.sourceSlots) {
     if (slot.lifecycle === 'planned' || slot.terminalClass === 'pre_launch_interrupted') continue;
@@ -4120,10 +4119,11 @@ async function recoverStaleGptSourceComments(options: {
     };
   }
   const settlePartialAfterGrace = options.input.settlePartialAfterGrace ?? true;
+  const degradedEligible = round.cardinality === 3
+    && (round.accountingVersion !== PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION
+      || round.tier === 'T3');
   const requiredSourceCount = round.settledSourceCount
-    ?? (round.cardinality >= 3
-      ? (graceExpired && settlePartialAfterGrace ? 2 : round.cardinality)
-      : round.cardinality);
+    ?? (degradedEligible && graceExpired && settlePartialAfterGrace ? 2 : round.cardinality);
   if (usableSourceCount < requiredSourceCount) {
     // A failed actor lookup, incomplete comment page, or conflicting identity
     // is not proof that the corresponding GitHub comment is absent.
@@ -4138,7 +4138,7 @@ async function recoverStaleGptSourceComments(options: {
         nextAction: `restore GitHub source-comment resolution for ${uncertainSourceObservations.join(', ')}, then rerun scoped reconcile`,
       };
     }
-    const reason = round.cardinality >= 3 && !graceExpired
+    const reason = degradedEligible && !graceExpired
       ? `gpt_sources_waiting_for_grace:${usableSourceCount}/${round.cardinality}`
       : `gpt_sources_incomplete_after_grace:${usableSourceCount}/${round.cardinality}`;
     return {
@@ -4148,14 +4148,13 @@ async function recoverStaleGptSourceComments(options: {
       usableSourceCount,
       graceExpired,
       missingFirstAttemptIdentities,
-      nextAction: round.cardinality >= 3 && !graceExpired
+      nextAction: degradedEligible && !graceExpired
         ? 'rerun scoped reconcile after the shared grace threshold or when the missing source publishes'
         : `reconcile or retry the missing source work (${unresolved.join(', ') || 'missing source comment'})`,
     };
   }
 
-  if (round.cardinality >= 3
-      && round.settledSourceCount === undefined) {
+  if (round.settledSourceCount === undefined) {
     if (options.input.fixtureBeforeGptRoundFreeze) {
       await options.input.fixtureBeforeGptRoundFreeze({
         runId: options.run.id,
@@ -4601,14 +4600,12 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
       || (!alreadySettled && (authority.currentHeadSha !== terminal.targetSha
         || currentHead !== terminal.targetSha))
       || run.reviewCycleId !== cycle.cycleId
-      || run.accountingVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
-      || round.accountingVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+      || cycle.capMapVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+      || !frozenLogicalGptSourceIdentity(run)
       || round.tier !== cycle.frozenTier || run.logicalRoundCap !== cycle.frozenCap
       || run.logicalRoundOrdinal !== cycle.frozenCap || round.roundOrdinal !== cycle.frozenCap
-      || terminal.logicalRoundOrdinal !== cycle.frozenCap || round.cardinality !== 3
-      || round.sourceSlots.length !== 3
-      || derivePackReviewGptCoverage(round)?.kind !== 'complete'
-      || (round.settledSourceCount !== undefined && round.settledSourceCount !== round.cardinality)
+      || terminal.logicalRoundOrdinal !== cycle.frozenCap
+      || gptUsableSourceCount(round) !== (round.settledSourceCount ?? round.cardinality)
       || !hasCredentialedGptSourceAuthority(run)
       || cycle.consumedRoundOrdinals?.filter((ordinal) => ordinal === cycle.frozenCap).length !== 1
       || run.resolvedReviewer !== 'gpt' || !run.completedAtUtc
@@ -5115,9 +5112,11 @@ async function verifyOriginalGptGithubSourcesAndReview(
   const round = run.reviewRound;
   if (!round || round.reviewer !== 'gpt') return true;
   if (!hasCredentialedGptSourceAuthority(run)
-      || !Number.isInteger(round.settledSourceCount)
-      || Number(round.settledSourceCount) < 2
-      || Number(round.settledSourceCount) > round.cardinality) return false;
+      || (round.settledSourceCount !== undefined
+        && (!Number.isInteger(round.settledSourceCount)
+          || round.settledSourceCount < (round.cardinality === 3 ? 2 : round.cardinality)
+          || round.settledSourceCount > round.cardinality))
+      || gptUsableSourceCount(round) !== (round.settledSourceCount ?? round.cardinality)) return false;
   // Tests must model both authenticated GitHub evidence surfaces explicitly.
   // Setting a harness environment variable cannot substitute for either one.
   const sourceTransport = process.env.OPK_VITEST_HARNESS === '1'
@@ -10685,7 +10684,6 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
       if (!persistedRound) throw new Error(`pack review run ${run.id} lost its GPT round before settlement`);
       const usableSourceCount = gptUsableSourceCount(persistedRound);
       if (process.env.OPK_VITEST_HARNESS === '1' && !input.fixtureGptSourceCommentTransport
-          && persistedRound.cardinality >= 3
           && usableSourceCount === persistedRound.cardinality
           && persistedRound.settledSourceCount === undefined) {
         const frozen = freezeGptRoundSourceCount(
