@@ -180,8 +180,15 @@ export function isBusyScreen(screen: string, busyRe: RegExp = DEFAULT_BUSY_RE): 
     .filter((line) => line.trim() !== '')
     .slice(-BUSY_MARKER_WINDOW_LINES)
     .join('\n');
+  // OpenCode's idle status bar still prints "esc interrupt" beside the model,
+  // context percentage and ctrl+p commands. That chrome is not a running turn.
+  // A live braille spinner on the last content line is positive active work.
+  const activeContent = contentLines(statusRegion);
+  if (activeContent.at(-1)?.running === true) return true;
+  const withoutIdleChrome = statusRegion.split(/\r?\n/u)
+    .filter((line) => !/\bctrl\+p\s+commands\b/iu.test(line)).join('\n');
   busyRe.lastIndex = 0;
-  return busyRe.test(statusRegion);
+  return busyRe.test(withoutIdleChrome);
 }
 
 export function hasPollingEvidence(screen: string): boolean {
@@ -422,10 +429,10 @@ export function selectAgentTerminals(
     const worktree = terminal.worktreePath.replaceAll('\\', '/');
     workspaceRe.lastIndex = 0;
     const inWorkspace = workspaceRe.test(worktree);
-    // Only a positively Run- and same-census-bound primary worker bypasses the old root/title filters.
-    if (isPrimary && !inWorkspace && primaryBindings.has(terminal.handle)) return true;
-    coordinatorTitleRe.lastIndex = 0;
-    if (isPrimary && coordinatorTitleRe.test(terminal.title)) return false;
+    // A primary-root title or workspace-pattern match is never a Dispatch witness.
+    // The exact current worker-list/worker-show/run-show binding wins for every
+    // primary pane; non-primary workspace selection is unchanged.
+    if (isPrimary) return primaryBindings.has(terminal.handle);
     return inWorkspace && looksLikeAgentPane(terminal.title);
   });
 }
@@ -435,7 +442,6 @@ export function selectAgentTerminals(
 function verifiedPrimaryBindings(
   terminals: readonly FleetTerminal[],
   primary: string,
-  workspaceRe: RegExp,
   projectId: string | undefined,
   coordinatorHandle: string | undefined,
   architectHandle: string | undefined,
@@ -454,8 +460,7 @@ function verifiedPrimaryBindings(
       || ![terminal.handle, terminal.incarnationId, terminal.worktreePath]
         .every((value) => typeof value === 'string' && value.trim().length > 0)
       || terminals.filter((other) => other.handle === terminal.handle).length !== 1) return false;
-    workspaceRe.lastIndex = 0;
-    return !workspaceRe.test(terminal.worktreePath.replaceAll('\\', '/'));
+    return true;
   });
   if (candidates.length === 0) return verified;
 
@@ -813,7 +818,7 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
     return censusCache.get(key)!;
   };
   const primaryBindings = verifiedPrimaryBindings(
-    terminals, options.primary, workspaceRe, options.projectId,
+    terminals, options.primary, options.projectId,
     coordinatorHandle, architectHandle, bindingExecutor,
   );
   const selected = selectAgentTerminals(
@@ -962,10 +967,9 @@ export function collectFleetDiagnostics(options: FleetDiagnosticOptions): FleetD
     return [{ reason: 'fleet_census_unreadable', evidence: 'terminal list --json: incomplete_or_malformed' }];
   }
   const workspaceRe = options.workspaceRe ?? defaultWorkspaceRegex(options.primary);
-  const coordinatorRe = options.coordinatorTitleRe ?? DEFAULT_ORCHESTRATOR_TITLE_RE;
   const primary = normalizedPath(options.primary);
   const primaryBindings = verifiedPrimaryBindings(
-    terminals, options.primary, workspaceRe, options.projectId,
+    terminals, options.primary, options.projectId,
     options.coordinatorHandle, options.architectHandle, executor,
   );
   const now = (options.now ?? Date.now)();
@@ -976,13 +980,9 @@ export function collectFleetDiagnostics(options: FleetDiagnosticOptions): FleetD
     workspaceRe.lastIndex = 0;
     const inWorkspace = workspaceRe.test(listed.worktreePath.replaceAll('\\', '/'));
     const boundPrimary = primaryBindings.has(listed.handle);
-    if (normalizedPath(listed.worktreePath) === primary && !inWorkspace && boundPrimary) {
-      // A positive Run/current-terminal join overrides the conservative primary title fallback.
-    } else {
-      coordinatorRe.lastIndex = 0;
-      if (normalizedPath(listed.worktreePath) === primary && coordinatorRe.test(listed.title)) continue;
-      if (!inWorkspace) continue;
-    }
+    // Primary-root evidence is Dispatch/Run-only even when the workspace regex
+    // also happens to match the primary checkout.
+    if (normalizedPath(listed.worktreePath) === primary ? !boundPrimary : !inWorkspace) continue;
     const old = store.readDiagnosticHistory?.(listed.handle);
     // Never-agent shells without exact historical designation are not diagnostic candidates.
     if (!boundPrimary && !listed.agentIdentity && !looksLikeAgentPane(listed.title)
@@ -1015,15 +1015,18 @@ export function collectFleetDiagnostics(options: FleetDiagnosticOptions): FleetD
       diagnostics.push({ ...fields, reason: 'unverified:screen_unreadable', evidence: 'terminal read --screen unavailable' });
       continue;
     }
-    const busy = isBusyScreen(screen, options.busyRe ?? DEFAULT_BUSY_RE);
-    // A final PARKED line is enough; Task/receipt binding is not park authority.
+    // Diagnostics use the operational screen classifier without mutating its
+    // polling marks; liveness remains independently "agent_unverified".
+    const classified = classifyFleetPane(screen, terminal.handle, {
+      hasPollingMark: (handle) => store.hasPollingMark(handle),
+      setPollingMark: () => {},
+      clearPollingMark: () => {},
+    }, options.busyRe ?? DEFAULT_BUSY_RE);
     const operational = options.observations?.find((pane) =>
       pane.handle === terminal.handle && pane.incarnationId === terminal.incarnationId
       && normalizedPath(pane.worktreePath) === normalizedPath(terminal.worktreePath));
-    const state: FleetPaneState | undefined = formerAgentShell ? 'STOPPED'
-      : operational?.state ?? (lastFleetParkedLine(screen) ? 'PARKED'
-        : busy ? (hasPollingEvidence(screen) && store.hasPollingMark(terminal.handle) ? 'POLLING' : 'busy')
-          : undefined);
+    const state: FleetPaneState = formerAgentShell ? 'STOPPED'
+      : operational?.state ?? (visibleOpenCodePermission(screen) ? 'PERMISSION' : classified);
     // Ignore TUI chrome, clocks and status bars; cap retained content and hash it.
     const tail = nonChromeLines(screen).slice(-20).join('\n').slice(-4096);
     const tailHash = createHash('sha256').update(tail).digest('hex');
