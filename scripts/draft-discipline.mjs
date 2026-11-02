@@ -315,9 +315,20 @@ function findSmokePlanRuntimeIdentifiers(scenario) {
       // Function-call names such as run_check() are not runtime-owned identities.
       if (/^\s*\(/u.test(after)) continue;
       const structured = /(?:^|[\s([{])(?:--[a-z-]*id|(?:runtime|session|run|term|terminal|msg|message)[-_ ]?(?:id|handle)|(?:target|witness))\s*(?:[:=]|\s+)\s*['"`]?$/iu.test(before);
-      const executable = /\b(?:execute|resume|attach|poll|fetch|read|open|inspect|cancel|dispatch|connect|query|target)\s+['"`]?$/iu.test(before);
+      const executable = /\b(?:execute|resume|attach|poll|fetch|read|open|inspect|cancel|dispatch|connect|query|target)\s+['"`]?$/iu.test(before)
+        || (kind === 'action' && /\brun\s+['"`]?$/iu.test(before));
       const directExecutable = kind === 'action' && /^\s*['"`]?\s*$/u.test(before);
-      if (structured || executable || directExecutable) tokens.add(match[0]);
+      // A standalone expected value is a runtime witness, not an explanatory mention.
+      const directExpected = kind === 'expected'
+        && /^\s*['"`]?\s*$/u.test(before)
+        && /^\s*['"`]?\s*$/u.test(after);
+      // CLI options and positional arguments can carry session-owned values.
+      const optionValue = /(?:^|\s)--[a-z][a-z0-9-]*(?:=|\s+)\s*['"`]?$/iu.test(before);
+      const positionalCommand = kind === 'action'
+        && /^\s*(?:node|npm|npx|python(?:3)?|bun|deno|bash|sh)\s+\S+/iu.test(before);
+      if (structured || executable || directExecutable || directExpected || optionValue || positionalCommand) {
+        tokens.add(match[0]);
+      }
     }
   }
   return [...tokens];
