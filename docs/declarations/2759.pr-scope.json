@@ -1,0 +1,20 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2759,
+  "declared_paths": [
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts"
+  ],
+  "denylist": [
+    ".env*",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts"
+  ],
+  "source_revision": "723997bbb9753abdc609a52582a0663ef47dd10d"
+}
