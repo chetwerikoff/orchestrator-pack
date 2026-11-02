@@ -250,8 +250,22 @@ describe('fleet sweep on real OpenCode screens', () => {
   it('reports POLLING on the second sweep while a wrapped sleep command is running', () => {
     const screen = runningSleepScreen();
     const store = new MemoryPollingStore();
+    // The native spinner is on the command line, one content line before the
+    // final wrapped argument. The ctrl+p commands status bar is not activity.
+    expect(isBusyScreen(screen)).toBe(true);
     expect(classifyFleetPane(screen, 'p1', store)).toBe('busy');
     expect(classifyFleetPane(screen, 'p1', store)).toBe('POLLING');
+  });
+
+  it('B9-5: later own content clears a stale wrapped spinner despite idle OpenCode chrome', () => {
+    const wrapped = runningSleepScreen();
+    const completed = wrapped.replace('  ┃  description\n',
+      '  ┃  description\n  ┃  Assistant: completed and waiting\n');
+    expect(completed).not.toBe(wrapped);
+    expect(isBusyScreen(completed)).toBe(false);
+    const store = new MemoryPollingStore();
+    expect(classifyFleetPane(completed, 'p1', store)).toBe('STOPPED');
+    expect(store.marks.has('p1')).toBe(false);
   });
 
   it('keeps a pane busy when the only sleep is stale scrollback behind newer work', () => {
@@ -282,7 +296,7 @@ describe('fleet sweep on real OpenCode screens', () => {
 describe('fleet sweep pane selection and reads', () => {
   it.each([true, false])('one-off sweep consumes the exact optional ARCHITECT_HANDLE: %s (#2422)', (exclude) => {
     const handle = 'term_721dce76-e932-460a-8ebe-e9f80da9f056';
-    const census = [pane(handle, 'Claude Code architect', primary), pane('worker', 'OpenCode worker'), pane('other', 'Claude Code architect')];
+    const census = [pane(handle, 'Claude Code architect', workerPath), pane('worker', 'OpenCode worker'), pane('other', 'Claude Code architect')];
     const calls: string[][] = [];
     try {
       vi.stubEnv('ARCHITECT_HANDLE', exclude ? ` ${handle} ` : '');
@@ -308,7 +322,7 @@ describe('fleet sweep pane selection and reads', () => {
       pane('claude', 'Claude Code'),
     ];
     expect(selectAgentTerminals(terminals, workspacePrimary, defaultWorkspaceRegex(workspacePrimary)).map((item) => item.handle))
-      .toEqual(['worker', 'primary-agent', 'claude']);
+      .toEqual(['worker', 'claude']);
   });
 
   it('sweeps primary-worktree agent panes but excludes the exact coordinator pane', () => {
@@ -331,7 +345,7 @@ describe('fleet sweep pane selection and reads', () => {
       store: new MemoryPollingStore(),
     });
 
-    expect(observed.map(({ handle }) => handle)).toEqual(['primary-agent', 'sibling-a', 'sibling-b']);
+    expect(observed.map(({ handle }) => handle)).toEqual(['sibling-a', 'sibling-b']);
     expect(observed.some(({ handle }) => handle === 'coordinator')).toBe(false);
   });
 
@@ -800,7 +814,7 @@ describe('Issue #2441 observational-only fleet diagnostics', () => {
     const calls: string[][] = [];
     const current = diagnose(store, [unknown], { agent: 'current screen' }, 300_000, calls);
     expect(current).toMatchObject([{ handle: 'agent', reason: 'agent_unverified' }]);
-    expect(current[0]?.state).toBeUndefined();
+    expect(current[0]?.state).toBe('STOPPED');
     expect(current[0]?.evidence).toContain('prior exact agentIdentity');
     expect(calls.some((args) => args[1] === 'read' && args.includes('agent'))).toBe(true);
     expect(diagnose(store, [{ ...unknown, incarnationId: 'new' }], { agent: 'current screen' }, 600_000)).toEqual([]);
@@ -975,5 +989,73 @@ describe('Issue #2687 r04: own park-line observation without expanding r05 class
       expect(JSON.stringify(ended)).not.toMatch(/DEAD|child-exited|agent_alive/u);
       expect(rows({ ...shell, incarnationId: 'reused' }, '$')).toEqual([]);
     } finally { rmSync(xdg, { recursive: true, force: true }); }
+  });
+});
+
+describe('Issue #2749 B9-5/B9-6: observed idle and primary Dispatch-only selection', () => {
+  it('B9-5: ignores idle OpenCode model/context/ctrl+p chrome but observes the running spinner', () => {
+    const agent: FleetTerminal = { ...pane('idle', 'OpenCode worker'),
+      agentIdentity: 'opencode', incarnationId: 'idle-inc', branch: 'refs/heads/idle', status: 'running' };
+    const idle = [
+      '┃  Completed earlier work',
+      '┃  >',
+      '▣  Pack-Opk-example · GPT-6 · medium',
+      '⬝⬝■■ esc interrupt 175K (64%) ctrl+p commands',
+    ].join('\n');
+    const working = [
+      '┃  Completed earlier work',
+      '┃  ⠏ Working on current change',
+      '▣  Pack-Opk-example · GPT-6 · medium',
+      '⬝⬝■■ esc interrupt 175K (64%) ctrl+p commands',
+    ].join('\n');
+    for (const [screen, state] of [[idle, 'STOPPED'], [working, 'busy']] as const) {
+      const terminals = [agent], store = new MemoryPollingStore();
+      const executor = fakeExecutor(terminals, { idle: screen });
+      const operational = runFleetSweep({ projectId: 'project', primary, terminals, executor, store });
+      expect(isBusyScreen(screen)).toBe(state === 'busy');
+      expect(operational[0]?.state).toBe(state);
+      for (const observations of [undefined, operational] as const) {
+        const rows = collectFleetDiagnostics({ projectId: 'project', primary,
+          terminals, executor, store, ...(observations ? { observations } : {}) });
+        expect(rows).toMatchObject([{ handle: 'idle', state, reason: 'agent_unverified' }]);
+      }
+    }
+    const parked = '┃  PARKED on GPT turn synthetic-id\n⬝⬝■■ esc interrupt 175K (64%) ctrl+p commands';
+    expect(classifyFleetPane(parked, 'idle', new MemoryPollingStore())).toBe('PARKED');
+    expect(classifyFleetPane('┃  ⠏ sleep 30\n⬝⬝■■ esc interrupt', 'idle', new MemoryPollingStore())).toBe('busy');
+  });
+
+  it('B9-6: title-only primary is excluded even when workspace regex matches it; exact Dispatch enters once', () => {
+    const coordinator = pane('coordinator', 'Cursor coordinator', primary);
+    const bound = primaryTerminal('bound');
+    const unbound = primaryTerminal('title-only');
+    const architect = primaryTerminal('architect', 'Claude architect');
+    const terminals = [coordinator, bound, unbound, architect];
+    const worker: PrimaryWorkerFixture = { terminal: bound, runId: 'run-main', coordinator: 'coordinator' };
+    const screens = { bound: 'done', 'title-only': 'done', architect: 'done' };
+    const matchingWorkspace = /(?:\/home\/user\/project$|\/orca\/workspaces\/project\/)/u;
+    for (const workspaceRe of [defaultWorkspaceRegex(primary), matchingWorkspace]) {
+      const executor = primaryOrcaExecutor(terminals, screens, [worker]);
+      const options = { projectId: 'project', primary, terminals, executor,
+        coordinatorHandle: coordinator.handle, architectHandle: architect.handle, workspaceRe,
+        store: new MemoryPollingStore() };
+      const missing: string[] = [];
+      expect(runFleetSweep({ ...options,
+        onMissingPrimaryBinding: (terminal) => { missing.push(terminal.handle); },
+      }).map((row) => row.handle)).toEqual(['bound']);
+      expect(missing).toEqual(['title-only']);
+      expect(collectFleetDiagnostics(options).map((row) => row.handle)).toEqual(['bound']);
+      const withoutDispatch = primaryOrcaExecutor(terminals, screens, []);
+      const entirelyUnbound: string[] = [];
+      expect(runFleetSweep({ ...options, executor: withoutDispatch,
+        onMissingPrimaryBinding: (terminal) => { entirelyUnbound.push(terminal.handle); },
+      })).toEqual([]);
+      expect(entirelyUnbound).toEqual(['bound', 'title-only']);
+      expect(collectFleetDiagnostics({ ...options, executor: withoutDispatch })).toEqual([]);
+    }
+    const duplicate = primaryOrcaExecutor(terminals, screens, [worker, worker]);
+    expect(runFleetSweep({ projectId: 'project', primary, terminals, executor: duplicate,
+      coordinatorHandle: coordinator.handle, workspaceRe: matchingWorkspace,
+      store: new MemoryPollingStore() })).toEqual([]);
   });
 });

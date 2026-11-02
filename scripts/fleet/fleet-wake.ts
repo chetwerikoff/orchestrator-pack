@@ -618,6 +618,8 @@ export interface TerminalEnvelopeEvent {
   readonly handoffReceiptPath?: string;
   readonly lifecycleOutcome?: 'incident' | 'success';
   readonly turnResultState?: string;
+  /** Separate native turn_result_cause; do not forward raw human text to a pane. */
+  readonly turnResultCause?: string;
   /** Existing envelope `delivery` (e.g. not-sent, POSSIBLY_DELIVERED, landed): wording input only. */
   readonly delivery?: string;
 }
@@ -658,6 +660,8 @@ export function listTerminalEnvelopes(root = '/tmp/opencode'): TerminalEnvelopeE
           ...(envelope.lifecycle_outcome === 'incident' || envelope.lifecycle_outcome === 'success'
             ? { lifecycleOutcome: envelope.lifecycle_outcome } : {}),
           ...(typeof envelope.turn_result_state === 'string' ? { turnResultState: envelope.turn_result_state } : {}),
+          ...(typeof envelope.turn_result_cause === 'string' && envelope.turn_result_cause.length > 0
+            ? { turnResultCause: envelope.turn_result_cause } : {}),
           ...(typeof envelope.delivery === 'string' && envelope.delivery.length > 0 ? { delivery: envelope.delivery } : {}),
           ...(cwd ? { cwd } : {}),
           ...(terminalHandle ? { terminalHandle } : {}),
@@ -928,6 +932,8 @@ interface ProducerResolution {
   readonly eventId: string;
   /** Original terminal-envelope paths the event rests on, for the shared handle/path mark. */
   readonly paths?: readonly string[];
+  /** Exact new live head for a named obsolete-head advisory; never a green verdict. */
+  readonly currentHeadSha?: string;
 }
 
 // GPT invocation names are free-form; punctuation belongs to the park sentence.
@@ -956,8 +962,10 @@ export function parseNamedParkedProducer(wait: string): NamedProducer | undefine
   }
   const gptPrefix = 'PARKED on GPT turn ';
   if (wait.startsWith(gptPrefix)) {
-    const id = wait.slice(gptPrefix.length)
-      .replace(/\s+\(self-wake armed\)[\p{P}\s]*$/u, '').replace(/[\p{P}\s]+$/u, '');
+    const first = wait.slice(gptPrefix.length).trimStart().split(/\s/u, 1)[0] ?? '';
+    // Only the first whitespace-delimited token names the invocation. Any
+    // explanatory words, em dash or self-wake suffix stay outside the ID.
+    const id = first.replace(/[\p{P}\s]+$/u, '');
     return id ? { kind: 'gpt', label: 'GPT-turn-' + id, id } : undefined;
   }
   const source = wait.endsWith(' (self-wake armed)')
@@ -1188,31 +1196,45 @@ function freshSendSafePane(
       coordinatorHandle: resolveCoordinatorPane(current, options.config)?.handle ?? '',
       coordinatorTitleRe: options.config.orchestratorTitleRe,
       architectHandle: options.config.architectHandle, busyRe: options.config.busyRe,
-      terminals: matches, executor,
+      // Primary-root Dispatch admission needs the *whole* fresh census,
+      // including the selected coordinator, not the one-row matches slice.
+      terminals: current, executor, onUnreadable: () => {},
       store: {
         hasPollingMark: (handle) => store.hasPollingMark(handle),
         setPollingMark: () => {}, clearPollingMark: () => {},
       },
     });
-    if (fresh.length !== 1) {
-      // The native selector cannot classify an unknown/missing title. That
-      // absence is not positive non-agent evidence: use the actual screen.
-      if (expected.state !== 'STOPPED') return false;
+    const freshMatches = fresh.filter((pane) => terminalsIdentity(pane) === terminalsIdentity(expected));
+    if (freshMatches.length !== 1) {
+      // A primary-root pane must never escape through the legacy STOPPED
+      // screen-only fallback when its current Dispatch binding disappears.
+      if (samePath(expected.worktreePath, options.config.primary) || expected.state !== 'STOPPED') return false;
       const screen = readFleetScreen(expected.handle, executor);
       return !isBusyScreen(screen, options.config.busyRe)
         && !lastFleetParkedLine(screen) && !ownPaneOutcome(screen).wait
         && !visibleOpenCodePermission(screen);
     }
-    const pane = fresh[0]!;
+    const pane = freshMatches[0]!;
     if (terminalsIdentity(pane) !== terminalsIdentity(expected) || pane.state !== expected.state) return false;
+    // An A-to-B Dispatch/Run rebind on the same native terminal cannot
+    // inherit A's already-selected Wake. Both taskBindings are complete
+    // selected-project joins, and the fresh census includes the coordinator.
+    if (samePath(expected.worktreePath, options.config.primary)
+      && (!expected.taskBinding || !pane.taskBinding
+        || pane.taskBinding !== expected.taskBinding)) return false;
     if (expected.state === 'STOPPED') {
       // A changed own screen can no longer corroborate the originally STOPPED
       // event recipient, even when both snapshots classify as idle.
       return pane.wait === undefined && pane.lines.length > 0
         && JSON.stringify(pane.lines) === JSON.stringify(expected.lines);
     }
+    const screen = readFleetScreen(expected.handle, executor);
+    // A native OpenCode idle prompt may follow the final own PARKED outcome.
+    // Keep exact own-wait evidence rather than requiring PARKED to be the
+    // screen's literal last content line.
     return pane.wait === expected.wait
-      && lastFleetParkedLine(readFleetScreen(expected.handle, executor)) === expected.wait;
+      && (lastFleetParkedLine(screen) === expected.wait
+        || ownPaneOutcome(screen).wait === expected.wait);
   } catch { return false; }
 }
 
@@ -1381,6 +1403,21 @@ function resolveParkEvent(
       ? resolved('review-submitted', 'review-' + producer.reviewId,
         'review:' + producer.number + ':' + producer.reviewId) : undefined;
   }
+  // Only a moved-head advisory requires an open PR. A closed/merged PR
+  // that retains the exact parked SHA still uses its incumbent terminal
+  // CI/pack-review producer result, never a fabricated head-moved event.
+  if ((producer.kind === 'ci' || producer.kind === 'pack-review') && producer.number && producer.sha) {
+    const pull = (options.readNamedPull ?? readNativePull)(repo, producer.number);
+    if (!pull || pull.number !== producer.number || !SHA40.test(pull.headSha)) return undefined;
+    if (pull.headSha !== producer.sha) {
+      if (pull.state !== 'open' || pull.merged) return undefined;
+      return {
+        label: producer.label, terminalState: 'head-moved', evidence: pull.headSha,
+        eventId: 'head-moved:' + producer.number + ':' + producer.sha,
+        currentHeadSha: pull.headSha,
+      };
+    }
+  }
   if (producer.kind === 'pack-review' && producer.sha) {
     const stage = (options.readPackReviewStage ?? readPackReviewStatus)(repo, producer.sha);
     return stage && (stage.state === 'success' || stage.state === 'failure')
@@ -1406,6 +1443,11 @@ function safeUnitAtom(input: string): string | undefined {
   const encoded = Array.from(input).map((char) => /^[A-Za-z0-9_.:/%#=+-]$/u.test(char)
     ? char : Array.from(Buffer.from(char)).map((byte) => '%' + byte.toString(16).padStart(2, '0')).join('')).join('');
   return encoded.length <= 240 && /^[A-Za-z0-9_.:/%#=+-]+$/u.test(encoded) ? encoded : undefined;
+}
+
+function safeMovedHeadWakeText(number: number, headSha: string): string | undefined {
+  if (!Number.isSafeInteger(number) || number <= 0 || !SHA40.test(headSha)) return undefined;
+  return `Wake: PR #${number} head moved to ${headSha} - re-read PR #${number} CI and re-park on the current head`;
 }
 
 export function safeUnitWakeText(producer: string, state: string, evidence: string): string | undefined {
@@ -1539,6 +1581,22 @@ async function wakeOriginalTerminalFailures(
 }
 
 
+function safeTerminalCauseCode(value: string | undefined): string | undefined {
+  return value && value.length <= 80 && /^[a-z][a-z0-9_]*$/u.test(value)
+    && !/(?:token|secret|password|passwd|credential|private|api_key)/iu.test(value)
+    ? value : undefined;
+}
+
+function singleGptEndedState(event: TerminalEnvelopeEvent): string {
+  const state = event.turnResultState
+    ?? (event.lifecycleOutcome === 'incident' ? 'incident' : 'ok');
+  const outcome = state === 'driver_error'
+    ? 'driver_error:' + (safeTerminalCauseCode(event.turnResultCause) ?? 'unverified') : state;
+  // Native delivery and turn-result state are independent fields; naming
+  // not-sent does not imply a failed send was never attempted.
+  return event.delivery === 'not-sent' ? outcome + '/delivery-not-sent' : outcome;
+}
+
 function gptTerminalResolution(
   producer: NamedProducer,
   pane: FleetPaneObservation,
@@ -1579,18 +1637,22 @@ function gptTerminalResolution(
       || (typeof event.turnResultState === 'string' && event.turnResultState.length > 0
         && !/^(?:pending|running|in_progress|unknown|unverified)$/iu.test(event.turnResultState));
     const contradicts = (event.lifecycleOutcome === 'success' && failureTerminalEnvelope(event))
-      || (event.lifecycleOutcome === 'incident' && event.turnResultState === 'ok');
+      || (event.lifecycleOutcome === 'incident' && event.turnResultState === 'ok')
+      || (typeof event.turnResultState === 'string'
+        && /^(?:pending|running|in_progress|unknown|unverified)$/iu.test(event.turnResultState));
     if (!exact || !settledOutcome || contradicts) { deficient = true; continue; }
-    // A coherent single non-ok incident is not a success-completion Wake.
-    if (producer.kind === 'gpt' && !(event.lifecycleOutcome === 'success' || event.turnResultState === 'ok')
-      || producer.kind === 'gpt' && failureTerminalEnvelope(event)) continue;
+    // A coherent terminal outcome means the producer ended, not that it
+    // succeeded. Original-owner non-ok incident delivery remains independent.
     settled.push(event);
   }
   if (deficient || settled.length !== ids.length) return { deficient };
   const paths = settled.map((event) => event.path);
   const evidence = paths.length === 1 ? paths[0]! : 'three-exact-terminal-envelopes';
   return { deficient: false, match: {
-    label: producer.label, terminalState: 'terminal-envelope-settled',
+    label: producer.label,
+    terminalState: producer.kind === 'gpt'
+      ? singleGptEndedState(settled[0]!)
+      : 'terminal-envelope-settled',
     evidence, eventId: 'gpt-exact:' + ids.join(',') + ':' + paths.join('|'), paths,
   } };
 }
@@ -1771,24 +1833,64 @@ async function wakeNamedParkedProducers(
       epoch = { key: episode, since: now, started: now };
       store.writeParkedEpoch?.(pane.handle, epoch);
     }
+    const producer = parseNamedParkedProducer(pane.wait);
+    if ((producer?.kind === 'gpt' || producer?.kind === 'gpt-multi')
+      && !pane.ownParkObservation) {
+      log('named GPT Wake withheld for ' + pane.handle
+        + ': re-check current own GPT PARKED and exact terminal envelope, not a foreign/quoted park');
+      continue;
+    }
+    // A quoted/historical visible PARKED line is classification only: a
+    // numbered PR recheck needs a positively own final named wait.
+    const namedPrOwn = !((producer?.kind === 'ci' || producer?.kind === 'pack-review')
+      && producer.number && !pane.ownParkObservation);
+    if (!namedPrOwn) {
+      log('named PR Wake withheld for ' + pane.handle
+        + ': re-check current own PARKED on PR #' + producer!.number + ', not a foreign/quoted park line');
+      continue; // Quoted named waits cannot reach a 30-minute Reminder either.
+    }
+    let match: ProducerResolution | undefined;
     // Re-observe this same native pane AND its actual last own PARKED line
     // immediately before text and again before Enter. A recycled handle or
     // newly bare shell cannot receive a stale parked event/reminder.
     const stillParkedOwner = (): boolean => {
       try {
-        const candidates = listFleetTerminals(executor).filter((row) => row.handle === pane.handle);
+        const census = listFleetTerminals(executor);
+        const candidates = census.filter((row) => row.handle === pane.handle);
         if (candidates.length !== 1) return false;
         const current = candidates[0]!;
         if (terminalsIdentity(current) !== terminalsIdentity(pane)
           || current.title !== pane.title || current.agentIdentity !== pane.agentIdentity
           || current.status?.toLowerCase() === 'exited') return false;
+        if (samePath(current.worktreePath, options.config.primary)
+          && !freshSendSafePane(pane, census, options, executor, store)) {
+          log('named Wake withheld for ' + pane.handle
+            + ': re-check selected coordinator and current worker-list/worker-show/run-show Dispatch binding');
+          return false;
+        }
+        if ((producer?.kind === 'ci' || producer?.kind === 'pack-review')
+          && producer.number && producer.sha) {
+          const repo = namedRepository(options.config);
+          const pull = repo && (options.readNamedPull ?? readNativePull)(repo, producer.number);
+          if (!pull || pull.number !== producer.number || !SHA40.test(pull.headSha)
+            || pull.headSha !== (match?.currentHeadSha ?? producer.sha)
+            || (match?.currentHeadSha !== undefined && (pull.state !== 'open' || pull.merged))) {
+            log('named PR Wake withheld for ' + pane.handle
+              + ': re-check PR #' + producer.number + ' and its exact current head');
+            return false;
+          }
+        }
         const screen = readFleetScreen(pane.handle, executor);
-        if (pane.ownParkObservation && ownPaneOutcome(screen).wait !== pane.wait) return false;
-        return lastFleetParkedLine(screen) === pane.wait || ownPaneOutcome(screen).wait === pane.wait;
+        const ownWait = ownPaneOutcome(screen).wait;
+        if (pane.ownParkObservation && ownWait !== pane.wait) return false;
+        // Neither the first Send nor the confirming Enter may be authorized
+        // by a later tool/user quotation that merely ends in the same text.
+        if ((producer?.kind === 'gpt' || producer?.kind === 'gpt-multi'
+          || ((producer?.kind === 'ci' || producer?.kind === 'pack-review') && producer.number))
+          && (!pane.ownParkObservation || ownWait !== pane.wait)) return false;
+        return lastFleetParkedLine(screen) === pane.wait || ownWait === pane.wait;
       } catch { return false; }
     };
-    const producer = parseNamedParkedProducer(pane.wait);
-    let match: ProducerResolution | undefined;
     let uncertainty: string | undefined;
     if (producer?.kind === 'gpt' || producer?.kind === 'gpt-multi') {
       const result = gptTerminalResolution(producer, pane, envelopes, options, terminals, executor);
@@ -1816,8 +1918,12 @@ async function wakeNamedParkedProducers(
       } else {
         uncertainty = 'process provenance unverified';
       }
-    } else if (producer) {
+    } else if (producer && namedPrOwn) {
       match = resolveParkEvent(pane.wait, terminals, options);
+      if (!match && (producer.kind === 'ci' || producer.kind === 'pack-review') && producer.number) {
+        log('named PR Wake pending/unverified for ' + pane.handle
+          + ': re-check exact PR #' + producer.number + ' open/current head and its current-head producer');
+      }
     }
     if (uncertainty) {
       await alarmParkUncertainty(uncertainty, pane, pane.wait, epoch, options, store,
@@ -1843,12 +1949,14 @@ async function wakeNamedParkedProducers(
       const covered = producer.kind === 'gpt-multi' && sharedMarks.length > 0
         && sharedMarks.every((mark) => store.hasParkedWakeEvent(mark));
       if (!store.hasParkedWakeEvent(eventKey) && !covered) {
-        const message = safeUnitWakeText(match.label, match.terminalState, match.evidence)
-          ?? 'Wake: matching producer event landed - re-check it yourself before continuing';
+        const message = match.currentHeadSha && producer.number
+          ? safeMovedHeadWakeText(producer.number, match.currentHeadSha)
+          : safeUnitWakeText(match.label, match.terminalState, match.evidence);
+        const wakeText = message ?? 'Wake: matching producer event landed - re-check it yourself before continuing';
         const shared: SharedWakeMarks | undefined = sharedMarks.length > 0
           ? { reserve: sharedMarks, ...(producer.kind === 'gpt' ? { suppressIfMarked: sharedMarks } : {}) }
           : undefined;
-        if (await sendMarkedUnitMessage(store, eventKey, pane.handle, message,
+        if (await sendMarkedUnitMessage(store, eventKey, pane.handle, wakeText,
           executor, sleepMs, log, counts, stillParkedOwner, match.eventId, shared)) {
           if (epoch) store.writeParkedEpoch?.(pane.handle, { ...epoch, since: now });
           store.clearPaneWait?.(pane.handle);
@@ -2069,8 +2177,7 @@ async function wakePanesOnEvents(
         }
         continue;
       }
-      // A PARKED pane is eligible only through its own X/event-name match above.
-      // This also coalesces a matching CI completion across the two routes.
+      // Current-head STOPPED CI fallback stays separate from named PARKED waits.
       if (pane.state !== 'STOPPED' || bareShellHandles.has(pane.handle) || store.hasParkedWakeEvent(key)) continue;
       wakes.push({
         pane, key, ci: { pull, ...(fallbackIssue !== undefined ? { fallbackIssue } : {}) },
@@ -2314,6 +2421,10 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     const unreadableSelected: FleetTerminal[] = [];
     try {
       observations = runFleetSweep({
+        onMissingPrimaryBinding: (terminal) => {
+          log('primary-root unit withheld handle=' + JSON.stringify(terminal.handle)
+            + ': re-check selected coordinator + worker-list/worker-show/run-show Dispatch/Run binding');
+        },
         onUnreadable: (terminal, _error, primaryBound) => {
           unreadableSelected.push(terminal);
           // A primary-bound pane keeps its legacy silent treatment; only others are reported.
