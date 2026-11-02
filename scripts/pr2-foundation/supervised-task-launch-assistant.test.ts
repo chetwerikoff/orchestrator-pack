@@ -2472,7 +2472,11 @@ describe('supervised Task launch assistant', () => {
               removeOne(globalRules, 'skill', 'browser-skill');
               removeOne(agentRules, 'skill', 'browser-skill');
             }
-            const rules = [...baselineRules, ...globalRules, ...agentRules];
+            // A new explicit Bash ruleset replaces the inherited Bash scope:
+            // the native contextual projection must not resurrect broad Bash
+            // allows removed by the fail-closed overlay.
+            const rules = [...baselineRules.filter((rule) => rule.permission !== 'bash'),
+              ...globalRules, ...agentRules];
             if (drift === 'edit' && !isChild) {
               const edit = [...rules].reverse().find((rule) => rule.permission === 'edit');
               if (edit) edit.action = 'deny';
@@ -3875,8 +3879,10 @@ The words Firefighter universal appear here only as prose.`;
       if (cwd === '/tmp/primary' && args.join(' ') === 'git remote get-url origin') {
         return { ok: true, stdout: 'git@github.com:chetwerikoff/orchestrator-pack.git\n', stderr: '' };
       }
-      if (cwd === '/tmp/primary' && args.join(' ') === 'git worktree prune --expire=now') {
-        return { ok: true, stdout: '', stderr: '' };
+      if (cwd === '/tmp/primary' && args.join(' ') === 'git worktree list --porcelain') {
+        return { ok: true, stdout: [
+          'worktree /tmp/primary', `HEAD ${'2'.repeat(40)}`, 'branch refs/heads/main', '',
+        ].join('\n'), stderr: '' };
       }
       if (cwd !== path) return { ok: false, stdout: '', stderr: 'wrong cwd' };
       const command = args.join(' ');
@@ -3910,7 +3916,8 @@ The words Firefighter universal appear here only as prose.`;
       value: { id: 'repo::manager-2024', setupWitness: 'same_invocation_complete' },
       evidence: { branch: 'manager-2024' },
     });
-    expect(calls[3]).toEqual(['git', 'worktree', 'prune', '--expire=now']);
+    expect(calls[3]).toEqual(['git', 'worktree', 'list', '--porcelain']);
+    expect(calls.filter((argv) => argv[2] === 'prune')).toEqual([]);
     expect(calls[4]).toEqual([
       'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'manager-2024',
       '--base-branch', 'origin/main', '--issue', '2024', '--setup', 'run', '--json',
@@ -4488,7 +4495,7 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
       return { ok: false, stdout: '', stderr: 'unexpected ' + joined };
     });
     expect(outcome).toMatchObject({ status: 'continue', cause: 'manager_worktree_dirty' });
-    expect(commands.filter((argv) => argv.join(' ') === 'git worktree prune --expire=now')).toHaveLength(1);
+    expect(commands.filter((argv) => argv.join(' ') === 'git worktree prune --expire=now')).toHaveLength(0);
     expect(commands.some((argv) => argv[0] === 'git' && ['merge', 'reset', 'rebase', 'stash'].includes(argv[1]!))).toBe(false);
     expect(commands.some((argv) => argv.join(' ') === 'git status --porcelain=v1 --untracked-files=all')).toBe(true);
   });
@@ -4972,9 +4979,9 @@ describe('Issue #2655 r02 fresh PR remote head', () => {
         setupWitness: 'same_invocation_complete',
       }, evidence: { branch: 'fresh-local-2655' },
     });
-    expect(f.calls.filter((c) => c.argv.join(' ') === 'git worktree prune --expire=now')).toEqual([
-      { argv: ['git', 'worktree', 'prune', '--expire=now'], cwd: '/tmp/primary' },
-    ]);
+    expect(f.calls.filter((c) => c.argv.join(' ') === 'git worktree prune --expire=now')).toEqual([]);
+    expect(f.calls.some((c) => c.argv.join(' ') === 'git worktree list --porcelain'
+      && c.cwd === '/tmp/primary')).toBe(true);
     const created = f.calls.find((c) => c.argv.slice(0, 3).join(' ') === 'orca worktree create');
     expect(created?.argv).toContain('origin/' + branch);
     expect(created?.argv).toContain('--issue');
@@ -6417,7 +6424,7 @@ describe('Issue #2754 AC11-AC12 pinned OpenCode task and smoke policy', () => {
     }
   });
 
-  it('places precise denies after inherited wildcard and specific tool allows', () => {
+  it('denies inherited Bash wildcard and specific executable allows while preserving non-Bash tools', () => {
     const inherited = {
       bash: { '*': 'allow', codex: 'allow', 'codex *': 'allow',
         'agent-launch': 'allow', 'agent-launch *': 'allow' },
@@ -6442,7 +6449,7 @@ describe('Issue #2754 AC11-AC12 pinned OpenCode task and smoke policy', () => {
       bash: Record<string, string>; codex: Record<string, string>;
       'agent-launch': Record<string, string>; skill: Record<string, string>;
     };
-    expect(selected.bash['*']).toBe('allow');
+    expect(selected.bash['*']).toBe('deny');
     expect(selected.bash.codex).toBe('deny');
     expect(selected.bash['codex *']).toBe('deny');
     expect(selected.bash['agent-launch']).toBe('deny');
