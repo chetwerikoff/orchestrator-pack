@@ -3253,7 +3253,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       settled: false, reason: 'same_head_resolution_unproven',
       nextAction: expect.any(String),
       ...(_name === 'current body drift'
-        ? { detail: 'same-head corrected Issue body or current PR head changed before settlement' } : {}),
+        ? { detail: 'corrected Issue has unrelated changes beyond the exact disposition scope roots' } : {}),
     }));
     expect(readPackReviewAuthority(prNumber, f.options)).toEqual(before);
     expect(f.statuses.some((request) => request.state === 'success')).toBe(false);
