@@ -19,6 +19,7 @@ import {
   PACK_REVIEW_CAP_MAP_VERSION,
   PACK_REVIEW_LOGICAL_CAPS,
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+  PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
   PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION,
   PACK_REVIEW_DISTINCT_HEAD_CAPS,
   PACK_REVIEW_LEGACY_CAP_MAP_VERSION,
@@ -203,7 +204,7 @@ export function derivePackReviewNoJudgmentBudgetOutcome(
   consumedRoundOrdinals: readonly number[],
 ): 'non_consuming_no_judgment' | null {
   const coverage = derivePackReviewGptCoverage(run.reviewRound);
-  if (run.accountingVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+  if (![PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION].includes(run.accountingVersion ?? '')
     || !Number.isInteger(run.logicalRoundOrdinal)
     || !['failed', 'timed_out', 'cancelled'].includes(run.status)
     || run.automaticBudgetDisposition !== 'consume'
@@ -702,13 +703,14 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
   const accountingVersion = raw.accountingVersion === undefined
     ? PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION
     : requiredJsonString(raw.accountingVersion, 'reviewRound accountingVersion', path);
-  if (![PACK_REVIEW_CAP_MAP_VERSION, PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION, PACK_REVIEW_LEGACY_CAP_MAP_VERSION]
+  if (![PACK_REVIEW_CAP_MAP_VERSION, PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION, PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION, PACK_REVIEW_LEGACY_CAP_MAP_VERSION]
       .includes(accountingVersion)) {
     throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid reviewRound accountingVersion`);
   }
   const roundOrdinal = requiredJsonPositiveInteger(raw.roundOrdinal, 'reviewRound roundOrdinal', path);
   const cardinality = requiredJsonPositiveInteger(raw.cardinality, 'reviewRound cardinality', path);
-  const tierCap = accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+  const tierCap = (accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+    || accountingVersion === PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION)
     ? PACK_REVIEW_LOGICAL_CAPS[tier]
     : PACK_REVIEW_DISTINCT_HEAD_CAPS[tier];
   if (roundOrdinal > tierCap) {
@@ -834,7 +836,13 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
       'reviewRound settledSourceCount',
       path,
     );
-    if (cardinality < 3 || settledSourceCount < 2 || settledSourceCount > cardinality) {
+    const fullCensus = settledSourceCount === cardinality;
+    const allowedDegraded = cardinality === 3 && settledSourceCount === 2
+      && (accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+        || (accountingVersion === PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION && tier === 'T3')
+        || (accountingVersion !== PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION
+          && accountingVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION));
+    if (!fullCensus && !allowedDegraded) {
       throw new Error(
         `corrupt pack review run record${path ? ` at ${path}` : ''}: invalid reviewRound settledSourceCount`,
       );
@@ -1451,7 +1459,7 @@ function parseRecord(
     ? undefined
     : requiredJsonString(raw.accountingVersion, 'accountingVersion', path);
   if (accountingVersion !== undefined
-      && ![PACK_REVIEW_CAP_MAP_VERSION, PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION, PACK_REVIEW_LEGACY_CAP_MAP_VERSION]
+      && ![PACK_REVIEW_CAP_MAP_VERSION, PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION, PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION, PACK_REVIEW_LEGACY_CAP_MAP_VERSION]
         .includes(accountingVersion)) {
     throw new Error(`corrupt pack review run record at ${path}: invalid accountingVersion`);
   }
@@ -1520,6 +1528,17 @@ function parseRecord(
   if (reviewRound && boundIssueSnapshotDigest !== undefined
       && boundIssueSnapshotDigest !== reviewRound.boundIssueSnapshotDigest) {
     throw new Error(`corrupt pack review run record at ${path}: GPT/native bound Issue digest differs`);
+  }
+  const logicalSourceVersions = [PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION];
+  if (reviewRound && (logicalSourceVersions.includes(accountingVersion ?? '')
+      || logicalSourceVersions.includes(reviewRound.accountingVersion ?? ''))) {
+    if (accountingVersion !== reviewRound.accountingVersion
+        || reviewCycleId === undefined
+        || logicalRoundOrdinal !== reviewRound.roundOrdinal
+        || logicalRoundCap !== PACK_REVIEW_LOGICAL_CAPS[reviewRound.tier]
+        || resolvedReviewer !== 'gpt') {
+      throw new Error(`corrupt pack review run record at ${path}: GPT logical source version/round identity mismatch`);
+    }
   }
   const reviewVerdict = raw.reviewVerdict === 'clean' || raw.reviewVerdict === 'findings'
     ? raw.reviewVerdict
