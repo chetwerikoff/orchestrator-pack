@@ -357,6 +357,28 @@ or retention is ambiguous, stop for operator inspection; do not delete a
 registered worktree directory or a bespoke registry entry.
 
 A bound external-pane stop is **not** `orca terminal stop --worktree`.
+The existing scoped entrypoint exposes a read-only, fresh-instance
+`stop-external` admission command. Supply the identities from the live
+Issue-bound assignment and the exact native Run/Task/Dispatch/worktree/terminal
+read-backs, not a title, stale handle or guessed path:
+
+```bash
+node --experimental-strip-types scripts/pr2-foundation/supervised-worker-start.ts stop-external \
+  --project "$PROJECT_ID" --issue-number "$ISSUE_NUMBER" --role "$ROLE" \
+  --run-id "$RUN_ID" --task-id "$TASK_ID" --dispatch-id "$DISPATCH_ID" \
+  --assignment-id "$ASSIGNMENT_ID" --assignment-generation "$ASSIGNMENT_GENERATION" \
+  --worktree-id "$WORKTREE_ID" --worktree-path "$WORKTREE_PATH" \
+  --terminal-handle "$TERMINAL_HANDLE" --terminal-generation "$TERMINAL_GENERATION"
+```
+
+This command verifies the stored assignment, selected Run/Task membership,
+exact Dispatch and terminal-resource owner, worktree identity and current
+adapter-produced terminal incarnation. **It does not close or abandon**:
+until installed Orca supplies verified generation-safe exact-target close,
+same-Dispatch abandon and both read-backs, its only lawful results are typed
+`unsupported` or `stop_unknown`, with coordinator/operator repair.
+Neither result permits restoration or proves `stopped`. There is no
+handle-only stop fallback, synthetic native capability or worktree-wide kill.
 Before any action revalidate Issue, Run, Task, current assignment, exact
 Dispatch ID, terminal handle **and incarnation**, and worktree. Where the
 installed native producer can safely close that exact generation **and**
