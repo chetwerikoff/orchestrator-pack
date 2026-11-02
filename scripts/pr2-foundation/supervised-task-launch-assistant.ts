@@ -5,7 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { performance } from 'node:perf_hooks';
-import { isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
 import { SUPPORTED_NODE_MAJOR } from '../toolchain/node-runtime-contract.mjs';
 import { evaluateCommandRuntimePreflight } from '../lib/command-runtime-bootstrap.mjs';
@@ -49,6 +49,7 @@ import { installManagerPushGuard, restoreManagerPushGuardForClaude } from './man
 import { runSupervisedWorkerStart, readTerminalGoneDispatch, type SupervisedWorkerStartResult, type WorkerStartMode } from './supervised-worker-start.ts';
 import type { TerminalGoneAssignmentEvidence } from '../lib/worker-assignment-runtime.ts';
 import { collectProcessEvidence } from '../worktree-lifecycle/operations.ts';
+import { parseGitWorktreePorcelain } from '../worktree-lifecycle/core.ts';
 
 export const LAUNCH_ASSISTANT_SCHEMA = 'supervised-task-launch-assistant/v1' as const;
 export const LAUNCH_STARTUP_OBSERVATION_WINDOW_MS = 30_000;
@@ -1100,18 +1101,10 @@ export async function runSupervisedTaskLaunchAssistant(
   const prepared = await checkpoint('worktree_prepare', timings, deps.now, async (): Promise<EdgeResult<PreparedWorktree>> => {
     const placed = await prepareStep();
     if (placed.status !== 'ok' || input.workClass !== 'manager') return placed;
-    if (profile.family === 'claude') {
-      // A fresh Claude manager has no B5 binding. Reuse must restore the exact
-      // previously recorded original hooks before this local route can start.
-      if (placed.value.setupWitness !== 'proven_reuse') return placed;
-      if (!placed.value.path || !deps.restoreClaudeManagerGuard) return {
-        status: 'continue', cause: 'manager_local_hooks_unobserved', actor: 'operator', evidence: {},
-        nextAction: { kind: 'reconcile_worktree_setup',
-          note: 'inspect this worktree core.hooksPath and B5 originalHooksPath; restore inherited hooks before retrying Claude manager launch' },
-      };
-      const restored = await deps.restoreClaudeManagerGuard(placed.value.path);
-      return restored.status === 'ok' ? placed : restored;
-    }
+    // A prior non-Claude manager's guard must remain in force until every
+    // final Dispatch/assignment/quiescence admission succeeds. Retire it only
+    // immediately before a newly admitted Claude-family start.
+    if (profile.family === 'claude') return placed;
     if (!deps.installManagerPushGuard) return {
       status: 'continue', cause: 'manager_push_guard_unobserved', actor: 'operator', evidence: {},
       nextAction: { kind: 'reconcile_worktree_setup',
@@ -1228,6 +1221,18 @@ export async function runSupervisedTaskLaunchAssistant(
         ...(early.value.kind === 'present' && early.value.status ? { status: early.value.status } : {}) },
       finalCurrent, 'the predecessor proof changed before start; reconcile it, do not call worker-start on this Task',
     ), resources, startedAtMs, timings, deps.now);
+  }
+
+  if (input.workClass === 'manager' && profile.family === 'claude'
+    && prepared.value.setupWitness === 'proven_reuse') {
+    if (!prepared.value.path || !deps.restoreClaudeManagerGuard) return continued(input, 'dispatch_admission_final', {
+      cause: 'manager_local_hooks_unobserved', actor: 'operator', evidence: {},
+      nextAction: { kind: 'reconcile_worktree_setup',
+        note: 'inspect this worktree core.hooksPath and B5 originalHooksPath; restore inherited hooks only after final admission, then retry' },
+    }, resources, startedAtMs, timings, deps.now);
+    const restored = await deps.restoreClaudeManagerGuard(prepared.value.path);
+    if (restored.status !== 'ok') return continued(input, 'dispatch_admission_final', restored,
+      resources, startedAtMs, timings, deps.now);
   }
 
   let terminal: RuntimeWorker | undefined;
@@ -2448,13 +2453,51 @@ export async function prepareWorktreeWithOrca(
   }
   const repositoryId = matches[0]!.id;
   const repositoryRoot = matches[0]!.path;
-  // Git owns registration retirement: its native non-expiring prune preserves
-  // live, locked and dirty linked worktrees and only removes stale metadata.
-  // Never run this from another repository or remove registration directories ourselves.
-  const pruned = await execute(['git', 'worktree', 'prune', '--expire=now'], undefined, undefined, repositoryRoot);
-  if (!pruned.ok) return worktreeContinue('worktree_registry_prune_failed',
-    { selectedRepository: repository, registeredRoot: repositoryRoot },
-    'inspect git worktree list --porcelain in this selected repository, repair the stale registration with native git worktree prune, then retry; preserve live and locked worktrees');
+  // Native prune is repository-wide, not target-specific. On normal fresh
+  // starts it must not silently delete another temporarily unavailable
+  // worktree's Git-admin record (including its local guard configuration).
+  const registry = await execute(['git', 'worktree', 'list', '--porcelain'], undefined, undefined, repositoryRoot);
+  const registryRepair = 'inspect git worktree list --porcelain and the exact missing checkout/mount; lock retained worktrees and run a reviewed native git worktree prune only for disposable entries, then retry without cleaning dirty bytes';
+  if (!registry.ok) return worktreeContinue('worktree_registry_inspect_failed',
+    { selectedRepository: repository, registeredRoot: repositoryRoot }, registryRepair);
+  let registrations: ReturnType<typeof parseGitWorktreePorcelain>;
+  try { registrations = parseGitWorktreePorcelain(registry.stdout); }
+  catch { return worktreeContinue('worktree_registry_inspect_malformed',
+    { selectedRepository: repository, registeredRoot: repositoryRoot }, registryRepair); }
+  if (!registrations.some((entry) => resolve(entry.path) === resolve(repositoryRoot) && !entry.prunable)) {
+    return worktreeContinue('worktree_registry_root_unproven',
+      { selectedRepository: repository, registeredRoot: repositoryRoot }, registryRepair);
+  }
+  const stale = registrations.filter((entry) => entry.prunable);
+  if (stale.length > 0) {
+    const candidate = stale.length === 1 ? stale[0] : null;
+    // A same-name, Git-marked prunable registration is only a candidate.
+    // Require an available parent directory plus Git's exact dry-run set.
+    // A missing mount, multiple candidates, or a non-matching admin name
+    // cannot authorize a bulk --expire=now prune.
+    const matching = candidate && request.worktreeName
+      && basename(candidate.path) === request.worktreeName
+      && resolve(candidate.path) !== resolve(repositoryRoot)
+      && existsSync(dirname(candidate.path)) && !existsSync(candidate.path);
+    if (!matching) return worktreeContinue('worktree_registry_prune_ambiguous',
+      { selectedRepository: repository, prunableCount: stale.length }, registryRepair);
+    const preview = await execute(['git', 'worktree', 'prune', '--dry-run', '--verbose', '--expire=now'],
+      undefined, undefined, repositoryRoot);
+    const lines = [preview.stdout, preview.stderr].join('\n').split(/\r?\n/u)
+      .map((line) => line.trim()).filter(Boolean);
+    // Git prints the admin registration name, not the missing path. If its
+    // exact planned effect cannot be tied to the operator-selected name,
+    // leave every registration untouched for native manual inspection.
+    if (!preview.ok || lines.length !== 1
+      || !lines[0]!.startsWith(`Removing worktrees/${request.worktreeName}:`)) {
+      return worktreeContinue('worktree_registry_prune_ambiguous',
+        { selectedRepository: repository, prunableCount: stale.length }, registryRepair);
+    }
+    const pruned = await execute(['git', 'worktree', 'prune', '--expire=now'],
+      undefined, undefined, repositoryRoot);
+    if (!pruned.ok) return worktreeContinue('worktree_registry_prune_failed',
+      { selectedRepository: repository, registeredRoot: repositoryRoot }, registryRepair);
+  }
   // The ordinary fresh path still uses origin/<default>. The exceptional PR
   // path must positively identify the only Issue-closing PR and fetched SHA
   // before invoking the native worktree-create mutation.
