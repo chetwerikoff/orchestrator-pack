@@ -1969,6 +1969,8 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     let firstBindEntered = false;
     const trace: Array<{ slotId: string; invocationId: string; at: number }> = [];
     const fixtureAttempts: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
+    // Measure against the batch invocation, not vi.waitFor's fake-timer ticks.
+    const started = Date.now();
     const pending = startPackReview(pluralStart(storeRoot, path.join(storeRoot, 'github-review.json'), {
       fixtureGptAdmissionReadObservation: () => { throw new Error('must not read an admission predecessor'); },
       fixtureReviewBySourceSlot: fixtureAttempts,
@@ -1984,7 +1986,6 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       },
     }));
     await vi.waitFor(() => expect(firstBindEntered).toBe(true));
-    const started = Date.now();
     expect(trace).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(29_000);
     expect(trace).toHaveLength(0);
