@@ -115,6 +115,35 @@ describe('target context', () => {
     expect(Object.isFrozen(context.browserGpt)).toBe(true);
   });
 
+  it('validates and freezes the optional project-owned evidence boundary without changing pack defaults', () => {
+    const target = fixture({ projectId: 'synthetic-b13', repository: 'example/synthetic-b13' });
+    expect(resolveTargetContext({ projectId: 'synthetic-b13', env: target.env }).contractEvidenceProducer)
+      .toBeUndefined();
+
+    writeFileSync(target.cardPath, JSON.stringify({
+      ...target.card,
+      contractEvidenceProducer: {
+        name: 'target-status',
+        boundaryCommand: 'node tests/fixtures/contract-evidence-reverify/producers/emit-reverify-status.mjs',
+      },
+    }), 'utf8');
+    const declared = resolveTargetContext({ projectId: 'synthetic-b13', env: target.env });
+    expect(declared.contractEvidenceProducer).toEqual({
+      name: 'target-status',
+      boundaryCommand: 'node tests/fixtures/contract-evidence-reverify/producers/emit-reverify-status.mjs',
+    });
+    expect(Object.isFrozen(declared.contractEvidenceProducer)).toBe(true);
+
+    for (const bad of [[], { name: '', boundaryCommand: 'node tests/x.mjs' },
+      { name: 'target-status', boundaryCommand: 'node tests/x.mjs\\nrm file' }]) {
+      writeFileSync(target.cardPath, JSON.stringify({ ...target.card, contractEvidenceProducer: bad }), 'utf8');
+      expect(codeOf(() => resolveTargetContext({ projectId: 'synthetic-b13', env: target.env })))
+        .toBe('card-invalid');
+    }
+    expect(codeOf(() => resolveTargetContext({ projectId: 'other-project', env: target.env })))
+      .toBe('card-missing');
+  });
+
   it('normalizes requiredCi workflow/job selectors, rejects ambiguous grammar and normalized duplicates, and exposes check read-back', async () => {
     const valid = fixture();
     writeFileSync(valid.cardPath, JSON.stringify({
