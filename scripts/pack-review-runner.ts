@@ -10758,6 +10758,16 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         const verified = supplemental
           ? Boolean(receipt && supplementalHeadVerified && !reconcileError)
           : confirmation?.verified === true;
+        // A fully credentialed original verdict can complete its review work
+        // even when the required status is still unobserved. Report that
+        // publication separately, never claiming an exact-head green. Missing
+        // or altered GitHub evidence cannot borrow this accepted-run result.
+        const acceptedUnpublished = !verified && !supplemental && verdictExists
+          && recovered.reviewVerdict === 'clean'
+          && recovered.deliveryOutcomes.githubComment?.state === 'succeeded'
+          && await verifyOrdinaryRequiredSuccessBinding(recovered, input, {
+            repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot, storeRoot,
+          });
         const unresolvedReason = String(reconciliationResult?.reason ?? '');
         const stillPendingOriginal = !verdictExists && !reconcileError
           && pendingSource
@@ -10779,8 +10789,8 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         const runs = listPackReviewRuns({ projectId, storeRoot });
         if (claimLease) await claimLease.release('run_started', runs);
         return {
-          ok: verified, created: true, reused: false,
-          reason,
+          ok: verified || acceptedUnpublished, created: true, reused: false,
+          reason: acceptedUnpublished ? 'completed' : reason,
           ...(supplemental
             ? (verified && receipt ? receipt : {
                 nextAction: 'observe the exact-head original GPT journal and reviewer COMMENT; use same-run recovery without another Send or required-status projection',
@@ -10791,6 +10801,8 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
                   publicationHeadSha: target.headSha,
                   requiredStatusState: confirmation!.requiredStatusState,
                 } : {
+                  ...(acceptedUnpublished && confirmation
+                    ? { publicationReason: confirmation.reason } : {}),
                   nextAction: stillPendingOriginal
                     ? 'recover original ' + stillPendingOriginal.slotId + ' invocation '
                       + stillPendingOriginal.invocationId
@@ -11149,13 +11161,17 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         });
         return { id: posted.id, url: posted.url, event: 'COMMENT' };
       },
-      writeRequiredStatus: currentCycleRequiredStatusWriter(
-        deliveryRun, storeRoot,
-        input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
-          repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
-          headSha: target.headSha, request,
-        })),
-        input.fixtureIssueBody,
+      writeRequiredStatus: guardedOrdinaryGptStatusWriter(
+        deliveryRun, input,
+        { projectId, storeRoot, repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot },
+        currentCycleRequiredStatusWriter(
+          deliveryRun, storeRoot,
+          input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
+            repoRoot: target.sourceRepoRoot, repoSlug: target.repoSlug,
+            headSha: target.headSha, request,
+          })),
+          input.fixtureIssueBody,
+        ),
       ),
       notifyWorker: async (request) => {
         const deliver = input.fixtureWorkerNotifier ?? ((value) => sendPackReviewWorkerNotification({
