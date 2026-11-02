@@ -56,6 +56,11 @@ export interface TargetVerification {
   readonly focused?: string;
 }
 
+export interface ContractEvidenceProducer {
+  readonly name: string;
+  readonly boundaryCommand: string;
+}
+
 export interface TargetContext {
   readonly projectId: string;
   readonly repository: string;
@@ -66,6 +71,7 @@ export interface TargetContext {
   readonly orchestratorTitlePattern: string;
   readonly browserGpt: Readonly<{ projectUrl: string }>;
   readonly verification?: TargetVerification;
+  readonly contractEvidenceProducer?: ContractEvidenceProducer;
   readonly packRoot: string;
   readonly cardPath: string;
 }
@@ -225,6 +231,24 @@ function parseVerification(value: unknown, cardPath: string): TargetVerification
   });
 }
 
+function parseContractEvidenceProducer(value: unknown, cardPath: string): ContractEvidenceProducer | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TargetContextError('card-invalid', `contractEvidenceProducer must be an object in ${cardPath}`, cardPath);
+  }
+  const record = value as Record<string, unknown>;
+  const name = text(record.name).toLowerCase();
+  const boundaryCommand = text(record.boundaryCommand);
+  if (!/^[a-z0-9][a-z0-9._-]*$/u.test(name) || !boundaryCommand || /[\r\n]/u.test(boundaryCommand)) {
+    throw new TargetContextError(
+      'card-invalid',
+      `contractEvidenceProducer requires a valid name and a single-line boundaryCommand in ${cardPath}`,
+      cardPath,
+    );
+  }
+  return Object.freeze({ name, boundaryCommand });
+}
+
 export function resolveTargetContext(input: ResolveTargetContextInput = {}): TargetContext {
   const env = input.env ?? process.env;
   const projectId = selectedProjectId({ ...input, env });
@@ -303,6 +327,7 @@ export function resolveTargetContext(input: ResolveTargetContextInput = {}): Tar
 
   const requiredCi = parseRequiredCi(card.requiredCi, cardPath);
   const verification = parseVerification(card.verification, cardPath);
+  const contractEvidenceProducer = parseContractEvidenceProducer(card.contractEvidenceProducer, cardPath);
   return Object.freeze({
     projectId,
     repository,
@@ -313,6 +338,7 @@ export function resolveTargetContext(input: ResolveTargetContextInput = {}): Tar
     orchestratorTitlePattern,
     browserGpt: Object.freeze({ projectUrl }),
     ...(verification ? { verification } : {}),
+    ...(contractEvidenceProducer ? { contractEvidenceProducer } : {}),
     packRoot: PACK_ROOT,
     cardPath,
   });

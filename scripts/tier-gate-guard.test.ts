@@ -1,10 +1,17 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
 import { fileURLToPath } from 'node:url';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { checkTierGateGuard, checkWorkerSafetyFloor, formatTierGatePassMessage, parseComplexityTierFence } from './lib/tier-gate-core.ts';
 import { canonicalizeEntry } from './pr-scope-declaration.ts';
 import { runProcessSync } from './kernel/subprocess.ts';
+import { checkContractEvidence } from './contract-evidence-validator.mjs';
+import { runContractEvidenceReverify } from './lib/contract-evidence-reverify.ts';
+import { isPrHeadNetworkSandboxAvailable } from './lib/reverify-sandbox.ts';
+import { captureBoundIssueSnapshot } from './lib/reverify-bound-issue-snapshot.ts';
 
 const valid = `## Prerequisite
 None.
@@ -100,6 +107,208 @@ describe('current substantive Issue floor', () => {
     expect(corrected.error).toBeUndefined();
     expect(corrected.exitCode).toBe(0);
     expect(corrected.stdout).toContain('tier-gate guard: PASS T2');
+  });
+
+  it('does not confuse narrative run_check() with a run ID, but rejects executable/structured runtime IDs', () => {
+    const prose = valid
+      .replace('## Goal\nShip it.', '## Goal\nThe named function run_check() documents the API.')
+      .replace(
+        '  - action: run | expected: pass',
+        '  - action: Describe the function run_check() | expected: run_check() is documented',
+      );
+    const baseRun = runProcessSync({
+      command: process.execPath,
+      args: ['--experimental-strip-types', fileURLToPath(new URL('./tier-gate-guard.ts', import.meta.url)), '--text', prose],
+      inheritParentEnv: true,
+    });
+    const noNameRun = runProcessSync({
+      command: process.execPath,
+      args: ['--experimental-strip-types', fileURLToPath(new URL('./tier-gate-guard.ts', import.meta.url)), '--text',
+        prose.replaceAll('run_check()', 'the named function')],
+      inheritParentEnv: true,
+    });
+    expect(baseRun.exitCode).toBe(0);
+    expect(noNameRun.exitCode).toBe(0);
+    expect(baseRun.stdout).toContain('tier-gate guard: PASS T2');
+    expect(checkTierGateGuard(prose).ok).toBe(true);
+
+    for (const line of [
+      '  - action: resume run_123abcd | expected: complete',
+      '  - action: run run_123abcd | expected: complete',
+      '  - action: node scripts/report-run.mjs run_123abcd | expected: complete',
+      '  - action: node scripts/check.mjs --session=run_abc12345 | expected: complete',
+      '  - action: inspect output | expected: run_abc12345',
+      '  - action: inspect result | expected: runtime-id: term_88da12',
+      '  - action: inspect --msg-id=msg_f312ba | expected: complete',
+    ]) {
+      const withId = valid.replace('  - action: run | expected: pass', line);
+      const result = runProcessSync({
+        command: process.execPath,
+        args: ['--experimental-strip-types', fileURLToPath(new URL('./tier-gate-guard.ts', import.meta.url)), '--text', withId],
+        inheritParentEnv: true,
+      });
+      expect(result.exitCode, line).toBe(1);
+      expect(result.stderr).toContain('replace with stable non-session-bound inputs and rerun the guard');
+    }
+    expect(checkTierGateGuard(valid.replace('  - action: run | expected: pass',
+      '  - action: resume run_123abcd | expected: complete')).ok).toBe(false);
+  });
+
+  it('binds target NEW evidence and independent proof to a synthetic selected card without admitting other commands', () => {
+    const temp = mkdtempSync(join(tmpdir(), 'opk2751-'));
+    const packRoot = fileURLToPath(new URL('../', import.meta.url));
+    const projectId = 'synthetic-2751';
+    const repository = 'example/synthetic-2751';
+    const targetRoot = join(temp, 'target');
+    const env = { ...process.env, OPK_PROJECT_ID: projectId, XDG_CONFIG_HOME: join(temp, 'config'), HOME: temp };
+    const cardPath = join(env.XDG_CONFIG_HOME, 'orchestrator-pack', 'projects', projectId + '.json');
+    const producerDir = 'tests/fixtures/contract-evidence-reverify/producers';
+    const proofCommand = 'node ' + producerDir + '/genuine-new-proof.mjs';
+    const boundaryCommand = 'node scripts/verify-boundary.mjs';
+    const runGit = (...args: string[]) => {
+      const output = runProcessSync({ command: 'git', args, cwd: targetRoot, inheritParentEnv: true });
+      if (!output.ok) throw new Error('synthetic git setup failed: ' + String(output.stderr || output.error));
+    };
+    try {
+      mkdirSync(targetRoot, { recursive: true });
+      mkdirSync(join(targetRoot, producerDir), { recursive: true });
+      mkdirSync(join(targetRoot, 'scripts'), { recursive: true });
+      for (const filename of ['genuine-new-proof.mjs', 'emit-reverify-status.mjs', 'echo-expected.mjs', 'structured-value.mjs']) {
+        copyFileSync(join(packRoot, producerDir, filename), join(targetRoot, producerDir, filename));
+      }
+      copyFileSync(join(packRoot, producerDir, 'emit-reverify-status.mjs'), join(targetRoot, 'scripts', 'verify-boundary.mjs'));
+      const manifestPath = 'tests/external-output-references/capture-manifest.json';
+      mkdirSync(dirname(join(targetRoot, manifestPath)), { recursive: true });
+      writeFileSync(join(targetRoot, manifestPath), JSON.stringify({
+        version: 1, corpusRoot: 'tests/external-output-references', entries: {},
+      }));
+      runGit('init');
+      runGit('remote', 'add', 'origin', 'https://github.com/' + repository + '.git');
+      runGit('add', '.');
+      runGit('-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.test', 'commit', '-m', 'synthetic');
+      mkdirSync(dirname(cardPath), { recursive: true });
+      const card = {
+        projectId, repository, primaryRoot: targetRoot, defaultBranch: 'main',
+        orcaWorkspacePattern: 'synthetic/workspaces/',
+        orchestratorTitlePattern: 'synthetic orchestrator',
+        browserGpt: { projectUrl: 'https://chatgpt.com/g/synthetic-2751/project' },
+        contractEvidenceProducer: { name: 'target-status', boundaryCommand },
+      };
+      const putCard = (value: object) => writeFileSync(cardPath, JSON.stringify(value));
+      putCard(card);
+      const tick = String.fromCharCode(96).repeat(3);
+      const makeIssue = (producer: string, producerCommand = boundaryCommand, proof = proofCommand) => valid
+        .replace('1. Works.', ['1. Works.', '', tick + 'producer-emission',
+          'producer: ' + producer,
+          'datum: reverify-status',
+          'expected: verified',
+          'proof-command: ' + proof,
+          'producer-command: ' + producerCommand, tick].join('\n'))
+        .replace(tick + 'contract-evidence\nnone\n' + tick, [
+          tick + 'contract-evidence',
+          'binding: target-reported verification status',
+          'binding-id: ' + producer + ':reverify-status:verified',
+          'producer: ' + producer,
+          'evidence: NEW(produced-by AC#1)',
+          tick,
+        ].join('\n'));
+
+      const targetIssue = makeIssue('target-status');
+      const floorOptions = { repoRoot: packRoot, projectId, env };
+      expect(checkTierGateGuard(targetIssue, floorOptions)).toMatchObject({ ok: true, errors: [] });
+      // Validate through the actual tier-gate evidence consumer, not the governed legacy entrypoint.
+      expect(checkContractEvidence(targetIssue, floorOptions)).toMatchObject({ ok: true, errors: [], skipped: false });
+
+      const cli = runProcessSync({
+        command: process.execPath,
+        args: ['--experimental-strip-types', join(packRoot, 'scripts', 'tier-gate-guard.ts'),
+          '--project', projectId, '--repo-root', packRoot, '--text', targetIssue],
+        env, inheritParentEnv: true,
+      });
+      expect(cli.exitCode, cli.stderr).toBe(0);
+      expect(cli.stdout).toContain('tier-gate guard: PASS T2');
+
+      const reverify = (body: string, extra: { forceProducerUnreachable?: boolean } = {}) =>
+        runContractEvidenceReverify({
+          repoRoot: packRoot, trustedBaseRoot: targetRoot, reviewTargetRoot: targetRoot,
+          manifestPath, boundSnapshotBody: body, explicitIssueNumber: 2751,
+          projectId, env, ...extra,
+        });
+      const verified = reverify(targetIssue);
+      expect(verified).toMatchObject({ candidateOnly: true, neverBlocks: true, runOutcome: 'rows-evaluated' });
+      if (isPrHeadNetworkSandboxAvailable()) {
+        expect(verified.rows[0]).toMatchObject({ status: 'verified', verificationMode: 'live', producerVerified: true });
+      } else {
+        expect(verified.rows[0]).toMatchObject({ status: 'unverified', reason: 'producer-unreachable' });
+      }
+
+      // Exercise the production CLI selector independently of OPK_PROJECT_ID; a library-only call misses this handoff.
+      const snapshotStore = join(temp, 'bound-snapshots');
+      const prHeadSha = 'a'.repeat(40);
+      const captured = captureBoundIssueSnapshot({
+        projectId, prNumber: 2769, prHeadSha, issueNumber: 2751,
+        issueBody: targetIssue, storeDirOverride: snapshotStore,
+      });
+      const changedPathsFile = join(temp, 'changed-paths.txt');
+      writeFileSync(changedPathsFile, '', 'utf8');
+      const cliEnv: NodeJS.ProcessEnv = { ...env, OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR: snapshotStore };
+      delete cliEnv.OPK_PROJECT_ID;
+      const cliReverify = runProcessSync({
+        command: process.execPath,
+        args: ['--experimental-strip-types', join(packRoot, 'scripts', 'invoke-contract-evidence-reverify.ts'),
+          '--repo-root', packRoot, '--trusted-base-root', targetRoot, '--review-target-root', targetRoot,
+          '--manifest-path', manifestPath, '--snapshot-file', captured.snapshotPath,
+          '--bound-snapshot-pr-number', '2769', '--bound-snapshot-issue-number', '2751',
+          '--project-id', projectId, '--explicit-issue', '2751', '--pr-head-sha', prHeadSha,
+          '--changed-paths-file', changedPathsFile],
+        env: cliEnv, inheritParentEnv: false,
+      });
+      expect(cliReverify.exitCode, cliReverify.stderr).toBe(0);
+      const cliResult = JSON.parse(cliReverify.stdout);
+      expect(cliResult).toMatchObject({ candidateOnly: true, neverBlocks: true, runOutcome: 'rows-evaluated' });
+      expect(cliResult.rows).toHaveLength(1);
+      expect(cliResult.rows[0].reason).not.toBe('unsupported-producer');
+      if (isPrHeadNetworkSandboxAvailable()) {
+        expect(cliResult.rows[0]).toMatchObject({ status: 'verified', verificationMode: 'live', producerVerified: true });
+      } else {
+        expect(cliResult.rows[0]).toMatchObject({ status: 'unverified', reason: 'producer-unreachable' });
+      }
+      putCard({ ...card, contractEvidenceProducer: undefined });
+      expect(checkTierGateGuard(targetIssue, floorOptions).errors.join('\n')).toContain('not declared by the selected project card');
+      expect(checkContractEvidence(targetIssue, floorOptions).errors.join('\n'))
+        .toContain('not declared by the selected project card');
+      expect(reverify(targetIssue).rows[0]).toMatchObject({ status: 'unverified', reason: 'unsupported-producer' });
+      putCard(card);
+
+      const badBinding = targetIssue.replace('binding-id: target-status:', 'binding-id: other-producer:');
+      expect(checkTierGateGuard(badBinding, floorOptions).errors.join('\n')).toContain('does not match binding-id');
+      expect(checkContractEvidence(badBinding, floorOptions).errors.join('\n')).toContain('does not match binding-id producer');
+      expect(reverify(badBinding).rows[0]).toMatchObject({ status: 'unverified', reason: 'unsupported-producer' });
+
+      const wrongIndependent = makeIssue('target-status', 'node ' + producerDir + '/structured-value.mjs');
+      expect(checkTierGateGuard(wrongIndependent, floorOptions).ok).toBe(false);
+      expect(checkContractEvidence(wrongIndependent, floorOptions).errors.join('\n'))
+        .toContain('target producer proof must use a safe executable proof-command');
+      expect(reverify(wrongIndependent, { forceProducerUnreachable: true }).rows[0])
+        .toMatchObject({ status: 'unverified', reason: 'non-genuine-proof' });
+
+      const unsafe = makeIssue('target-status', boundaryCommand, 'sh -c unsafe');
+      expect(checkTierGateGuard(unsafe, floorOptions).ok).toBe(false);
+      expect(checkContractEvidence(unsafe, floorOptions).errors.join('\n'))
+        .toContain('target producer proof must use a safe executable proof-command');
+      expect(reverify(unsafe).rows[0]).toMatchObject({ status: 'unverified', reason: 'unsafe-or-undeclared-command' });
+
+      const echoOnly = makeIssue('target-status', boundaryCommand, 'node ' + producerDir + '/echo-expected.mjs');
+      expect(reverify(echoOnly, { forceProducerUnreachable: true }).rows[0])
+        .toMatchObject({ status: 'unverified', reason: 'non-genuine-proof' });
+
+      const packIssue = makeIssue('orchestrator-pack');
+      expect(checkTierGateGuard(packIssue, floorOptions).ok).toBe(true);
+      expect(checkContractEvidence(packIssue, floorOptions)).toMatchObject({ ok: true, errors: [], skipped: false });
+      expect(checkTierGateGuard(valid, floorOptions).ok).toBe(true);
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
   });
 
   it('accepts below-the-ladder work without tier review while retaining substantive floors', () => {

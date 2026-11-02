@@ -9,6 +9,7 @@ import { resolvePackWorkerReportRequest, type ReportDeps } from '../pack-worker-
 import { resolveWakeSupervisorStateRoot } from '../pr2-foundation/wake-supervisor-state-root.ts';
 import { publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath } from './worker-assignment-store.ts';
 import { ensureProjectStateBinding } from './project-state-binding.ts';
+import { isCommandSafe } from './reverify-command-resolution.ts';
 import { readWorkerSmokeReceipt } from './worker-smoke-receipt.ts';
 import {
   TargetContextError,
@@ -115,6 +116,62 @@ describe('target context', () => {
     expect(Object.isFrozen(context.browserGpt)).toBe(true);
   });
 
+  it('validates and freezes the optional project-owned evidence boundary without changing pack defaults', () => {
+    const target = fixture({ projectId: 'synthetic-b13', repository: 'example/synthetic-b13' });
+    expect(resolveTargetContext({ projectId: 'synthetic-b13', env: target.env }).contractEvidenceProducer)
+      .toBeUndefined();
+
+    writeFileSync(target.cardPath, JSON.stringify({
+      ...target.card,
+      contractEvidenceProducer: {
+        name: 'target-status',
+        boundaryCommand: 'node tests/fixtures/contract-evidence-reverify/producers/emit-reverify-status.mjs',
+      },
+    }), 'utf8');
+    const declared = resolveTargetContext({ projectId: 'synthetic-b13', env: target.env });
+    expect(declared.contractEvidenceProducer).toEqual({
+      name: 'target-status',
+      boundaryCommand: 'node tests/fixtures/contract-evidence-reverify/producers/emit-reverify-status.mjs',
+    });
+    expect(Object.isFrozen(declared.contractEvidenceProducer)).toBe(true);
+
+    for (const bad of [[], { name: '', boundaryCommand: 'node tests/x.mjs' },
+      { name: 'target-status', boundaryCommand: ['node tests/x.mjs', 'rm file'].join(String.fromCharCode(10)) }]) {
+      writeFileSync(target.cardPath, JSON.stringify({ ...target.card, contractEvidenceProducer: bad }), 'utf8');
+      expect(codeOf(() => resolveTargetContext({ projectId: 'synthetic-b13', env: target.env })))
+        .toBe('card-invalid');
+    }
+    expect(codeOf(() => resolveTargetContext({ projectId: 'other-project', env: target.env })))
+      .toBe('card-missing');
+  });
+
+  it('admits only the exact validated selected-card boundary under the target primary root', () => {
+    const target = fixture({ projectId: 'synthetic-boundary', repository: 'example/synthetic-boundary' });
+    const command = 'node scripts/verify-boundary.mjs';
+    mkdirSync(join(target.primaryRoot, 'scripts'), { recursive: true });
+    writeFileSync(join(target.primaryRoot, 'scripts', 'verify-boundary.mjs'), 'console.log("verified")\n');
+    writeFileSync(join(target.primaryRoot, 'scripts', 'unlisted.mjs'), 'console.log("unlisted")\n');
+    writeFileSync(target.cardPath, JSON.stringify({
+      ...target.card,
+      contractEvidenceProducer: { name: 'target-status', boundaryCommand: command },
+    }), 'utf8');
+    const selected = resolveTargetContext({ projectId: 'synthetic-boundary', env: target.env });
+    const other = fixture({ projectId: 'other-boundary', repository: 'example/other-boundary' });
+    const unrelated = resolveTargetContext({ projectId: 'other-boundary', env: other.env });
+
+    expect(isCommandSafe(command, target.primaryRoot)).toBe(false);
+    expect(isCommandSafe(command, target.primaryRoot, selected)).toBe(true);
+    expect(isCommandSafe(command, target.primaryRoot, unrelated)).toBe(false);
+    for (const untrusted of [
+      'node scripts/unlisted.mjs',
+      'node scripts/verify-boundary.mjs other-argument',
+      'node scripts/verify-boundary.mjs; echo unsafe',
+      'node ../verify-boundary.mjs',
+      'sh -c node scripts/verify-boundary.mjs',
+    ]) {
+      expect(isCommandSafe(untrusted, target.primaryRoot, selected), untrusted).toBe(false);
+    }
+  });
   it('normalizes requiredCi workflow/job selectors, rejects ambiguous grammar and normalized duplicates, and exposes check read-back', async () => {
     const valid = fixture();
     writeFileSync(valid.cardPath, JSON.stringify({

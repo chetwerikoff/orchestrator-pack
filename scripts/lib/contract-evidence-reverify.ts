@@ -6,6 +6,8 @@ import { extractAtJsonPath } from '../external-output-shape-guard.mjs';
 import {
   acceptanceCriterionSection,
   canonicalProducer,
+  canonicalBindingIdProducer,
+  producerEmissionMatchesRow,
   extractAuthoritativeContractEvidenceBody,
   isCliBehaviorBinding,
   parseContractEvidenceRows,
@@ -31,6 +33,9 @@ import {
 } from './reverify-command-resolution.ts';
 import { loadReverifyAllowlistConfig } from './reverify-allowlist-config.ts';
 import { runSandboxedAllowlistedCommand } from './reverify-sandbox.ts';
+import { runProcessSync } from '../kernel/subprocess.ts';
+import { parseRemoteSlug } from './git-origin-slug.mjs';
+import { resolveTargetContext, type TargetContext } from './target-context.ts';
 
 export { DEFAULT_REVERIFY_MANIFEST_PATH };
 
@@ -115,6 +120,8 @@ export interface ReverifyRunInput {
   simulateCrashBeforeFirstRow?: boolean;
   simulateCrashAfterRow?: number;
   forceProducerUnreachable?: boolean;
+  projectId?: string;
+  env?: Readonly<NodeJS.ProcessEnv>;
 }
 
 interface CaptureManifestEntry {
@@ -288,9 +295,10 @@ function runTrustedCommand(command: string, options: {
   timeoutMs: number;
   forceUnreachable?: boolean;
   sandboxMode: 'trusted-base' | 'pr-head-new';
+  selectedContext?: TargetContext;
 }): CommandRunResult {
   const resolutionRoot = options.resolutionRoot ?? options.cwd;
-  const resolved = resolveAllowlistedCommand(command, { repoRoot: resolutionRoot });
+  const resolved = resolveAllowlistedCommand(command, { repoRoot: resolutionRoot, selectedContext: options.selectedContext });
   if (!resolved) {
     return {
       ok: false,
@@ -468,9 +476,11 @@ function commandExercisesDeclaredProducer(
   command: string,
   declaredProducer: string,
   repoRoot: string,
+  selectedContext?: TargetContext,
 ): boolean {
+  const selectedTarget = selectedContext?.contractEvidenceProducer;
   const trimmed = command.trim();
-  if (!trimmed || !isCommandSafe(trimmed, repoRoot)) {
+  if (!trimmed || !isCommandSafe(trimmed, repoRoot, selectedContext)) {
     return false;
   }
   const producer = canonicalProducer(declaredProducer);
@@ -483,6 +493,11 @@ function commandExercisesDeclaredProducer(
   const rels = listAllowlistedNodeScriptRelPaths(trimmed, repoRoot);
   if (rels.some((rel) => ECHO_ONLY_PRODUCER_STUBS.has(normalizePath(rel)))) {
     return false;
+  }
+  // The card is the sole authority for the target producer's actual boundary.
+  // Neither a proof command nor a NEW row can nominate another entrypoint.
+  if (selectedTarget?.name === producer && !(producerRegistry.repoOwned ?? []).includes(producer)) {
+    return trimmed === selectedTarget.boundaryCommand;
   }
   const boundaries = listDeclaredProducerBoundaryRelPaths(producer);
   if (boundaries.length > 0) {
@@ -528,8 +543,15 @@ function buildIndependentProducerCommand(
   proofCommand: string,
   block: Record<string, string>,
   repoRoot: string,
+  selectedContext?: TargetContext,
 ): string | null {
+  const selectedTarget = selectedContext?.contractEvidenceProducer;
+  const producer = canonicalProducer(block.producer ?? '');
+  const isTarget = !(producerRegistry.repoOwned ?? []).includes(producer) && !isExternalProducer(producer);
   const explicit = (block['producer-command'] ?? '').trim();
+  if (isTarget && (!selectedTarget || selectedTarget.name !== producer || explicit !== selectedTarget.boundaryCommand)) {
+    return null;
+  }
   if (explicit) {
     if (
       explicit === proofCommand.trim()
@@ -538,12 +560,13 @@ function buildIndependentProducerCommand(
       return null;
     }
     if (
-      isCommandSafe(explicit, repoRoot)
-      && commandExercisesDeclaredProducer(explicit, block.producer ?? '', repoRoot)
+      isCommandSafe(explicit, repoRoot, selectedContext)
+      && commandExercisesDeclaredProducer(explicit, block.producer ?? '', repoRoot, selectedContext)
     ) {
       return explicit;
     }
   }
+  if (isTarget) return null; // No pack-derived fallback for a target-card producer.
 
   const trimmed = proofCommand.trim();
   if (trimmed.startsWith('npm test --')) {
@@ -770,13 +793,13 @@ function compareToRecord(
   };
 }
 
-function findProducerEmissionForRow(markdown: string, acNumber: number): Record<string, string> | null {
+function findProducerEmissionForRow(markdown: string, acNumber: number, row: Record<string, string>): Record<string, string> | null {
   const section = acceptanceCriterionSection(markdown, acNumber);
   if (!section) {
     return null;
   }
   const blocks = parseProducerEmissionBlocks(section);
-  return blocks.find((block) => producerEmissionIsComplete(block)) ?? null;
+  return blocks.find((block) => producerEmissionIsComplete(block) && producerEmissionMatchesRow(block, row)) ?? null;
 }
 
 function evaluateNewRow(input: {
@@ -787,15 +810,25 @@ function evaluateNewRow(input: {
   reviewTargetRoot: string;
   timeoutMs: number;
   forceProducerUnreachable?: boolean;
+  selectedContext?: TargetContext;
 }): ReverifyRowResult {
-  const { row, rowIndex, markdown, trustedBaseRoot, reviewTargetRoot, timeoutMs, forceProducerUnreachable } = input;
+  const { row, rowIndex, markdown, trustedBaseRoot, reviewTargetRoot, timeoutMs, forceProducerUnreachable, selectedContext } = input;
+  const selectedTarget = selectedContext?.contractEvidenceProducer;
+  const producer = canonicalProducer(row.producer ?? '');
+  if (canonicalBindingIdProducer(row) !== producer || isExternalProducer(producer)) {
+    return buildUnverified(rowIndex, row, 'unsupported-producer');
+  }
+  if (!(producerRegistry.repoOwned ?? []).includes(producer)
+    && selectedTarget?.name !== producer) {
+    return buildUnverified(rowIndex, row, 'unsupported-producer');
+  }
   const evidence = row.evidence ?? '';
   const acMatch = evidence.match(/^NEW\(produced-by AC#(\d+)\)$/i);
   if (!acMatch) {
     return buildUnverified(rowIndex, row, 'unsupported-producer');
   }
   const acNumber = Number(acMatch[1]);
-  const block = findProducerEmissionForRow(markdown, acNumber);
+  const block = findProducerEmissionForRow(markdown, acNumber, row);
   if (!block) {
     return buildUnverified(rowIndex, row, 'unsupported-producer');
   }
@@ -805,6 +838,18 @@ function evaluateNewRow(input: {
   }
   if (!isCommandSafe(proofCommand, reviewTargetRoot)) {
     return buildUnverified(rowIndex, row, 'unsafe-or-undeclared-command');
+  }
+  if (listAllowlistedNodeScriptRelPaths(proofCommand, reviewTargetRoot)
+    .some((rel) => ECHO_ONLY_PRODUCER_STUBS.has(normalizePath(rel)))) {
+    return buildUnverified(rowIndex, row, 'non-genuine-proof');
+  }
+
+  const independentCommand = buildIndependentProducerCommand(proofCommand, block, reviewTargetRoot, selectedContext);
+  if (
+    !independentCommand
+    || areNewRowCommandsSemanticallyIdentical(independentCommand, proofCommand, reviewTargetRoot)
+  ) {
+    return buildUnverified(rowIndex, row, 'non-genuine-proof');
   }
 
   const expected = block.expected ?? '';
@@ -828,20 +873,13 @@ function evaluateNewRow(input: {
     return buildUnverified(rowIndex, row, 'non-genuine-proof');
   }
 
-  const independentCommand = buildIndependentProducerCommand(proofCommand, block, reviewTargetRoot);
-  if (
-    !independentCommand
-    || areNewRowCommandsSemanticallyIdentical(independentCommand, proofCommand, reviewTargetRoot)
-  ) {
-    return buildUnverified(rowIndex, row, 'non-genuine-proof');
-  }
-
   const independentRun = runTrustedCommand(independentCommand, {
     cwd: reviewTargetRoot,
     dependencyRoot: trustedBaseRoot,
     timeoutMs,
     forceUnreachable: forceProducerUnreachable,
     sandboxMode: 'pr-head-new',
+    selectedContext,
   });
   if (independentRun.blocked) {
     return buildUnverified(rowIndex, row, blockedUnverifiedReason(independentRun));
@@ -977,6 +1015,11 @@ export function formatReviewerReverifySummary(result: ReverifyRunResult): string
     if (row.reason) {
       parts.push(`reason=${formatEvidenceField(row.reason)}`);
     }
+    if (row.reason === 'unsupported-producer') {
+      parts.push('next=select/correct the project card producer and matching binding-id/emission, then rerun');
+    } else if (row.reason === 'unsafe-or-undeclared-command' || row.reason === 'non-genuine-proof') {
+      parts.push('next=provide a safe independently exercisable producer proof, then rerun');
+    }
     if (row.asserted !== undefined) {
       parts.push(`asserted=${formatEvidenceField(row.asserted)}`);
     }
@@ -1074,6 +1117,22 @@ export function runContractEvidenceReverify(input: ReverifyRunInput): ReverifyRu
   }
   const corpusRoot = path.dirname(input.manifestPath).replace(/\\/g, '/');
   const rows: ReverifyRowResult[] = [];
+  let selectedContext: TargetContext | undefined;
+  // The selected card must bind to the repository actually under review, not
+  // merely to a valid but unrelated primary checkout.
+  try {
+    const context = resolveTargetContext({ projectId: input.projectId, env: input.env });
+    const origin = runProcessSync({
+      command: 'git', args: ['remote', 'get-url', 'origin'],
+      cwd: reviewTargetRoot, inheritParentEnv: false,
+    });
+    if (origin.ok && parseRemoteSlug(origin.stdout)?.toLowerCase() === context.repository) {
+      selectedContext = context;
+    }
+  } catch {
+    // Pack-owned producers retain their current behavior without target selection.
+    // Target rows remain unsupported until the selected card is corrected.
+  }
 
   for (const [index, row] of parsed.rows.entries()) {
     if (input.simulateCrashAfterRow === index) {
@@ -1098,6 +1157,7 @@ export function runContractEvidenceReverify(input: ReverifyRunInput): ReverifyRu
           reviewTargetRoot,
           timeoutMs,
           forceProducerUnreachable: input.forceProducerUnreachable,
+          selectedContext,
         }),
       );
       continue;
