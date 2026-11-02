@@ -16,6 +16,7 @@
     "scripts/flow-manager-browser-gpt-long-run.ts",
     "scripts/flow-manager-long-running-child.test.ts",
     "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/execute-issue-manager-boundary.test.ts",
     "scripts/toolchain/chatgpt-browser-turn.test.ts"
   ],
   "denylist": [
@@ -39,7 +40,8 @@
     "scripts/flow-manager-browser-gpt-long-run.ts",
     "scripts/flow-manager-long-running-child.test.ts",
     "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/execute-issue-manager-boundary.test.ts",
     "scripts/toolchain/chatgpt-browser-turn.test.ts"
   ],
-  "source_revision": "f36fbbb2343431d7bcb5f4765d4c28cad260d375"
+  "source_revision": "e6f547a9f455979c326afac75c3707629c5d1598"
 }
