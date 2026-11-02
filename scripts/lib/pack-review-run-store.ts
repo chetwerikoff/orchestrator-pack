@@ -7,10 +7,12 @@ import {
   rmSync,
   statSync,
   writeFileSync,
+  appendFileSync,
+  lstatSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import type { PackReviewer, PackReviewerResolutionSource } from './resolve-pack-reviewer.ts';
 import { TURN_STATES } from '../chatgpt-browser-turn/contracts.ts';
@@ -116,6 +118,218 @@ export interface PackReviewSourceSlotRecord {
   attemptHistory?: PackReviewSourceSlotAttemptHistory[];
   terminalResult?: unknown;
   payload?: unknown;
+}
+
+export type PackReviewTriageDecision = 'FIX_NOW' | 'DEFER' | 'REJECT';
+export interface PackReviewTriageGroup {
+  groupId: string;
+  members: string[];
+  slotIds: string[];
+  decision: PackReviewTriageDecision;
+  reason: string;
+  code: string;
+  /** Verified against the exact reviewed head before persistence. */
+  codeEvidence?: string;
+  lowImpact?: boolean;
+}
+export interface PackReviewGptTriageAttempt {
+  schema: 'pack-review-gpt-triage-attempt/v1';
+  runId: string;
+  targetSha: string;
+  cycleId: string;
+  roundOrdinal: number;
+  issueDigest: string;
+  rawFindingsDigest: string;
+  attemptedAtUtc: string;
+}
+export interface PackReviewGptTriageRecord {
+  schema: 'pack-review-gpt-triage/v1';
+  runId: string;
+  targetSha: string;
+  cycleId: string;
+  roundOrdinal: number;
+  issueDigest: string;
+  rawFindingsDigest: string;
+  groups: PackReviewTriageGroup[];
+}
+
+export interface PackReviewTriageModelGroup {
+  members: Array<{ slotId: string; index: number }>;
+  decision: PackReviewTriageDecision;
+  reason: string;
+  codeEvidence?: string;
+  lowImpact?: boolean;
+}
+
+/** The source-slot order and per-slot index are the sole occurrence identities. */
+function packReviewTriageCensus(run: PackReviewRunRecord): {
+  rawFindings: unknown[];
+  occurrences: Array<{ key: string; finding: Record<string, unknown> }>;
+  digest: string;
+} | null {
+  const round = run.reviewRound;
+  if (!round || round.reviewer !== 'gpt') return null;
+  const occurrences: Array<{ key: string; finding: Record<string, unknown> }> = [];
+  const rawFindings: unknown[] = [];
+  for (const slot of [...round.sourceSlots].sort((a,b) => a.ordinal - b.ordinal)) {
+    if (slot.lifecycle !== 'terminal'
+        || (slot.terminalClass !== 'complete_clean' && slot.terminalClass !== 'complete_findings')) continue;
+    const payload = slot.payload;
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+    const findings = (payload as { findings?: unknown }).findings;
+    if (!Array.isArray(findings)) return null;
+    for (let index = 0; index < findings.length; index += 1) {
+      const finding = findings[index];
+      if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return null;
+      const original = finding as Record<string, unknown>;
+      occurrences.push({ key: `${slot.slotId}:${index}`, finding: original });
+      rawFindings.push({ ...original, sourceSlotId: slot.slotId });
+    }
+  }
+  return {
+    rawFindings, occurrences,
+    digest: createHash('sha256').update(JSON.stringify(rawFindings)).digest('hex'),
+  };
+}
+
+export function isOriginallyBlockingPackReviewFinding(finding: unknown): boolean {
+  if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return true;
+  return !['warning','info','non-blocking'].includes(
+    String((finding as Record<string, unknown>).severity ?? '').trim().toLowerCase());
+}
+
+function protectedTriageHarm(finding: Record<string, unknown>): boolean {
+  const fields = ['title','body','description','category','code','quality','signature','type','severity'];
+  const text = fields.map((name) => String(finding[name] ?? '')).join(' ').toLowerCase();
+  return /security|auth(?:orization|entication)?|scope.?(?:violation|escape)|permission|unauthori[sz]ed|secret|credential|data.?(?:loss|corrupt)|destruct|false.?success|falsely.?green|incorrect.?completion|hung|no.?recovery|deadlock|stuck.?unit|integrity|safety/.test(text);
+}
+
+function triageGroupId(run: PackReviewRunRecord, members: readonly string[]): string {
+  return 'g-' + createHash('sha256').update(
+    JSON.stringify([run.id,run.targetSha,[...members].sort()])).digest('hex').slice(0,20);
+}
+
+function triageBoundIdentity(run: PackReviewRunRecord, digest: string): Omit<PackReviewGptTriageAttempt,'schema'|'attemptedAtUtc'> {
+  return {
+    runId: run.id, targetSha: run.targetSha,
+    cycleId: run.reviewCycleId ?? '', roundOrdinal: run.logicalRoundOrdinal ?? 0,
+    issueDigest: run.reviewRound?.boundIssueSnapshotDigest ?? '', rawFindingsDigest: digest,
+  };
+}
+
+function matchesTriageIdentity(
+  value: Partial<PackReviewGptTriageRecord | PackReviewGptTriageAttempt>,
+  run: PackReviewRunRecord,
+  digest: string,
+): boolean {
+  const identity = triageBoundIdentity(run,digest);
+  return Boolean(identity.cycleId && identity.roundOrdinal && identity.issueDigest)
+    && value.runId === identity.runId && value.targetSha === identity.targetSha
+    && value.cycleId === identity.cycleId && value.roundOrdinal === identity.roundOrdinal
+    && value.issueDigest === identity.issueDigest && value.rawFindingsDigest === identity.rawFindingsDigest;
+}
+
+/** Whole-result validator: one exact member per original occurrence; no invented finding. */
+export function validatePackReviewTriageResult(
+  run: PackReviewRunRecord,
+  groupsValue: readonly PackReviewTriageModelGroup[],
+): PackReviewGptTriageRecord {
+  const census = packReviewTriageCensus(run);
+  if (!census || census.occurrences.length === 0
+      || !Array.isArray(groupsValue) || groupsValue.length === 0) {
+    throw new Error('triage requires a settled nonempty immutable source census');
+  }
+  const byKey = new Map(census.occurrences.map((row) => [row.key,row.finding] as const));
+  const assigned = new Set<string>();
+  const groups: PackReviewTriageGroup[] = [];
+  for (const value of groupsValue) {
+    if (!value || typeof value !== 'object' || !Array.isArray(value.members)
+        || value.members.length === 0
+        || !['FIX_NOW','DEFER','REJECT'].includes(value.decision)
+        || typeof value.reason !== 'string' || !value.reason.trim()
+        || value.reason.length > 400) throw new Error('invalid triage group');
+    const members = value.members.map((member) => {
+      if (!member || typeof member.slotId !== 'string' || !Number.isInteger(member.index)
+          || member.index < 0) throw new Error('invalid triage member');
+      return `${member.slotId}:${member.index}`;
+    }).sort();
+    if (new Set(members).size !== members.length) throw new Error('duplicated triage member');
+    const originals = members.map((key) => {
+      const found = byKey.get(key);
+      if (!found || assigned.has(key)) throw new Error('unknown or repeated triage occurrence');
+      assigned.add(key);
+      return found;
+    });
+    const originalBlocking = originals.some(isOriginallyBlockingPackReviewFinding);
+    const protectedBlocking = originals.some((finding) =>
+      isOriginallyBlockingPackReviewFinding(finding) && protectedTriageHarm(finding));
+    const reason = value.reason.trim();
+    const codeEvidence = value.codeEvidence;
+    const verifiedCode = typeof codeEvidence === 'string'
+      && /^[^\s:]+:\d+\s+[^\r\n]{6,240}$/.test(codeEvidence);
+    if (originalBlocking && value.decision !== 'FIX_NOW') {
+      if (!verifiedCode || (value.decision === 'DEFER'
+          && (protectedBlocking || value.lowImpact !== true))) {
+        throw new Error('blocking downgrade lacks verified exact-head evidence or is protected');
+      }
+    }
+    const code = originals.map((finding) => String(finding.code ?? finding.signature ?? '').trim())
+      .find(Boolean) ?? 'UNSPECIFIED';
+    groups.push({
+      groupId: triageGroupId(run,members), members,
+      slotIds: [...new Set(members.map((key) => key.split(':')[0]!))].sort(),
+      decision: value.decision, reason, code,
+      ...(verifiedCode ? { codeEvidence } : {}),
+      ...(value.lowImpact === true ? { lowImpact: true } : {}),
+    });
+  }
+  if (assigned.size !== byKey.size) throw new Error('triage occurrence mapping is incomplete');
+  const identity = triageBoundIdentity(run,census.digest);
+  if (!identity.cycleId || !identity.roundOrdinal || !identity.issueDigest) throw new Error('missing triage identity');
+  return {
+    schema:'pack-review-gpt-triage/v1', ...identity,
+    groups: groups.sort((a,b) => a.groupId.localeCompare(b.groupId)),
+  };
+}
+
+/** One bounded projection for classification, fixer intake and delivery replay. */
+export function projectPackReviewEffectiveFindings(run: PackReviewRunRecord): {
+  mode:'plain'|'triaged'; blocking:boolean; effectiveBlockingGroupCount:number;
+  groups: PackReviewTriageGroup[]; fixNow: PackReviewTriageGroup[]; deferred: PackReviewTriageGroup[];
+} {
+  const raw = packReviewTriageCensus(run);
+  const fallback = () => ({
+    mode: 'plain' as const,
+    blocking: raw ? raw.rawFindings.some(isOriginallyBlockingPackReviewFinding)
+      : run.findings.some(isOriginallyBlockingPackReviewFinding),
+    effectiveBlockingGroupCount: raw
+      ? raw.rawFindings.filter(isOriginallyBlockingPackReviewFinding).length
+      : run.findings.filter(isOriginallyBlockingPackReviewFinding).length,
+    groups: [], fixNow: [], deferred: [],
+  });
+  const saved = run.gptTriage;
+  if (!raw || !saved || saved.schema !== 'pack-review-gpt-triage/v1'
+      || !matchesTriageIdentity(saved,run,raw.digest)
+      || !run.gptTriageAttempt || !matchesTriageIdentity(run.gptTriageAttempt,run,raw.digest)) return fallback();
+  try {
+    const parsedGroups = saved.groups.map((group) => ({
+      members: group.members.map((key) => {
+        const hit = /^([^:]+):(\d+)$/.exec(key);
+        if (!hit) throw new Error('invalid saved triage member');
+        return { slotId: hit[1]!,index: Number(hit[2]) };
+      }),
+      decision:group.decision,reason:group.reason,
+      codeEvidence:group.codeEvidence,lowImpact:group.lowImpact,
+    }));
+    const verified = validatePackReviewTriageResult(run,parsedGroups);
+    if (JSON.stringify(verified) !== JSON.stringify(saved)) return fallback();
+    const occurrences = new Map(raw.occurrences.map((row) => [row.key,row.finding] as const));
+    const fixNow = verified.groups.filter((group) => group.decision === 'FIX_NOW'
+      && group.members.some((key) => isOriginallyBlockingPackReviewFinding(occurrences.get(key))));
+    return {mode:'triaged',blocking:fixNow.length>0,
+      effectiveBlockingGroupCount:fixNow.length,
+      groups:verified.groups,fixNow,deferred:verified.groups.filter((group) => group.decision === 'DEFER')};
+  } catch { return fallback(); }
 }
 
 export interface PackReviewGptRoundRecord {
@@ -277,6 +491,8 @@ export interface PackReviewRunRecord {
   deliveryOutcomes: Partial<Record<PackReviewDeliveryChannel, PackReviewDeliveryOutcome>>;
   canonicalRepository?: string;
   reviewRound?: PackReviewGptRoundRecord;
+  gptTriageAttempt?: PackReviewGptTriageAttempt;
+  gptTriage?: PackReviewGptTriageRecord;
   /** Immutable exact body for native as well as GPT verdicts. */
   boundIssueSnapshotDigest?: string;
   stale?: boolean;
