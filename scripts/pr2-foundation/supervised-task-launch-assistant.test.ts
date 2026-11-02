@@ -396,6 +396,7 @@ function freshRepoFixture(input: {
   rootByPath?: Readonly<Record<string, string>>;
   failRoot?: boolean;
   failOrigin?: boolean;
+  pruneOk?: boolean;
   setupState?: 'not_configured' | 'running' | 'absent';
   waitExitCode?: number;
   freshStatus?: string;
@@ -422,6 +423,9 @@ function freshRepoFixture(input: {
         stderr: '',
       };
     }
+    if (command === 'git worktree prune') return {
+      ok: input.pruneOk !== false, stdout: '', stderr: input.pruneOk === false ? 'fixture: locked prune failed' : '',
+    };
     if (command === 'git status --porcelain=v1 --untracked-files=all') {
       return { ok: true, stdout: input.freshStatus ?? '', stderr: '' };
     }
@@ -566,6 +570,9 @@ function managerReuseFixture(input: {
         ? { ok: false, stdout: '', stderr: 'origin/main unresolved' }
         : { ok: true, stdout: `${originMain}\n`, stderr: '' };
     }
+    if (command === 'git worktree prune') return {
+      ok: input.pruneOk !== false, stdout: '', stderr: input.pruneOk === false ? 'fixture: locked prune failed' : '',
+    };
     if (command === 'git status --porcelain=v1 --untracked-files=all') {
       return { ok: true, stdout: input.status ?? '', stderr: '' };
     }
@@ -3117,7 +3124,7 @@ The words Firefighter universal appear here only as prose.`;
       status: 'ok', value: { selector: 'new-top-level', repositorySelector: 'id:legacy-repo' },
     });
     expect(fixture.calls.slice(1).map((call) => call.cwd)).toEqual([
-      REGISTERED_ORCA_ROOT, REGISTERED_ORCA_ROOT,
+      REGISTERED_ORCA_ROOT, REGISTERED_ORCA_ROOT, REGISTERED_ORCA_ROOT,
     ]);
   });
 
@@ -3177,7 +3184,25 @@ The words Firefighter universal appear here only as prose.`;
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', issueNumber: 1479,
     }, fixture.execute);
     expect(result).toMatchObject({ status: 'ok', value: { id: 'repo::wt', setupWitness: 'same_invocation_complete' } });
-    expect(fixture.calls.map((call) => call.argv[0])).toEqual(['orca', 'git', 'git', 'orca', 'git']);
+    expect(fixture.calls.map((call) => call.argv[0])).toEqual(['orca', 'git', 'git', 'git', 'orca', 'git']);
+  });
+
+  it('prunes only the exact validated selected repository before fresh native creation', async () => {
+    const fixture = freshRepoFixture();
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt',
+    }, fixture.execute);
+    expect(result.status).toBe('ok');
+    expect(fixture.calls[3]).toEqual({ argv: ['git', 'worktree', 'prune'], cwd: REGISTERED_ORCA_ROOT });
+    expect(fixture.calls[4]?.argv.slice(0, 3)).toEqual(['orca', 'worktree', 'create']);
+
+    const failed = freshRepoFixture({ pruneOk: false });
+    const refused = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt',
+    }, failed.execute);
+    expect(refused).toMatchObject({ status: 'continue', cause: 'worktree_registry_prune_failed',
+      nextAction: { note: expect.stringContaining('git worktree list --porcelain') } });
+    expect(failed.calls.some((call) => call.argv.slice(0, 3).join(' ') === 'orca worktree create')).toBe(false);
   });
 
   it('accepts a fresh worktree with no setup receipt', async () => {
@@ -3189,7 +3214,7 @@ The words Firefighter universal appear here only as prose.`;
       status: 'ok', value: { id: 'repo::wt', setupWitness: 'same_invocation_complete' },
       evidence: { setupState: 'not_configured' },
     });
-    expect(fixture.calls[3]?.argv).toEqual([
+    expect(fixture.calls[4]?.argv).toEqual([
       'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'wt',
       '--issue', '1479', '--setup', 'run', '--json',
     ]);
@@ -3214,11 +3239,11 @@ The words Firefighter universal appear here only as prose.`;
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', baseBranch: 'main',
     }, fixture.execute);
     expect(result).toMatchObject({ status: 'ok', value: { setupWitness: 'same_invocation_complete' } });
-    expect(fixture.calls[3]?.argv).toEqual([
+    expect(fixture.calls[4]?.argv).toEqual([
       'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'wt',
       '--base-branch', 'main', '--no-parent', '--setup', 'run', '--json',
     ]);
-    expect(fixture.calls[4]?.argv).toEqual([
+    expect(fixture.calls[5]?.argv).toEqual([
       'orca', 'terminal', 'wait', '--terminal', 'setup-term', '--for', 'exit', '--timeout-ms', '120000', '--json',
     ]);
   });
@@ -3562,7 +3587,10 @@ The words Firefighter universal appear here only as prose.`;
           stderr: '',
         };
       }
-      if (command === 'git status --porcelain=v1 --untracked-files=all') {
+      if (command === 'git worktree prune') return {
+      ok: input.pruneOk !== false, stdout: '', stderr: input.pruneOk === false ? 'fixture: locked prune failed' : '',
+    };
+    if (command === 'git status --porcelain=v1 --untracked-files=all') {
         return { ok: true, stdout: '', stderr: '' };
       }
       return { ok: false, stdout: '', stderr: `unexpected: ${command}` };
