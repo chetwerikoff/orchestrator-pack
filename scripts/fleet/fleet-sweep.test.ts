@@ -78,6 +78,8 @@ interface PrimaryWorkerFixture {
   readonly observationStatus?: string;
   readonly shownTerminal?: FleetTerminal | null;
   readonly exactWorker?: boolean;
+  /** Emit the legacy snake_case `run_id` instead of the native camelCase `runId`. */
+  readonly legacyRunIdKey?: boolean;
 }
 
 function primaryTerminal(handle: string, title = 'OpenCode merge worker', status = 'running'): FleetTerminal {
@@ -112,7 +114,8 @@ function primaryOrcaExecutor(
       if (index < 0) return result('', false);
       const worker = workers[index]!;
       return result(JSON.stringify({ ok: true, result: {
-        dispatch: { id: dispatchId, taskId: 'task-' + index, run_id: worker.runId,
+        dispatch: { id: dispatchId, taskId: 'task-' + index, task_id: 'task-' + index,
+          [worker.legacyRunIdKey ? 'run_id' : 'runId']: worker.runId,
           status: worker.dispatchStatus ?? 'dispatched' },
         observation: { exactWorker: worker.exactWorker ?? true, status: worker.observationStatus ?? 'live' },
         ...(worker.shownTerminal === null ? {} : { terminal: worker.shownTerminal ?? worker.terminal }),
@@ -597,6 +600,30 @@ describe('Issue #2585 supervised primary-root admission', () => {
     expect(collectFleetDiagnostics(options).map((row) => row.handle)).toEqual(['bound-cursor']);
     expect(calls.filter((args) => args[1] === 'read').every((args) => args.includes('bound-cursor'))).toBe(true);
     expect(calls.filter((args) => args[1] === 'read')).toHaveLength(2);
+  });
+
+  it('primary-root native worker-show shape (camelCase runId): admits an exact exited merge agent, excludes operator panes (#1407)', () => {
+    const merge = primaryTerminal('merge', 'OpenCode merge agent', 'exited');
+    const legacy = primaryTerminal('legacy', 'OpenCode merge agent');
+    const operator = primaryTerminal('operator', 'Claude Code operator');
+    const foreign = primaryTerminal('foreign', 'OpenCode merge agent');
+    const inexact = primaryTerminal('inexact', 'OpenCode merge agent');
+    const terminals = [currentCoordinator, merge, legacy, operator, foreign, inexact];
+    const workers: PrimaryWorkerFixture[] = [
+      { terminal: merge, runId: 'run-main', coordinator: 'coordinator', dispatchStatus: 'failed',
+        observationStatus: 'exited' },
+      { terminal: legacy, runId: 'run-main', coordinator: 'coordinator', legacyRunIdKey: true },
+      { terminal: foreign, runId: 'run-foreign', coordinator: 'other-coordinator' },
+      { terminal: inexact, runId: 'run-main', coordinator: 'coordinator', exactWorker: false },
+    ];
+    const executor = primaryOrcaExecutor(terminals, { merge: 'done', legacy: 'done', operator: 'done',
+      foreign: 'done', inexact: 'done' }, workers);
+    const handles = runFleetSweep({ ...opts, terminals, executor }).map((row) => row.handle);
+    expect(handles).toContain('merge');
+    expect(handles).toContain('legacy');
+    expect(handles).not.toContain('operator');
+    expect(handles).not.toContain('foreign');
+    expect(handles).not.toContain('inexact');
   });
 
   it('primary-root exited and unreadable: native exact exit alarms without screen and does not hide stopped peer', () => {

@@ -16,6 +16,15 @@ import {
   type LifecycleOperations,
 } from './operations.ts';
 import type { ExpectedWorktreeIdentity } from './core.ts';
+import { closeSync, openSync, realpathSync } from 'node:fs';
+import { defaultProcessCensus } from '../worktree-teardown.ts';
+import {
+  removeIdenticalLaunchCopies,
+  runMergeCleanup,
+  type GitRunner,
+  type MergeCleanupDeps,
+} from './merge-cleanup.ts';
+import { collectProcessCensus, type ProcIo } from './operations.ts';
 
 const HEAD = 'a'.repeat(40);
 const OTHER_HEAD = 'b'.repeat(40);
@@ -742,4 +751,369 @@ describe('pack-owned lifecycle tool paths', () => {
       .toEqual(['--repo-root', PACK_ROOT]);
     expect(value.removeCount).toBe(0);
   });
+});
+
+describe('process census (Issue #2782)', () => {
+const TARGET = '/work/issue-1';
+
+function errno(code: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(code), { code });
+}
+
+function stat(ppid: number): string {
+  // pid (comm) state ppid ... starttime is field index 19 after ") "
+  const fields = Array.from({ length: 22 }, (_, index) => String(index));
+  fields[0] = 'S';
+  fields[1] = String(ppid);
+  fields[19] = '777';
+  return `1 (x) ${fields.join(' ')}`;
+}
+
+interface FakeProc {
+  readonly ppid: number;
+  readonly cwd: string | Error;
+  readonly fds?: readonly string[] | Error;
+}
+
+function fakeIo(table: Record<string, FakeProc>): ProcIo {
+  return {
+    readdirSync(path) {
+      if (path === '/proc') return Object.keys(table);
+      const match = /^\/proc\/(\d+)\/fd$/.exec(path);
+      const fds = match ? table[match[1]!]?.fds : undefined;
+      if (fds instanceof Error) throw fds;
+      if (!fds) return [];
+      return fds.map((_, index) => String(index));
+    },
+    readFileSync(path) {
+      const match = /^\/proc\/(\d+)\/stat$/.exec(path);
+      const row = match ? table[match[1]!] : undefined;
+      if (!row) throw errno('ENOENT');
+      return stat(row.ppid);
+    },
+    readlinkSync(path) {
+      const cwd = /^\/proc\/(\d+)\/cwd$/.exec(path);
+      if (cwd) {
+        const value = table[cwd[1]!]!.cwd;
+        if (value instanceof Error) throw value;
+        return value;
+      }
+      const fd = /^\/proc\/(\d+)\/fd\/(\d+)$/.exec(path)!;
+      return (table[fd[1]!]!.fds as readonly string[])[Number(fd[2])]!;
+    },
+  };
+}
+
+describe('process census with unreadable observations', () => {
+  const table: Record<string, FakeProc> = {
+    '10': { ppid: 1, cwd: errno('EACCES') },
+    '11': { ppid: 1, cwd: errno('EPERM'), fds: errno('EACCES') },
+    '12': { ppid: 1, cwd: '/elsewhere' },
+    '13': { ppid: 1, cwd: `${TARGET}/sub` },
+    '14': { ppid: 1, cwd: '/elsewhere', fds: [`${TARGET}/file.log`] },
+    '15': { ppid: 13, cwd: '/elsewhere' },
+  };
+
+  it('operations census counts denied cwd/fd reads and keeps real holders', () => {
+    const result = collectProcessCensus(TARGET, fakeIo(table));
+    expect(result.observations).toEqual({ unreadableCwd: 2, unreadableFd: 1 });
+    expect(result.processes.map((row) => row.pid)).toEqual([13, 14, 15]);
+    expect(result.processes.find((row) => row.pid === 14)?.fd).toBe(`${TARGET}/file.log`);
+  });
+
+  it('operations census still throws on a non-permission cwd error', () => {
+    const io = fakeIo({ '20': { ppid: 1, cwd: errno('EIO') } });
+    expect(() => collectProcessCensus(TARGET, io)).toThrow(/could not read \/proc\/20\/cwd/);
+  });
+
+  it('operations census reports no holder and the denied count when only denied reads exist', () => {
+    const result = collectProcessCensus(TARGET, fakeIo({ '10': table['10']! }));
+    expect(result.processes).toEqual([]);
+    expect(result.observations.unreadableCwd).toBe(1);
+  });
+
+  it('teardown census marks denied cwd/fd and keeps readable fd holders', () => {
+    const rows = defaultProcessCensus(TARGET, fakeIo(table));
+    expect(rows.filter((row) => row.cwdDenied).map((row) => row.pid)).toEqual([10, 11]);
+    expect(rows.filter((row) => row.fdDenied).map((row) => row.pid)).toEqual([11]);
+    expect(rows.find((row) => row.pid === 14)?.fd).toBe(`${TARGET}/file.log`);
+    expect(rows.find((row) => row.pid === 13)?.cwd).toBe(`${TARGET}/sub`);
+  });
+
+  it('both censuses see a real open file descriptor under the target', () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'census-fd-')));
+    try {
+      mkdirSync(join(dir, 'tree'));
+      const fd = openSync(join(dir, 'tree', 'held.txt'), 'w');
+      try {
+        const target = join(dir, 'tree');
+        const own = collectProcessCensus(target).processes.find((row) => row.pid === process.pid);
+        expect(own?.fd).toBe(join(target, 'held.txt'));
+        const teardown = defaultProcessCensus(target).find((row) => row.pid === process.pid);
+        expect(teardown?.fd).toBe(join(target, 'held.txt'));
+      } finally {
+        closeSync(fd);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+});
+
+describe('merge cleanup (Issue #2782)', () => {
+const roots: string[] = [];
+
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+function sh(cwd: string, ...args: string[]): string {
+  const result = runProcessSync({ command: 'git', args, cwd, inheritParentEnv: true, timeoutMs: 60_000 });
+  if (!result.ok) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+  return result.stdout;
+}
+
+const LOCAL_CONFIG = '.claude/skills/discuss-with-gpt/local.config.json';
+
+interface Fixture {
+  readonly primary: string;
+  readonly own: string;
+  readonly manager: string;
+  readonly smoke: string;
+  readonly unrelated: string;
+  readonly git: GitRunner;
+}
+
+function fixture(): Fixture {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'merge-cleanup-')));
+  roots.push(root);
+  const primary = join(root, 'primary');
+  mkdirSync(primary);
+  sh(primary, 'init', '-q', '-b', 'main');
+  sh(primary, 'config', 'user.email', 't@example.com');
+  sh(primary, 'config', 'user.name', 't');
+  writeFileSync(join(primary, '.gitignore'), '.env\n.claude/skills/discuss-with-gpt/local.config.json\n');
+  writeFileSync(join(primary, 'a.txt'), 'a');
+  sh(primary, 'add', '-A');
+  sh(primary, 'commit', '-qm', 'init');
+  writeFileSync(join(primary, '.env'), 'SECRET=1\n');
+  mkdirSync(join(primary, '.claude/skills/discuss-with-gpt'), { recursive: true });
+  writeFileSync(join(primary, LOCAL_CONFIG), '{"a":1}\n');
+  const make = (name: string): string => {
+    const path = join(root, name);
+    sh(primary, 'worktree', 'add', '-q', '--detach', path);
+    return path;
+  };
+  const own = make('own');
+  const manager = make('manager');
+  const smoke = make('smoke');
+  const unrelated = make('unrelated');
+  for (const tree of [manager, smoke, unrelated]) {
+    writeFileSync(join(tree, '.env'), 'SECRET=1\n');
+    mkdirSync(join(tree, '.claude/skills/discuss-with-gpt'), { recursive: true });
+    writeFileSync(join(tree, LOCAL_CONFIG), '{"a":1}\n');
+  }
+  const git: GitRunner = (args) => {
+    const result = runProcessSync({
+      command: 'git', args: ['-C', primary, ...args], inheritParentEnv: true, timeoutMs: 60_000,
+    });
+    return { ok: result.ok, stdout: result.stdout, stderr: result.stderr };
+  };
+  return { primary, own, manager, smoke, unrelated, git };
+}
+
+function deps(fx: Fixture, overrides: Partial<MergeCleanupDeps> = {}, log: string[] = []): MergeCleanupDeps {
+  return {
+    git: fx.git,
+    holders: () => ({ holders: 0, unreadableCwd: 0, unreadableFd: 0 }),
+    orcaState: () => ({ known: false, agents: 0, terminals: 0 }),
+    removeTree: (path) => {
+      log.push(`remove:${path}`);
+      const result = fx.git(['worktree', 'remove', path]);
+      return { ok: result.ok, detail: result.stderr };
+    },
+    send: (handle, text) => {
+      log.push(`send:${handle}:${text}`);
+      return { ok: true, detail: 'sent' };
+    },
+    ...overrides,
+  };
+}
+
+describe('removeIdenticalLaunchCopies', () => {
+  it('removes byte-identical ignored copies and preserves differing ones', () => {
+    const fx = fixture();
+    writeFileSync(join(fx.manager, '.env'), 'SECRET=changed\n');
+    const result = removeIdenticalLaunchCopies(fx.manager, fx.primary, fx.git);
+    expect(result.removed).toEqual([LOCAL_CONFIG]);
+    expect(result.preserved).toEqual([{ path: '.env', reason: 'differs_from_primary' }]);
+    expect(existsSync(join(fx.manager, '.env'))).toBe(true);
+    expect(existsSync(join(fx.manager, LOCAL_CONFIG))).toBe(false);
+  });
+
+  it('preserves a copy whose primary counterpart is missing', () => {
+    const fx = fixture();
+    rmSync(join(fx.primary, '.env'));
+    const result = removeIdenticalLaunchCopies(fx.manager, fx.primary, fx.git);
+    expect(result.preserved).toEqual([{ path: '.env', reason: 'primary_copy_missing' }]);
+    expect(existsSync(join(fx.manager, '.env'))).toBe(true);
+  });
+});
+
+describe('runMergeCleanup', () => {
+  it('removes every exact listed tree, keeps primary, own and unrelated trees, then reports MERGED after cleanup', () => {
+    const fx = fixture();
+    const log: string[] = [];
+    const report = runMergeCleanup(
+      {
+        primaryRoot: fx.primary,
+        ownWorktree: fx.own,
+        listed: [fx.manager, fx.smoke, fx.own, join(fx.primary, '..', 'gone-already')],
+        prNumber: 2758,
+        mergeSha: 'abc123',
+        orchestratorHandle: 'term_orch',
+      },
+      deps(fx, {}, log),
+    );
+    expect(report.blockers).toEqual([]);
+    expect(report.message).toBe('MERGED 2758 abc123');
+    expect(report.delivery.ok).toBe(true);
+    expect(existsSync(fx.manager)).toBe(false);
+    expect(existsSync(fx.smoke)).toBe(false);
+    expect(existsSync(fx.unrelated)).toBe(true);
+    expect(existsSync(fx.own)).toBe(true);
+    expect(existsSync(fx.primary)).toBe(true);
+    expect(report.trees.map((tree) => tree.status)).toEqual(['removed', 'removed', 'excluded_own_worktree', 'already_absent']);
+    expect(report.trees[0]?.launchCopies?.removed).toEqual(['.env', LOCAL_CONFIG]);
+    // the message is sent only after both removals
+    expect(log.map((entry) => entry.split(':')[0])).toEqual(['remove', 'remove', 'send']);
+    expect(report.order[report.order.length - 1]).toBe('send');
+  });
+
+  it('preserves a held tree and reports the exact blocker instead of MERGED', () => {
+    const fx = fixture();
+    const log: string[] = [];
+    const report = runMergeCleanup(
+      {
+        primaryRoot: fx.primary,
+        ownWorktree: fx.own,
+        listed: [fx.manager, fx.smoke],
+        prNumber: 9,
+        mergeSha: 'def456',
+        orchestratorHandle: 'term_orch',
+      },
+      deps(fx, {
+        holders: (path) => (path === fx.smoke
+          ? { holders: 2, unreadableCwd: 3, unreadableFd: 1 }
+          : { holders: 0, unreadableCwd: 3, unreadableFd: 0 }),
+      }, log),
+    );
+    expect(existsSync(fx.smoke)).toBe(true);
+    expect(existsSync(join(fx.smoke, '.env'))).toBe(true);
+    expect(existsSync(fx.manager)).toBe(false);
+    expect(report.message).toMatch(/^CLEANUP_BLOCKED 9 def456 merged; .*smoke: 2 live process/);
+    expect(report.message).not.toMatch(/[`!]/);
+    expect(report.trees[1]?.unreadableProcessObservations).toEqual({ cwd: 3, fd: 1 });
+    expect(log[log.length - 1]).toMatch(/^send:term_orch:CLEANUP_BLOCKED/);
+  });
+
+  it('never removes the primary checkout or an unlisted path named in the spec', () => {
+    const fx = fixture();
+    const report = runMergeCleanup(
+      {
+        primaryRoot: fx.primary,
+        ownWorktree: fx.own,
+        listed: [fx.primary, fx.primary],
+        prNumber: 1,
+        mergeSha: 's',
+        orchestratorHandle: 'h',
+      },
+      deps(fx),
+    );
+    expect(existsSync(fx.primary)).toBe(true);
+    expect(report.blockers).toHaveLength(1);
+    expect(report.message).toMatch(/^CLEANUP_BLOCKED/);
+  });
+
+  it('does not bypass an Orca refusal with Git: Orca-known tree is preserved when Orca refuses', () => {
+    const fx = fixture();
+    const log: string[] = [];
+    const report = runMergeCleanup(
+      { primaryRoot: fx.primary, ownWorktree: fx.own, listed: [fx.manager], prNumber: 5, mergeSha: 's5', orchestratorHandle: 'h' },
+      deps(fx, {
+        orcaState: () => ({ known: true, agents: 0, terminals: 0 }),
+        removeTree: (path, orcaKnown) => {
+          log.push(`remove:${path}:${String(orcaKnown)}`);
+          return { ok: false, detail: 'orca refused: active agent check' };
+        },
+      }, log),
+    );
+    expect(existsSync(fx.manager)).toBe(true);
+    expect(log[0]).toBe(`remove:${fx.manager}:true`);
+    expect(report.message).toMatch(/^CLEANUP_BLOCKED 5 s5 merged; .*orca refused/);
+  });
+
+  it('preserves a tree with a live Orca agent or an incomplete Orca inventory', () => {
+    const fx = fixture();
+    const report = runMergeCleanup(
+      { primaryRoot: fx.primary, ownWorktree: fx.own, listed: [fx.manager, fx.smoke], prNumber: 6, mergeSha: 's6', orchestratorHandle: 'h' },
+      deps(fx, {
+        orcaState: (path) => {
+          if (path === fx.manager) return { known: true, agents: 1, terminals: 0 };
+          throw new Error('orca worktree ps is truncated');
+        },
+      }),
+    );
+    expect(existsSync(fx.manager)).toBe(true);
+    expect(existsSync(fx.smoke)).toBe(true);
+    expect(report.blockers.join('|')).toMatch(/1 live Orca agent/);
+    expect(report.blockers.join('|')).toMatch(/inventory unavailable or incomplete: orca worktree ps is truncated/);
+  });
+
+  it('keeps going and still sends exactly one blocker line when a tree throws', () => {
+    const fx = fixture();
+    const log: string[] = [];
+    const report = runMergeCleanup(
+      { primaryRoot: fx.primary, ownWorktree: fx.own, listed: [fx.manager, fx.smoke], prNumber: 7, mergeSha: 's7', orchestratorHandle: 'h' },
+      deps(fx, {
+        holders: (path) => {
+          if (path === fx.manager) throw new Error('process census could not read /proc/9/cwd: EIO');
+          return { holders: 0, unreadableCwd: 0, unreadableFd: 0 };
+        },
+      }, log),
+    );
+    expect(existsSync(fx.manager)).toBe(true);
+    expect(existsSync(fx.smoke)).toBe(false);
+    expect(log.filter((entry) => entry.startsWith('send:'))).toHaveLength(1);
+    expect(report.message).toMatch(/^CLEANUP_BLOCKED 7 s7 merged; .*unexpected error, tree preserved: process census could not read/);
+  });
+
+  it('preserves a tree whose differing launch copy remains instead of removing it', () => {
+    const fx = fixture();
+    writeFileSync(join(fx.manager, '.env'), 'LOCAL_ONLY=1\n');
+    const report = runMergeCleanup(
+      { primaryRoot: fx.primary, ownWorktree: fx.own, listed: [fx.manager], prNumber: 8, mergeSha: 's8', orchestratorHandle: 'h' },
+      deps(fx),
+    );
+    expect(existsSync(join(fx.manager, '.env'))).toBe(true);
+    expect(report.message).toMatch(/launch copy kept: \.env \(differs_from_primary\)/);
+  });
+
+  it('does not claim delivery when the send fails', () => {
+    const fx = fixture();
+    const report = runMergeCleanup(
+      {
+        primaryRoot: fx.primary,
+        ownWorktree: fx.own,
+        listed: [fx.manager],
+        prNumber: 1,
+        mergeSha: 's',
+        orchestratorHandle: 'h',
+      },
+      deps(fx, { send: () => ({ ok: false, detail: 'pane gone' }) }),
+    );
+    expect(report.delivery).toEqual({ ok: false, detail: 'pane gone' });
+  });
+});
 });

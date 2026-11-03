@@ -25,6 +25,7 @@ import {
   WORKTREE_TEARDOWN_RUNTIME_PROFILE as RUNTIME,
   type RuntimeCommand,
 } from './worktree-teardown-runtime-profile.ts';
+import { removeIdenticalLaunchCopies, type LaunchCopyResult } from './worktree-lifecycle/launch-copies.ts';
 
 export type PostMergeTeardownOutcome =
   | 'cleanup_eligible'
@@ -100,6 +101,12 @@ interface ProcessSnapshot {
   readonly ppid: number;
   readonly starttime: string;
   readonly cwd: string | null;
+  /** The cwd read was denied (EACCES/EPERM): counted as an unreadable observation, never as proof of absence. */
+  readonly cwdDenied?: boolean;
+  /** First readable open fd target under the worktree, when set. */
+  readonly fd?: string;
+  /** The fd directory read was denied (EACCES/EPERM). */
+  readonly fdDenied?: boolean;
 }
 
 export interface DiscardManifestEntry {
@@ -164,6 +171,10 @@ interface ProcessEffects {
   readonly termed: number;
   readonly sigkilled: number;
   readonly residual: number;
+  /** Processes whose cwd read was denied (EACCES/EPERM) in the final census; not holders, not proof of absence. */
+  readonly unreadableCwd: number;
+  /** Processes whose fd directory read was denied in the final census. */
+  readonly unreadableFd: number;
 }
 
 interface BranchDecision {
@@ -199,6 +210,7 @@ export interface PostMergeTeardownReport {
   };
   readonly terminals?: TerminalEffects;
   readonly processes?: ProcessEffects;
+  readonly launchCopies?: LaunchCopyResult;
   readonly manifest?: DiscardManifest;
   readonly removal?: {
     readonly method: 'orca-force' | 'git-force';
@@ -217,7 +229,7 @@ export interface PostMergeTeardownReport {
 
 export interface TeardownDependencies {
   readonly runner?: CommandRunner;
-  readonly processCensus?: () => readonly ProcessSnapshot[];
+  readonly processCensus?: (target: string) => readonly ProcessSnapshot[];
   readonly signalProcess?: (pid: number, starttime: string, signal: NodeJS.Signals) => boolean;
   readonly sleep?: (milliseconds: number) => Promise<void>;
   readonly now?: () => Date;
@@ -854,29 +866,77 @@ function sameManifest(left: DiscardManifest, right: DiscardManifest): boolean {
     && left.entries.length === right.entries.length;
 }
 
-function defaultProcessCensus(): ProcessSnapshot[] {
+function isDeniedError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'EACCES' || code === 'EPERM';
+}
+
+/** Filesystem reads the census uses; injectable so denied reads can be exercised without root. */
+export interface CensusIo {
+  readonly readdirSync: (path: string) => string[];
+  readonly readFileSync: (path: string, encoding: 'utf8') => string;
+  readonly readlinkSync: (path: string) => string;
+}
+
+const defaultCensusIo: CensusIo = {
+  readdirSync: (path) => readdirSync(path),
+  readFileSync: (path, encoding) => readFileSync(path, encoding),
+  readlinkSync: (path) => readlinkSync(path),
+};
+
+function readFdHolder(name: string, target: string, io: CensusIo): { fd?: string; denied: boolean } {
+  let entries: string[];
+  try {
+    entries = io.readdirSync(`/proc/${name}/fd`);
+  } catch (error) {
+    return { denied: isDeniedError(error) };
+  }
+  for (const entry of entries) {
+    try {
+      const link = normalizePath(io.readlinkSync(`/proc/${name}/fd/${entry}`).replace(/ \(deleted\)$/, ''));
+      if (link === target || link.startsWith(`${target}/`)) return { fd: link, denied: false };
+    } catch {
+      // fd closed between reads.
+    }
+  }
+  return { denied: false };
+}
+
+export function defaultProcessCensus(target?: string, io: CensusIo = defaultCensusIo): ProcessSnapshot[] {
   const result: ProcessSnapshot[] = [];
-  for (const name of readdirSync('/proc').filter((value) => /^\d+$/.test(value))) {
+  for (const name of io.readdirSync('/proc').filter((value) => /^\d+$/.test(value))) {
     const pid = Number.parseInt(name, 10);
     if (!Number.isInteger(pid) || pid <= 1) continue;
     let stat: string;
     try {
-      stat = readFileSync(`/proc/${name}/stat`, 'utf8');
+      stat = io.readFileSync(`/proc/${name}/stat`, 'utf8');
     } catch {
       continue;
     }
     const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
     let cwd: string | null = null;
+    let cwdDenied = false;
     try {
-      cwd = normalizePath(readlinkSync(`/proc/${name}/cwd`).replace(/ \(deleted\)$/, ''));
-    } catch {
-      // Process may disappear or deny access between reads.
+      cwd = normalizePath(io.readlinkSync(`/proc/${name}/cwd`).replace(/ \(deleted\)$/, ''));
+    } catch (error) {
+      // Process may disappear or deny access between reads; a denial is counted, not a verdict.
+      cwdDenied = isDeniedError(error);
+    }
+    let fd: string | undefined;
+    let fdDenied = false;
+    if (target && !(cwd === target || cwd?.startsWith(`${target}/`))) {
+      const holder = readFdHolder(name, target, io);
+      fd = holder.fd;
+      fdDenied = holder.denied;
     }
     result.push({
       pid,
       ppid: Number.parseInt(fields[1] ?? '0', 10),
       starttime: fields[19] ?? '',
       cwd,
+      ...(cwdDenied ? { cwdDenied } : {}),
+      ...(fd ? { fd } : {}),
+      ...(fdDenied ? { fdDenied } : {}),
     });
   }
   return result;
@@ -884,7 +944,9 @@ function defaultProcessCensus(): ProcessSnapshot[] {
 
 function selectedProcesses(rows: readonly ProcessSnapshot[], target: string): ProcessSnapshot[] {
   const selected = new Set(
-    rows.filter((row) => row.cwd === target || row.cwd?.startsWith(`${target}/`)).map((row) => row.pid),
+    rows
+      .filter((row) => row.cwd === target || row.cwd?.startsWith(`${target}/`) || row.fd !== undefined)
+      .map((row) => row.pid),
   );
   let changed = true;
   while (changed) {
@@ -918,26 +980,38 @@ function defaultSignal(pid: number, starttime: string, signal: NodeJS.Signals): 
   }
 }
 
+function unreadableCounts(rows: readonly ProcessSnapshot[]): { unreadableCwd: number; unreadableFd: number } {
+  return {
+    unreadableCwd: rows.filter((row) => row.cwdDenied).length,
+    unreadableFd: rows.filter((row) => row.fdDenied).length,
+  };
+}
+
 async function reapTargetProcesses(
   target: string,
   apply: boolean,
   dependencies: Required<Pick<TeardownDependencies, 'processCensus' | 'signalProcess' | 'sleep'>>,
 ): Promise<ProcessEffects> {
-  const initial = selectedProcesses(dependencies.processCensus(), target);
-  if (!apply) return { selected: initial.length, termed: 0, sigkilled: 0, residual: initial.length };
+  const initialRows = dependencies.processCensus(target);
+  const initial = selectedProcesses(initialRows, target);
+  if (!apply) {
+    return { selected: initial.length, termed: 0, sigkilled: 0, residual: initial.length, ...unreadableCounts(initialRows) };
+  }
   let termed = 0;
   for (const row of initial) if (dependencies.signalProcess(row.pid, row.starttime, 'SIGTERM')) termed += 1;
   for (let iteration = 0; iteration < 20; iteration += 1) {
-    if (selectedProcesses(dependencies.processCensus(), target).length === 0) break;
+    if (selectedProcesses(dependencies.processCensus(target), target).length === 0) break;
     await dependencies.sleep(500);
   }
-  const stubborn = selectedProcesses(dependencies.processCensus(), target);
+  const stubborn = selectedProcesses(dependencies.processCensus(target), target);
   let sigkilled = 0;
   for (const row of stubborn) if (dependencies.signalProcess(row.pid, row.starttime, 'SIGKILL')) sigkilled += 1;
   let firstZero = false;
   let residual: ProcessSnapshot[] = [];
+  let lastRows: readonly ProcessSnapshot[] = initialRows;
   for (let iteration = 0; iteration < 8; iteration += 1) {
-    residual = selectedProcesses(dependencies.processCensus(), target);
+    lastRows = dependencies.processCensus(target);
+    residual = selectedProcesses(lastRows, target);
     if (residual.length === 0) {
       if (firstZero) break;
       firstZero = true;
@@ -951,6 +1025,7 @@ async function reapTargetProcesses(
     termed,
     sigkilled,
     residual: residual.length,
+    ...unreadableCounts(lastRows),
   };
 }
 
@@ -1324,6 +1399,43 @@ export async function runPostMergeTeardown(
       processes,
       effects,
       error: `${String(processes.residual)} observable target processes remain`,
+    };
+  }
+
+  // Launch copies (.env, discuss-with-gpt local config): identical to the primary checkout's copy they
+  // go with the tree; differing or unverified ones are never force-deleted, so removal is deferred.
+  let launchCopies: LaunchCopyResult;
+  try {
+    launchCopies = removeIdenticalLaunchCopies(target, repositoryRoot, (gitArgs) => {
+      const run = runner({ command: 'git', args: gitArgs });
+      return { ok: run.ok, stdout: run.stdout, stderr: run.stderr };
+    });
+  } catch (error) {
+    return {
+      ...report,
+      repositoryRoot,
+      worktree: target,
+      outcome: 'quiesced_cleanup_deferred',
+      preflight,
+      terminals,
+      processes,
+      effects,
+      error: `launch-copy check failed, tree preserved: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  if (launchCopies.removed.length > 0) effects.push(`identical launch copies removed: ${launchCopies.removed.join(', ')}`);
+  if (launchCopies.preserved.length > 0) {
+    return {
+      ...report,
+      repositoryRoot,
+      worktree: target,
+      outcome: 'quiesced_cleanup_deferred',
+      preflight,
+      terminals,
+      processes,
+      effects,
+      launchCopies,
+      error: `launch copy preserved, tree not removed: ${launchCopies.preserved.map((item) => `${item.path} (${item.reason})`).join(', ')}`,
     };
   }
 
