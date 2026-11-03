@@ -1,0 +1,25 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2777,
+  "declared_paths": [
+    "docs/declarations/2777.pr-scope.json",
+    "scripts/lib/pack-review-run-store-historical-cap.test.ts",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "denylist": [
+    ".orchestrator-pack/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/lib/",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "source_revision": "a6621247533c131d953dc1d9189bb1eb12d3029e"
+}

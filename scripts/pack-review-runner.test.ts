@@ -3410,12 +3410,11 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     },
   );
 
-  it.each(['cycle', 'round-cap', 'source-coverage', 'source-identity', 'repository'])('refuses %s mismatch in disposable persisted evidence', async (kind) => {
+  it.each(['cycle', 'source-coverage', 'source-identity', 'repository'])('refuses %s mismatch in disposable persisted evidence', async (kind) => {
     const f = fixture();
     const path = join(f.options.storeRoot, 'runs', `${f.run.id}.json`);
     const raw = JSON.parse(readFileSync(path, 'utf8')) as PackReviewRunRecord;
     if (kind === 'cycle') raw.reviewCycleId = 'other-cycle';
-    if (kind === 'round-cap') raw.logicalRoundCap = 3;
     if (kind === 'repository') raw.canonicalRepository = 'other/project';
     if (kind === 'source-identity') {
       const receipt = (raw.reviewRound!.sourceSlots[2]!.terminalResult as { source_comment_receipt: { runId: string } }).source_comment_receipt;
@@ -3431,15 +3430,8 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     // Deliberately malformed/adversarial fixture evidence; never a live runtime record.
     writeFileSync(path, JSON.stringify(raw));
     const before = readPackReviewAuthority(prNumber, f.options);
-    if (kind === 'round-cap') {
-      // The logical identity validator now refuses the corrupt persisted row
-      // at the store boundary, before any same-head reconciliation.
-      await expect(reconcileStalePackReviewRuns(f.input))
-        .rejects.toThrow(/GPT logical source version\/round identity mismatch/);
-    } else {
-      const result = await reconcileStalePackReviewRuns(f.input);
-      expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'same_head_resolution_unproven' }));
-    }
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({ settled: false, reason: 'same_head_resolution_unproven' }));
     expect(readPackReviewAuthority(prNumber, f.options)).toEqual(before);
     expect(f.statuses.some((request) => request.state === 'success')).toBe(false);
   });
@@ -6323,7 +6315,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     },
   );
 
-  it('does not claim fresh-run authority for a changed head, unowned claim, or mismatched frozen cap', async () => {
+  it('does not claim fresh-run authority for a changed head or unowned claim', async () => {
     const moved = fixture();
     const movedHead = 'b'.repeat(40);
     const changed = await moved.reconcile({ fixtureCurrentPrHeadSha: movedHead });
@@ -6348,11 +6340,6 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     });
     expect(noClaim).toMatchObject({ ok: false, created: false });
     expect(listPackReviewRuns(claim.options)).toHaveLength(1);
-
-    // A mismatched historical cap is corrupt at persistence, not a valid
-    // incumbent that should reach fresh-run admission.
-    expect(() => fixture({ logicalRoundCap: 2 }))
-      .toThrow(/GPT logical source version\/round identity mismatch/);
   });
 
 
