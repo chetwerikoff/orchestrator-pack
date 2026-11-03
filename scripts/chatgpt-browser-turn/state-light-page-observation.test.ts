@@ -2209,8 +2209,12 @@ describe('Issue #2457 unproven terminal locator', () => {
           click: vi.fn(async () => { sent = true; currentUrl = conversationUrl; }),
         });
         const historicalUser = { role: 'user' as const, text: 'historical user' };
+        // #2772 AC7: the reopened chat's last pre-send turn is a completed answer.
+        const historicalAnswer = {
+          role: 'assistant' as const, text: 'historical answer', finalAction: true, finalActionInTurnContainer: true,
+        };
         const finalMessages = () => [
-          ...(currentUrl === conversationUrl ? [historicalUser] : []),
+          ...(currentUrl === conversationUrl ? [historicalUser, historicalAnswer] : []),
           ...(sent ? [
             { role: 'user' as const, text: composerText },
             { role: 'assistant' as const, text: 'synthetic reply', finalAction: true, finalActionInTurnContainer: true },
@@ -2244,7 +2248,7 @@ describe('Issue #2457 unproven terminal locator', () => {
                   })),
                   pageTurnEvidence: {
                     generationInProgress: false,
-                    observedAssistantNodes: sent ? 1 : 0, continueGeneratingVisible: false,
+                    observedAssistantNodes: sent ? 2 : 1, continueGeneratingVisible: false,
                   },
                 })),
               });
