@@ -917,6 +917,8 @@ export async function deliverPackReviewVerdict(
             ? projected.effectiveBlockingGroupCount : 'not triaged; original union applies'}`,
           ...(projected?.mode === 'triaged'
             ? projected.fixNow.map((group) => `FIX_NOW ${group.groupId} ${group.code}: ${group.reason}`) : []),
+          ...(projected?.mode === 'plain' && projected.blocking
+            ? projected.fixNow.map((row) => `ORIGINAL_BLOCKER ${row.members[0]} ${row.code}: ${row.reason}`) : []),
           `Pack-review status: ${projectedRequiredStatus}`,
         ].join('\n'),
         idempotencyKey: workerKey,
