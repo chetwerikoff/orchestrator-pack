@@ -267,7 +267,6 @@ interface StartInput {
   fixtureOpusTriageProcess?: (request: {
     args: readonly string[]; cwd: string; input: string; timeoutMs: number;
   }) => Promise<ProcessResult>;
-  fixtureOpusTriageConfinementVerified?: boolean;
   fixtureGptSourceCommentTransport?: PackGptSourceCommentTransport;
   fixtureGptAdmissionReadObservation?: typeof readStateLightTurnObservation;
   /** Offline-only stall before the durable per-slot bind, testing sibling independence. */
@@ -3193,29 +3192,6 @@ function harnessSourceResolution(
 }
 
 
-/** The native dontAsk mode still honors preapproved user tools. Without a
- * closed user allow set, --allowedTools Read/Grep/Glob is NOT a denylist.
- * Refuse native triage rather than trusting adversarial source.json instructions.
- */
-export function hasReadOnlyOpusTriageUserSettings(settings: unknown): boolean {
-  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return false;
-  const permissions = (settings as { permissions?: unknown }).permissions;
-  if (!permissions || typeof permissions !== 'object' || Array.isArray(permissions)) return false;
-  const p = permissions as Record<string, unknown>;
-  if (p.blockReadsOutsideWorkingDirectories !== true
-      || (p.additionalDirectories !== undefined
-        && (!Array.isArray(p.additionalDirectories) || p.additionalDirectories.length !== 0))
-      || (p.blockReadsExemptPaths !== undefined
-        && (!Array.isArray(p.blockReadsExemptPaths) || p.blockReadsExemptPaths.length !== 0))) return false;
-  if (p.defaultMode !== undefined && p.defaultMode !== 'default'
-      && p.defaultMode !== 'dontAsk') return false;
-  // A user-level allow for Bash, WebFetch, Task, MCP, wildcard patterns or
-  // another tool survives dontAsk. Only these exact read names are admissible.
-  return p.allow === undefined || (Array.isArray(p.allow)
-    && p.allow.every((rule) => typeof rule === 'string'
-      && ['Read','Grep','Glob'].includes(rule)));
-}
-
 /** Only a source-settling runner may call this. A failed capability or an unsafe
  * read boundary is an ordinary original-union fallback, never another reviewer.
  * The child works in an isolated input directory rather than in the untrusted
@@ -3251,7 +3227,10 @@ async function invokeSettledGptOpusTriage(options: {
   }
   if (occurrences.length === 0) return null;
 
-  // The native help/probe is authoritative for the installed executable.
+  // The native help/probe is authoritative for the installed executable. Native
+  // --restricted ignores user/project/local settings and drops code-running
+  // tools; --tools narrows the set to read-only. An older CLI without them
+  // takes the ordinary original-union fallback.
   const help = fixtureProcess && typeof input.fixtureOpusTriageHelp === 'string'
     ? input.fixtureOpusTriageHelp
     : await runProcess({
@@ -3263,36 +3242,10 @@ async function invokeSettledGptOpusTriage(options: {
   const edge = claudeHelpEdgeCapabilities(helpText);
   const required = [
     '--print', '--output-format', '--json-schema', '--model', '--effort',
-    '--setting-sources', '--strict-mcp-config', '--permission-mode', '--allowedTools',
+    '--restricted', '--tools', '--strict-mcp-config', '--permission-mode',
   ];
   if (!edge.exactTerminal.available || !edge.exactTerminal.supportsEffort
       || required.some((flag) => !new RegExp('(?:^|\\s)' + flag + '(?:[=\\s,]|$)', 'm').test(helpText))) return null;
-
-  if (!fixtureProcess || input.fixtureOpusTriageConfinementVerified !== true) {
-    if (fixtureProcess) return null;
-    if (process.platform !== 'linux') return null;
-    // The closed user-level Claude read restriction is required *in addition*
-    // to the allowedTools list; allowlisting Read alone does not confine paths.
-    const version = await runProcess({
-      command: 'claude', args: ['--version'], timeoutMs: 15_000,
-      inheritParentEnv: true, allowEmptyStdout: false,
-    });
-    const match = version.ok ? /(?:^|\s)(\d+)\.(\d+)\.(\d+)(?:\s|$)/.exec(version.stdout) : null;
-    const versionParts = match?.slice(1).map(Number);
-    if (!versionParts || versionParts[0]! < 2
-        || (versionParts[0] === 2 && (versionParts[1]! < 1
-          || (versionParts[1] === 1 && versionParts[2]! < 257)))) return null;
-    try {
-      const userDirectory = join(homedir(), '.claude');
-      const configPath = join(userDirectory, 'settings.json');
-      if (lstatSync(userDirectory).isSymbolicLink()
-          || !lstatSync(userDirectory).isDirectory()
-          || !lstatSync(configPath).isFile()
-          || lstatSync(configPath).isSymbolicLink()) return null;
-      const settings: unknown = JSON.parse(readFileSync(configPath, 'utf8'));
-      if (!hasReadOnlyOpusTriageUserSettings(settings)) return null;
-    } catch { return null; }
-  }
 
   let issueBody: string;
   if (harness && input.fixtureIssueBody !== undefined) {
@@ -3383,8 +3336,8 @@ async function invokeSettledGptOpusTriage(options: {
   const args = [
     '--print', '--output-format', 'json', '--json-schema', JSON.stringify(schema),
     '--model', 'claude-opus-5-5', '--effort', 'medium',
-    '--setting-sources', 'user', '--strict-mcp-config',
-    '--permission-mode', 'dontAsk', '--allowedTools', 'Read', 'Grep', 'Glob',
+    '--restricted', '--tools', 'Read,Grep,Glob', '--strict-mcp-config',
+    '--permission-mode', 'dontAsk',
   ] as const;
   let isolated = '';
   try {
