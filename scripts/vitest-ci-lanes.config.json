@@ -194,6 +194,7 @@
     "scripts/worker-smoke.test.ts": "light",
     "scripts/worktree-lifecycle/core.test.ts": "light",
     "scripts/worktree-lifecycle/create-continuation.test.ts": "light",
+    "scripts/worktree-lifecycle/merge-cleanup.test.ts": "light",
     "scripts/worktree-lifecycle/operations.test.ts": "light",
     "scripts/worktree-lifecycle/process-census.test.ts": "light",
     "scripts/worktree-lifecycle/recovery-regression.test.ts": "light",
