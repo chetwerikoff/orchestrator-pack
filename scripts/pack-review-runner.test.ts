@@ -1282,6 +1282,95 @@ describe('Issue #1826 logical-round smoke independence', () => {
       reviewStageComplete: true,
     });
   });
+  it('Issue #2767: admits round 2 on a verified rebased head but refuses same-head and unverified ancestry', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'pack-review-2767-rebased-head-'));
+    roots.push(parent);
+    const storeRoot = join(parent, 'store');
+    setupHarness(storeRoot);
+    const findingsHead = '7'.repeat(40);
+    const rebasedHead = '8'.repeat(40);
+    const prNumber = 2767;
+    const issueBody = [
+      '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
+      '```smoke-test-plan\nscenarios:\n  - action: review rebased head | expected: PASS\n```',
+    ].join('\n\n');
+    const options = { storeRoot };
+    initializePackReviewAuthority({
+      prNumber, headSha: findingsHead, tier: 'T3',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options,
+    });
+    const common = {
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: process.cwd(),
+      prNumber,
+      headSha: findingsHead,
+      claimMode: 'preacquired' as const,
+      fixtureCurrentPrHeadSha: findingsHead,
+      fixturePostReviewHeadSha: findingsHead,
+      fixturePrState: 'OPEN' as const,
+      fixturePrBody: `Closes #${prNumber}`,
+      fixturePostReviewPrBody: `Closes #${prNumber}`,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureIssueNumber: prNumber,
+      fixtureIssueTitle: '[T3] Rebased head fixture', fixtureIssueBody: issueBody,
+      fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
+      fixtureEmulateWin32Selector: true,
+      fixtureRequiredStatusWriter: async () => {},
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    };
+    const first = await startPackReview({
+      ...common,
+      fixtureReviewStdout: JSON.stringify({
+        verdict: 'findings', findingCount: 1,
+        findings: [{ severity: 'blocking', title: 'round one finding' }],
+      }),
+      fixtureGithubReviewId: 276701,
+    });
+    expect(first).toMatchObject({ ok: true, created: true });
+    expect(readPackReviewAuthority(prNumber, options)?.cycle).toMatchObject({
+      state: 'open_findings', frozenTier: 'T3', frozenCap: 2,
+      consumedRoundOrdinals: [1],
+    });
+
+    const sameHead = await startPackReview({
+      ...common, fixtureReviewStdout: cleanPayload(), fixtureGithubReviewId: 276702,
+    });
+    expect(sameHead).toMatchObject({
+      ok: false, created: false, reason: 'prior_round_findings_unresolved', httpStatus: 409,
+    });
+    expect(String(sameHead.nextAction)).toContain('a rebase is allowed');
+
+    const rebasedInput = {
+      ...common,
+      headSha: rebasedHead,
+      fixtureCurrentPrHeadSha: rebasedHead,
+      fixturePostReviewHeadSha: rebasedHead,
+      fixtureReviewStdout: cleanPayload(),
+      fixtureGithubReviewId: 276703,
+    };
+    const unknown = await startPackReview({
+      ...rebasedInput, fixtureReviewCompareStatus: 'unavailable',
+    });
+    expect(unknown).toMatchObject({
+      ok: false, created: false, reason: 'prior_round_findings_unresolved',
+    });
+    expect(readPackReviewAuthority(prNumber, options)?.cycle?.consumedRoundOrdinals).toEqual([1]);
+
+    const round2 = await startPackReview({
+      ...rebasedInput, fixtureReviewCompareStatus: 'diverged',
+    });
+    expect(round2).toMatchObject({ ok: true, created: true, headSha: rebasedHead });
+    expect(readPackReviewAuthority(prNumber, options)).toMatchObject({
+      currentHeadSha: rebasedHead,
+      cycle: {
+        state: 'closed', frozenTier: 'T3', frozenCap: 2,
+        consumedRoundOrdinals: [1, 2],
+        settlementKind: 'rewritten_head', reviewStageComplete: true,
+      },
+    });
+  });
+
   it('does not create a native same-round replacement when the prior run lacks a native binding', async () => {
     const parent = mkdtempSync(join(tmpdir(), 'pack-review-1826-native-unbound-'));
     roots.push(parent);

@@ -1,8 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { collectLocalModuleSpecifiers } from './module-specifiers.mjs';
 import { loadReverifyAllowlistConfig } from './reverify-allowlist-config.ts';
+import type { TargetContext } from './target-context.ts';
 
 const allowlist = loadReverifyAllowlistConfig();
 
@@ -150,9 +151,25 @@ function resolveNpmTestAllowlistedCommand(
   };
 }
 
+// The selected card grants only its exact node entrypoint, confined to the card's
+// primary checkout and to the checkout where the resolver will execute it.
+function isConfinedExistingNodeScript(root: string, relativeScript: string): boolean {
+  try {
+    const canonicalRoot = realpathSync(root);
+    const canonicalScript = realpathSync(path.resolve(root, relativeScript));
+    const relative = path.relative(canonicalRoot, canonicalScript);
+    return !!relative
+      && relative !== '..'
+      && !relative.startsWith(`..${path.sep}`)
+      && !path.isAbsolute(relative)
+      && statSync(canonicalScript).isFile();
+  } catch {
+    return false;
+  }
+}
 export function resolveAllowlistedCommand(
   command: string,
-  options: { repoRoot: string },
+  options: { repoRoot: string; selectedContext?: TargetContext },
 ): ResolvedAllowlistedCommand | null {
   const trimmed = command.trim();
   if (!trimmed || SHELL_METACHAR_PATTERN.test(trimmed)) {
@@ -184,7 +201,13 @@ export function resolveAllowlistedCommand(
       return null;
     }
     const matchedPrefix = NODE_PREFIXES.find((prefix) => scriptPathMatchesAllowlistedPrefix(scriptPath, prefix));
-    if (!matchedPrefix) {
+    const selectedContext = options.selectedContext;
+    const selectedCardBoundary = !!selectedContext?.contractEvidenceProducer
+      && selectedContext.contractEvidenceProducer.boundaryCommand === trimmed
+      && !path.isAbsolute(scriptPath)
+      && isConfinedExistingNodeScript(selectedContext.primaryRoot, scriptPath)
+      && isConfinedExistingNodeScript(options.repoRoot, scriptPath);
+    if (!matchedPrefix && !selectedCardBoundary) {
       return null;
     }
     const absoluteScript = path.isAbsolute(scriptPath)
@@ -197,7 +220,7 @@ export function resolveAllowlistedCommand(
       executable: process.execPath,
       args: [absoluteScript],
       env: parsedEnv.env,
-      allowlistId: `node ${matchedPrefix}`,
+      allowlistId: matchedPrefix ? `node ${matchedPrefix}` : 'selected-card:boundaryCommand',
     };
   }
 
@@ -222,8 +245,8 @@ export function resolveAllowlistedCommand(
   return null;
 }
 
-export function isCommandSafe(command: string, repoRoot: string): boolean {
-  return resolveAllowlistedCommand(command, { repoRoot }) !== null;
+export function isCommandSafe(command: string, repoRoot: string, selectedContext?: TargetContext): boolean {
+  return resolveAllowlistedCommand(command, { repoRoot, selectedContext }) !== null;
 }
 
 
