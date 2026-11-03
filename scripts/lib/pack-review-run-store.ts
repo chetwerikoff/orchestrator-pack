@@ -251,6 +251,57 @@ function matchesTriageIdentity(
     && value.issueDigest === identity.issueDigest && value.rawFindingsDigest === identity.rawFindingsDigest;
 }
 
+/** A citation is an exact-head witness, not a general-purpose model verdict.
+ * Permit narrowly checkable low-harm and direct-control-flow claims only.
+ * Ambiguous consequences, unsafe effects and unrelated code lines fail closed.
+ */
+function blockingTriageDowngradeHasEvidence(
+  originals: readonly Record<string, unknown>[],
+  decision: PackReviewTriageDecision,
+  reason: string,
+  evidence: string | undefined,
+  verifiedCode: boolean,
+  lowImpact: boolean | undefined,
+): boolean {
+  if (!verifiedCode || !evidence) return false;
+  const match = /^([A-Za-z0-9._+@/-]+):([1-9][0-9]*)\s+([^\r\n]{6,240})$/.exec(evidence);
+  if (!match) return false;
+  const sourcePath = match[1]!;
+  if (!originals.every((finding) =>
+    (finding.path === sourcePath || finding.filePath === sourcePath))) return false;
+  const claim = originals.map((finding) =>
+    [finding.type, finding.category, finding.quality, finding.title,
+      finding.summary, finding.details, finding.body]
+      .filter((part) => typeof part === 'string').join(' ')).join(' ').toLowerCase();
+  if (!claim.trim()) return false;
+
+  // Classify from the full untrusted claim, never from optional category
+  // or an Opus-supplied lowImpact flag. Unknown dangerous claims remain FIX_NOW.
+  const protectedHarm = /\b(?:secur(?:ity|e)|scope|permission|privilege|unauthori[sz]ed|credential|secret|token|password|exfiltrat\w*|unsafe|destruct\w*|data\s+(?:loss|lost|corrupt\w*|delet\w*)|loss\s+of\s+data|corrupt\w*|overwrite|false(?:ly)?\s+(?:success|green|pass\w*|complet\w*)|green\s+(?:status|check|build)|required\s+(?:status|check|ci)|merge|completion|incorrect\s+success|hung|hang\w*|deadlock|stuck|indefinit\w*|without\s+(?:automatic\s+)?recover\w*|no\s+automatic\s+recover\w*)\b/i.test(claim);
+  if (protectedHarm) return false;
+
+  const codeLine = match[3]!;
+  const irrelevant = new Set(['return','const','false','true','null','undefined','function',
+    'export','import','string','number','value','result','lines','push','this','throw',
+    'async','await','else','error','source','review','code','into','from']);
+  const tokens = [...new Set((codeLine.match(/[A-Za-z_$][\w$]*/g) ?? [])
+    .map((token) => token.toLowerCase())
+    .filter((token) => token.length >= 5 && !irrelevant.has(token)))];
+  if (!tokens.some((token) => claim.includes(token))) return false;
+  if (decision === 'REJECT') {
+    // A direct same-file short-circuit can disprove a stated trigger.
+    // A cited import, assignment or unrelated helper is never such proof.
+    return /\bif\s*\(.{1,160}\)\s*(?:return\b|throw\b)/.test(codeLine)
+      && /\b(?:unreachable|cannot\s+(?:occur|run|reach)|never\s+(?:invoked|executed|runs)|returns?\s+before|prevents?\s+invocation)\b/i.test(reason)
+      && tokens.some((token) => reason.toLowerCase().includes(token));
+  }
+  return decision === 'DEFER'
+    && lowImpact === true
+    && /\b(?:cosmetic|visual|formatting|style|styling|typo|label|display|optional\s+text)\b/i.test(claim)
+    && /\b(?:cost|effort|complexity|fix\s+cost|fixing)\b/i.test(reason)
+    && /\b(?:low[- ]impact|minor|cosmetic|visual|label|display|format|harmless)\b/i.test(reason);
+}
+
 /** Whole-result validator: one exact member per original occurrence; no invented finding. */
 function validatePackReviewTriageResultInternal(
   run: PackReviewRunRecord,
@@ -297,14 +348,14 @@ function validatePackReviewTriageResultInternal(
       && (evidenceMode === 'write'
         ? verifiedExactHeadTriageCodeLine(run,codeEvidence)
         : /^([A-Za-z0-9._+@/-]+):([1-9][0-9]*)\s+([^\r\n]{6,240})$/.test(codeEvidence));
-    // An exact-head line proves that a citation exists, not that a trigger
-    // is impossible or its harm is low.  Neither model-authored lowImpact nor
-    // a finite protected-harm keyword list supplies independent causal proof.
-    // The current boundary has no production witness that can establish such
-    // proof: fail the whole triage rather than publish an unsafe downgrade.
-    // Advisory source groups may still DEFER/REJECT; blocking FIX_NOW groups
-    // may still deduplicate without changing their original severity.
-    if (originalBlocking && value.decision !== 'FIX_NOW') {
+    // Only the write boundary reads the immutable Git head; saved results replay
+    // the same source/line/claim checks without consulting a mutable checkout.
+    // A merely existing file:line, a model confidence label, or cost alone fails.
+    if (originalBlocking && value.decision !== 'FIX_NOW'
+        && !blockingTriageDowngradeHasEvidence(
+          originals, value.decision, reason, codeEvidence, verifiedCode,
+          value.lowImpact,
+        )) {
       throw new Error('blocking downgrade lacks independent causal or low-harm proof');
     }
     const code = originals.map((finding: Record<string, unknown>) => String(finding.code ?? finding.signature ?? '').trim())
@@ -340,15 +391,32 @@ export function projectPackReviewEffectiveFindings(run: PackReviewRunRecord): {
   groups: PackReviewTriageGroup[]; fixNow: PackReviewTriageGroup[]; deferred: PackReviewTriageGroup[];
 } {
   const raw = packReviewTriageCensus(run);
-  const fallback = () => ({
-    mode: 'plain' as const,
-    blocking: raw ? raw.rawFindings.some(isOriginallyBlockingPackReviewFinding)
-      : run.findings.some(isOriginallyBlockingPackReviewFinding),
-    effectiveBlockingGroupCount: raw
-      ? raw.rawFindings.filter(isOriginallyBlockingPackReviewFinding).length
-      : run.findings.filter(isOriginallyBlockingPackReviewFinding).length,
-    groups: [], fixNow: [], deferred: [],
-  });
+  const fallback = () => {
+    // Plain fallback is the original per-occurrence source union, NOT a
+    // deduplicated triage. It must still supply an actionable fixer packet.
+    const rows = raw?.occurrences ?? run.findings.map((finding,index) => ({
+      key: 'original:' + index, finding: finding as Record<string, unknown>,
+    }));
+    const fixNow: PackReviewTriageGroup[] = rows
+      .filter((row) => isOriginallyBlockingPackReviewFinding(row.finding))
+      .map((row) => {
+        const slotId = row.key.split(':')[0]!;
+        const code = String(row.finding.code ?? row.finding.signature ??
+          row.finding.title ?? 'UNSPECIFIED').trim().slice(0,160) || 'UNSPECIFIED';
+        return {
+          groupId: 'original-' + createHash('sha256').update(JSON.stringify([
+            run.id,run.targetSha,row.key,
+          ])).digest('hex').slice(0,20),
+          members: [row.key], slotIds: [slotId], decision: 'FIX_NOW' as const,
+          reason: 'Original blocking source finding; no validated triage', code,
+        };
+      });
+    return {
+      mode: 'plain' as const, blocking: fixNow.length > 0,
+      effectiveBlockingGroupCount: fixNow.length,
+      groups: [] as PackReviewTriageGroup[], fixNow, deferred: [] as PackReviewTriageGroup[],
+    };
+  };
   const saved = run.gptTriage;
   if (!raw || !saved || saved.schema !== 'pack-review-gpt-triage/v1'
       || !matchesTriageIdentity(saved,run,raw.digest)
