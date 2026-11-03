@@ -30,7 +30,6 @@ import {
   resolveCurrentPrHead,
   resolvePackReviewReconcileRepository,
   startPackReview,
-  hasReadOnlyOpusTriageUserSettings,
 } from './pack-review-runner.js';
 import type { CarryoverReplayResult } from './pack-review-carryover.js';
 import {
@@ -7854,7 +7853,7 @@ describe('Issue #2719 CLI and manager interpretation of primary and secondary re
 describe('Issue #2761 normal source-settling Opus triage', () => {
   const help = [
     '--print', '--output-format', '--json-schema', '--model', '--effort',
-    '--setting-sources', '--strict-mcp-config', '--permission-mode', '--allowedTools',
+    '--restricted', '--tools', '--strict-mcp-config', '--permission-mode',
   ].join(' ');
   const groups = [
     {
@@ -7866,7 +7865,9 @@ describe('Issue #2761 normal source-settling Opus triage', () => {
       decision: 'DEFER', reason: 'Originally advisory cosmetic issue',
     },
   ];
-  async function settled(opusGroups: unknown, options: { noSchemaFlag?: boolean; clean?: boolean } = {}) {
+  async function settled(opusGroups: unknown, options: {
+    noSchemaFlag?: boolean; noRestrictedFlag?: boolean; clean?: boolean;
+  } = {}) {
     const storeRoot = tempRoot('opk-2761-triage-settle-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot,capture);
@@ -7897,8 +7898,12 @@ describe('Issue #2761 normal source-settling Opus triage', () => {
         'source-02': [{ stdout: findingsPayload('duplicate') }],
         'source-03': [{ stdout: findingsPayload('cosmetic', 'warning') }],
       },
-      fixtureOpusTriageHelp: options.noSchemaFlag ? help.replace('--json-schema','') : help,
-      fixtureOpusTriageConfinementVerified: true,
+      fixtureOpusTriageHelp: (() => {
+        let text = help;
+        if (options.noSchemaFlag) text = text.replace('--json-schema', '');
+        if (options.noRestrictedFlag) text = text.replace('--restricted', '');
+        return text;
+      })(),
       fixtureOpusTriageProcess: async (request) => {
         calls.push(request);
         return {
@@ -7920,8 +7925,8 @@ describe('Issue #2761 normal source-settling Opus triage', () => {
     expect(test.calls[0]?.args).toEqual([
       '--print', '--output-format', 'json', '--json-schema', expect.any(String),
       '--model', 'claude-opus-5-5', '--effort', 'medium',
-      '--setting-sources', 'user', '--strict-mcp-config',
-      '--permission-mode', 'dontAsk', '--allowedTools', 'Read', 'Grep', 'Glob',
+      '--restricted', '--tools', 'Read,Grep,Glob', '--strict-mcp-config',
+      '--permission-mode', 'dontAsk',
     ]);
     expect(test.calls[0]?.timeoutMs).toBe(900_000);
     expect(test.run?.gptTriageAttempt).toBeDefined();
@@ -8051,21 +8056,8 @@ describe('Issue #2761 normal source-settling Opus triage', () => {
     expect(skill).toContain('FIX_NOW');
   });
 
-  it('triage one-shot confinement rejects user-approved forbidden tools and never re-invokes on unsupported help or zero union', async () => {
-    const safe = {permissions: {
-      blockReadsOutsideWorkingDirectories:true,
-      additionalDirectories:[],blockReadsExemptPaths:[],allow:['Read','Grep','Glob'],
-    }};
-    expect(hasReadOnlyOpusTriageUserSettings(safe)).toBe(true);
-    for (const rule of ['Bash','Bash(npm *)','Write','Edit','Task','WebFetch','mcp__github', '*']) {
-      expect(hasReadOnlyOpusTriageUserSettings({
-        permissions:{ ...safe.permissions, allow:['Read',rule] },
-      })).toBe(false);
-    }
-    expect(hasReadOnlyOpusTriageUserSettings({
-      permissions:{ ...safe.permissions, defaultMode:'bypassPermissions' },
-    })).toBe(false);
-    const unsupported = await settled(groups,{noSchemaFlag:true});
+  it('triage one-shot confinement falls back to the plain union when the CLI lacks --restricted and never re-invokes on zero union', async () => {
+    const unsupported = await settled(groups,{noRestrictedFlag:true});
     expect(unsupported.calls).toHaveLength(0);
     expect(unsupported.run?.gptTriageAttempt).toBeDefined();
     expect(unsupported.run?.gptTriage).toBeUndefined();
