@@ -1860,13 +1860,15 @@ function parseRecord(
       || logicalSourceVersions.includes(reviewRound.accountingVersion ?? ''))) {
     // Supplemental reviews may carry the cycle's historical source version but
     // never consume a logical ordinal. Only required GPT rounds have cap identity.
+    // The saved cap is the one valid when the round was created; read does not
+    // compare it with today's cap. Current caps gate new-round admission.
     const supplemental = automaticBudgetDisposition === 'non_consuming_explicit'
       && logicalRoundOrdinal === undefined && logicalRoundCap === undefined;
     if (accountingVersion !== reviewRound.accountingVersion
         || resolvedReviewer !== 'gpt'
         || (!supplemental && (reviewCycleId === undefined
           || logicalRoundOrdinal !== reviewRound.roundOrdinal
-          || logicalRoundCap !== PACK_REVIEW_LOGICAL_CAPS[reviewRound.tier]))) {
+          || logicalRoundCap === undefined))) {
       throw new Error(`corrupt pack review run record at ${path}: GPT logical source version/round identity mismatch`);
     }
   }
