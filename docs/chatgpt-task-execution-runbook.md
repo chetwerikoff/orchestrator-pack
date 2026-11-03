@@ -734,22 +734,37 @@ For every required logical round:
 
 - the former requirement “`PACK_GPT_BROWSER_PROJECT_URL` is present” is retired;
   the selected card supplies the project URL and `PACK_GPT_BROWSER_CHAT_URL` is absent;
-- the runner launches source slots `source-01..03` as independent fresh
-  ChatGPT project chats, at 30-second admission-start intervals, without waiting
-  for a predecessor's bind or send settlement. Resumed rounds reuse their retained
-  admission timestamps and invocation identities. The implementation, fixer,
-  and sibling reviewer conversations are never reused as sources;
+- for genuinely new GPT runs, the runner launches T1 `source-01`, T2
+  `source-01..02`, or T3 `source-01..03` as independent fresh ChatGPT project
+  chats, at 30-second admission-start intervals, without waiting for predecessor
+  binding or send settlement. The logical cap remains T1/T2/T3=1/1/2; source
+  selection is a separately persisted run/round generation. Existing pre-tiered
+  three-slot runs keep their frozen slots, including a credentialed after-grace
+  2/3 settlement for historical T1/T2/T3 when already permitted; new T1/T2
+  require full 1/1 or 2/2 and only new T3 may degrade to 2/3 after grace.
+  Resumed rounds reuse retained admission timestamps and invocation identities.
+  The implementation, fixer, and sibling reviewer chats are never reused;
 - reviewer-authored runner-bound GitHub source comments plus canonical runner
   state are the progression authority. The manager observes/consumes them and
   never republishes or paraphrases them into a replacement review authority.
 
-When the canonical result for a logical round contains findings, open exactly
-one **fresh GPT fixer conversation for that findings-bearing round**. It must be
-different from the implementation conversation and every reviewer conversation.
-Keep its prompt authority-driven: provide the live Issue URL, PR URL, and exact
-reviewed head, then instruct it to read the live Issue, PR, current CI, and
-current pack-review/source comments and fix every applicable finding. Do not
-paste a stale findings summary when GitHub is available. One fixer conversation
+Only when the canonical exact-PR/head effective-findings projection contains
+blocking actionable entries, open one **fresh GPT fixer conversation** for
+that logical round. If a valid triage was persisted, this means blocking
+`FIX_NOW` groups only; a findings-only verdict consisting of `DEFER`,
+evidence-proven `REJECT` and/or advisory groups launches no fixer.
+If triage was missing, invalid or unsafe, the same projection is `plain`:
+**original source blocking rows remain actionable** and still launch a fixer,
+using the published `ORIGINAL_BLOCKER` packet one entry per original occurrence.
+Plain fallback must not wait for a non-existent persisted triage group packet.
+The fixer differs from implementation and each reviewer chat. Give it the exact
+Issue URL, PR URL, 40-hex reviewed head and the bound published packet:
+deduplicated one-entry-per-`FIX_NOW`-group only in validated triaged mode,
+or unmodified original blocker occurrences in plain mode. No `DEFER`,
+`REJECT` or advisory-only rows become fixer work. The manager rereads
+current CI, original source comments and published packet before acting;
+a stale copied summary has no authority.
+One fixer conversation
 may continue for concrete CI/fix gaps in that same correction episode. Required
 code corrections advance the PR to a Git strict descendant of the findings-reviewed
 head; current required CI must be green before review progression. The guarded
@@ -759,9 +774,10 @@ fixer never merges unless the direct top-level operator separately orders merge.
 Preserve the existing logical-round economics and settlement authority:
 
 ```text
-T1 -> 1 logical round x 3 GPT sources
-T2 -> 1 logical round x 3 GPT sources
-T3 -> 2 logical rounds x 3 GPT sources
+T1 -> 1 logical round x 1 GPT source (new tiered runs)
+T2 -> 1 logical round x 2 GPT sources (new tiered runs)
+T3 -> 2 logical rounds x 3 GPT sources each (new tiered runs)
+Existing pre-tiered runs -> frozen 3-slot source policy, unchanged logical caps
 ```
 
 A findings-bearing pre-final round is fixed to a strict descendant before the
@@ -777,8 +793,8 @@ node --experimental-strip-types scripts/pack-review-runner.ts reconcile \
 
 At the unchanged reviewed head, scoped reconcile may settle a blocking scope-fence
 finding resolved in the linked Issue's live allowed-roots. It requires the exact
-repository/PR/Issue/head, terminal run/current cycle/final logical round, every
-credentialed source complete (no degraded coverage), the frozen Issue snapshot,
+repository/PR/Issue/head, terminal run/current cycle/final logical round, the original frozen source census at its authenticated saved-version quorum
+(including historically permitted old T1/T2 2/3 after grace), the frozen Issue snapshot,
 and current-head required CI green (excluding the settlement-owned pack-review
 status). It consumes the ordinary trusted author disposition convention owned by
 [`create-issue-draft`](../.cursor/skills/create-issue-draft/SKILL.md): the exact

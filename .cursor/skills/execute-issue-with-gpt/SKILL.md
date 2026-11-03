@@ -106,9 +106,17 @@ runner when the supervised manager will park on review completion. The session i
 exact already-owned supervised identity; never infer it from branch/worktree/title/PID. If that
 binding is unavailable, omit `--session-id`, keep the runner foregrounded/observed, consume its
 terminal result directly, and do not park waiting for `workerNotification`. Required
-reviewer sources are fresh project chats owned by that runner. A findings-bearing
-logical round gets one fresh GPT fixer conversation distinct from the
-implementation conversation and every reviewer conversation. A code-required
+reviewer sources are fresh project chats owned by that runner. A logical round gets one fresh GPT fixer conversation distinct from implementation
+and source reviewers only for blocking findings in the canonical exact-PR/head
+effective projection. In validated triaged mode this means one or more blocking
+`FIX_NOW` groups: give the fixer the published one-entry-per-group
+`FIX_NOW` packet, never raw duplicate rows or DEFER/REJECT/advisory rows.
+When triage is absent, unsafe, invalid, or uncertain, the projection is
+`plain`: a blocking original source union still launches a fixer with the
+published `ORIGINAL_BLOCKER` source-occurrence packet (no deduplication or
+false group decisions). Neither mode launches a fixer when effective blocking
+count is zero. Do not require a persisted triage result for plain fallback.
+A code-required
 findings fix advances to a proven strict-descendant head with green required CI;
 an independently credentialed final-cap Issue-only scope correction can instead
 settle on the original head through scoped reconcile and its original cap.

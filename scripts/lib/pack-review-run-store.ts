@@ -7,11 +7,14 @@ import {
   rmSync,
   statSync,
   writeFileSync,
+  appendFileSync,
+  lstatSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import type { PackReviewer, PackReviewerResolutionSource } from './resolve-pack-reviewer.ts';
 import { TURN_STATES } from '../chatgpt-browser-turn/contracts.ts';
 import {
@@ -19,6 +22,7 @@ import {
   PACK_REVIEW_CAP_MAP_VERSION,
   PACK_REVIEW_LOGICAL_CAPS,
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+  PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
   PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION,
   PACK_REVIEW_DISTINCT_HEAD_CAPS,
   PACK_REVIEW_LEGACY_CAP_MAP_VERSION,
@@ -117,6 +121,327 @@ export interface PackReviewSourceSlotRecord {
   payload?: unknown;
 }
 
+export type PackReviewTriageDecision = 'FIX_NOW' | 'DEFER' | 'REJECT';
+export interface PackReviewTriageGroup {
+  groupId: string;
+  members: string[];
+  slotIds: string[];
+  decision: PackReviewTriageDecision;
+  reason: string;
+  code: string;
+  /** Verified against the exact reviewed head before persistence. */
+  codeEvidence?: string;
+  lowImpact?: boolean;
+}
+export interface PackReviewGptTriageAttempt {
+  schema: 'pack-review-gpt-triage-attempt/v1';
+  runId: string;
+  targetSha: string;
+  cycleId: string;
+  roundOrdinal: number;
+  issueDigest: string;
+  rawFindingsDigest: string;
+  attemptedAtUtc: string;
+}
+export interface PackReviewGptTriageRecord {
+  schema: 'pack-review-gpt-triage/v1';
+  runId: string;
+  targetSha: string;
+  cycleId: string;
+  roundOrdinal: number;
+  issueDigest: string;
+  rawFindingsDigest: string;
+  groups: PackReviewTriageGroup[];
+}
+
+export interface PackReviewTriageModelGroup {
+  members: Array<{ slotId: string; index: number }>;
+  decision: PackReviewTriageDecision;
+  reason: string;
+  codeEvidence?: string;
+  lowImpact?: boolean;
+}
+
+/** The source-slot order and per-slot index are the sole occurrence identities. */
+function packReviewTriageCensus(run: PackReviewRunRecord): {
+  rawFindings: unknown[];
+  occurrences: Array<{ key: string; finding: Record<string, unknown> }>;
+  digest: string;
+} | null {
+  const round = run.reviewRound;
+  if (!round || round.reviewer !== 'gpt') return null;
+  const occurrences: Array<{ key: string; finding: Record<string, unknown> }> = [];
+  const rawFindings: unknown[] = [];
+  for (const slot of [...round.sourceSlots].sort((a,b) => a.ordinal - b.ordinal)) {
+    if (slot.lifecycle !== 'terminal'
+        || (slot.terminalClass !== 'complete_clean' && slot.terminalClass !== 'complete_findings')) continue;
+    const payload = slot.payload;
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+    const findings = (payload as { findings?: unknown }).findings;
+    if (!Array.isArray(findings)) return null;
+    for (let index = 0; index < findings.length; index += 1) {
+      const finding = findings[index];
+      if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return null;
+      const original = finding as Record<string, unknown>;
+      occurrences.push({ key: `${slot.slotId}:${index}`, finding: original });
+      rawFindings.push({ ...original, sourceSlotId: slot.slotId });
+    }
+  }
+  return {
+    rawFindings, occurrences,
+    digest: createHash('sha256').update(JSON.stringify(rawFindings)).digest('hex'),
+  };
+}
+
+export function isOriginallyBlockingPackReviewFinding(finding: unknown): boolean {
+  if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return true;
+  return !['warning','info','non-blocking'].includes(
+    String((finding as Record<string, unknown>).severity ?? '').trim().toLowerCase());
+}
+
+/** A model-supplied path:line assertion is never its own proof.
+ * Read the immutable reviewed commit object, not the mutable working tree.
+ * Unavailable Git, wrong head, ambiguous paths, and missing lines all fail closed.
+ */
+function verifiedExactHeadTriageCodeLine(run: PackReviewRunRecord, evidence: string): boolean {
+  const match = /^([A-Za-z0-9._+@/-]+):([1-9][0-9]*)\s+([^\r\n]{6,240})$/.exec(evidence);
+  if (!match || !/^[a-f0-9]{40}$/i.test(run.targetSha)
+      || !run.sourceRepoRoot || match[1]!.startsWith('/')
+      || match[1]!.split('/').some((part) => !part || part === '.' || part === '..')) return false;
+  const lineNumber = Number(match[2]);
+  if (!Number.isSafeInteger(lineNumber) || lineNumber > 100_000) return false;
+  try {
+    const result = runProcessSync({
+      command: 'git',
+      args: ['-C', run.sourceRepoRoot, '--no-pager', 'show', `${run.targetSha}:${match[1]}`],
+      inheritParentEnv: false,
+      timeoutMs: 10_000,
+    });
+    if (!result.ok || result.stdout.length > 1_000_000) return false;
+    const original = result.stdout.split(/\r?\n/)[lineNumber - 1]?.trim();
+    const expected = match[3]!.trim();
+    return Boolean(original && expected && original.includes(expected));
+  } catch {
+    return false;
+  }
+}
+
+function triageGroupId(run: PackReviewRunRecord, members: readonly string[]): string {
+  return 'g-' + createHash('sha256').update(
+    JSON.stringify([run.id,run.targetSha,[...members].sort()])).digest('hex').slice(0,20);
+}
+
+function triageBoundIdentity(run: PackReviewRunRecord, digest: string): Omit<PackReviewGptTriageAttempt,'schema'|'attemptedAtUtc'> {
+  return {
+    runId: run.id, targetSha: run.targetSha,
+    cycleId: run.reviewCycleId ?? '', roundOrdinal: run.logicalRoundOrdinal ?? 0,
+    issueDigest: run.reviewRound?.boundIssueSnapshotDigest ?? '', rawFindingsDigest: digest,
+  };
+}
+
+function matchesTriageIdentity(
+  value: Partial<PackReviewGptTriageRecord | PackReviewGptTriageAttempt>,
+  run: PackReviewRunRecord,
+  digest: string,
+): boolean {
+  const identity = triageBoundIdentity(run,digest);
+  return Boolean(identity.cycleId && identity.roundOrdinal && identity.issueDigest)
+    && value.runId === identity.runId && value.targetSha === identity.targetSha
+    && value.cycleId === identity.cycleId && value.roundOrdinal === identity.roundOrdinal
+    && value.issueDigest === identity.issueDigest && value.rawFindingsDigest === identity.rawFindingsDigest;
+}
+
+/** A citation is an exact-head witness, not a general-purpose model verdict.
+ * Permit narrowly checkable low-harm and direct-control-flow claims only.
+ * Ambiguous consequences, unsafe effects and unrelated code lines fail closed.
+ */
+function blockingTriageDowngradeHasEvidence(
+  originals: readonly Record<string, unknown>[],
+  decision: PackReviewTriageDecision,
+  reason: string,
+  evidence: string | undefined,
+  verifiedCode: boolean,
+  lowImpact: boolean | undefined,
+): boolean {
+  if (!verifiedCode || !evidence) return false;
+  const match = /^([A-Za-z0-9._+@/-]+):([1-9][0-9]*)\s+([^\r\n]{6,240})$/.exec(evidence);
+  if (!match) return false;
+  const sourcePath = match[1]!;
+  if (!originals.every((finding) =>
+    (finding.path === sourcePath || finding.filePath === sourcePath))) return false;
+  const claim = originals.map((finding) =>
+    [finding.type, finding.category, finding.quality, finding.title,
+      finding.summary, finding.details, finding.body]
+      .filter((part) => typeof part === 'string').join(' ')).join(' ').toLowerCase();
+  if (!claim.trim()) return false;
+
+  // Classify from the full untrusted claim, never from optional category
+  // or an Opus-supplied lowImpact flag. Unknown dangerous claims remain FIX_NOW.
+  const protectedHarm = /\b(?:secur(?:ity|e)|scope|permission|privilege|unauthori[sz]ed|credential|secret|token|password|exfiltrat\w*|unsafe|destruct\w*|data\s+(?:loss|lost|corrupt\w*|delet\w*)|loss\s+of\s+data|corrupt\w*|overwrite|false(?:ly)?\s+(?:success|green|pass\w*|complet\w*)|green\s+(?:status|check|build)|required\s+(?:status|check|ci)|merge|completion|incorrect\s+success|hung|hang\w*|deadlock|stuck|indefinit\w*|without\s+(?:automatic\s+)?recover\w*|no\s+automatic\s+recover\w*)\b/i.test(claim);
+  if (protectedHarm) return false;
+
+  const codeLine = match[3]!;
+  const irrelevant = new Set(['return','const','false','true','null','undefined','function',
+    'export','import','string','number','value','result','lines','push','this','throw',
+    'async','await','else','error','source','review','code','into','from']);
+  const tokens = [...new Set((codeLine.match(/[A-Za-z_$][\w$]*/g) ?? [])
+    .map((token) => token.toLowerCase())
+    .filter((token) => token.length >= 5 && !irrelevant.has(token)))];
+  if (!tokens.some((token) => claim.includes(token))) return false;
+  if (decision === 'REJECT') {
+    // A direct same-file short-circuit can disprove a stated trigger.
+    // A cited import, assignment or unrelated helper is never such proof.
+    return /\bif\s*\(.{1,160}\)\s*(?:return\b|throw\b)/.test(codeLine)
+      && /\b(?:unreachable|cannot\s+(?:occur|run|reach)|never\s+(?:invoked|executed|runs)|returns?\s+before|prevents?\s+invocation)\b/i.test(reason)
+      && tokens.some((token) => reason.toLowerCase().includes(token));
+  }
+  return decision === 'DEFER'
+    && lowImpact === true
+    && /\b(?:cosmetic|visual|formatting|style|styling|typo|label|display|optional\s+text)\b/i.test(claim)
+    && /\b(?:cost|effort|complexity|fix\s+cost|fixing)\b/i.test(reason)
+    && /\b(?:low[- ]impact|minor|cosmetic|visual|label|display|format|harmless)\b/i.test(reason);
+}
+
+/** Whole-result validator: one exact member per original occurrence; no invented finding. */
+function validatePackReviewTriageResultInternal(
+  run: PackReviewRunRecord,
+  groupsValue: readonly PackReviewTriageModelGroup[],
+  evidenceMode: 'write' | 'replay',
+): PackReviewGptTriageRecord {
+  const census = packReviewTriageCensus(run);
+  if (!census || census.occurrences.length === 0
+      || !Array.isArray(groupsValue) || groupsValue.length === 0) {
+    throw new Error('triage requires a settled nonempty immutable source census');
+  }
+  const byKey = new Map(census.occurrences.map((row) => [row.key,row.finding] as const));
+  const assigned = new Set<string>();
+  const groups: PackReviewTriageGroup[] = [];
+  for (const value of groupsValue) {
+    if (!value || typeof value !== 'object' || !Array.isArray(value.members)
+        || value.members.length === 0
+        || !['FIX_NOW','DEFER','REJECT'].includes(value.decision)
+        || typeof value.reason !== 'string' || !value.reason.trim()
+        || value.reason.length > 400) throw new Error('invalid triage group');
+    const members = value.members.map((member: { slotId: string; index: number }) => {
+      if (!member || typeof member.slotId !== 'string' || !Number.isInteger(member.index)
+          || member.index < 0) throw new Error('invalid triage member');
+      return `${member.slotId}:${member.index}`;
+    }).sort();
+    if (new Set(members).size !== members.length) throw new Error('duplicated triage member');
+    const originals = members.map((key: string) => {
+      const found = byKey.get(key);
+      if (!found || assigned.has(key)) throw new Error('unknown or repeated triage occurrence');
+      assigned.add(key);
+      return found;
+    });
+    const originalBlocking = originals.some(isOriginallyBlockingPackReviewFinding);
+    // Triaging an advisory-only group as FIX_NOW would silently promote it.
+    if (!originalBlocking && value.decision === 'FIX_NOW') {
+      throw new Error('triage cannot promote original advisory findings');
+    }
+    if (/[\r\n\x00-\x1f]/.test(value.reason)) {
+      throw new Error('triage reason must be a single physical line');
+    }
+    const reason = value.reason.trim();
+    const codeEvidence = value.codeEvidence;
+    const verifiedCode = typeof codeEvidence === 'string'
+      && (evidenceMode === 'write'
+        ? verifiedExactHeadTriageCodeLine(run,codeEvidence)
+        : /^([A-Za-z0-9._+@/-]+):([1-9][0-9]*)\s+([^\r\n]{6,240})$/.test(codeEvidence));
+    // Only the write boundary reads the immutable Git head; saved results replay
+    // the same source/line/claim checks without consulting a mutable checkout.
+    // A merely existing file:line, a model confidence label, or cost alone fails.
+    if (originalBlocking && value.decision !== 'FIX_NOW'
+        && !blockingTriageDowngradeHasEvidence(
+          originals, value.decision, reason, codeEvidence, verifiedCode,
+          value.lowImpact,
+        )) {
+      throw new Error('blocking downgrade lacks independent causal or low-harm proof');
+    }
+    const code = originals.map((finding: Record<string, unknown>) => String(finding.code ?? finding.signature ?? '').trim())
+      .find(Boolean) ?? 'UNSPECIFIED';
+    groups.push({
+      groupId: triageGroupId(run,members), members,
+      slotIds: [...new Set<string>(members.map((key: string) => key.split(':')[0]!))].sort(),
+      decision: value.decision, reason, code,
+      ...(verifiedCode ? { codeEvidence } : {}),
+      ...(value.lowImpact === true ? { lowImpact: true } : {}),
+    });
+  }
+  if (assigned.size !== byKey.size) throw new Error('triage occurrence mapping is incomplete');
+  const identity = triageBoundIdentity(run,census.digest);
+  if (!identity.cycleId || !identity.roundOrdinal || !identity.issueDigest) throw new Error('missing triage identity');
+  return {
+    schema:'pack-review-gpt-triage/v1', ...identity,
+    groups: groups.sort((a,b) => a.groupId.localeCompare(b.groupId)),
+  };
+}
+
+/** Only the persistence boundary can verify against Git; replay stays pure. */
+export function validatePackReviewTriageResult(
+  run: PackReviewRunRecord,
+  groupsValue: readonly PackReviewTriageModelGroup[],
+): PackReviewGptTriageRecord {
+  return validatePackReviewTriageResultInternal(run, groupsValue, 'write');
+}
+
+/** One bounded projection for classification, fixer intake and delivery replay. */
+export function projectPackReviewEffectiveFindings(run: PackReviewRunRecord): {
+  mode:'plain'|'triaged'; blocking:boolean; effectiveBlockingGroupCount:number;
+  groups: PackReviewTriageGroup[]; fixNow: PackReviewTriageGroup[]; deferred: PackReviewTriageGroup[];
+} {
+  const raw = packReviewTriageCensus(run);
+  const fallback = () => {
+    // Plain fallback is the original per-occurrence source union, NOT a
+    // deduplicated triage. It must still supply an actionable fixer packet.
+    const rows = raw?.occurrences ?? run.findings.map((finding,index) => ({
+      key: 'original:' + index, finding: finding as Record<string, unknown>,
+    }));
+    const fixNow: PackReviewTriageGroup[] = rows
+      .filter((row) => isOriginallyBlockingPackReviewFinding(row.finding))
+      .map((row) => {
+        const slotId = row.key.split(':')[0]!;
+        const code = String(row.finding.code ?? row.finding.signature ??
+          row.finding.title ?? 'UNSPECIFIED').trim().slice(0,160) || 'UNSPECIFIED';
+        return {
+          groupId: 'original-' + createHash('sha256').update(JSON.stringify([
+            run.id,run.targetSha,row.key,
+          ])).digest('hex').slice(0,20),
+          members: [row.key], slotIds: [slotId], decision: 'FIX_NOW' as const,
+          reason: 'Original blocking source finding; no validated triage', code,
+        };
+      });
+    return {
+      mode: 'plain' as const, blocking: fixNow.length > 0,
+      effectiveBlockingGroupCount: fixNow.length,
+      groups: [] as PackReviewTriageGroup[], fixNow, deferred: [] as PackReviewTriageGroup[],
+    };
+  };
+  const saved = run.gptTriage;
+  if (!raw || !saved || saved.schema !== 'pack-review-gpt-triage/v1'
+      || !matchesTriageIdentity(saved,run,raw.digest)
+      || !run.gptTriageAttempt || !matchesTriageIdentity(run.gptTriageAttempt,run,raw.digest)) return fallback();
+  try {
+    const parsedGroups = saved.groups.map((group) => ({
+      members: group.members.map((key) => {
+        const hit = /^([^:]+):(\d+)$/.exec(key);
+        if (!hit) throw new Error('invalid saved triage member');
+        return { slotId: hit[1]!,index: Number(hit[2]) };
+      }),
+      decision:group.decision,reason:group.reason,
+      codeEvidence:group.codeEvidence,lowImpact:group.lowImpact,
+    }));
+    const verified = validatePackReviewTriageResultInternal(run,parsedGroups,'replay');
+    if (JSON.stringify(verified) !== JSON.stringify(saved)) return fallback();
+    const occurrences = new Map(raw.occurrences.map((row) => [row.key,row.finding] as const));
+    const fixNow = verified.groups.filter((group) => group.decision === 'FIX_NOW'
+      && group.members.some((key) => isOriginallyBlockingPackReviewFinding(occurrences.get(key))));
+    return {mode:'triaged',blocking:fixNow.length>0,
+      effectiveBlockingGroupCount:fixNow.length,
+      groups:verified.groups,fixNow,deferred:verified.groups.filter((group) => group.decision === 'DEFER')};
+  } catch { return fallback(); }
+}
+
 export interface PackReviewGptRoundRecord {
   schema: 'pack-review-gpt-round/v1';
   reviewer: 'gpt';
@@ -203,7 +528,7 @@ export function derivePackReviewNoJudgmentBudgetOutcome(
   consumedRoundOrdinals: readonly number[],
 ): 'non_consuming_no_judgment' | null {
   const coverage = derivePackReviewGptCoverage(run.reviewRound);
-  if (run.accountingVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+  if (![PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION].includes(run.accountingVersion ?? '')
     || !Number.isInteger(run.logicalRoundOrdinal)
     || !['failed', 'timed_out', 'cancelled'].includes(run.status)
     || run.automaticBudgetDisposition !== 'consume'
@@ -276,6 +601,8 @@ export interface PackReviewRunRecord {
   deliveryOutcomes: Partial<Record<PackReviewDeliveryChannel, PackReviewDeliveryOutcome>>;
   canonicalRepository?: string;
   reviewRound?: PackReviewGptRoundRecord;
+  gptTriageAttempt?: PackReviewGptTriageAttempt;
+  gptTriage?: PackReviewGptTriageRecord;
   /** Immutable exact body for native as well as GPT verdicts. */
   boundIssueSnapshotDigest?: string;
   stale?: boolean;
@@ -702,13 +1029,14 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
   const accountingVersion = raw.accountingVersion === undefined
     ? PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION
     : requiredJsonString(raw.accountingVersion, 'reviewRound accountingVersion', path);
-  if (![PACK_REVIEW_CAP_MAP_VERSION, PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION, PACK_REVIEW_LEGACY_CAP_MAP_VERSION]
+  if (![PACK_REVIEW_CAP_MAP_VERSION, PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION, PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION, PACK_REVIEW_LEGACY_CAP_MAP_VERSION]
       .includes(accountingVersion)) {
     throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid reviewRound accountingVersion`);
   }
   const roundOrdinal = requiredJsonPositiveInteger(raw.roundOrdinal, 'reviewRound roundOrdinal', path);
   const cardinality = requiredJsonPositiveInteger(raw.cardinality, 'reviewRound cardinality', path);
-  const tierCap = accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+  const tierCap = (accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+    || accountingVersion === PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION)
     ? PACK_REVIEW_LOGICAL_CAPS[tier]
     : PACK_REVIEW_DISTINCT_HEAD_CAPS[tier];
   if (roundOrdinal > tierCap) {
@@ -834,7 +1162,13 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
       'reviewRound settledSourceCount',
       path,
     );
-    if (cardinality < 3 || settledSourceCount < 2 || settledSourceCount > cardinality) {
+    const fullCensus = settledSourceCount === cardinality;
+    const allowedDegraded = cardinality === 3 && settledSourceCount === 2
+      && (accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+        || (accountingVersion === PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION && tier === 'T3')
+        || (accountingVersion !== PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION
+          && accountingVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION));
+    if (!fullCensus && !allowedDegraded) {
       throw new Error(
         `corrupt pack review run record${path ? ` at ${path}` : ''}: invalid reviewRound settledSourceCount`,
       );
@@ -1451,7 +1785,7 @@ function parseRecord(
     ? undefined
     : requiredJsonString(raw.accountingVersion, 'accountingVersion', path);
   if (accountingVersion !== undefined
-      && ![PACK_REVIEW_CAP_MAP_VERSION, PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION, PACK_REVIEW_LEGACY_CAP_MAP_VERSION]
+      && ![PACK_REVIEW_CAP_MAP_VERSION, PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION, PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION, PACK_REVIEW_LEGACY_CAP_MAP_VERSION]
         .includes(accountingVersion)) {
     throw new Error(`corrupt pack review run record at ${path}: invalid accountingVersion`);
   }
@@ -1520,6 +1854,21 @@ function parseRecord(
   if (reviewRound && boundIssueSnapshotDigest !== undefined
       && boundIssueSnapshotDigest !== reviewRound.boundIssueSnapshotDigest) {
     throw new Error(`corrupt pack review run record at ${path}: GPT/native bound Issue digest differs`);
+  }
+  const logicalSourceVersions = [PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION];
+  if (reviewRound && (logicalSourceVersions.includes(accountingVersion ?? '')
+      || logicalSourceVersions.includes(reviewRound.accountingVersion ?? ''))) {
+    // Supplemental reviews may carry the cycle's historical source version but
+    // never consume a logical ordinal. Only required GPT rounds have cap identity.
+    const supplemental = automaticBudgetDisposition === 'non_consuming_explicit'
+      && logicalRoundOrdinal === undefined && logicalRoundCap === undefined;
+    if (accountingVersion !== reviewRound.accountingVersion
+        || resolvedReviewer !== 'gpt'
+        || (!supplemental && (reviewCycleId === undefined
+          || logicalRoundOrdinal !== reviewRound.roundOrdinal
+          || logicalRoundCap !== PACK_REVIEW_LOGICAL_CAPS[reviewRound.tier]))) {
+      throw new Error(`corrupt pack review run record at ${path}: GPT logical source version/round identity mismatch`);
+    }
   }
   const reviewVerdict = raw.reviewVerdict === 'clean' || raw.reviewVerdict === 'findings'
     ? raw.reviewVerdict
@@ -2073,7 +2422,14 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       ...(input.logicalRoundCap ? { logicalRoundCap: input.logicalRoundCap } : {}),
       ...(input.resolvedReviewer ? { resolvedReviewer: input.resolvedReviewer } : {}),
       ...(input.resolvedReviewerSource ? { resolvedReviewerSource: input.resolvedReviewerSource } : {}),
-      ...(input.reviewRound ? { reviewRound: input.reviewRound } : {}),
+      // Freeze the caller-selected source generation together with the round
+      // when creating a record. An omitted round version is only filled at
+      // creation; previously persisted versions are never migrated on read.
+      ...(input.reviewRound ? { reviewRound: {
+        ...input.reviewRound,
+        ...(input.reviewRound.accountingVersion === undefined && input.accountingVersion
+          ? { accountingVersion: input.accountingVersion } : {}),
+      } } : {}),
       ...(input.boundIssueSnapshotDigest ? { boundIssueSnapshotDigest: input.boundIssueSnapshotDigest } : {}),
       runnerPid: process.pid,
       createdAt: now,
@@ -2187,6 +2543,14 @@ function buildUpdatedPackReviewRun(
       ? updatedAt
       : String(fields.heartbeatAtUtc ?? existing.heartbeatAtUtc),
   };
+  if (existing.gptTriageAttempt && fields.gptTriageAttempt
+      && !isDeepStrictEqual(existing.gptTriageAttempt,fields.gptTriageAttempt)) {
+    throw new Error(`corrupt pack review run record at ${path}: triage attempt is immutable`);
+  }
+  if (existing.gptTriage && fields.gptTriage
+      && !isDeepStrictEqual(existing.gptTriage,fields.gptTriage)) {
+    throw new Error(`corrupt pack review run record at ${path}: triage decision is immutable`);
+  }
   if (existing.reviewRound) {
     if (candidate.reviewRound === undefined || candidate.reviewRound === null) {
       throw new Error(`corrupt pack review run record at ${path}: frozen reviewRound cannot be removed`);
@@ -2200,7 +2564,27 @@ function buildUpdatedPackReviewRun(
   } else if (candidate.reviewRound !== undefined && candidate.reviewRound !== null) {
     candidate.reviewRound = normalizePackReviewGptRoundRecord(candidate.reviewRound, path);
   }
-  return parseRecord(candidate, path);
+  const parsed = parseRecord(candidate, path);
+  if (!existing.gptTriage && parsed.gptTriage) {
+    // Generic store writers cannot bypass the one-time exact-head proof check.
+    // Replays never need filesystem access, but this new persisted decision does.
+    const groups = parsed.gptTriage.groups.map((group) => ({
+      members: group.members.map((key) => {
+        const hit = /^([^:]+):(\d+)$/.exec(key);
+        if (!hit) throw new Error('invalid persisted triage occurrence');
+        return {slotId:hit[1]!,index:Number(hit[2])};
+      }),
+      decision:group.decision,reason:group.reason,
+      codeEvidence:group.codeEvidence,lowImpact:group.lowImpact,
+    }));
+    const verified = validatePackReviewTriageResult(parsed,groups);
+    if (!isDeepStrictEqual(parsed.gptTriage,verified)
+        || !parsed.gptTriageAttempt
+        || !matchesTriageIdentity(parsed.gptTriageAttempt,parsed,verified.rawFindingsDigest)) {
+      throw new Error(`corrupt pack review run record at ${path}: unverified persisted triage`);
+    }
+  }
+  return parsed;
 }
 
 export function updatePackReviewRun(
@@ -2238,6 +2622,113 @@ export function updatePackReviewRunIf(
     const next = buildUpdatedPackReviewRun(existing, nextFields, path, updatedAt);
     writeRecordUnlocked(storeRoot, next);
     return next;
+  });
+}
+
+/** Atomic, input-census-bound once-only marker, even if the child never spawns. */
+export function claimPackReviewGptTriageAttempt(
+  runId: string,
+  options: PackReviewStoreOptions = {},
+): PackReviewRunRecord | null {
+  return updatePackReviewRunIf(runId, (records) => {
+    const run = records.find((record) => record.id === runId);
+    const census = run && packReviewTriageCensus(run);
+    return Boolean(run && census && census.occurrences.length > 0
+      && !run.gptTriageAttempt && !run.gptTriage && !hasPersistedPackReviewVerdict(run)
+      && run.reviewRound?.settledSourceCount !== undefined
+      && run.reviewCycleId && run.logicalRoundOrdinal
+      && run.accountingVersion === run.reviewRound.accountingVersion
+      && run.reviewRound.sourceSlots.filter((slot) => slot.lifecycle === 'terminal'
+        && (slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings'))
+        .length === run.reviewRound.settledSourceCount
+      // A historical/T3 after-grace 2/3 may leave the third slot unresolved.
+      // The frozen credentialed quorum, not the third slot's lifecycle, binds triage.
+      && run.reviewRound.sourceSlots.filter((slot) => slot.lifecycle === 'terminal'
+        && (slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings'))
+        .every((slot) => {
+          const terminal = slot.terminalResult;
+          return terminal && typeof terminal === 'object'
+            && !Array.isArray(terminal)
+            && ((terminal as Record<string, unknown>).source_comment_authority === 'credentialed_github'
+              || (process.env.OPK_VITEST_HARNESS === '1'
+                && (terminal as Record<string, unknown>).source_comment_authority === 'harness_fixture'));
+        }));
+  }, (run) => {
+    const census = packReviewTriageCensus(run);
+    if (!census) throw new Error('triage source census disappeared under store lock');
+    return { gptTriageAttempt: {
+      schema: 'pack-review-gpt-triage-attempt/v1',
+      ...triageBoundIdentity(run,census.digest),
+      attemptedAtUtc: new Date().toISOString(),
+    }};
+  }, options);
+}
+
+export function persistPackReviewGptTriageResult(
+  runId: string,
+  groups: readonly PackReviewTriageModelGroup[],
+  options: PackReviewStoreOptions = {},
+): PackReviewRunRecord | null {
+  return updatePackReviewRunIf(runId, (records) => {
+    const run = records.find((record) => record.id === runId);
+    const census = run && packReviewTriageCensus(run);
+    return Boolean(run && census && run.gptTriageAttempt
+      && run.gptTriageAttempt.schema === 'pack-review-gpt-triage-attempt/v1'
+      && matchesTriageIdentity(run.gptTriageAttempt,run,census.digest)
+      && !run.gptTriage && !hasPersistedPackReviewVerdict(run));
+  }, (run) => ({ gptTriage: validatePackReviewTriageResult(run,groups) }), options);
+}
+
+function onePhysicalTodoField(value: string, limit = 180): string {
+  return String(value).replace(/[|\r\n\t\x00-\x1f\x7f]/g,' ')
+    .replace(/\s+/g,' ').trim().slice(0,limit);
+}
+
+/** Append + identity check execute under the existing run-store lock only. */
+export function appendPackReviewDeferredTodos(
+  runId: string,
+  options: PackReviewStoreOptions = {},
+): { appended: number; skipped: number; error?: string; path?: string } {
+  const storeRoot = resolvePackReviewRunStoreRoot(options);
+  return withStoreLock(storeRoot, () => {
+    const path = recordPath(storeRoot,runId);
+    if (!existsSync(path)) return {appended:0,skipped:0,error:'run_missing'};
+    const run = parseRecord(JSON.parse(readFileSync(path,'utf8')),path);
+    const projection = projectPackReviewEffectiveFindings(run);
+    if (projection.mode !== 'triaged' || projection.deferred.length === 0) {
+      return {appended:0,skipped:0};
+    }
+    const project = normalizePackReviewProjectId(run.projectId);
+    if (project !== run.projectId) return {appended:0,skipped:0,error:'project_identity_untrusted'};
+    // Honor process-local HOME in isolated Vitest workers: the native
+    // os.homedir() lookup can still see the parent process environment.
+    const todoHome = process.env.HOME || homedir();
+    const todoPath = join(todoHome,'.local','state','orchestrator-session',project,'review-todo.md');
+    let appended=0, skipped=0;
+    try {
+      mkdirSync(dirname(todoPath),{recursive:true});
+      if (existsSync(todoPath) && !lstatSync(todoPath).isFile()) {
+        return {appended,skipped,error:'todo_target_not_regular_file',path:todoPath};
+      }
+      let existing = existsSync(todoPath) ? readFileSync(todoPath,'utf8') : '';
+      for (const group of projection.deferred) {
+        const identity = `runId=${run.id} groupId=${group.groupId}`;
+        if (existing.split('\n').some((line) => line.includes(` | ${identity} |`))) {skipped++;continue;}
+        const date = (options.now ?? new Date()).toISOString().slice(0,10);
+        const line = [
+          date, `repo=${onePhysicalTodoField(run.canonicalRepository ?? '',120)}`,
+          `PR=#${run.prNumber}`,`head=${run.targetSha}`,
+          `code=${onePhysicalTodoField(group.code,90)}`,
+          identity,`reason=${onePhysicalTodoField(group.reason,240)}`,
+        ].join(' | ') + '\n';
+        appendFileSync(todoPath,line,'utf8');
+        existing += line;
+        appended++;
+      }
+      return {appended,skipped,path:todoPath};
+    } catch (error) {
+      return {appended,skipped,error:describePackReviewError(error),path:todoPath};
+    }
   });
 }
 

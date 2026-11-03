@@ -9,6 +9,7 @@ import {
   PACK_REVIEW_CAP_MAP_VERSION,
   PACK_REVIEW_LEGACY_CAP_MAP_VERSION,
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+  PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
   acknowledgePackReviewReset,
   beginPackReviewBodyAmendmentContinuation,
   commitPackReviewAuthorityTransition,
@@ -47,6 +48,9 @@ import {
   setPackReviewRunTerminal,
   updatePackReviewRun,
   validatePersistedPackReviewGptAggregate,
+  validatePackReviewTriageResult,
+  projectPackReviewEffectiveFindings,
+  type PackReviewRunRecord,
   type PackReviewGptRoundRecord,
 } from './lib/pack-review-run-store.ts';
 
@@ -633,6 +637,33 @@ describe('Issue #1417 explicit extra-review legacy helper', () => {
       headSha: sha('b'),
       options: storeOptions,
     })).toThrow(/exact current head/);
+  });
+});
+
+describe('Issue #2761 tiered GPT source accounting (separate from logical cycle caps)', () => {
+  it.each([
+    ['T1', 1, 1], ['T2', 1, 2], ['T3', 1, 3], ['T3', 2, 3],
+  ] as const)('new %s round %s selects %s source slots', (tier, roundOrdinal, expected) => {
+    expect(selectPackReviewGptSourceCardinality({
+      reviewer:'gpt',tier,roundOrdinal,
+      accountingVersion:PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
+    })).toBe(expected);
+    expect(selectPackReviewGptSourceCardinality({
+      reviewer:'gpt',tier,roundOrdinal,
+      accountingVersion:PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+    })).toBe(3);
+  });
+
+  it('rejects T1/T2 second ordinal and unknown source versions', () => {
+    for (const tier of ['T1','T2'] as const) {
+      expect(() => selectPackReviewGptSourceCardinality({
+        reviewer:'gpt',tier,roundOrdinal:2,
+        accountingVersion:PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
+      })).toThrow(/round ordinal exceeds logical tier cap/);
+    }
+    expect(() => selectPackReviewGptSourceCardinality({
+      reviewer:'gpt',tier:'T3',roundOrdinal:1,accountingVersion:'unknown-version',
+    })).toThrow(/unknown GPT source accounting version/);
   });
 });
 
@@ -1687,5 +1718,97 @@ describe('Issue #2659 shared run-store and authority lock regression', () => {
     expect(updatePackReviewRun(run.id, { status: 'running' }, storeOptions).status).toBe('running');
     expect(readPackReviewAuthority(prNumber, config)?.transitionSeq).toBe(authority.transitionSeq);
     expect(getPackReviewRun(run.id, storeOptions)?.status).toBe('running');
+  });
+});
+
+
+describe('Issue #2761 immutable GPT source occurrence triage', () => {
+  function sourceRun(severity: 'blocking' | 'warning' = 'blocking'): PackReviewRunRecord {
+    const findings = [1, 2].map(() => ({
+      type: 'quality', code: 'same-code', severity,
+      summary: 'Duplicate explanation of the same fixture issue',
+    }));
+    return {
+      id: 'prr-2761-synthetic', targetSha: sha('a'),
+      sourceRepoRoot: repoRoot, reviewCycleId: 'cycle-2761-synthetic',
+      logicalRoundOrdinal: 1, findings: [],
+      accountingVersion: PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
+      reviewRound: {
+        schema: 'pack-review-gpt-round/v1',
+        reviewer: 'gpt', tier: 'T2', roundOrdinal: 1, cardinality: 2,
+        accountingVersion: PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
+        issueNumber: 2761, boundIssueSnapshotDigest: 'fixture-bound-body',
+        settledSourceCount: 2,
+        sourceSlots: [1, 2].map((ordinal, index) => ({
+          slotId: `source-${String(ordinal).padStart(2, '0')}`,
+          ordinal, lifecycle: 'terminal', terminalClass: 'complete_findings',
+          payload: { findings: [findings[index]] },
+        })),
+      },
+    } as unknown as PackReviewRunRecord;
+  }
+
+  function armedRun(run: PackReviewRunRecord, groups: Parameters<typeof validatePackReviewTriageResult>[1]) {
+    const triage = validatePackReviewTriageResult(run, groups);
+    return {
+      ...run,
+      gptTriage: triage,
+      gptTriageAttempt: {
+        schema: 'pack-review-gpt-triage-attempt/v1' as const,
+        runId: triage.runId, targetSha: triage.targetSha, cycleId: triage.cycleId,
+        roundOrdinal: triage.roundOrdinal, issueDigest: triage.issueDigest,
+        rawFindingsDigest: triage.rawFindingsDigest,
+        attemptedAtUtc: '2026-11-03T00:00:00.000Z',
+      },
+    };
+  }
+
+  it('groups the two immutable source occurrences exactly once for fixer intake', () => {
+    const run = sourceRun();
+    const grouped = armedRun(run, [{
+      members: [{ slotId: 'source-02', index: 0 }, { slotId: 'source-01', index: 0 }],
+      decision: 'FIX_NOW', reason: 'One defect independently found by both sources',
+    }]);
+    const projected = projectPackReviewEffectiveFindings(grouped);
+    expect(projected.mode).toBe('triaged');
+    expect(projected.blocking).toBe(true);
+    expect(projected.effectiveBlockingGroupCount).toBe(1);
+    expect(projected.fixNow).toHaveLength(1);
+    expect(projected.fixNow[0]?.slotIds).toEqual(['source-01', 'source-02']);
+    expect(() => validatePackReviewTriageResult(run, [{
+      members: [{ slotId: 'source-01', index: 0 }, { slotId: 'source-01', index: 0 }],
+      decision: 'FIX_NOW', reason: 'Repeated same occurrence',
+    }])).toThrow(/duplicated triage member/);
+  });
+
+  it('allows explicit advisory DEFER but falls back if raw evidence later differs', () => {
+    const run = sourceRun('warning');
+    const classified = armedRun(run, [{
+      members: [{ slotId: 'source-01', index: 0 }, { slotId: 'source-02', index: 0 }],
+      decision: 'DEFER', reason: 'Non-blocking presentation polish',
+    }]);
+    expect(projectPackReviewEffectiveFindings(classified)).toMatchObject({
+      mode: 'triaged', blocking: false, effectiveBlockingGroupCount: 0,
+    });
+    const stale = {
+      ...classified,
+      reviewRound: {
+        ...classified.reviewRound!,
+        sourceSlots: classified.reviewRound!.sourceSlots.map((slot, index) => index === 0
+          ? { ...slot, payload: { findings: [{ type: 'quality', severity: 'blocking',
+            code: 'changed', summary: 'different incident' }] } } : slot),
+      },
+    };
+    expect(projectPackReviewEffectiveFindings(stale).mode).toBe('plain');
+    expect(projectPackReviewEffectiveFindings(stale).blocking).toBe(true);
+  });
+
+  it('never accepts fabricated path:line evidence for a blocking downgrade', () => {
+    const run = sourceRun();
+    expect(() => validatePackReviewTriageResult(run, [{
+      members: [{ slotId: 'source-01', index: 0 }, { slotId: 'source-02', index: 0 }],
+      decision: 'REJECT', reason: 'Claimed impossible by a malicious triage reply',
+      codeEvidence: 'src/fictional.ts:12 if (false) return true;',
+    }])).toThrow(/blocking downgrade lacks independent causal or low-harm proof/);
   });
 });
