@@ -30,18 +30,20 @@ import {
   resolveCurrentPrHead,
   resolvePackReviewReconcileRepository,
   startPackReview,
+  hasReadOnlyOpusTriageUserSettings,
 } from './pack-review-runner.js';
 import type { CarryoverReplayResult } from './pack-review-carryover.js';
 import {
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
   PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
+  selectPackReviewGptSourceCardinality,
   PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION,
   commitPackReviewTerminal,
   initializePackReviewAuthority,
   readPackReviewAuthority,
   reconcilePackReviewTier,
 } from './pack-review-state.js';
-import { packReviewDeliveryNeedsResume, restorePackReviewAuthoritativeRequiredStatus } from './lib/pack-review-delivery.js';
+import { packReviewDeliveryNeedsResume, restorePackReviewAuthoritativeRequiredStatus, classifyPackReviewPayload } from './lib/pack-review-delivery.js';
 import {
   createPackReviewRun,
   derivePackReviewNoJudgmentBudgetOutcome,
@@ -52,6 +54,7 @@ import {
   updatePackReviewRun,
   validatePackReviewTriageResult,
   projectPackReviewEffectiveFindings,
+  appendPackReviewDeferredTodos,
   type PackReviewRunRecord,
   type PackReviewGptRoundRecord,
 } from './lib/pack-review-run-store.js';
@@ -7957,6 +7960,118 @@ describe('Issue #2761 normal source-settling Opus triage', () => {
       });
       expect(test.calls).toHaveLength(scenario.noSchemaFlag ? 0 : 1);
     }
+  });
+
+  it('triage plain-union fallback gives each original blocker an actionable packet after invalid or unsupported Opus', async () => {
+    const invalid = await settled([{
+      members: [{ slotId: 'source-01', index: 0 }],
+      decision: 'REJECT', reason: 'Unproven and incomplete source mapping',
+    }]);
+    const plain = projectPackReviewEffectiveFindings(invalid.run!);
+    expect(plain.mode).toBe('plain');
+    expect(plain.blocking).toBe(true);
+    expect(plain.effectiveBlockingGroupCount).toBe(2);
+    expect(plain.fixNow.map((row) => row.members[0])).toEqual(['source-01:0','source-02:0']);
+    expect(plain.groups).toEqual([]); // fallback is not disguised as valid deduplication
+    const published = readFileSync(invalid.capture,'utf8');
+    expect(published).toContain('Original blocking source fixer packet (plain-union fallback)');
+    expect(published).toContain('ORIGINAL_BLOCKER source-01:0');
+    expect(published).toContain('ORIGINAL_BLOCKER source-02:0');
+    const unsupported = await settled(groups, { noSchemaFlag: true });
+    expect(unsupported.calls).toHaveLength(0);
+    expect(unsupported.run?.gptTriageAttempt).toBeDefined();
+    expect(unsupported.run?.gptTriage).toBeUndefined();
+    expect(projectPackReviewEffectiveFindings(unsupported.run!).fixNow).toHaveLength(2);
+    expect(readFileSync(unsupported.capture,'utf8')).toContain('ORIGINAL_BLOCKER source-02:0');
+  });
+
+  it('triage TODO append idempotently uses the existing store lock and never changes a valid verdict on failure', async () => {
+    const test = await settled(groups);
+    const todo = path.join(test.todoParent,'review-todo.md');
+    expect(readFileSync(todo,'utf8').trim().split('\n')).toHaveLength(1);
+    const replay = appendPackReviewDeferredTodos(test.run!.id, {
+      projectId: 'orchestrator-pack', storeRoot: test.storeRoot,
+    });
+    expect(replay).toMatchObject({ appended: 0, skipped: 1 });
+    rmSync(todo, { force: true });
+    mkdirSync(todo);
+    const failed = appendPackReviewDeferredTodos(test.run!.id, {
+      projectId: 'orchestrator-pack', storeRoot: test.storeRoot,
+    });
+    expect(failed.error).toBe('todo_target_not_regular_file');
+    expect(projectPackReviewEffectiveFindings(getPackReviewRun(test.run!.id, {
+      projectId: 'orchestrator-pack', storeRoot: test.storeRoot,
+    })!)).toMatchObject({ mode: 'triaged', blocking: true, effectiveBlockingGroupCount: 1 });
+  });
+
+  it('tiered source coverage keeps 1/2/3 source selection separate from historical three-slot records and logical rounds', () => {
+    for (const [tier, cardinality] of [
+      ['T1',1],['T2',2],['T3',3],
+    ] as const) {
+      expect(selectPackReviewGptSourceCardinality({
+        reviewer:'gpt', tier, roundOrdinal:1,
+        accountingVersion:PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
+      })).toBe(cardinality);
+      expect(selectPackReviewGptSourceCardinality({
+        reviewer:'gpt', tier, roundOrdinal:1,
+        accountingVersion:PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      })).toBe(3);
+    }
+    expect(selectPackReviewGptSourceCardinality({
+      reviewer:'gpt',tier:'T3',roundOrdinal:2,
+      accountingVersion:PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
+    })).toBe(3);
+    expect(() => selectPackReviewGptSourceCardinality({
+      reviewer:'gpt',tier:'T2',roundOrdinal:1,accountingVersion:'unknown-source-version',
+    })).toThrow();
+    expect(() => selectPackReviewGptSourceCardinality({
+      reviewer:'gpt',tier:'T2',roundOrdinal:2,
+      accountingVersion:PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
+    })).toThrow();
+  });
+
+  it('effective fixer handoff emits one valid deduplicated packet or original blocking occurrences on plain fallback', async () => {
+    const valid = await settled(groups);
+    const projected = projectPackReviewEffectiveFindings(valid.run!);
+    expect(projected).toMatchObject({ mode:'triaged',blocking:true,effectiveBlockingGroupCount:1 });
+    expect(projected.fixNow).toHaveLength(1);
+    const validComment = readFileSync(valid.capture,'utf8');
+    expect(validComment).toContain('FIX_NOW fixer packet (deduplicated)');
+    expect(validComment).toContain('FIX_NOW ' + projected.fixNow[0]!.groupId);
+    const invalid = await settled([{ members: [{ slotId:'source-01',index:0 }],
+      decision:'FIX_NOW',reason:'Missing second occurrence' }]);
+    const plain = projectPackReviewEffectiveFindings(invalid.run!);
+    expect(plain).toMatchObject({ mode:'plain',blocking:true,effectiveBlockingGroupCount:2 });
+    expect(plain.fixNow).toHaveLength(2);
+    expect(readFileSync(invalid.capture,'utf8')).toContain('ORIGINAL_BLOCKER source-01:0');
+    const clean = await settled(groups,{clean:true});
+    expect(projectPackReviewEffectiveFindings(clean.run!).blocking).toBe(false);
+    const skill = readFileSync(path.join(repoRoot,'.cursor','skills','execute-issue-with-gpt','SKILL.md'),'utf8');
+    expect(skill).toContain('ORIGINAL_BLOCKER');
+    expect(skill).toContain('FIX_NOW');
+  });
+
+  it('triage one-shot confinement rejects user-approved forbidden tools and never re-invokes on unsupported help or zero union', async () => {
+    const safe = {permissions: {
+      blockReadsOutsideWorkingDirectories:true,
+      additionalDirectories:[],blockReadsExemptPaths:[],allow:['Read','Grep','Glob'],
+    }};
+    expect(hasReadOnlyOpusTriageUserSettings(safe)).toBe(true);
+    for (const rule of ['Bash','Bash(npm *)','Write','Edit','Task','WebFetch','mcp__github', '*']) {
+      expect(hasReadOnlyOpusTriageUserSettings({
+        permissions:{ ...safe.permissions, allow:['Read',rule] },
+      })).toBe(false);
+    }
+    expect(hasReadOnlyOpusTriageUserSettings({
+      permissions:{ ...safe.permissions, defaultMode:'bypassPermissions' },
+    })).toBe(false);
+    const unsupported = await settled(groups,{noSchemaFlag:true});
+    expect(unsupported.calls).toHaveLength(0);
+    expect(unsupported.run?.gptTriageAttempt).toBeDefined();
+    expect(unsupported.run?.gptTriage).toBeUndefined();
+    const empty = await settled(groups,{clean:true});
+    expect(empty.calls).toHaveLength(0);
+    expect(empty.run?.gptTriageAttempt).toBeUndefined();
   });
 
   it('does not claim or invoke triage for an empty settled source union', async () => {
