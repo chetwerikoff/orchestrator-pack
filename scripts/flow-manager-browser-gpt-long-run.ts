@@ -18,7 +18,9 @@ import {
   type HandoffReceipt,
   type LaunchPreSpawnValidation,
 } from './flow-manager-long-running-child.ts';
-import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
+import {
+  absoluteProfilePathError, configuredProfileKey, PROFILE_ABSOLUTE_NEXT_STEP, PROFILE_ABSOLUTE_REQUIRED_CODE,
+} from './chatgpt-browser-turn/storage-common.ts';
 import {
   parseBoundIssueSelector,
   parsePrAuthorBindingPair,
@@ -49,7 +51,7 @@ const CLI = {
     { flag: '--invocation-id', value: 'id', required: true },
     { flag: '--terminal-envelope', value: 'path', required: true },
     { flag: '--output', value: 'path', required: true },
-    { flag: '--profile', value: 'key', required: true },
+    { flag: '--profile', value: 'absolute-user-data-dir', required: true },
     { flag: '--cdp', value: 'url', required: true },
     { flag: '--input', value: 'path', required: true },
     { flag: '--cwd', value: 'path' },
@@ -83,7 +85,7 @@ function refuse(reason: string): number {
 
 /** After a launcher may have started: known wrapper code, never a hidden child code or zero-SEND claim. */
 const POSTSPAWN_RECONCILE_STEP = 'physical SEND unknown (POSSIBLY_DELIVERED; no resend license): run the original-invocation '
-  + 'owner wait (wait --invocation-id <id> --owner-task-id <task> --owner-dispatch-id <dispatch> --profile <key> --cdp <url>), '
+  + 'owner wait (wait --invocation-id <id> --owner-task-id <task> --owner-dispatch-id <dispatch> --profile <absolute-user-data-dir> --cdp <url>), '
   + 'inspect the original Page and the exact bound GitHub target before any new SEND';
 
 function refusePostspawn(code: string): number {
@@ -200,6 +202,9 @@ export async function runBrowserAdapter(
   const browserOutput = requiredOption(options, 'output');
   const profile = requiredOption(options, 'profile');
   const cdp = requiredOption(options, 'cdp');
+  // Pre-SEND, before any occupancy hash, profile key or launcher validation: never resolve against cwd.
+  const profileError = absoluteProfilePathError(profile);
+  if (profileError) return refuse(PROFILE_ABSOLUTE_REQUIRED_CODE + ': ' + profileError + '; nextStep: ' + PROFILE_ABSOLUTE_NEXT_STEP);
   const input = requiredOption(options, 'input');
   const cwd = typeof options.get('cwd') === 'string' ? options.get('cwd') as string : repoRoot;
   const ownerTaskId = options.has('owner-task-id') ? requiredOption(options, 'owner-task-id') : undefined;
@@ -213,9 +218,12 @@ export async function runBrowserAdapter(
   const predecessorInvocation = options.get('predecessor-invocation-id');
   const predecessorAttempt = options.get('predecessor-attempt-identity');
   const hasPredecessor = typeof predecessorInvocation === 'string' && typeof predecessorAttempt === 'string';
-  if ((predecessorInvocation !== undefined || predecessorAttempt !== undefined)
-    && (!hasPredecessor || predecessorInvocation === invocationId)) {
+  if ((predecessorInvocation !== undefined || predecessorAttempt !== undefined) && !hasPredecessor) {
     return refuse('predecessor_invocation_and_attempt_required; nextStep: supply the exact earlier invocation and attempt selector, then let its durable locator provide its original Run and owner pair');
+  }
+  if (hasPredecessor && predecessorInvocation === invocationId) {
+    return refuse('predecessor_self_invocation_forbidden; nextStep: pass a genuinely earlier --predecessor-invocation-id/--predecessor-attempt-identity pair '
+      + '(not this --invocation-id), or omit both for separately admitted independent work; nothing was sent');
   }
   // #2718: --repo/--pr is an atomic optional pair. Absent = unbound (unchanged);
   // present = PR AUTHOR, admitted only for an explicit worktree whose branch is

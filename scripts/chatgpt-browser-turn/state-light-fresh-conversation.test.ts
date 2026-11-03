@@ -783,10 +783,13 @@ describe('state-light fresh conversation collision recovery', () => {
         expect(output.result.send_count).toBe(0);
         expect(predecessor.turn.page.close).not.toHaveBeenCalled();
         if (scenario === 'contradictory-delivery') {
-          expect(output.result.cause).toBe('predecessor_cleanup_unconfirmed:not_sent_dispatch_unproven');
+          // #2772 AC8: a Send/phase proof failure refuses as predecessor_handoff_unproven with read-only recovery.
+          expect(output.result.cause).toBe('predecessor_handoff_unproven:not_sent_dispatch_unproven');
+          expect(String(output.result.next_action)).toMatch(/Reconcile the exact predecessor invocation read-only/u);
           expect(attach).not.toHaveBeenCalled();
         } else {
-          expect(output.result.cause).not.toMatch(/^predecessor_cleanup_unconfirmed/u);
+          // #2772 AC8(a): a post-identity last_page_guard cleanup_unconfirmed permits the separately admitted fresh Page.
+          expect(output.result.cause).not.toMatch(/^predecessor_(?:cleanup_unconfirmed|handoff_unproven)/u);
           expect(attach).toHaveBeenCalledTimes(2);
         }
       } finally {
@@ -2013,7 +2016,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result).toMatchObject({
       state: 'ui_contract_mismatch',
       cause: 'conversation_unavailable',
-      next_action: expect.stringContaining('fresh chat'),
+      next_action: expect.stringContaining('read-only first'),
       send_count: 1,
       cleanup: 'unconfirmed',
     });
@@ -2334,7 +2337,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result).toMatchObject({
       state: 'ui_contract_mismatch',
       cause: 'conversation_unavailable',
-      next_action: expect.stringContaining('fresh chat'),
+      next_action: expect.stringContaining('read-only first'),
       conversation_id: SHARED_CONV,
       send_count: 0,
     });
@@ -2362,7 +2365,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result).toMatchObject({
       state: 'ui_contract_mismatch',
       cause: 'conversation_unavailable',
-      next_action: expect.stringContaining('fresh chat'),
+      next_action: expect.stringContaining('read-only first'),
       send_count: 0,
     });
     expect(solo.getSends()).toBe(0);
@@ -2393,8 +2396,11 @@ describe('state-light fresh conversation collision recovery', () => {
       conversation_id: SHARED_CONV,
       send_count: 0,
     });
-    expect(outcome.result.next_action).toMatch(/fresh chat/u);
-    expect(outcome.result.next_action).toMatch(/advice only/u);
+    // #2772 AC6: read-first original reconciliation; a redirect never recommends a fresh chat.
+    expect(outcome.result.next_action).toMatch(/^conversation unavailable/u);
+    expect(outcome.result.next_action).toMatch(/read-only first/u);
+    expect(outcome.result.next_action).toMatch(/no resend authority/u);
+    expect(outcome.result.next_action).not.toMatch(/fresh chat/iu);
     expect(outcome.result).not.toHaveProperty('recovery_available');
     expect(outcome.result).not.toHaveProperty('output');
     expect(JSON.stringify(outcome.result)).not.toContain(foreignReply);
@@ -3647,9 +3653,9 @@ describe('state-light fresh conversation collision recovery', () => {
       send_count: 1, cleanup: 'unconfirmed',
     });
     expect(outcome.result).not.toHaveProperty('conversation_id');
-    expect(outcome.result.next_action).toContain('exact bound GitHub target and original Page');
+    expect(outcome.result.next_action).toContain('read-only first');
     expect(outcome.result.next_action).toContain('page-probe only as a diagnostic');
-    expect(outcome.result.next_action).toContain('Do not retry or create a replacement invocation');
+    expect(outcome.result.next_action).toContain('no resend or replacement of a possibly delivered request');
     expect(fixture.alertReads()).toBe(2);
     expect(mocks.nowMs - startMs).toBeLessThan(68_000);
     expect(fixture.getSends()).toBe(1);
@@ -3862,8 +3868,8 @@ describe('state-light fresh conversation collision recovery', () => {
     });
     expect(outcome.result).not.toHaveProperty('conversation_id');
     expect(outcome.result.next_action).toContain('POSSIBLY_DELIVERED');
-    expect(outcome.result.next_action).toContain('exact bound GitHub target and original Page');
-    expect(outcome.result.next_action).toContain('Do not retry or create a replacement invocation');
+    expect(outcome.result.next_action).toContain('read-only first');
+    expect(outcome.result.next_action).toContain('no resend or replacement of a possibly delivered request');
     expect(mocks.nowMs - start).toBeLessThan(90_000);
     expect(fixture.getSends()).toBe(1);
     expect(fixture.page.goto).toHaveBeenCalledTimes(fixture.gotoAtSend());

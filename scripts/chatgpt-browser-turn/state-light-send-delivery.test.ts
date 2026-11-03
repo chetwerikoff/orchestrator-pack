@@ -61,7 +61,7 @@ import { runStateLightCancellation } from './state-light-cancellation.ts';
 import {
   __setStateLightPrAuthorHooksForTest, findOtherPrAuthorHolder, isExactLivePrAuthorLauncher,
   prAuthorHeadEffect, prAuthorHeadMismatch, prelaunchPrAuthorOccupant, PR_AUTHOR_CANONICAL_ENTRY,
-  PR_AUTHOR_CANONICAL_LAUNCHER, PR_AUTHOR_HEAD_POLL_FLOOR_MS, scanPrAuthorCandidates,
+  PR_AUTHOR_CANONICAL_LAUNCHER, PR_AUTHOR_HEAD_POLL_FLOOR_MS, scanPrAuthorCandidates, observePreSendPagePredicate,
   type PrAuthorBinding, type PrAuthorHeadObservation, type PrAuthorProcessReader,
 } from './state-light-turn-base.ts';
 import { CONVERSATION_LOAD_ERROR_HEADING_SELECTOR, heldPage429Diagnostic, observeHeldPageConversation429 } from './ui-adapter-base.ts';
@@ -1929,6 +1929,9 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     expect(run.fill).not.toHaveBeenCalled();
     expect(run.send).not.toHaveBeenCalled();
     expect(run.lastGotoAt! - run.startedAt).toBeLessThan(30_000);
+    // #2772 AC7: current busy evidence is journaled as a named predicate with read-first, no-Send advice.
+    expect(run.result.next_action).toMatch(/^current Page busy \(stop_visible\); nothing was sent by this invocation\. read-only first/u);
+    expect(JSON.stringify(run.result)).toContain('current_page_busy_predicate');
   });
 
   it.each([
@@ -1953,8 +1956,14 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
     expect(run.goto).toHaveBeenCalledTimes(1);
     expect(run.result).toMatchObject({ state, cause, send_count: 0 });
     if (cause === 'conversation_unavailable') {
-      expect(run.result.next_action).toMatch(/fresh chat/u);
+      expect(run.result.next_action).toMatch(/read-only first/u);
+      expect(run.result.next_action).not.toMatch(/fresh chat/iu);
       expect(run.result).not.toHaveProperty('recovery_available');
+    }
+    if (state === 'conversation_busy') {
+      // #2772 AC7: the busy predicate is named; historic harvest never overrules it.
+      expect(run.result.next_action).toMatch(/^current Page busy \((?:stop_visible|generation_in_progress|continue_generating_visible|unreadable|contradictory)\); nothing was sent/u);
+      expect(run.result.next_action).not.toMatch(/fresh chat/iu);
     }
     if (scenario === 'expired-readiness') {
       // No time remains for even one post-goto composer DOM probe.
@@ -4681,5 +4690,35 @@ describe('Issue #2750 AC22 finished long CodeMirror-virtualized reply and AC9 at
       mocks.browserQueue.length = 0;
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('Issue #2772 AC7/AC11: shared side-effect-free pre-SEND page observation', () => {
+  function readOnlyPage(stop: { count: () => Promise<number>; isVisible?: () => Promise<boolean> }) {
+    const mutations = { click: vi.fn(), fill: vi.fn(), type: vi.fn(), press: vi.fn(), goto: vi.fn(), close: vi.fn() };
+    const page = {
+      ...mutations,
+      locator: vi.fn(() => ({ ...stop, click: mutations.click, fill: mutations.fill })),
+      evaluate: vi.fn(async () => { throw new Error('no transcript in this fixture'); }),
+      url: () => 'https://chatgpt.com/c/11111111-1111-4111-8111-111111111111',
+      isClosed: () => false,
+    };
+    return { page, mutations };
+  }
+
+  it.each([
+    ['visible Stop', { count: async () => 1, isVisible: async () => true }, 'stop_visible'],
+    ['unreadable Stop count', { count: async () => { throw new Error('detached'); } }, 'unreadable'],
+    ['Stop present without a visibility reader', { count: async () => 1 }, 'unreadable'],
+  ] as const)('%s is a named busy predicate with zero page mutation', async (_name, stop, predicate) => {
+    const { page, mutations } = readOnlyPage(stop);
+    const result = await observePreSendPagePredicate(page, Date.now() + 5_000);
+    expect(result).toEqual({ verdict: 'busy', predicate });
+    for (const mutation of Object.values(mutations)) expect(mutation).not.toHaveBeenCalled();
+  });
+
+  it('an expired deadline is unreadable busy, never idle', async () => {
+    const { page } = readOnlyPage({ count: async () => 0 });
+    expect(await observePreSendPagePredicate(page, Date.now() - 1)).toEqual({ verdict: 'busy', predicate: 'unreadable' });
   });
 });

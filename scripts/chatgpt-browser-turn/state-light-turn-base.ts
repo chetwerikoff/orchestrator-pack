@@ -71,7 +71,10 @@ import {
   verifyStateLightFreshClaimOwnerFence,
   waitForConversationUrlAfterSend,
 } from './state-light-fresh-conversation.ts';
-import { atomicJson, configuredProfileKey, profileDirs, profileStoreRoot } from './storage-common.ts';
+import {
+  absoluteProfilePathError, atomicJson, boundTargetReadFirstNextAction, configuredProfileKey, profileDirs, profileStoreRoot,
+  PROFILE_ABSOLUTE_NEXT_STEP, PROFILE_ABSOLUTE_REQUIRED_CODE, type BoundGithubTarget,
+} from './storage-common.ts';
 import {
   admitStateLightTurnObservation,
   bindStateLightOwnedTarget,
@@ -160,14 +163,16 @@ const ACCOUNT_COOLDOWN_ACTIONABLE_MS = ACCOUNT_COOLDOWN_MS + 1_000;
 const ACCOUNT_COOLDOWN_QUIET_RESET_MS = 30 * 60_000;
 const ACCOUNT_COOLDOWN_STEPS_MS = [60_000, 120_000, 240_000, ACCOUNT_COOLDOWN_MS] as const;
 
-const CONVERSATION_UNAVAILABLE_NEXT_ACTION =
-  'conversation unavailable: the bound conversation redirected; start a fresh chat (advice only, no resend authority, '
-  + 'no recovery of the bound conversation, and any earlier Send remains possibly delivered).';
+/** A redirect neither disproves an earlier Send nor authorizes a replacement: read the bound target first. */
+function conversationUnavailableNextAction(target: BoundGithubTarget | undefined): string {
+  return 'conversation unavailable: the bound conversation redirected (no recovery of the bound conversation; any earlier '
+    + 'Send remains possibly delivered, no resend authority). ' + boundTargetReadFirstNextAction(target);
+}
 
-const FRESH_LOCAL_POSSIBLY_DELIVERED_NEXT_ACTION =
-  'Delivery is POSSIBLY_DELIVERED. Reconcile the original invocation against its exact bound GitHub target and original Page; '
-  + 'use page-probe only as a diagnostic, never as proof of completion or no Send. Do not retry or create a replacement invocation; '
-  + 'if exact target or Page evidence is unavailable, ask the original Task/Dispatch owner to continue reconciliation.';
+function freshLocalPossiblyDeliveredNextAction(target: BoundGithubTarget | undefined): string {
+  return 'Delivery is POSSIBLY_DELIVERED; use page-probe only as a diagnostic, never as proof of completion or no Send. '
+    + boundTargetReadFirstNextAction(target);
+}
 
 // A local-chatgpt id is never a durable conversation locator. Match both the
 // current project identity and exact route; the root /c/local-chatgpt route
@@ -3386,6 +3391,43 @@ async function readFreshStopVisible(page: any, deadlineMs: number): Promise<bool
   }
 }
 
+/** #2772 AC7: the named current-Page busy predicate journaled on a no-Send busy return. */
+export type CurrentPageBusyPredicate =
+  | 'stop_visible' | 'generation_in_progress' | 'continue_generating_visible' | 'unreadable' | 'contradictory';
+
+export type PreSendPageObservation =
+  | { readonly verdict: 'busy'; readonly predicate: CurrentPageBusyPredicate }
+  | { readonly verdict: 'idle' }
+  | { readonly verdict: 'pending' };
+
+/**
+ * #2772 AC7/AC11: the side-effect-free bounded pre-SEND observation shared by the real driver and
+ * the authorized read-only CDP check. It only reads Stop, generation, Continue and last-turn
+ * completion with a consistent Stop recheck; it never clicks, types, navigates, Stops, closes or
+ * Sends, and it returns before any dispatch. `between` runs between reads (driver cancellation).
+ */
+export async function observePreSendPagePredicate(
+  page: any, deadlineMs: number, between: () => void = () => undefined,
+): Promise<PreSendPageObservation> {
+  const busy = (predicate: CurrentPageBusyPredicate): PreSendPageObservation => ({ verdict: 'busy', predicate });
+  const stopRead = await readFreshStopVisible(page, deadlineMs);
+  if (stopRead !== false) return busy(stopRead === true ? 'stop_visible' : 'unreadable');
+  const observed = await readPageObservation(page, undefined, undefined, true, deadlineMs);
+  between();
+  if (observed.pageTurnEvidence?.generationInProgress === true) return busy('generation_in_progress');
+  if (observed.pageTurnEvidence?.continueGeneratingVisible === true) return busy('continue_generating_visible');
+  if (!observed.transcriptIncomplete && observed.snapshot?.complete === true
+    && observed.snapshot.carriers.some((carrier) =>
+      carrier.role === 'user' && normalizeVisibleText(carrier.text).length > 0)
+    && observed.pageTurnEvidence?.generationInProgress === false) {
+    // A Stop reappearing after an idle read conflicts with it: busy, never idle.
+    const finalStop = await readFreshStopVisible(page, deadlineMs);
+    if (finalStop !== false) return busy(finalStop === true ? 'contradictory' : 'unreadable');
+    return { verdict: 'idle' };
+  }
+  return { verdict: 'pending' };
+}
+
 /** Fail closed when the existing Continue generating control is visible or unreadable.
  * This is an observational guard, never an instruction to click the control. */
 /** Compare only a fresh complete attributed own reply with the exact committed
@@ -4114,6 +4156,7 @@ function returnOwnedConversationIdentityMismatch(
   journalWriteFailed: boolean,
   incident: (eventClass: string, symptom: string, action?: string) => void,
   afterSend: boolean,
+  boundTarget?: BoundGithubTarget,
 ): TurnRunOutcome {
   // AC4: a readable page URL that is not the bound conversation is a positive redirect,
   // reported as conversation_unavailable. The foreign URL is never exposed as the locator
@@ -4143,7 +4186,7 @@ function returnOwnedConversationIdentityMismatch(
       redirected
         ? {
           ...(identity.targetUrl ? { conversation_id: identity.targetUrl } : {}),
-          next_action: CONVERSATION_UNAVAILABLE_NEXT_ACTION,
+          next_action: conversationUnavailableNextAction(boundTarget),
         }
         : {
           ...(identity.pageUrl ? { conversation_id: identity.pageUrl } : {}),
@@ -4492,6 +4535,16 @@ async function runTurnCore(
   let prAuthorSendHead: PrAuthorHeadObservation | undefined;
   let prAuthorClaimPassed = false;
   let prAuthorNextHeadPollAt = 0;
+  /** The trusted original-bound GitHub target from this launch's exact selectors, or none. */
+  const boundGithubTarget = (): BoundGithubTarget | undefined => {
+    if (prAuthorBinding) return { kind: 'pr', repo: prAuthorBinding.repo, number: prAuthorBinding.pr };
+    try {
+      const issue = parseBoundIssueSelector(boundIssueOption);
+      return issue ? { kind: 'issue', repo: issue.repo, number: issue.issue } : undefined;
+    } catch {
+      return undefined;
+    }
+  };
 
   const setHeartbeatPhase = (phase: BrowserTurnLivenessPhase, pulse = true): void => {
     heartbeatPhase = phase;
@@ -4619,6 +4672,18 @@ async function runTurnCore(
       throw new Error('input_invalid:exact_predecessor_selector_required');
     }
     const baseConfig = browserConfig(args);
+    // Fixable pre-SEND refusal before any profile key, legacy key, observation or state allocation.
+    const profileError = absoluteProfilePathError(baseConfig.profile);
+    if (profileError) {
+      incident('input_invalid', PROFILE_ABSOLUTE_REQUIRED_CODE, 'return_local_error');
+      return {
+        result: compactResult(
+          'input_invalid', 'invocation', `${PROFILE_ABSOLUTE_REQUIRED_CODE}:${profileError}`,
+          invocationId, 'profile-unresolved', 0, pollCount, navigation, incidents,
+          { next_action: PROFILE_ABSOLUTE_NEXT_STEP }, journalWriteFailed,
+        ),
+      };
+    }
     if (baseConfig.timeoutMs > STATE_LIGHT_MAX_TIMEOUT_MS) {
       incident('input_invalid', 'timeout_ms_exceeds_maximum', 'return_local_error');
       return {
@@ -4739,9 +4804,12 @@ async function runTurnCore(
         freshCleanup.predecessorTargetId = previous.targetId;
       }
       if (previous.status !== 'confirmed' && previous.status !== 'nonblocking_open') {
-        // Keep the incumbent failure channel, but expose the first guard that
-        // actually refused retirement to the owner deciding its next safe read.
-        throw new Error(`predecessor_cleanup_unconfirmed:${previous.cause ?? 'unknown'}`);
+        // Partition by cause, not status: only a post-identity page-state/retirement refusal leaves the
+        // old Page open (uncertain, never retired/settled) while separately admitted fresh work proceeds.
+        if (!predecessorCleanupCauseNonblocking(previous.cause)) {
+          throw new Error(`predecessor_handoff_unproven:${previous.cause ?? 'predecessor_proof_unclassified'}`);
+        }
+        incident('predecessor_cleanup_unconfirmed', previous.cause!, 'retain_old_page_no_stop_no_close');
       }
     }
 
@@ -5156,14 +5224,20 @@ async function runTurnCore(
     // A committed same-chat reopen needs fresh DOM/owner proof, including at
     // the dispatch boundary. The incumbent generation watcher stays unchanged.
     let reopenedExistingComposer = false;
-    const returnExistingBusy = (): TurnRunOutcome => {
+    /** Current busy evidence; the predicate that fired is journaled (never raw DOM/prompt text). */
+    type BusyPredicate = CurrentPageBusyPredicate;
+    const returnExistingBusy = (predicate: BusyPredicate): TurnRunOutcome => {
       incident('invocation_blocker', 'another_turn_active', 'return_local_error');
+      incident('current_page_busy_predicate', predicate, 'no_send_no_stop_no_close');
       return {
         page, browser,
         result: compactResult(
           'conversation_busy', 'conversation', 'another_turn_active',
           invocationId, profileKey, sendCount, pollCount, navigation, incidents,
-          { conversation_id: normalizeConversationUrl(config.chatUrl ?? '') },
+          {
+            conversation_id: normalizeConversationUrl(config.chatUrl ?? ''),
+            next_action: `current Page busy (${predicate}); nothing was sent by this invocation. ${boundTargetReadFirstNextAction(boundGithubTarget())}`,
+          },
           journalWriteFailed,
         ),
       };
@@ -5175,7 +5249,7 @@ async function runTurnCore(
         const identity = readOwnedConversationIdentity(page, target);
         if (!identity.matched) return returnOwnedConversationIdentityMismatch(
           identity, page, browser, invocationId, profileKey, sendCount,
-          pollCount, navigation, incidents, journalWriteFailed, incident, false,
+          pollCount, navigation, incidents, journalWriteFailed, incident, false, boundGithubTarget(),
         );
         // A slow transcript is not a wrong transcript. Observe the same owned
         // page until the existing invocation deadline, without granting Send
@@ -5187,21 +5261,14 @@ async function runTurnCore(
             navigation, incidents, journalWriteFailed, incident,
           );
         }
-        if (await readFreshStopVisible(page, invocationDeadlineMs) !== false) return returnExistingBusy();
-        const observed = await readPageObservation(page, undefined, undefined, true, invocationDeadlineMs);
-        beforeBrowserAction();
-        if (observed.pageTurnEvidence?.generationInProgress === true
-          || observed.pageTurnEvidence?.continueGeneratingVisible === true) return returnExistingBusy();
-        if (!observed.transcriptIncomplete && observed.snapshot?.complete === true
-          && observed.snapshot.carriers.some((carrier) =>
-            carrier.role === 'user' && normalizeVisibleText(carrier.text).length > 0)
-          && observed.pageTurnEvidence?.generationInProgress === false) {
-          if (await readFreshStopVisible(page, invocationDeadlineMs) !== false) return returnExistingBusy();
+        const preSend = await observePreSendPagePredicate(page, invocationDeadlineMs, beforeBrowserAction);
+        if (preSend.verdict === 'busy') return returnExistingBusy(preSend.predicate);
+        if (preSend.verdict === 'idle') {
           if (browserOrPageDefinitelyLost(page, browser)) throw new Error('Target closed');
           const finalIdentity = readOwnedConversationIdentity(page, target);
           return finalIdentity.matched ? null : returnOwnedConversationIdentityMismatch(
             finalIdentity, page, browser, invocationId, profileKey, sendCount,
-            pollCount, navigation, incidents, journalWriteFailed, incident, false,
+            pollCount, navigation, incidents, journalWriteFailed, incident, false, boundGithubTarget(),
           );
         }
         // #2723: a held query-GET 429 becomes the wall once the load failure shows.
@@ -5253,7 +5320,12 @@ async function runTurnCore(
         if (prAuthorBinding && prAuthorSendHead) {
           writeGithubEffectBaselineToReceipt({
             receiptPath, invocationId,
-            target: { repo: prAuthorBinding.repo, kind: 'pr', number: prAuthorBinding.pr, headSha: prAuthorSendHead.sha },
+            target: {
+              repo: prAuthorBinding.repo, kind: 'pr', number: prAuthorBinding.pr, headSha: prAuthorSendHead.sha,
+              state: prAuthorSendHead.state.toUpperCase(), headRepository: prAuthorSendHead.headRepo,
+              headRef: prAuthorSendHead.headRef, baseRepository: prAuthorSendHead.baseRepo,
+              ...(prAuthorSendHead.baseRef !== undefined ? { baseRef: prAuthorSendHead.baseRef } : {}),
+            },
           });
           return;
         }
@@ -5261,14 +5333,26 @@ async function runTurnCore(
         if (!bound) return;
         const budgetMs = Math.max(0, Math.min(15_000, invocationDeadlineMs - Date.now() - MAX_LOCAL_READ_WAIT_MS));
         if (budgetMs <= 0) return;
-        const digest = await Promise.race([
-          (prAuthorTurnHooks.readIssueBodySha256 ?? readIssueBodySha256ViaPackGh)(bound.repo, bound.issue).catch(() => undefined),
+        // The structured Issue tuple (OPEN state + body digest); a digest-only hook leaves the state
+        // unrecorded, which later classifies effect_unverified rather than progress.
+        const readTuple: IssueTupleReader = prAuthorTurnHooks.readIssueTuple
+          ?? (prAuthorTurnHooks.readIssueBodySha256
+            ? async (repo, issue) => {
+              const digest = await prAuthorTurnHooks.readIssueBodySha256!(repo, issue);
+              return digest ? { state: undefined, bodySha256: digest } : undefined;
+            }
+            : readIssueTupleViaPackGh);
+        const tuple = await Promise.race([
+          readTuple(bound.repo, bound.issue).catch(() => undefined),
           new Promise<undefined>((done) => setTimeout(() => done(undefined), budgetMs)),
         ]);
-        if (!digest) return;
+        if (!tuple?.bodySha256) return;
         writeGithubEffectBaselineToReceipt({
           receiptPath, invocationId,
-          target: { repo: bound.repo, kind: 'issue', number: bound.issue, bodySha256: digest },
+          target: {
+            repo: bound.repo, kind: 'issue', number: bound.issue, bodySha256: tuple.bodySha256,
+            ...(tuple.state ? { state: tuple.state } : {}),
+          },
         });
       } catch {
         // effect_unverified: the baseline is optional evidence, never an admission gate.
@@ -5679,7 +5763,7 @@ async function runTurnCore(
         if (!identity.matched) {
           return returnOwnedConversationIdentityMismatch(
             identity, page, browser, invocationId, profileKey, sendCount,
-            pollCount, navigation, incidents, journalWriteFailed, incident, false,
+            pollCount, navigation, incidents, journalWriteFailed, incident, false, boundGithubTarget(),
           );
         }
       } else {
@@ -6319,6 +6403,7 @@ async function runTurnCore(
           journalWriteFailed,
           incident,
           false,
+          boundGithubTarget(),
         );
       }
 
@@ -6380,7 +6465,7 @@ async function runTurnCore(
             const identity = readOwnedConversationIdentity(page, chatUrlTarget);
             if (!identity.matched) return returnOwnedConversationIdentityMismatch(
               identity, page, browser, invocationId, profileKey, sendCount,
-              pollCount, navigation, incidents, journalWriteFailed, incident, false,
+              pollCount, navigation, incidents, journalWriteFailed, incident, false, boundGithubTarget(),
             );
             // Preserve the witnessed transport/timeout/operation cause.
             throw error;
@@ -6389,7 +6474,7 @@ async function runTurnCore(
           const identity = readOwnedConversationIdentity(page, chatUrlTarget);
           if (!identity.matched) return returnOwnedConversationIdentityMismatch(
             identity, page, browser, invocationId, profileKey, sendCount,
-            pollCount, navigation, incidents, journalWriteFailed, incident, false,
+            pollCount, navigation, incidents, journalWriteFailed, incident, false, boundGithubTarget(),
           );
           reopenedExistingComposer = true;
           // A composer reading from the old Page is not post-navigation evidence.
@@ -6411,7 +6496,7 @@ async function runTurnCore(
         const identity = readOwnedConversationIdentity(page, chatUrlTarget);
         if (!identity.matched) return returnOwnedConversationIdentityMismatch(
           identity, page, browser, invocationId, profileKey, sendCount,
-          pollCount, navigation, incidents, journalWriteFailed, incident, false,
+          pollCount, navigation, incidents, journalWriteFailed, incident, false, boundGithubTarget(),
         );
         if (Date.now() >= invocationDeadlineMs
           || !['absent', 'hidden', 'disabled', 'not_editable'].includes(preSendComposerState)) {
@@ -6454,7 +6539,7 @@ async function runTurnCore(
         const settledBaselineFailure = await captureBaseline();
         if (settledBaselineFailure) return settledBaselineFailure;
       }
-      if (existingGeneration === 'busy') return returnExistingBusy();
+      if (existingGeneration === 'busy') return returnExistingBusy('stop_visible');
       if (reopenedExistingComposer && existingGeneration === 'idle' && !nothingToResume
         && Date.now() - generationWatchStartedAt < EXISTING_GENERATION_RESUME_WINDOW_MS) {
         return returnComposerMutationFailure('composer_mutation_budget_exhausted');
@@ -6502,6 +6587,7 @@ async function runTurnCore(
           journalWriteFailed,
           incident,
           sendCount >= 1,
+          boundGithubTarget(),
         );
       }
     }
@@ -6771,7 +6857,8 @@ async function runTurnCore(
             result: compactResult(
               'observation_uncertain', 'invocation', cause,
               invocationId, profileKey, sendCount, pollCount, navigation, incidents,
-              { send_attempted: true }, journalWriteFailed,
+              { send_attempted: true, next_action: freshLocalPossiblyDeliveredNextAction(boundGithubTarget()) },
+              journalWriteFailed,
             ),
           };
         };
@@ -6995,7 +7082,7 @@ async function runTurnCore(
           'observation_uncertain', 'invocation', 'fresh_conversation_owner_unproven',
           invocationId, profileKey, sendCount, pollCount, navigation, incidents,
           { ...(sendAttempted ? { send_attempted: true } : {}),
-            next_action: FRESH_LOCAL_POSSIBLY_DELIVERED_NEXT_ACTION },
+            next_action: freshLocalPossiblyDeliveredNextAction(boundGithubTarget()) },
           journalWriteFailed,
         ),
       };
@@ -7050,7 +7137,7 @@ async function runTurnCore(
             sendCount, pollCount, navigation, incidents,
             { ...(sendAttempted ? { send_attempted: true } : {}),
               ...(config.newChat && !ownedConversationUrl
-                ? { next_action: FRESH_LOCAL_POSSIBLY_DELIVERED_NEXT_ACTION } : {}) },
+                ? { next_action: freshLocalPossiblyDeliveredNextAction(boundGithubTarget()) } : {}) },
             journalWriteFailed,
           ),
         };
@@ -7183,6 +7270,7 @@ async function runTurnCore(
             journalWriteFailed,
             incident,
             true,
+            boundGithubTarget(),
           );
         }
       }
@@ -7776,7 +7864,7 @@ async function runTurnCore(
               incidents,
               {
                 ...(localBanner
-                  ? { next_action: FRESH_LOCAL_POSSIBLY_DELIVERED_NEXT_ACTION }
+                  ? { next_action: freshLocalPossiblyDeliveredNextAction(boundGithubTarget()) }
                   : { conversation_id: durableConversationUrl }),
                 ...((localBanner ? streamRecoveryBannerFirstHeading : bannerText)
                   ? { product_banner_text: localBanner ? streamRecoveryBannerFirstHeading : bannerText } : {}),
@@ -8230,6 +8318,7 @@ async function runTurnCore(
                 journalWriteFailed,
                 incident,
                 true,
+                boundGithubTarget(),
               );
             }
           }
@@ -8620,6 +8709,8 @@ async function runTurnCore(
             ...(cancelledBeforeDispatch ? {
               next_action: 'Cancelled before dispatch by the exact owner; nothing was sent. Start a fresh invocation id if still needed.',
             } : {}),
+            ...(!afterSend && !sendAttempted && sendCount === 0 && cause.startsWith('predecessor_handoff_unproven:')
+              ? { next_action: PREDECESSOR_HANDOFF_UNPROVEN_NEXT_ACTION } : {}),
             ...(page && pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
             ...(holderTimeout ? {
               send_slot_holder_invocation_id: holderTimeout.send_slot_holder_invocation_id,
@@ -8649,6 +8740,25 @@ async function runTurnCore(
  * Task/Run. No profile-wide sweep, URL selection, newPage, Send, Stop, Retry
  * or harvest. The driver alone attaches and performs the destructive-boundary read.
  */
+/**
+ * Post-identity page-state/retirement causes that may stay nonblocking for separately admitted distinct
+ * work. Every other cause (identity, terminal, Send/phase or created-target ownership proof, unclassified)
+ * is a predecessor proof failure and refuses.
+ */
+export const PREDECESSOR_NONBLOCKING_CLEANUP_CAUSES: ReadonlySet<string> = new Set([
+  'target_census_failed', 'stop_visible', 'generation_in_progress', 'continuation_control_visible', 'last_page_guard',
+]);
+
+export function predecessorCleanupCauseNonblocking(cause: string | undefined): boolean {
+  return cause !== undefined && PREDECESSOR_NONBLOCKING_CLEANUP_CAUSES.has(cause);
+}
+
+/** Read-only original-invocation recovery for a refused predecessor proof; never a Send or cleanup. */
+export const PREDECESSOR_HANDOFF_UNPROVEN_NEXT_ACTION = 'predecessor proof failed; nothing was sent by this invocation. '
+  + 'Reconcile the exact predecessor invocation read-only through its own locator/terminal (wait --invocation-id <old> '
+  + 'with its original Run/attempt and Task+Dispatch owner); do not retry with this pair while it is unresolved. '
+  + 'Genuinely independent, separately admitted work may omit the predecessor pair.';
+
 async function retireExplicitPredecessor(input: {
   readonly previousInvocationId: string;
   readonly previousAttemptIdentity: string;
@@ -8702,31 +8812,43 @@ async function retireExplicitPredecessor(input: {
     return refuse('predecessor_identity_unproven');
   }
   const pinId = original.owned_target!.id;
-  let browser: any;
+  let census: Awaited<ReturnType<typeof listCdpPageTargets>>;
   try {
     // No sibling Page may become a cleanup target; census is exact ID only.
-    const census = await listCdpPageTargets(input.cdp,
+    census = await listCdpPageTargets(input.cdp,
       Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, input.deadlineMs - Date.now())));
-    const found = census.filter((target) => target.id === pinId);
-    if (found.length === 0) return { status: 'confirmed', targetId: pinId, cause: 'already_gone' };
-    if (found.length !== 1 || Date.now() >= input.deadlineMs) return refuse('target_census_failed');
-    // A synthesized cleanup-only result carries no Send attempt witness.
-    // Never use that default to override contrary terminal delivery evidence.
-    if (original.phase === 'not_sent'
-      && (terminalDelivery !== 'not-sent' || terminalSendCount !== 0)) {
-      return refuse('not_sent_dispatch_unproven');
+  } catch {
+    return refuse('target_census_failed');
+  }
+  const found = census.filter((target) => target.id === pinId);
+  if (found.length === 0) return { status: 'confirmed', targetId: pinId, cause: 'already_gone' };
+  // Send/phase proof failures are decided before any census ambiguity, so a proof failure
+  // can never be reported as (nonblocking) page-state.
+  // A synthesized cleanup-only result carries no Send attempt witness.
+  // Never use that default to override contrary terminal delivery evidence.
+  if (original.phase === 'not_sent'
+    && (terminalDelivery !== 'not-sent' || terminalSendCount !== 0)) {
+    return refuse('not_sent_dispatch_unproven');
+  }
+  if (original.phase === 'harvested'
+    && (terminalDelivery !== 'landed' || terminalSendCount !== 1)) {
+    return refuse('harvested_terminal_unverified');
+  }
+  if (found.length !== 1 || Date.now() >= input.deadlineMs) return refuse('target_census_failed');
+  let browser: any;
+  try {
+    let page: any;
+    try {
+      const attached = await attachOwnTarget(loadChromium(), {
+        mode: 'own-target', cdp: input.cdp, newChat: false,
+        pinnedTargetId: pinId, deadlineMs: input.deadlineMs,
+        cleanupBudgetMs: RESOURCE_CLEANUP_BOUND_MS,
+      });
+      browser = attached.browser;
+      page = attached.page;
+    } catch {
+      return refuse('created_target_ownership_unproven');
     }
-    if (original.phase === 'harvested'
-      && (terminalDelivery !== 'landed' || terminalSendCount !== 1)) {
-      return refuse('harvested_terminal_unverified');
-    }
-    const attached = await attachOwnTarget(loadChromium(), {
-      mode: 'own-target', cdp: input.cdp, newChat: false,
-      pinnedTargetId: pinId, deadlineMs: input.deadlineMs,
-      cleanupBudgetMs: RESOURCE_CLEANUP_BOUND_MS,
-    });
-    browser = attached.browser;
-    const page = attached.page;
     if (!page || getOwnTargetInfo(browser)?.targetId !== pinId) return refuse('created_target_ownership_unproven');
     const result = compactResult(
       'observation_uncertain', 'invocation', 'predecessor_cleanup_only',
@@ -8747,9 +8869,10 @@ async function retireExplicitPredecessor(input: {
       });
       if (fresh) return { status: 'nonblocking_open', targetId: pinId, cause: 'settled_idle_last_page_preserved' };
     }
-    return refuse(guarded.cause);
+    return refuse(guarded.cause ?? 'predecessor_cleanup_unclassified');
   } catch {
-    return refuse('target_census_failed');
+    // An unexpected exception after attachment is unclassified: it refuses, never page-state.
+    return refuse('predecessor_cleanup_unclassified');
   } finally {
     if (browser) await releaseCdpBrowser(browser, RESOURCE_CLEANUP_BOUND_MS);
   }
@@ -10248,6 +10371,32 @@ export const readPrAuthorHeadViaPackGh: PrAuthorHeadReader = async (binding) => 
 
 export type IssueBodyDigestReader = (repo: string, issue: number) => Promise<string | undefined>;
 
+/** Structured exact Issue tuple: upper-cased REST state (OPEN/CLOSED) and body SHA-256. */
+export interface IssueTupleObservation { readonly state: string | undefined; readonly bodySha256: string }
+export type IssueTupleReader = (repo: string, issue: number) => Promise<IssueTupleObservation | undefined>;
+
+/** Authenticated pack `scripts/gh` REST read of the exact Issue state and body digest; undefined when unreadable. */
+export const readIssueTupleViaPackGh: IssueTupleReader = async (repo, issue) => {
+  const result = await runProcess({
+    command: PR_AUTHOR_PACK_GH,
+    args: ['api', `repos/${repo}/issues/${issue}`],
+    cwd: PR_AUTHOR_PACK_ROOT,
+    inheritParentEnv: true,
+    allowEmptyStdout: false,
+    timeoutMs: 30_000,
+  });
+  if (!result.ok) return undefined;
+  try {
+    const body = JSON.parse(result.stdout) as { number?: unknown; body?: unknown; pull_request?: unknown; state?: unknown };
+    if (body.number !== issue || body.pull_request !== undefined || typeof body.state !== 'string') return undefined;
+    if (body.body !== null && typeof body.body !== 'string') return undefined;
+    return {
+      state: body.state.toUpperCase(),
+      bodySha256: createHash('sha256').update(typeof body.body === 'string' ? body.body : '', 'utf8').digest('hex'),
+    };
+  } catch { return undefined; }
+};
+
 /** Authenticated pack `scripts/gh` REST read of the exact Issue body; SHA-256, undefined when unreadable. */
 export const readIssueBodySha256ViaPackGh: IssueBodyDigestReader = async (repo, issue) => {
   const result = await runProcess({
@@ -10288,7 +10437,9 @@ export function writeGithubEffectBaselineToReceipt(input: {
   readonly receiptPath: string | undefined;
   readonly invocationId: string;
   readonly target: { readonly repo: string; readonly kind: 'issue' | 'pr'; readonly number: number;
-    readonly bodySha256?: string; readonly headSha?: string };
+    readonly bodySha256?: string; readonly headSha?: string; readonly state?: string;
+    readonly baseRepository?: string; readonly baseRef?: string;
+    readonly headRepository?: string; readonly headRef?: string };
 }): boolean {
   const receiptPath = input.receiptPath;
   if (!receiptPath || !isAbsolute(receiptPath)) return false;
@@ -10307,6 +10458,14 @@ export function writeGithubEffectBaselineToReceipt(input: {
       kind: input.target.kind,
       number: input.target.number,
       ...(input.target.kind === 'issue' ? { body_sha256: input.target.bodySha256 } : { head_sha: input.target.headSha }),
+      // Structured pre-SEND tuple (#2772): OPEN state plus exact base/head repository/ref.
+      ...(input.target.state !== undefined ? { state: input.target.state } : {}),
+      ...(input.target.kind === 'pr' ? {
+        ...(input.target.baseRepository !== undefined ? { base_repository: input.target.baseRepository } : {}),
+        ...(input.target.baseRef !== undefined ? { base_ref: input.target.baseRef } : {}),
+        ...(input.target.headRepository !== undefined ? { head_repository: input.target.headRepository } : {}),
+        ...(input.target.headRef !== undefined ? { head_ref: input.target.headRef } : {}),
+      } : {}),
       captured_at: new Date().toISOString(),
     };
     stage = join(dirname(receiptPath), `.${basename(receiptPath)}.baseline-${process.pid}-${Date.now()}.tmp`);
@@ -10373,6 +10532,7 @@ export interface PrAuthorTurnHooks {
   readHead?: PrAuthorHeadReader;
   readBranch?: (cwd: string) => Promise<string | undefined>;
   readIssueBodySha256?: IssueBodyDigestReader;
+  readIssueTuple?: IssueTupleReader;
   reader?: PrAuthorProcessReader;
   /** Deterministic barrier hooks for the bounded race fixtures. */
   beforeFinalScan?: (invocationId: string) => Promise<void> | void;

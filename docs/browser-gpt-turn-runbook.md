@@ -115,7 +115,18 @@ resolved paths. `--predecessor-invocation-id` and `--predecessor-attempt-identit
 take only the earlier invocation and attempt: the launcher reads that
 predecessor's original Run/Task/Dispatch from its own durable locator, and a
 settled `ok`/landed predecessor is a no-op that never admits the new Send.
-Refusals print an exact code and `nextStep`. After the launcher may have
+A one-sided pair is `predecessor_invocation_and_attempt_required`; naming this
+invocation as its own predecessor is `predecessor_self_invocation_forbidden`.
+Genuinely independent new work omits both flags. A verified predecessor whose
+old Page only failed post-identity cleanup (`cleanup_unconfirmed`) keeps that
+Page untouched and allows the separately admitted fresh Page; an absent,
+foreign or unproven predecessor identity, terminal, Send/phase proof or
+created-target ownership is `predecessor_handoff_unproven`: reconcile it
+read-only. `--profile <profile>` must be an absolute user-data directory (POSIX, WSL
+`/mnt/<drive>/...`, Windows `C:\...`/`C:/...`, or a Windows `\\server\share`
+path on Windows); a relative, drive-relative or unsupported UNC value is
+refused with `profile_absolute_user_data_dir_required` before any state is
+allocated. Refusals print an exact code and `nextStep`. After the launcher may have
 started, a refusal names only the adapter's own code and marks physical SEND
 unknown: reconcile the original invocation, never resend. Details:
 [flow-manager runbook](flow-manager-long-running-child-runbook.md).
@@ -131,12 +142,25 @@ child projects it into its terminal envelope and records delivery as
 - Possible/proven delivery forbids a blind resend.
 - Timeout, child exit, missing envelope, or absent output does not prove no send.
 - Recovered reply bytes belong to the same invocation/conversation.
+- `ok` with `send_count: 0` or `author_effect_pr_head_changed` and no owned
+  Send witness stays `POSSIBLY_DELIVERED`; GitHub movement never makes it
+  `landed`.
+- When the original receipt carries a pre-SEND baseline, the terminal adds
+  `diagnostics.github_effect` (`target_progress_observed` or
+  `effect_unverified`, attribution always `unverified`). Progress needs the
+  same still-OPEN target with unchanged base/head repository and ref, read
+  twice coherently. It never changes incident, exit or delivery.
 
 ### Non-success observation gate
 
 Read exact state/cause, send count, owned conversation identity, and current
 page/browser liveness before the owning workflow chooses a next action.
 Product/login/quota/network walls are evidence, not send authority.
+A busy current Page (`stop_visible`, `generation_in_progress`,
+`continue_generating_visible`, `unreadable` or `contradictory`) is
+`conversation_busy` with nothing sent; a historic harvest never overrules it.
+The manager pauses a still-generating inspect and names the next exact-original
+read-only inspect for the next existing wake; it emits no immediate argv.
 
 ### Same-invocation recovery
 
@@ -144,8 +168,15 @@ When delivery may have happened: retain invocation/conversation identity,
 re-observe the owned conversation, harvest only an attributable reply, and
 publish output once. If attribution remains uncertain, report uncertainty and
 preserve no-resend semantics. A redirect away from the bound conversation is
-`cause: conversation_unavailable` with no recoverable locator: start a fresh
-chat as advice only, not as resend authority for possibly delivered work.
+`cause: conversation_unavailable` with no recoverable locator. The next action
+is read-first: the exact bound target read (`scripts/gh issue view <N> --repo
+<owner/repo> --json state,title,body,closedAt` or `scripts/gh pr view <N>
+--repo <owner/repo> --json number,state,headRefOid,headRefName,headRepository`),
+then reconciliation of the original invocation by its still-current
+Task+Dispatch owner. Without a trusted bound target, inspect the original
+invocation read-only. Unchanged GitHub state is not proof of no Send. Only that
+owner may separately admit a genuinely distinct new intent on an ordinary
+`--new-chat` path with new identities.
 No fixed time window settles an attempt or
 authorizes a new Send: reconcile the original Page and the exact bound GitHub
 target (task-progress check) first. The owner-run `wait` may publish one

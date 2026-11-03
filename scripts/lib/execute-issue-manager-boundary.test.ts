@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { TURN_STATES } from '../chatgpt-browser-turn/contracts.ts';
 import type { ProbeStatus } from '../browser-gpt-page-probe.ts';
+import { classifyArgv } from './gh-inventory-match.mjs';
 import {
   MANAGER_NEXT_ACTION_KINDS,
   managerNextAction,
@@ -69,6 +70,16 @@ function smoke(
     }],
     ...overrides,
   };
+}
+
+/** #2772: a non-identity-bound generating pause names the next read-only step but emits no argv or wake. */
+function expectGeneratingPause(evaluated: ReturnType<typeof classifyExecuteIssueManagerRecord>) {
+  expect(evaluated).toMatchObject({ exitCode: 4, result: { ok: false, cause: 'external:content_authority_conflict', nextAction: null } });
+  if (evaluated.result.ok !== false || !('pause' in evaluated.result)) throw new Error('expected generating pause');
+  expect(evaluated.result.pause.remedy).toContain('next existing coordinator/watcher wake');
+  expect(evaluated.result.pause.remedy).toContain('exact-original read-only inspect');
+  expect(evaluated.result.pause).not.toHaveProperty('wake_owner');
+  expect(JSON.stringify(evaluated.result)).not.toMatch(/scripts\/gh|--new-chat|self_recommendation/u);
 }
 
 function actionOf(evaluated: ReturnType<typeof classifyExecuteIssueManagerRecord>) {
@@ -152,9 +163,37 @@ describe('execute-Issue manager boundary', () => {
     }
   });
 
+  it('#2772 AC6: a fixer-bound PR emits the inventory-accepted PR read; other phases keep the Issue read', () => {
+    const cause = 'product_network_error';
+    const fixer = classifyExecuteIssueManagerRecord(turn('recovery_required', { scope: 'conversation', cause }), { ...context, phase: 'fixer' });
+    const action = expectReadOnly(fixer);
+    expect(action.argv).toEqual(['scripts/gh', 'pr', 'view', '2083', '--json', 'number,state,headRefOid,headRefName,headRepository']);
+    expect(classifyArgv(action.argv.slice(1)).route).not.toBeNull();
+    for (const prNumber of [undefined, 0, -1, 1.5]) {
+      const unbound = expectReadOnly(classifyExecuteIssueManagerRecord(
+        turn('recovery_required', { scope: 'conversation', cause }), { ...context, phase: 'fixer', prNumber }));
+      expect(unbound.argv).toEqual(['scripts/gh', 'issue', 'view', '2081', '--json', 'state,title,body,closedAt']);
+    }
+    const smokeIssue = expectReadOnly(classifyExecuteIssueManagerRecord(turn('recovery_required', { scope: 'conversation', cause }), context));
+    expect(classifyArgv(smokeIssue.argv.slice(1)).route).not.toBeNull();
+  });
+
+  it('#2772 AC7: no generating row repeats the just-executed argv, and stopped rows still reach GitHub first', () => {
+    const executed = ['node', '--experimental-strip-types', 'scripts/browser-gpt-page-probe.ts', 'inspect', '--cdp', context.cdp!];
+    const generating = probe('ok', { execution_recovery_inspect: { cause: null, generation_in_progress: true } });
+    const paused = classifyExecuteIssueManagerRecord(generating, { ...context, productionArgv: executed });
+    expectGeneratingPause(paused);
+    expect(JSON.stringify(paused.result)).not.toContain(JSON.stringify(executed));
+    const stopped = classifyExecuteIssueManagerRecord(probe('ok', {
+      execution_recovery_inspect: { cause: 'message_stream_error', generation_in_progress: false },
+    }), { ...context, productionArgv: executed });
+    expect(expectReadOnly(stopped).kind).toBe('execute-github-first-read-only');
+  });
+
   it('keeps probe observation read-only until stopped recovery is proven', () => {
     expect(expectReadOnly(classifyExecuteIssueManagerRecord(probe('not_found'), context)).kind).toBe('execute-observe-owned-turn');
-    expect(expectReadOnly(classifyExecuteIssueManagerRecord(probe('ok', { execution_recovery_inspect: { cause: null, generation_in_progress: true } }), context)).kind).toBe('execute-observe-owned-turn');
+    // #2772 AC7: a still-generating non-identity-bound inspect pauses with no immediate argv.
+    expectGeneratingPause(classifyExecuteIssueManagerRecord(probe('ok', { execution_recovery_inspect: { cause: null, generation_in_progress: true } }), context));
     for (const cause of ['product_network_error', 'message_stream_error', 'stream_recovery_polling_timed_out']) {
       expect(expectReadOnly(classifyExecuteIssueManagerRecord(probe('ok', { execution_recovery_inspect: { cause, generation_in_progress: false } }), context)).kind).toBe('execute-github-first-read-only');
     }
@@ -273,20 +312,17 @@ describe('execute-Issue manager boundary', () => {
         { ...generating, profile: '/foreign/profile' },
         { ...generating, invocation_id: 'foreign-invocation' },
       ]) {
-        expect(classifyExecuteIssueManagerRecord(unbound, bound)).toMatchObject({
-          exitCode: 5, result: { cause: 'self_recommendation', nextAction: { kind: 'fresh-execution-invocation', resend_allowed: false } },
-        });
+        // #2772: never the just-executed inspect again (formerly a rejected self_recommendation).
+        expectGeneratingPause(classifyExecuteIssueManagerRecord(unbound, bound));
       }
       for (const unretained of [
         { ...bound, profile: undefined },
         { ...bound, invocationId: undefined },
         { ...bound, targetId: undefined, conversationUrl: undefined },
       ]) {
-        const evaluated = classifyExecuteIssueManagerRecord(generating, unretained);
-        expect(evaluated.exitCode).not.toBe(4);
-        expect(evaluated.exitCode).not.toBe(0);
+        // No watcher-wake special case and no immediate argv for an unretained identity.
+        expectGeneratingPause(classifyExecuteIssueManagerRecord(generating, unretained));
       }
-      // The existing no-identity fixture above still reobserves rather than pausing.
     });
 
     it('does not attribute sibling page generation or an uncommitted harvest, but accepts an exact-owned completed harvest', () => {
@@ -1141,9 +1177,9 @@ describe('Issue #2544: unavailable observation and Task-owned receipt recovery',
       .toBe('execute-observe-owned-turn');
     expect(classifyExecuteIssueManagerRecord(probe('unavailable', { reason: 'cdp_unavailable' }), bound))
       .toMatchObject({ exitCode: 4, result: { nextAction: null } });
-    expect(expectReadOnly(classifyExecuteIssueManagerRecord(probe('ok', {
+    expectGeneratingPause(classifyExecuteIssueManagerRecord(probe('ok', {
       execution_recovery_inspect: { generation_in_progress: true },
-    }), bound)).kind).toBe('execute-observe-owned-turn');
+    }), bound));
   });
 
   it('does not settle the incumbent from actual list, liveness, pending harvest or export observations', () => {
