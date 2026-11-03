@@ -509,13 +509,15 @@ function verifiedPrimaryBindings(
     const detailed = terminal.branch?.trim() ? terminal : diagnosticTerminalDetails(terminal, executor, true);
     if (!detailed.branch?.trim()) continue;
     const shown = read(['orchestration', 'worker-show', '--dispatch', row.dispatchId, '--json']);
+    // Native worker-show reports the Run as camelCase `runId`; `run_id` is the legacy spelling.
     const dispatch = shown?.dispatch as {
-      id?: unknown; taskId?: unknown; run_id?: unknown; status?: unknown;
+      id?: unknown; taskId?: unknown; runId?: unknown; run_id?: unknown; status?: unknown;
     } | undefined;
+    const dispatchRunId = dispatch?.runId ?? dispatch?.run_id;
     const observation = shown?.observation as { exactWorker?: unknown; status?: unknown } | undefined;
     const observed = shown?.terminal as Partial<FleetTerminal> | undefined;
     if (dispatch?.id !== row.dispatchId || dispatch.taskId !== row.taskId
-      || typeof dispatch.run_id !== 'string' || !dispatch.run_id.trim()
+      || typeof dispatchRunId !== 'string' || !dispatchRunId.trim()
       || observation?.exactWorker !== true || typeof observation.status !== 'string'
       || !observation.status.trim()
       || !observed || ![observed.handle, observed.incarnationId, observed.worktreePath, observed.branch]
@@ -524,12 +526,12 @@ function verifiedPrimaryBindings(
       || observed.worktreePath !== terminal.worktreePath || observed.branch !== detailed.branch
       || (typeof row.dispatchStatus === 'string' && typeof dispatch.status === 'string'
         && row.dispatchStatus !== dispatch.status)) continue;
-    const runResult = read(['orchestration', 'run-show', '--id', dispatch.run_id, '--json']);
+    const runResult = read(['orchestration', 'run-show', '--id', dispatchRunId, '--json']);
     const run = runResult?.run as { id?: unknown; coordinator_handle?: unknown } | undefined;
-    if (run?.id !== dispatch.run_id || run.coordinator_handle !== coordinatorHandle) continue;
+    if (run?.id !== dispatchRunId || run.coordinator_handle !== coordinatorHandle) continue;
     verified.set(terminal.handle, JSON.stringify([
       projectId, terminal.handle, terminal.incarnationId, terminal.worktreePath, detailed.branch,
-      row.taskId, row.dispatchId, dispatch.run_id,
+      row.taskId, row.dispatchId, dispatchRunId,
     ]));
   }
   return verified;
