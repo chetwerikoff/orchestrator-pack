@@ -6,6 +6,7 @@
     "docs/declarations/2782.pr-scope.json",
     "scripts/fleet/fleet-sweep.test.ts",
     "scripts/fleet/fleet-sweep.ts",
+    "scripts/worktree-lifecycle/launch-copies.ts",
     "scripts/worktree-lifecycle/merge-cleanup.ts",
     "scripts/worktree-lifecycle/operations.test.ts",
     "scripts/worktree-lifecycle/operations.ts",
@@ -28,5 +29,5 @@
     "scripts/worktree-teardown.test.ts",
     "scripts/worktree-teardown.ts"
   ],
-  "source_revision": "a9cf412783e1c63a4b22c096c301da7009b56cb5"
+  "source_revision": "8168a2def041c97d6f93c5c0a0c2a60f0d5bab45"
 }
