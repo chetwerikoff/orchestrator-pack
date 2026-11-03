@@ -8109,6 +8109,105 @@ describe('Issue #2761: blocking triage requires independent causal evidence', ()
     },
   } as unknown as PackReviewRunRecord);
 
+  it('triage end-to-end validates mixed exact-head blocker, low-harm DEFER and unreachable REJECT without hiding raw findings', () => {
+    const base = triageRun('Synthetic mixed fixture');
+    const head = base.targetSha;
+    const file = 'scripts/pack-review-runner.ts';
+    const shown = runProcessSync({ command:'git',
+      args:['-C',repoRoot,'--no-pager','show',head + ':' + file],
+      inheritParentEnv:true,timeoutMs:10_000,
+    });
+    expect(shown.ok).toBe(true);
+    const lines = shown.stdout.split(/\r?\n/);
+    function citation(needle: string): string {
+      const index = lines.findIndex((line) => line.includes(needle));
+      expect(index, 'missing reviewed-head witness for ' + needle).toBeGreaterThanOrEqual(0);
+      return file + ':' + (index+1) + ' ' + lines[index]!.trim();
+    }
+    const original = [
+      {type:'quality',code:'duplicate',path:file,severity:'blocking',
+        summary:'Original reachable blocker duplicates a real state bug',
+        details:'Distinct reviewer slots observed the same reachable state defect'},
+      {type:'quality',code:'cosmetic-source-label',path:file,severity:'blocking',
+        summary:'Optional Sources display cosmetic label is visually truncated',
+        details:'A minor display label formatting defect only'},
+      {type:'quality',code:'empty-occurrences-claim',path:file,severity:'blocking',
+        summary:'Empty occurrences still invoke Opus even when there are no findings',
+        details:'The occurrences collection guard allegedly fails to prevent invocation'},
+      {type:'quality',code:'advisory',path:file,severity:'warning',
+        summary:'Optional cosmetic text is slightly misaligned',
+        details:'Advisory visual inconvenience'},
+    ];
+    const round = {
+      ...base.reviewRound!,tier:'T3' as const,cardinality:3,
+      sourceSlots:[
+        {slotId:'source-01',ordinal:1,lifecycle:'terminal' as const,
+          terminalClass:'complete_findings',payload:{findings:[original[0]!]}},
+        {slotId:'source-02',ordinal:2,lifecycle:'terminal' as const,
+          terminalClass:'complete_findings',payload:{findings:[original[0]!]}},
+        {slotId:'source-03',ordinal:3,lifecycle:'terminal' as const,
+          terminalClass:'complete_findings',payload:{findings:original.slice(1)}},
+      ],
+    };
+    const raw = round.sourceSlots.flatMap((slot) =>
+      slot.payload.findings.map((finding) => ({...finding,sourceSlotId:slot.slotId})));
+    const run = {
+      ...base,reviewRound:round,findings:raw,reviewVerdict:'findings',findingCount:raw.length,
+    } as unknown as PackReviewRunRecord;
+    const choices = [
+      {members:[{slotId:'source-01',index:0},{slotId:'source-02',index:0}],
+        decision:'FIX_NOW' as const,reason:'Retain one distinct reachable blocker'},
+      {members:[{slotId:'source-03',index:0}],decision:'DEFER' as const,
+        reason:'Fix cost and effort outweigh minor cosmetic display label harm',lowImpact:true,
+        codeEvidence:citation('Sources: 2/3 (degraded after timeout)')},
+      {members:[{slotId:'source-03',index:1}],decision:'REJECT' as const,
+        reason:'The occurrences guard returns before invocation; trigger unreachable',
+        codeEvidence:citation('if (occurrences.length === 0) return null;')},
+      {members:[{slotId:'source-03',index:2}],decision:'DEFER' as const,
+        reason:'Originally advisory minor cosmetic issue'},
+    ];
+    const triage = validatePackReviewTriageResult(run,choices);
+    const saved = {
+      ...run,gptTriage:triage,gptTriageAttempt:{
+        schema:'pack-review-gpt-triage-attempt/v1' as const,
+        runId:run.id,targetSha:run.targetSha,cycleId:run.reviewCycleId!,
+        roundOrdinal:run.logicalRoundOrdinal!,
+        issueDigest:run.reviewRound!.boundIssueSnapshotDigest,
+        rawFindingsDigest:createHash('sha256').update(JSON.stringify(raw)).digest('hex'),
+        attemptedAtUtc:'2026-11-03T00:00:00.000Z',
+      },
+    } as PackReviewRunRecord;
+    const projection = projectPackReviewEffectiveFindings(saved);
+    expect(projection).toMatchObject({mode:'triaged',blocking:true,effectiveBlockingGroupCount:1});
+    expect(projection.fixNow).toHaveLength(1);
+    expect(projection.fixNow[0]!.members).toEqual(['source-01:0','source-02:0']);
+    expect(projection.deferred).toHaveLength(2);
+    expect(projection.groups.find((g) => g.decision === 'REJECT')?.members).toEqual(['source-03:1']);
+    expect(saved.findings).toEqual(raw); // original audit union never changed
+    expect(classifyPackReviewPayload({
+      verdict:'findings',findingCount:raw.length,findings:raw,
+    } as Parameters<typeof classifyPackReviewPayload>[0],saved)).toMatchObject({
+      requiredStatus:'failure',blocking:true,
+    });
+    expect(() => validatePackReviewTriageResult(run, choices.map((choice,index) => index === 1
+      ? {...choice,reason:'Minor cosmetic display inconvenience only'} : choice)))
+      .toThrow(/blocking downgrade lacks independent/); // missing economic reasoning
+    const protectedRun = {
+      ...run,reviewRound:{...round,sourceSlots:[{
+        ...round.sourceSlots[0]!,payload:{findings:[{
+          ...original[0]!,
+          summary:'Required status falsely green when empty occurrences bypass safety',
+          details:'The occurrences collection allegedly triggers a false success before evidence',
+        }]},
+      }]},
+    } as unknown as PackReviewRunRecord;
+    expect(() => validatePackReviewTriageResult(protectedRun,[{
+      members:[{slotId:'source-01',index:0}],decision:'REJECT',
+      reason:'occurrences guard returns before invocation; unreachable',
+      codeEvidence:citation('if (occurrences.length === 0) return null;'),
+    }])).toThrow(/blocking downgrade lacks independent/);
+  });
+
   it.each([
     'Required pack-review check reports success before source comments are verified',
     'Worker remains blocked indefinitely after lost Browser-GPT response',
