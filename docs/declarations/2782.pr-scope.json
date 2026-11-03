@@ -1,0 +1,32 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2782,
+  "declared_paths": [
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "docs/declarations/2782.pr-scope.json",
+    "scripts/fleet/fleet-sweep.test.ts",
+    "scripts/fleet/fleet-sweep.ts",
+    "scripts/worktree-lifecycle/merge-cleanup.ts",
+    "scripts/worktree-lifecycle/operations.test.ts",
+    "scripts/worktree-lifecycle/operations.ts",
+    "scripts/worktree-teardown.test.ts",
+    "scripts/worktree-teardown.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "node_modules/",
+    "packages/core/",
+    "runtime-state/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "docs/",
+    "scripts/fleet/",
+    "scripts/worktree-lifecycle/",
+    "scripts/worktree-teardown.test.ts",
+    "scripts/worktree-teardown.ts"
+  ],
+  "source_revision": "a9cf412783e1c63a4b22c096c301da7009b56cb5"
+}
