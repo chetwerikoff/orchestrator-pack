@@ -411,6 +411,42 @@ orchestrator removes that separate manager worktree **after the manager terminat
 through its existing lifecycle; its temporary survival is not an additional merge
 completion condition. No actor claims that teardown occurred without observing it.
 
+### 9-pre — Launch copies and exact listed trees
+
+**Launch copies.** Ignored `.env` and `.claude/skills/discuss-with-gpt/local.config.json`
+inside a worktree to be removed are launch copies when they are byte-identical to the same
+file in `PRIMARY_ROOT`. Remove identical copies together with their selected tree, before the
+lifecycle ignored-data gate runs. A copy that differs, has no readable primary counterpart, is
+tracked, or cannot be verified is preserved and reported by path and reason. Never print or
+copy file contents. `removeIdenticalLaunchCopies()` in
+`scripts/worktree-lifecycle/merge-cleanup.ts` is the one implementation; it never touches a
+tree that still has a live holder.
+
+**Exact listed trees (delegated merge).** The merge specification names every Issue worktree
+and checkout that must go: manager, smoke, verify, continuation and `/tmp/opencode` trees.
+Clean up exactly those paths and nothing else. Each path must be a worktree of this
+repository in `git worktree list`, must not be `PRIMARY_ROOT` or your own worktree, and must
+have no live holder (readable cwd or fd, plus descendants; a denied `/proc` read is counted
+and reported, never taken as proof of absence) and no bound Orca terminal. Unlisted siblings,
+the primary checkout and live work are preserved. Delegated mode keeps its admission and
+process/identity protections and never uses Step 9b. After the PR worktree `WT` went through
+9a/9c, remove the other listed trees and report in one run:
+
+```bash
+node --experimental-strip-types scripts/worktree-lifecycle/merge-cleanup.ts \
+  --repo-root REPO --primary-root "$PRIMARY_ROOT" --own-worktree "$OWN_WORKTREE" \
+  --pr "$P" --merge-sha "$MERGE_SHA" --orchestrator-handle "$ORCH_HANDLE" \
+  --worktree "$LISTED_1" --worktree "$LISTED_2"
+```
+
+`ORCH_HANDLE` is the orchestrator terminal handle named in the merge specification. The
+command removes the listed trees, reads Git back, and only then delivers one line with
+`orca terminal send --terminal "$ORCH_HANDLE" --enter --text ...`: `MERGED <n> <sha>` when
+every listed tree is observed absent, otherwise `CLEANUP_BLOCKED <n> <sha> merged; <path>:
+<reason> | ...`. Its JSON report carries `delivery.ok`; claim delivery only when it is true.
+A non-zero exit means a blocker or a failed delivery: report that exact result and, on a failed
+delivery, type the same line into the orchestrator pane yourself.
+
 ### 9a — Ordinary lifecycle attempt
 
 Run the normal dry-run for selected-target census and diagnostics:
@@ -465,8 +501,9 @@ Never override a real GitHub/OS permission failure or ambiguous destructive targ
 
    Close individually addressable residual target handles only; preserve
    mixed/unrelated panes.
-3. Repeatedly census processes whose current CWD equals/is below `WT`, plus
-   descendants. Apply bounded TERM, wait, SIGKILL, then require a repeated zero
+3. Repeatedly census processes whose readable CWD or open file descriptor equals/is below
+   `WT`, plus descendants. A denied (`EACCES`/`EPERM`) CWD read is counted and reported,
+   never taken as proof that no holder exists. Apply bounded TERM, wait, SIGKILL, then require a repeated zero
    census. A survivor is a real technical inability to remove the target safely.
 4. Capture only a path-name discard summary (`git status --porcelain=v1 -z`
    or equivalent); never publish file contents, diffs, secrets or editor buffers.
@@ -586,6 +623,10 @@ actor/wait is false. The accepted prefix is
 `^PARKED(?: on\s+|:\s*(?:wait\s+)?)(.+)$`.
 An ordinary technical failure is reported with its real next action, not
 falsely parked.
+
+A delegated merge agent ends with cleanup, then the `merge-cleanup.ts` delivery above
+(`MERGED <n> <sha>` or the exact cleanup blocker) to the orchestrator handle named in its
+spec, and only then stops. Never report cleanup or delivery without observed evidence.
 
 Only after the three terminal facts above are verified, the final
 own-response line is:
