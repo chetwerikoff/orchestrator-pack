@@ -50,7 +50,7 @@ import {
   COMPOSER_SELECTOR, SEND_BUTTON_SELECTOR, MESSAGE_NODE_SELECTOR,
   MESSAGE_AUTHOR_ROLE_ATTR, USER_MESSAGE_STYLE, RENDERED_CONVERSATION_TURN_SECTION_SELECTOR,
   USER_MESSAGE_SELECTOR, ASSISTANT_MESSAGE_SELECTOR, ASSISTANT_TURN_ANCESTOR_XPATH,
-  RENDERED_STOP_BUTTON_SELECTOR, ASSISTANT_TURN_ACTION_SELECTOR,
+  RENDERED_STOP_BUTTON_SELECTOR, ASSISTANT_TURN_ACTION_SELECTOR, CONNECTION_RECOVERY_STATUS_SELECTOR,
 } from './product-page-selectors.ts';
 import { publishWitnessedStateLight429, readStateLightAccountCooldown, __testComposerMutation, __testSendDelivery, atomicSnapshotSignature, classifyPageObservation, keyedHarvestCandidate, readPageObservation, revalidateKeyedHarvest, runStateLightTurn, type AtomicTranscriptSnapshot } from './state-light-turn-base.ts';
 import {
@@ -1128,6 +1128,91 @@ describe('production attempted-send result and durable envelope', () => {
         }, observation)).toBe(preDispatch);
       }
   });
+
+  it.each(['unanswered_turn', 'recovery_alert', 'overlap_generation'] as const)(
+    'a ready existing-chat composer never Sends or clicks Stop before the completion/Continue/Stop predicate: %s (#2772 K5)',
+    async (scenario) => {
+      const invocationId = randomUUID();
+      const profile = join(root, 'profile');
+      const cdp = 'http://127.0.0.1:9222';
+      const chatUrl = 'https://chatgpt.com/c/27722772-2772-4772-8772-277227722772';
+      let now = 10_000;
+      let text = '';
+      const rows: Array<{ role: 'user' | 'assistant'; text: string }> = [
+        { role: 'user', text: 'historical user' }, { role: 'assistant', text: 'historical answer' },
+      ];
+      // The newest carrier is an unanswered user turn: not a completed answer.
+      if (scenario === 'unanswered_turn') rows.push({ role: 'user', text: 'unanswered user turn' });
+      const stopVisible = scenario !== 'unanswered_turn';
+      const send = vi.fn(async () => undefined);
+      const stopClick = vi.fn(async () => undefined);
+      const composer = scalarLocator({
+        count: vi.fn(async () => 1),
+        fill: vi.fn(async (value: string) => { text = value; }),
+        innerText: vi.fn(async () => text),
+        press: send,
+      });
+      const stop = {
+        count: vi.fn(async () => (stopVisible ? 1 : 0)),
+        isVisible: vi.fn(async () => stopVisible),
+        click: stopClick,
+      };
+      const page = {
+        __fakeBrowserGptPage: true,
+        url: () => chatUrl,
+        isClosed: () => false,
+        goto: vi.fn(async () => undefined),
+        close: vi.fn(async () => undefined),
+        waitForTimeout: vi.fn(async (ms: number) => { now += ms; }),
+        locator: vi.fn((selector: string) => {
+          if (selector === COMPOSER_SELECTOR) return composer;
+          if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: async () => 1, click: send });
+          if (selector === RENDERED_STOP_BUTTON_SELECTOR) return { ...stop, first: () => stop, last: () => stop };
+          if (selector === CONNECTION_RECOVERY_STATUS_SELECTOR) {
+            return scalarLocator({ count: async () => (scenario === 'recovery_alert' ? 1 : 0) });
+          }
+          if (selector === MESSAGE_NODE_SELECTOR) {
+            return Object.assign(collectionLocator(rows), {
+              evaluateAll: vi.fn(async () => ({
+                rows: rows.map((message, domIndex) => ({
+                  role: message.role, text: message.text, key: `historical-2772-k5-${domIndex}`,
+                  domIndex, complete: true, completionReady: message.role === 'assistant', continuationVisible: false,
+                })),
+                pageTurnEvidence: {
+                  generationInProgress: scenario === 'overlap_generation',
+                  observedAssistantNodes: 0, continueGeneratingVisible: false,
+                },
+              })),
+            });
+          }
+          return scalarLocator();
+        }),
+      };
+      enqueueBrowserForTurn(mocks, page);
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      let result: Awaited<ReturnType<typeof runStateLightTurnWithStdoutCapture>>['result'];
+      try {
+        ({ result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+          '--profile', profile, '--cdp', cdp, '--input', join(root, 'synthetic-input'),
+          '--output', join(root, `${invocationId}.txt`), '--chat-url', chatUrl,
+          '--invocation-id', invocationId, '--timeout-ms', '120000',
+        ]));
+      } finally {
+        clock.mockRestore();
+      }
+      expect(send).not.toHaveBeenCalled();
+      expect(stopClick).not.toHaveBeenCalled();
+      expect(result.send_count).toBe(0);
+      expect(result.send_attempted === true).toBe(false);
+      expect(page.close).not.toHaveBeenCalled();
+      const observation = readStateLightTurnObservation(configuredProfileKey(profile, cdp), invocationId);
+      expect(observation.phase).toBe('not_sent');
+      if (scenario !== 'unanswered_turn') {
+        expect(result).toMatchObject({ state: 'conversation_busy', cause: 'another_turn_active' });
+        expect(result.incidents).toContain('current_page_busy_predicate');
+      }
+    },
+  );
 });
 
 

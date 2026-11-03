@@ -574,7 +574,7 @@ describe('observable post-send exits (#2416)', () => {
     admitStateLightTurnObservation({ profileKey, invocationId, marker: 'OPKTURNV1a97e3f70e9c07fa75c0f03840c0528a2' });
     transitionStateLightTurnObservation({ profileKey, invocationId, phase: 'dispatching', reason: 'fixture' });
     transitionStateLightTurnObservation({ profileKey, invocationId, phase: 'sent_unbound', reason: 'fixture', sendCount: 1, sendWitness: 'numeric_send_count' });
-    const result = makeTurnResult({ invocation_id: invocationId });
+    const result = makeTurnResult({ invocation_id: invocationId, configured_profile_key: profileKey });
     const fixture = nodeFixture(`
       let termReceived = false;
       process.on('SIGTERM', () => { termReceived = true; });
@@ -4702,6 +4702,28 @@ describe('Issue #2750 predecessor identity and continuity (AC14-AC15)', () => {
       expect(existsSync(scenario.config.terminalEnvelopePath)).toBe(false);
     });
 
+    it('a launcher refusal never emits the raw message or an absolute path on caller stderr (#2772 K7)', async () => {
+      const scenario = predecessorScenario({ skipLocator: true });
+      const raw = validateLaunchPreSpawn(scenario.config);
+      expect(raw.ok).toBe(false);
+      const writes: string[] = [];
+      const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: string | Uint8Array) => {
+        writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+        return true;
+      });
+      try {
+        expect(await runLaunch(scenario.config)).toBe(2);
+      } finally {
+        stderr.mockRestore();
+      }
+      const emitted = writes.join('');
+      expect(emitted).toContain('predecessor_handoff_unproven');
+      expect(emitted).toMatch(/ENOENT|receipt_locator/u);
+      expect(emitted).not.toContain(scenario.root);
+      expect(emitted).not.toMatch(/"message":"[^"]*\/(?:tmp|home)\//u);
+      expect(emitted).not.toMatch(/(?<![a-z<])\/(?:tmp|home)\/[^\s"']+/u);
+    });
+
     it('refuses a foreign attempt selector and a foreign profile/CDP selector', () => {
       const attempt = predecessorScenario({
         childArgsExtra: [],
@@ -5270,8 +5292,10 @@ describe('Issue #2524: final persisted no-result terminal projection', () => {
 
   it('keeps actual child results authoritative over an unrelated harvested no-result projection', async () => {
     const result = makeTurnResult({ invocation_id: 'inv-2524-synthetic' });
+    // A genuine driver result always carries this launch's configured profile key (#2772 K4).
     const success = await savedTerminal({
-      phase: 'harvested', sendCount: 1, reply: 'synthetic reply!!', childResult: result,
+      phase: 'harvested', sendCount: 1, reply: 'synthetic reply!!',
+      childResult: (profileKey) => ({ ...result, configured_profile_key: profileKey }),
     });
     expect(success.exitCode).toBe(0);
     expect(success.envelope).toMatchObject({
@@ -5287,7 +5311,10 @@ describe('Issue #2524: final persisted no-result terminal projection', () => {
       },
     });
     const incident = await savedTerminal({
-      phase: 'harvested', sendCount: 1, reply: 'synthetic reply!!', childResult: incidentResult,
+      phase: 'harvested', sendCount: 1, reply: 'synthetic reply!!',
+      childResult: (profileKey, invocationId) => ({
+        ...incidentResult, invocation_id: invocationId, configured_profile_key: profileKey,
+      }),
     });
     expect(incident.exitCode).toBe(1);
     expect(incident.envelope).toMatchObject({
@@ -5350,23 +5377,31 @@ describe('Issue #2524: final persisted no-result terminal projection', () => {
     expect(envelope.diagnostics).not.toHaveProperty('last_heartbeat');
   });
 
-  it.each(['invocation', 'profile'] as const)(
-    'refuses to borrow a harvested primary across a parsed %s mismatch', async (mismatch) => {
-      const { envelope } = await savedTerminal({
+  it.each([
+    ['invocation', false], ['profile', false], ['invocation', true], ['profile', true],
+  ] as const)(
+    'never publishes success or borrows a harvested primary across a parsed %s mismatch (forged witness %s) (#2772 K4)',
+    async (mismatch, forgedWitness) => {
+      const { envelope, exitCode } = await savedTerminal({
         phase: 'harvested', sendCount: 1, reply: 'synthetic reply!!', heartbeat: true,
         childResult: (profileKey, invocationId) => matchingSuccess(profileKey, invocationId, {
           ...(mismatch === 'invocation' ? { invocation_id: 'foreign-invocation' } : {}),
           ...(mismatch === 'profile' ? { configured_profile_key: 'foreign-profile' } : {}),
+          // A forged service Send witness would otherwise derive a landed delivery.
+          ...(forgedWitness ? { witness: makeTurnResult({}).witness } : {}),
         }),
       });
+      expect(exitCode).toBe(1);
       expect(envelope).toMatchObject({
-        lifecycle_outcome: 'success', turn_result_state: 'ok',
-        delivery: 'POSSIBLY_DELIVERED', send_count: 1,
+        lifecycle_outcome: 'incident', incident: 'child_turn_result_identity_mismatch',
+        turn_result_state: 'ok', delivery: 'POSSIBLY_DELIVERED',
         observed_invocation_id: mismatch === 'invocation' ? 'foreign-invocation' : 'inv-2524-synthetic',
-        conversation_locator: 'conv-uuid', recovery_available: true,
-        diagnostics: { last_reply_length: 0, last_reply_sha256_head: 'deadbeef00000000' },
       });
-      expect(envelope.diagnostics).not.toHaveProperty('persisted_observation');
+      expect(String(envelope.next_action)).toMatch(/reconcile the exact original invocation/u);
+      for (const foreign of ['send_count', 'conversation_locator', 'owned_target_id']) {
+        expect(envelope).not.toHaveProperty(foreign);
+      }
+      expect(envelope.diagnostics ?? {}).not.toHaveProperty('persisted_observation');
     },
   );
 
@@ -5691,8 +5726,24 @@ describe('Issue #2772 AC3: launcher terminal GitHub effect on the bound candidat
     id: string; baseline?: GithubEffectBaseline; result: Partial<TurnResultV1>; readers: GithubEffectReaders;
     /** Seed this invocation's original observation record, as the real driver would. */
     seedRecord?: boolean;
+    /** Immutable launch selectors (#2772 K6); default is the exact `acme/widgets` PR #7 author binding. */
+    selectors?: readonly string[];
+    /** Managed Task+Dispatch owner: current at launch, then this store state at terminal time (K1). */
+    owner?: 'current' | 'absent' | 'unreadable' | 'replaced';
+    /** How the fixture child ends (K3): its result line, an exit without one, or a startup hang. */
+    mode?: 'result' | 'exit' | 'hang';
   }) {
     const root = tempDir(`opk-2772-${input.id}-`);
+    let ownerStore: { file: string; replaced: string } | null = null;
+    if (input.owner) {
+      const env = { OPK_BASE_DIR: join(root, 'opk-base'), OPK_PROJECT_ID: OWNER_PROJECT };
+      for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
+      const staging = join(root, 'replaced-store');
+      const stagingEnv = { OPK_BASE_DIR: staging, OPK_PROJECT_ID: OWNER_PROJECT };
+      const replaced = writeAssignmentStore(stagingEnv, [{ taskId: OWNER_TASK, dispatchId: 'dispatch-replacement' }]);
+      ownerStore = { file: writeAssignmentStore(env, [{ taskId: OWNER_TASK, dispatchId: OWNER_DISPATCH }]), replaced };
+    }
+    if (input.mode === 'hang') vi.stubEnv('OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS', '200');
     vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
     const ids = fixtureIds(input.id);
     const paths = launchPaths(root, input.id);
@@ -5715,18 +5766,28 @@ describe('Issue #2772 AC3: launcher terminal GitHub effect on the bound candidat
       const baseline = ${JSON.stringify(input.baseline ?? null)};
       const staged = ${JSON.stringify(staged)};
       if (staged) fs.renameSync(staged.from, staged.to);
+      const ownerStore = ${JSON.stringify(ownerStore)};
+      const ownerChange = ${JSON.stringify(input.owner ?? 'current')};
+      if (ownerStore && ownerChange === 'absent') fs.rmSync(ownerStore.file);
+      if (ownerStore && ownerChange === 'unreadable') fs.writeFileSync(ownerStore.file, '{ not json');
+      if (ownerStore && ownerChange === 'replaced') fs.copyFileSync(ownerStore.replaced, ownerStore.file);
+      const mode = ${JSON.stringify(input.mode ?? 'result')};
       if (baseline) {
         const receipt = JSON.parse(fs.readFileSync(${JSON.stringify(paths.receipt)}, 'utf8'));
         fs.writeFileSync(${JSON.stringify(paths.receipt)}, JSON.stringify({ ...receipt, github_effect_baseline: baseline }) + '\\n', { mode: 0o600 });
       }
-      process.stdout.write(JSON.stringify(${JSON.stringify(result)}) + '\\n', () => process.exit(0));
+      if (mode === 'hang') setInterval(() => {}, 1000);
+      else if (mode === 'exit') process.exit(0);
+      else process.stdout.write(JSON.stringify(${JSON.stringify(result)}) + '\\n', () => process.exit(0));
     `);
+    const selectors = input.selectors ?? ['--repo', 'acme/widgets', '--pr', '7'];
     const code = await runFixtureLaunch(root, {
       runIdentity: ids.run, attemptIdentity: ids.attempt, invocationId: ids.invocation, profile, cdp,
       handoffReceiptPath: paths.receipt, terminalEnvelopePath: paths.envelope,
       browserOutputPath: paths.output, cwd: repoRoot, childCommand: fixture.command,
-      childArgs: [...fixture.args, '--', '--cdp', cdp, '--profile', profile, '--invocation-id', ids.invocation],
+      childArgs: [...fixture.args, '--', '--cdp', cdp, '--profile', profile, '--invocation-id', ids.invocation, ...selectors],
       githubReaders: input.readers,
+      ...(input.owner ? { ownerTaskId: OWNER_TASK, ownerDispatchId: OWNER_DISPATCH } : {}),
     });
     return { code, envelope: readTerminalEnvelope(paths.envelope) };
   }
@@ -5774,9 +5835,98 @@ describe('Issue #2772 AC3: launcher terminal GitHub effect on the bound candidat
     expect(envelope!.delivery).toBe('POSSIBLY_DELIVERED');
   });
 
+  it.each(['absent', 'unreadable', 'replaced'] as const)(
+    'never reports progress unless the managed owner is positively current at terminal time: %s store (#2772 K1)',
+    async (owner) => {
+      const prHead = vi.fn(async () => HEAD_AFTER);
+      const { envelope } = await launchWithBaseline({
+        id: `owner-${owner}`, baseline: prBaselineFor(`owner-${owner}`), result: zeroCount,
+        readers: tupleReaders({ prHead }), seedRecord: true, owner,
+      });
+      expect(prHead).not.toHaveBeenCalled();
+      expect((envelope!.diagnostics as Record<string, any>).github_effect).toMatchObject({
+        class: 'effect_unverified', attribution: 'unverified',
+        evidence: owner === 'replaced' ? 'owner_not_current' : 'owner_unverified',
+      });
+      expect(String(envelope!.next_action)).toContain('read-only first: scripts/gh pr view 7 --repo acme/widgets');
+    },
+  );
+
+  it('reports progress for a managed owner that is still current (#2772 K1 positive)', async () => {
+    const prHead = vi.fn(async () => HEAD_AFTER);
+    const { envelope } = await launchWithBaseline({
+      id: 'owner-current', baseline: prBaselineFor('owner-current'), result: zeroCount,
+      readers: tupleReaders({ prHead }), seedRecord: true, owner: 'current',
+    });
+    expect((envelope!.diagnostics as Record<string, any>).github_effect).toMatchObject({
+      class: 'target_progress_observed', evidence: 'pr_head_advanced_stable',
+    });
+  });
+
+  it.each([
+    ['foreign repository', { repo: 'other/repo' }],
+    ['foreign PR number', { number: 8 }],
+    ['issue instead of the bound PR', { kind: 'issue', body_sha256: 'a'.repeat(64) }],
+  ] as const)('never reads or recommends a baseline target that differs from the launch selector: %s (#2772 K6)',
+    async (_name, overrides) => {
+      const prHead = vi.fn(async () => HEAD_AFTER);
+      const { envelope } = await launchWithBaseline({
+        id: 'mismatch', baseline: prBaselineFor('mismatch', overrides as Record<string, unknown>), result: zeroCount,
+        readers: tupleReaders({ prHead }), seedRecord: true,
+      });
+      expect(prHead).not.toHaveBeenCalled();
+      expect((envelope!.diagnostics as Record<string, any>).github_effect).toMatchObject({
+        class: 'effect_unverified', evidence: 'baseline_target_mismatch',
+      });
+      // Only the original launch-selected target is recommended.
+      expect(String(envelope!.next_action)).toContain('scripts/gh pr view 7 --repo acme/widgets');
+      expect(String(envelope!.next_action)).not.toMatch(/other\/repo|pr view 8|issue view/u);
+    });
+
+  it('never trusts a baseline target when the launch carried no bound selector (#2772 K6)', async () => {
+    const prHead = vi.fn(async () => HEAD_AFTER);
+    const { envelope } = await launchWithBaseline({
+      id: 'unbound', baseline: prBaselineFor('unbound'), result: zeroCount,
+      readers: tupleReaders({ prHead }), seedRecord: true, selectors: [],
+    });
+    expect(prHead).not.toHaveBeenCalled();
+    expect((envelope!.diagnostics as Record<string, any>).github_effect).toMatchObject({
+      class: 'effect_unverified', evidence: 'baseline_target_unbound',
+    });
+    expect(String(envelope!.next_action ?? '')).not.toContain('acme/widgets');
+  });
+
+  it.each(['exit', 'hang'] as const)(
+    'a bound launch whose baseline was never written keeps a bounded effect and the selector read-first step: child %s (#2772 K3)',
+    async (mode) => {
+      const prHead = vi.fn(async () => HEAD_AFTER);
+      const { envelope } = await launchWithBaseline({
+        id: `nobaseline-${mode}`, result: zeroCount, readers: tupleReaders({ prHead }), mode,
+      });
+      expect(envelope).toMatchObject({ lifecycle_outcome: 'incident', delivery: 'POSSIBLY_DELIVERED' });
+      expect(prHead).not.toHaveBeenCalled();
+      expect((envelope!.diagnostics as Record<string, any>).github_effect).toEqual({
+        class: 'effect_unverified', attribution: 'unverified', evidence: 'baseline_absent',
+      });
+      expect(String(envelope!.next_action)).toContain(
+        'read-only first: scripts/gh pr view 7 --repo acme/widgets --json number,state,headRefOid,headRefName,headRepository');
+    },
+  );
+
+  it('a bound Issue launch without a baseline recommends only its exact Issue read (#2772 K3)', async () => {
+    const { envelope } = await launchWithBaseline({
+      id: 'nobaseline-issue', result: zeroCount, readers: tupleReaders({}), mode: 'exit',
+      selectors: ['--bound-issue', 'acme/widgets#42'],
+    });
+    expect((envelope!.diagnostics as Record<string, any>).github_effect).toMatchObject({ evidence: 'baseline_absent' });
+    expect(String(envelope!.next_action)).toContain('scripts/gh issue view 42 --repo acme/widgets');
+  });
+
   it('adds nothing when the original receipt carries no baseline (legacy launch)', async () => {
     const prHead = vi.fn(async () => HEAD_AFTER);
-    const { envelope } = await launchWithBaseline({ id: 'legacy', result: zeroCount, readers: tupleReaders({ prHead }) });
+    const { envelope } = await launchWithBaseline({
+      id: 'legacy', result: zeroCount, readers: tupleReaders({ prHead }), selectors: [],
+    });
     expect(prHead).not.toHaveBeenCalled();
     expect((envelope!.diagnostics as Record<string, any> | undefined)?.github_effect).toBeUndefined();
     expect(envelope!.delivery).toBe('POSSIBLY_DELIVERED');

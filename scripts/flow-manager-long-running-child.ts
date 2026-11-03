@@ -1418,6 +1418,37 @@ async function publishEnvelopeAtCaller(config: LaunchConfig, envelope: TerminalE
 
 const TERMINAL_GITHUB_EFFECT_BUDGET_MS = 25_000;
 
+/** #2772 K6: the immutable launch-selected target from the child argv (`--bound-issue` or `--repo`/`--pr`). */
+function launchBoundTarget(config: LaunchConfig): BoundGithubTarget | undefined {
+  const issue = childOption(config, '--bound-issue');
+  if (issue) {
+    const match = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9][0-9]*)$/u.exec(issue);
+    return match ? { kind: 'issue', repo: match[1]!, number: Number(match[2]) } : undefined;
+  }
+  const repo = childOption(config, '--repo');
+  const pr = childOption(config, '--pr');
+  if (repo && pr && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repo) && /^[1-9][0-9]*$/u.test(pr)) {
+    return { kind: 'pr', repo, number: Number(pr) };
+  }
+  return undefined;
+}
+
+function sameBoundTarget(left: BoundGithubTarget, right: BoundGithubTarget): boolean {
+  return left.kind === right.kind && left.repo.toLowerCase() === right.repo.toLowerCase() && left.number === right.number;
+}
+
+/** #2772 K4: the parsed turn-result names this exact launch-selected invocation and profile. */
+function candidateIdentityMatchesLaunch(config: LaunchConfig, candidate: ParsedTurnResult): boolean {
+  const invocationId = childOption(config, '--invocation-id');
+  const profile = childOption(config, '--profile');
+  const cdp = childOption(config, '--cdp');
+  // A legacy launch without these selectors has no identity to compare against.
+  if (!invocationId || !profile || !cdp) return true;
+  if (config.invocationId !== undefined && config.invocationId !== invocationId) return false;
+  return candidate.invocation_id === invocationId
+    && candidate.configured_profile_key === configuredProfileKey(profile, cdp);
+}
+
 /**
  * A candidate may reach the shared effect evaluator only when it is this exact child invocation and
  * profile and the projection matched the original observation record. An absent, unreadable or
@@ -1453,25 +1484,32 @@ async function terminalGithubEffect(
   } catch {
     fresh = null;
   }
-  if (fresh?.github_effect_baseline === undefined) return undefined;
+  // Only the immutable launch selector names the original target; a receipt baseline never does (K6).
+  const bound = launchBoundTarget(config);
   const unverified = (evidence: string) => ({
     classification: { class: 'effect_unverified' as const, attribution: 'unverified' as const, evidence },
+    ...(bound ? { target: bound } : {}),
   });
+  // A bound launch without a baseline still owes a bounded effect and the exact read-first step (K3).
+  if (fresh?.github_effect_baseline === undefined) return bound ? unverified('baseline_absent') : undefined;
   const invocationId = childOption(config, '--invocation-id');
   if (!candidateBound) return unverified('candidate_not_bound_to_invocation');
   if (!invocationId || !sameHandoffIdentity(fresh, receipt) || fresh.invocation_id !== invocationId
     || fresh.owner_task_id !== config.ownerTaskId || fresh.owner_dispatch_id !== config.ownerDispatchId) {
     return unverified('receipt_identity_changed');
   }
-  if (config.ownerTaskId && config.ownerDispatchId
-    && observeOwnerCurrency(config.ownerTaskId, config.ownerDispatchId).state === 'not_current') {
-    return unverified('owner_not_current');
+  // A managed Task+Dispatch owner must be positively current, not merely not replaced (K1).
+  if (config.ownerTaskId && config.ownerDispatchId) {
+    const owner = observeOwnerCurrency(config.ownerTaskId, config.ownerDispatchId);
+    if (owner.state !== 'current') return unverified(owner.state === 'not_current' ? 'owner_not_current' : 'owner_unverified');
   }
   const baseline = parseGithubEffectBaseline(fresh.github_effect_baseline, {
     invocationId, runIdentity: config.runIdentity, attemptIdentity: config.attemptIdentity,
   });
   if (!baseline) return unverified('baseline_absent');
   const target = baselineBoundTarget(baseline);
+  if (!bound) return unverified('baseline_target_unbound');
+  if (!target || !sameBoundTarget(bound, target)) return unverified('baseline_target_mismatch');
   let readers = config.githubReaders;
   if (!readers) {
     try { readers = await defaultGithubEffectReaders(); } catch { readers = undefined; }
@@ -1582,6 +1620,26 @@ async function finalizeCandidatePath(
     ...conversationLocatorFields(config, candidate),
     ...turnTargetEnvelopeFields(candidate, candidateObservation?.record),
   });
+  if (!candidateIdentityMatchesLaunch(config, candidate)) {
+    // A foreign or misrouted turn-result is never this invocation's outcome (#2772 K4): keep none of its
+    // Send witness, count, target or next action, and borrow no harvested primary across the mismatch.
+    const foreignKeys = new Set([
+      'send_count', 'next_action', 'observed_turn_result_identity',
+      ...Object.keys(conversationLocatorFields(config, candidate)),
+      ...Object.keys(turnTargetEnvelopeFields(candidate, undefined)),
+    ]);
+    const base = incidentEnvelope('child_turn_result_identity_mismatch');
+    const envelope = Object.fromEntries(
+      Object.entries(base).filter(([key]) => !foreignKeys.has(key)),
+    ) as unknown as TerminalEnvelope;
+    await publishEnvelopeAtCaller(config, await withEffect({
+      ...envelope,
+      delivery: 'POSSIBLY_DELIVERED',
+      next_action: OWNER_RECONCILE_STEP,
+    }));
+    await abortManagedProcess(controller, runPromise);
+    return 1;
+  }
   if (capture.duplicateCandidate) {
     await publishEnvelopeAtCaller(config, await withEffect(incidentEnvelope('child_terminal_result_duplicate')));
     await abortManagedProcess(controller, runPromise);
@@ -1676,7 +1734,9 @@ function refusalDetails(code: string, details: Record<string, unknown> = {}): Re
   // The caller sees the genuine bounded cause first, then the executable repair.
   const reason = boundedRefusalReason(details.message);
   const nextStep = reason && !base.startsWith('reason: ') ? `reason: ${reason}; ${base}` : base;
-  return { ...details, nextStep };
+  // The raw message never crosses the caller boundary; only its bounded reason does (#2772 K7).
+  const { message: _raw, ...rest } = details;
+  return { ...rest, ...(reason ? { message: reason } : {}), nextStep };
 }
 
 /** Companion schema for an authenticated detached-launcher pre-SEND refusal (non-authoritative). */

@@ -506,7 +506,7 @@ describe('state-light fresh conversation collision recovery', () => {
   // The following cases enter through the real existing state-light CLI and
   // guarded backend. Only the already-established browser/CDP fixture seams
   // are mocked; receipt/terminal/observation readers are not mocked.
-  async function deferredRetirementFixture(phase: 'not_sent' | 'sent_unbound' | 'harvested') {
+  async function deferredRetirementFixture(phase: 'not_sent' | 'sent_unbound' | 'sent_unharvested' | 'harvested') {
     const invocationId = randomUUID();
     const profile = '/tmp/profile';
     const cdp = 'http://127.0.0.1:9222';
@@ -542,7 +542,8 @@ describe('state-light fresh conversation collision recovery', () => {
         reason: 'positive_send_attempt',
       });
       transitionStateLightTurnObservation({
-        profileKey: 'collision-profile', invocationId, phase: 'sent_unbound',
+        profileKey: 'collision-profile', invocationId,
+        phase: phase === 'sent_unharvested' ? 'sent_unharvested' : 'sent_unbound',
         reason: 'positive_original_send', sendCount: 1, sendWitness: 'numeric_send_count',
         conversationUrl: SHARED_CONV,
       });
@@ -750,6 +751,47 @@ describe('state-light fresh conversation collision recovery', () => {
     }
   });
 
+
+  it.each([
+    ['not-sent terminal', 'not-sent', 0],
+    ['zero send count', 'POSSIBLY_DELIVERED', 0],
+  ] as const)('Issue #2772 K2: a contradictory sent_unharvested predecessor (%s) refuses before a failing census',
+    async (_name, delivery, sendCount) => {
+      const predecessor = await deferredRetirementFixture('sent_unharvested');
+      const attach = vi.mocked(attachOwnTarget);
+      predecessor.writeTerminal(delivery, sendCount);
+      let censusCalls = 0;
+      predecessor.fetchSpy.mockImplementation(async () => { censusCalls += 1; throw new Error('injected_census_unavailable'); });
+      const nextId = randomUUID();
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('NO-REPLAY-NEXT-2772-K2'));
+      mocks.browserQueue.length = 0;
+      enqueueBrowserForTurn(mocks, predecessor.turn.page);
+      const sendsBefore = predecessor.turn.getSends();
+      const run = [
+        ...STATE_LIGHT_TURN_BASE_ARGV,
+        '--invocation-id', nextId,
+        '--output', join(stateDir, 'successor-' + nextId + '.txt'),
+        '--new-chat', '--project-url', PROJECT_URL,
+        '--timeout-ms', '90000', '--poll-ms', '1',
+        '--predecessor-invocation-id', predecessor.args[6]!,
+        '--predecessor-attempt-identity', 'attempt-retire-2685',
+      ];
+      try {
+        attach.mockClear();
+        const output = await runStateLightTurnWithStdoutCapture(runStateLightTurn, run);
+        expect(output.result.send_count).toBe(0);
+        // A proof failure, never a nonblocking target_census_failed page-state cleanup.
+        expect(output.result.cause).toBe('predecessor_handoff_unproven:sent_dispatch_terminal_contradiction');
+        expect(String(output.result.next_action)).toMatch(/Reconcile the exact predecessor invocation read-only/u);
+        expect(censusCalls).toBe(0);
+        expect(attach).not.toHaveBeenCalled();
+        expect(predecessor.turn.page.close).not.toHaveBeenCalled();
+        expect(predecessor.turn.getSends()).toBe(sendsBefore);
+      } finally {
+        attach.mockImplementation(__testAttachOwnTargetFixture);
+        predecessor.fetchSpy.mockRestore();
+      }
+    });
 
   it.each(['settled-unsent-last-page', 'contradictory-delivery', 'contradictory-delivery-census-failure', 'contradictory-delivery-gone'] as const)(
     'Issue #2685: the actual successor driver %s before any new Page Send',

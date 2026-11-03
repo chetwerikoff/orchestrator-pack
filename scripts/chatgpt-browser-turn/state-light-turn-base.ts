@@ -2089,7 +2089,6 @@ async function waitForExistingGeneration(
   const waitUntil = Math.min(startedAt + EXISTING_GENERATION_WAIT_ROUND_MS * EXISTING_GENERATION_WAIT_ROUNDS, deadlineMs);
   let sawStop = false;
   let idleReads = 0;
-  let recoveryStopPressed = false;
   for (let read = 0; ; read += 1) {
     if (read > 0) {
       if (waitUntil - Date.now() <= EXISTING_GENERATION_READ_INTERVAL_MS + MAX_LOCAL_READ_WAIT_MS * 2) {
@@ -2101,18 +2100,9 @@ async function waitForExistingGeneration(
     if (await locatorCount(page.locator(RENDERED_STOP_BUTTON_SELECTOR), deadlineMs) > 0) {
       sawStop = true;
       idleReads = 0;
-      if (!recoveryStopPressed && await locatorCount(page.locator(CONNECTION_RECOVERY_STATUS_SELECTOR), deadlineMs) > 0) {
-        recoveryStopPressed = true;
-        try {
-          await boundedBrowserRead(
-            page.locator(RENDERED_STOP_BUTTON_SELECTOR).first().click({ timeout: MAX_LOCAL_READ_WAIT_MS }),
-            MAX_LOCAL_READ_WAIT_MS,
-            'connection_recovery_stop_timeout',
-          );
-        } catch {
-          // A Stop that does not respond leaves the conversation busy as before.
-        }
-      }
+      // Observational only (#2772 K5): a visible Stop with a recovery alert is a busy Page that this
+      // invocation does not own; never click its Stop, return busy without Send.
+      if (await locatorCount(page.locator(CONNECTION_RECOVERY_STATUS_SELECTOR), deadlineMs) > 0) return 'busy';
       continue;
     }
     idleReads += 1;
@@ -6565,10 +6555,11 @@ async function runTurnCore(
         && Date.now() - generationWatchStartedAt < EXISTING_GENERATION_RESUME_WINDOW_MS) {
         return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       }
-      if (reopenedExistingComposer) {
+      // Every existing-chat Send, reopened or ready, first passes the completion/Continue/Stop predicate (K5).
+      if (reopenedExistingComposer || !config.newChat) {
         const afterWatchFailure = await verifyReopenedExistingPage();
         if (afterWatchFailure) return afterWatchFailure;
-        if (Date.now() + insertionBudgetMs >= invocationDeadlineMs) {
+        if (reopenedExistingComposer && Date.now() + insertionBudgetMs >= invocationDeadlineMs) {
           return returnComposerMutationFailure('composer_mutation_budget_exhausted');
         }
       }
@@ -8844,6 +8835,17 @@ async function retireExplicitPredecessor(input: {
   if (original.phase === 'harvested'
     && (terminalDelivery !== 'landed' || terminalSendCount !== 1)) {
     return refuse('harvested_terminal_unverified');
+  }
+  // Every other phase is proven before the census too (#2772 K2): a sent phase needs one recorded Send and a
+  // terminal that never denies it; an in-flight or unknown phase is never page-state cleanup.
+  if (original.phase === 'sent_unbound' || original.phase === 'sent_unharvested') {
+    if (original.send_count !== 1
+      || (terminalDelivery !== 'POSSIBLY_DELIVERED' && terminalDelivery !== 'landed')
+      || (terminalSendCount !== undefined && terminalSendCount !== 1)) {
+      return refuse('sent_dispatch_terminal_contradiction');
+    }
+  } else if (original.phase !== 'not_sent' && original.phase !== 'harvested') {
+    return refuse('predecessor_phase_unclassified');
   }
   let census: Awaited<ReturnType<typeof listCdpPageTargets>>;
   try {

@@ -2494,10 +2494,10 @@ describe('existing generation behind a connection-recovery status', () => {
     return { page, click };
   }
 
-  it('presses Stop once and settles when the recovery status is shown', async () => {
+  it('never presses Stop and returns busy when the recovery status is shown (#2772 K5)', async () => {
     const { page, click } = recoveryPage(true);
-    await expect(__testWaitForExistingGeneration(page, Date.now() + 60_000)).resolves.toBe('settled');
-    expect(click).toHaveBeenCalledTimes(1);
+    await expect(__testWaitForExistingGeneration(page, Date.now() + 60_000)).resolves.toBe('busy');
+    expect(click).not.toHaveBeenCalled();
   });
 
   it('never presses Stop for an ordinary running generation', async () => {
