@@ -88,11 +88,14 @@ import {
   resolveBoundIssueSnapshot,
 } from './lib/reverify-bound-issue-snapshot.ts';
 import {
+  PACK_REVIEW_LOGICAL_CAPS,
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
   commitPackReviewTerminal,
+  createNewPackReviewCycle,
   initializePackReviewAuthority,
   observePackReviewHead,
   readPackReviewAuthority,
+  selectPackReviewGptSourceCardinality,
   settleLogicalPackReviewFindingsByStrictDescendant,
   stableJson,
 } from './pack-review-state.ts';
@@ -6865,5 +6868,81 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     expect(String(incumbent.result.detail)).toContain('observe the original runner PID and stale grace');
     expect(f.freshStarts).toEqual([]);
     expect(listPackReviewRuns(f.options)).toHaveLength(1);
+  });
+});
+
+describe('Issue #2777 historical logical round cap on read', () => {
+  const projectId = 'orchestrator-pack';
+  const histVersion = 'issue-1826-logical-rounds-1-1-2';
+
+  function harness() {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2777-historical-cap-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    process.env.PACK_REVIEWER = 'gpt';
+    process.env.PACK_REVIEW_BOUND_REVIEWER = 'gpt';
+    return { storeRoot, options: { projectId, storeRoot } };
+  }
+
+  function t3Run(storeRoot: string, input: { ordinal: number; cap?: number; roundOrdinal?: number }) {
+    const round: PackReviewGptRoundRecord = {
+      schema: 'pack-review-gpt-round/v1', reviewer: 'gpt', tier: 'T3',
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      roundOrdinal: input.roundOrdinal ?? input.ordinal, cardinality: 3, issueNumber: 2777,
+      boundIssueSnapshotDigest: 'd'.repeat(64),
+      sourceSlots: [1, 2, 3].map((ordinal) => ({
+        slotId: 'source-0' + ordinal, ordinal, lifecycle: 'planned' as const,
+      })),
+    };
+    return createPackReviewRun({
+      projectId, storeRoot, prNumber: 515, headSha: HEAD,
+      trustedPackRoot: process.cwd(), sourceRepoRoot: process.cwd(),
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      reviewCycleId: 'cycle-2777', logicalRoundOrdinal: input.ordinal,
+      ...(input.cap === undefined ? {} : { logicalRoundCap: input.cap }),
+      automaticBudgetDisposition: 'consume', resolvedReviewer: 'gpt', reviewRound: round,
+    }).run;
+  }
+
+  it('loads a saved T3 record whose cap (1) differs from today\'s T3 cap', () => {
+    expect(PACK_REVIEW_LOGICAL_CAPS.T3).not.toBe(1);
+    const { storeRoot, options } = harness();
+    const created = t3Run(storeRoot, { ordinal: 1, cap: PACK_REVIEW_LOGICAL_CAPS.T3 });
+    const path = join(storeRoot, 'runs', `${created.id}.json`);
+    const saved = JSON.parse(readFileSync(path, 'utf8')) as PackReviewRunRecord;
+    // Realistic historical file: written when the T3 cap was 1.
+    saved.logicalRoundCap = 1;
+    saved.accountingVersion = histVersion;
+    writeFileSync(path, JSON.stringify(saved));
+    expect(PACK_REVIEW_LOGICAL_CAP_MAP_VERSION).toBe(histVersion);
+    expect(getPackReviewRun(created.id, options)).toMatchObject({
+      id: created.id, logicalRoundCap: 1, logicalRoundOrdinal: 1, accountingVersion: histVersion,
+    });
+    // The project-store scan is not aborted by the historical row.
+    expect(listPackReviewRuns(options).map((run) => run.id)).toEqual([created.id]);
+  });
+
+  it('still enforces current caps at new-round admission', () => {
+    const { storeRoot, options } = harness();
+    const overCap = PACK_REVIEW_LOGICAL_CAPS.T3 + 1;
+    expect(() => t3Run(storeRoot, { ordinal: overCap, cap: PACK_REVIEW_LOGICAL_CAPS.T3 })).toThrow();
+    expect(() => selectPackReviewGptSourceCardinality({
+      reviewer: 'gpt', tier: 'T3', roundOrdinal: overCap, accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+    })).toThrow(/exceeds logical tier cap/);
+    expect(createNewPackReviewCycle('T3', { capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION }).frozenCap)
+      .toBe(PACK_REVIEW_LOGICAL_CAPS.T3);
+    expect(listPackReviewRuns(options)).toEqual([]);
+  });
+
+  it('keeps the other logical identity checks', () => {
+    const { storeRoot } = harness();
+    expect(() => t3Run(storeRoot, { ordinal: 1 }))
+      .toThrow(/GPT logical source version\/round identity mismatch/);
+    expect(() => t3Run(storeRoot, { ordinal: 2, cap: 2, roundOrdinal: 1 }))
+      .toThrow(/GPT logical source version\/round identity mismatch/);
+    expect(() => t3Run(storeRoot, { ordinal: 2, cap: 1, roundOrdinal: 2 }))
+      .toThrow(/logicalRoundOrdinal exceeds logicalRoundCap/);
   });
 });
