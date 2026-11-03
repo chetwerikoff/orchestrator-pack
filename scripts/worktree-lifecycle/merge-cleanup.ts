@@ -1,100 +1,18 @@
 #!/usr/bin/env node
 
-import { existsSync, lstatSync, readFileSync, realpathSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, realpathSync } from 'node:fs';
 import { parseGitWorktreePorcelain, normalizeWorktreePath } from './core.ts';
+import { removeIdenticalLaunchCopies, type GitResult, type GitRunner, type LaunchCopyResult } from './launch-copies.ts';
 import { runProcessSync } from '../kernel/subprocess.ts';
 import { collectProcessCensus } from './operations.ts';
+
+export { LAUNCH_COPY_PATHS, removeIdenticalLaunchCopies } from './launch-copies.ts';
+export type { GitResult, GitRunner, LaunchCopyResult } from './launch-copies.ts';
 
 /**
  * Delegated merge cleanup (Issue #2782): exact listed Issue worktrees, identical launch copies,
  * and the completion/blocker message to the orchestrator, in that order.
  */
-
-/** Ignored files copied from the primary checkout at launch. */
-export const LAUNCH_COPY_PATHS: readonly string[] = [
-  '.env',
-  '.claude/skills/discuss-with-gpt/local.config.json',
-];
-
-export type LaunchCopyPreserveReason =
-  | 'differs_from_primary'
-  | 'primary_copy_missing'
-  | 'unverified'
-  | 'not_ignored';
-
-export interface LaunchCopyResult {
-  readonly removed: readonly string[];
-  readonly preserved: readonly { readonly path: string; readonly reason: LaunchCopyPreserveReason }[];
-}
-
-export interface GitResult {
-  readonly ok: boolean;
-  readonly stdout: string;
-  readonly stderr: string;
-}
-
-export type GitRunner = (args: readonly string[]) => GitResult;
-
-function regularFile(path: string): boolean {
-  try {
-    const stat = lstatSync(path);
-    return stat.isFile() && !stat.isSymbolicLink();
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Remove launch copies in `worktree` that are byte-identical to the same file in `primaryRoot`.
- * A copy that differs, has no readable primary counterpart, or is not git-ignored is preserved.
- */
-export function removeIdenticalLaunchCopies(
-  worktree: string,
-  primaryRoot: string,
-  git: GitRunner,
-): LaunchCopyResult {
-  const removed: string[] = [];
-  const preserved: { path: string; reason: LaunchCopyPreserveReason }[] = [];
-  for (const relative of LAUNCH_COPY_PATHS) {
-    const copy = join(worktree, relative);
-    if (!existsSync(copy) && !regularFile(copy)) continue;
-    const original = join(primaryRoot, relative);
-    if (!regularFile(copy)) {
-      preserved.push({ path: relative, reason: 'unverified' });
-      continue;
-    }
-    if (!existsSync(original)) {
-      preserved.push({ path: relative, reason: 'primary_copy_missing' });
-      continue;
-    }
-    if (!regularFile(original)) {
-      preserved.push({ path: relative, reason: 'unverified' });
-      continue;
-    }
-    let same: boolean;
-    try {
-      same = readFileSync(copy).equals(readFileSync(original));
-    } catch {
-      preserved.push({ path: relative, reason: 'unverified' });
-      continue;
-    }
-    if (!same) {
-      preserved.push({ path: relative, reason: 'differs_from_primary' });
-      continue;
-    }
-    // Only an untracked, git-ignored file is a launch copy; never delete tracked content.
-    const ignored = git(['-C', worktree, 'check-ignore', '-q', '--', relative]);
-    const tracked = git(['-C', worktree, 'ls-files', '--error-unmatch', '--', relative]);
-    if (!ignored.ok || tracked.ok) {
-      preserved.push({ path: relative, reason: 'not_ignored' });
-      continue;
-    }
-    rmSync(copy, { force: true });
-    removed.push(relative);
-  }
-  return { removed, preserved };
-}
 
 export type ListedTreeStatus =
   | 'removed'
@@ -118,10 +36,20 @@ export interface MergeCleanupDeps {
     readonly unreadableCwd: number;
     readonly unreadableFd: number;
   };
-  /** Orca terminals whose structured worktreePath equals the tree. Throw when the inventory is unavailable. */
-  readonly terminals: (path: string) => number;
-  /** Non-force removal of one exact tree. */
-  readonly removeTree: (path: string) => { readonly ok: boolean; readonly detail: string };
+  /**
+   * Orca runtime state of the tree: whether Orca knows it, its live agents and bound terminals.
+   * Must throw when the inventory is unavailable, truncated or malformed (fail closed).
+   */
+  readonly orcaState: (path: string) => {
+    readonly known: boolean;
+    readonly agents: number;
+    readonly terminals: number;
+  };
+  /**
+   * Non-force removal of one exact tree. A tree Orca knows is removed only by Orca; its refusal
+   * is final. Plain `git worktree remove` (itself non-force) is used only for trees Orca does not know.
+   */
+  readonly removeTree: (path: string, orcaKnown: boolean) => { readonly ok: boolean; readonly detail: string };
   /** Deliver one line to the orchestrator pane. */
   readonly send: (handle: string, text: string) => { readonly ok: boolean; readonly detail: string };
   readonly exists?: (path: string) => boolean;
@@ -167,6 +95,63 @@ function oneLine(text: string): string {
   return text.replace(/[`!]/g, '').replace(/\s+/g, ' ').trim();
 }
 
+function cleanupOneTree(
+  path: string,
+  primary: string,
+  inventory: Set<string>,
+  deps: MergeCleanupDeps,
+  exists: (path: string) => boolean,
+  canonical: (path: string) => string,
+): ListedTreeResult {
+  const census = deps.holders(path);
+  const unreadable = { cwd: census.unreadableCwd, fd: census.unreadableFd };
+  const preserved = (reason: string): ListedTreeResult => ({
+    path,
+    status: 'preserved',
+    reason,
+    unreadableProcessObservations: unreadable,
+  });
+  if (census.holders > 0) {
+    return preserved(`${String(census.holders)} live process(es) hold the tree (readable cwd or fd)`);
+  }
+  let orca: ReturnType<MergeCleanupDeps['orcaState']>;
+  try {
+    orca = deps.orcaState(path);
+  } catch (error) {
+    return preserved(`Orca inventory unavailable or incomplete: ${oneLine(error instanceof Error ? error.message : String(error))}`);
+  }
+  if (orca.agents > 0) return preserved(`${String(orca.agents)} live Orca agent(s) on the tree`);
+  if (orca.terminals > 0) return preserved(`${String(orca.terminals)} Orca terminal(s) still bound to the tree`);
+  // Gates passed: only now are identical launch copies removed, so a preserved tree is never touched.
+  const launchCopies = removeIdenticalLaunchCopies(path, primary, deps.git);
+  if (launchCopies.preserved.length > 0) {
+    return {
+      path,
+      status: 'preserved',
+      reason: `launch copy kept: ${launchCopies.preserved.map((item) => `${item.path} (${item.reason})`).join(', ')}`,
+      launchCopies,
+      unreadableProcessObservations: unreadable,
+    };
+  }
+  const removal = deps.removeTree(path, orca.known);
+  let after: Set<string>;
+  try {
+    after = listedGitPaths(deps.git, canonical);
+  } catch {
+    after = inventory;
+  }
+  if (!after.has(path) && !exists(path)) {
+    return { path, status: 'removed', launchCopies, unreadableProcessObservations: unreadable };
+  }
+  return {
+    path,
+    status: 'preserved',
+    reason: `removal not observed: ${oneLine(removal.detail) || 'tree still present after removal'}`,
+    launchCopies,
+    unreadableProcessObservations: unreadable,
+  };
+}
+
 /** Cleanup of exact listed trees, read-back, then the single completion or blocker message. */
 export function runMergeCleanup(input: MergeCleanupInput, deps: MergeCleanupDeps): MergeCleanupReport {
   const canonical = deps.canonical ?? canon;
@@ -206,56 +191,14 @@ export function runMergeCleanup(input: MergeCleanupInput, deps: MergeCleanupDeps
     }
 
     order.push(`cleanup:${path}`);
-    const census = deps.holders(path);
-    const unreadable = { cwd: census.unreadableCwd, fd: census.unreadableFd };
-    if (census.holders > 0) {
-      trees.push({
-        path,
-        status: 'preserved',
-        reason: `${String(census.holders)} live process(es) hold the tree (readable cwd or fd)`,
-        unreadableProcessObservations: unreadable,
-      });
-      continue;
-    }
-    let terminalCount: number;
     try {
-      terminalCount = deps.terminals(path);
+      trees.push(cleanupOneTree(path, primary, inventory, deps, exists, canonical));
     } catch (error) {
+      // One tree failing never silences the coordinator report or stops independent trees.
       trees.push({
         path,
         status: 'preserved',
-        reason: `terminal inventory unavailable: ${oneLine(error instanceof Error ? error.message : String(error))}`,
-        unreadableProcessObservations: unreadable,
-      });
-      continue;
-    }
-    if (terminalCount > 0) {
-      trees.push({
-        path,
-        status: 'preserved',
-        reason: `${String(terminalCount)} Orca terminal(s) still bound to the tree`,
-        unreadableProcessObservations: unreadable,
-      });
-      continue;
-    }
-    // Gates passed: only now are identical launch copies removed, so a preserved tree is never touched.
-    const launchCopies = removeIdenticalLaunchCopies(path, primary, deps.git);
-    const removal = deps.removeTree(path);
-    let after: Set<string>;
-    try {
-      after = listedGitPaths(deps.git, canonical);
-    } catch {
-      after = inventory;
-    }
-    if (!after.has(path) && !exists(path)) {
-      trees.push({ path, status: 'removed', launchCopies, unreadableProcessObservations: unreadable });
-    } else {
-      trees.push({
-        path,
-        status: 'preserved',
-        reason: `removal not observed: ${oneLine(removal.detail) || 'tree still present after removal'}`,
-        launchCopies,
-        unreadableProcessObservations: unreadable,
+        reason: `unexpected error, tree preserved: ${oneLine(error instanceof Error ? error.message : String(error))}`,
       });
     }
   }
@@ -294,19 +237,39 @@ export function defaultMergeCleanupDeps(repoRoot: string): MergeCleanupDeps {
         unreadableFd: census.observations.unreadableFd,
       };
     },
-    terminals: (path) => {
-      const listed = spawn('orca', ['terminal', 'list', '--json']);
-      if (!listed.ok) throw new TypeError(listed.stderr.trim() || 'orca terminal list failed');
-      const root = JSON.parse(listed.stdout) as { result?: { terminals?: { worktreePath?: string }[] } };
-      const rows = root.result?.terminals;
-      if (!Array.isArray(rows)) throw new TypeError('orca terminal list omitted result.terminals[]');
-      return rows.filter((row) => typeof row.worktreePath === 'string' && canon(row.worktreePath) === path).length;
+    orcaState: (path) => {
+      const ps = spawn('orca', ['worktree', 'ps', '--json']);
+      const terminals = spawn('orca', ['terminal', 'list', '--json']);
+      if (!ps.ok) throw new TypeError(ps.stderr.trim() || 'orca worktree ps failed');
+      if (!terminals.ok) throw new TypeError(terminals.stderr.trim() || 'orca terminal list failed');
+      const complete = (value: unknown, key: string, label: string): Record<string, unknown>[] => {
+        const result = (value as { result?: Record<string, unknown> } | null)?.result;
+        const rows = result?.[key];
+        if (!result || !Array.isArray(rows)) throw new TypeError(`${label} omitted result.${key}[]`);
+        if (result.truncated === true) throw new TypeError(`${label} is truncated`);
+        if (typeof result.totalCount === 'number' && result.totalCount !== rows.length) {
+          throw new TypeError(`${label} totalCount does not match its rows`);
+        }
+        return rows as Record<string, unknown>[];
+      };
+      const worktrees = complete(JSON.parse(ps.stdout), 'worktrees', 'orca worktree ps');
+      const termRows = complete(JSON.parse(terminals.stdout), 'terminals', 'orca terminal list');
+      const rows = worktrees.filter((row) => typeof row.path === 'string' && canon(row.path) === path);
+      const agents = rows.reduce((sum, row) => sum + (Array.isArray(row.agents) ? row.agents.length : 0), 0);
+      const unverifiable = rows.reduce(
+        (sum, row) => sum + (typeof row.unverifiableTerminalCount === 'number' ? row.unverifiableTerminalCount : 0),
+        0,
+      );
+      const bound = termRows.filter((row) => typeof row.worktreePath === 'string' && canon(row.worktreePath) === path).length;
+      return { known: rows.length > 0, agents, terminals: bound + unverifiable };
     },
-    removeTree: (path) => {
-      const viaOrca = spawn('orca', ['worktree', 'rm', '--worktree', `path:${path}`, '--json']);
-      if (viaOrca.ok) return { ok: true, detail: 'orca worktree rm' };
+    removeTree: (path, orcaKnown) => {
+      if (orcaKnown) {
+        const viaOrca = spawn('orca', ['worktree', 'rm', '--worktree', `path:${path}`, '--json']);
+        return { ok: viaOrca.ok, detail: viaOrca.ok ? 'orca worktree rm' : viaOrca.stderr || viaOrca.stdout };
+      }
       const viaGit = spawn('git', ['-C', repoRoot, 'worktree', 'remove', path]);
-      return { ok: viaGit.ok, detail: viaGit.ok ? 'git worktree remove' : viaGit.stderr || viaOrca.stderr };
+      return { ok: viaGit.ok, detail: viaGit.ok ? 'git worktree remove' : viaGit.stderr };
     },
     send: (handle, text) => {
       const sent = spawn('orca', ['terminal', 'send', '--terminal', handle, '--enter', '--text', text]);
@@ -326,6 +289,18 @@ function valuesAfter(argv: readonly string[], name: string): string[] {
 function main(argv = process.argv.slice(2)): void {
   const [repoRoot] = valuesAfter(argv, '--repo-root');
   const [primaryRoot] = valuesAfter(argv, '--primary-root');
+  if (argv.includes('--launch-copies-only')) {
+    const [tree] = valuesAfter(argv, '--worktree');
+    if (!repoRoot || !primaryRoot || !tree) {
+      console.error('usage: merge-cleanup.ts --launch-copies-only --repo-root R --primary-root P --worktree PATH');
+      process.exitCode = 2;
+      return;
+    }
+    const copies = removeIdenticalLaunchCopies(canon(tree), canon(primaryRoot), defaultMergeCleanupDeps(repoRoot).git);
+    console.log(JSON.stringify(copies, null, 2));
+    process.exitCode = copies.preserved.length === 0 ? 0 : 1;
+    return;
+  }
   const [own] = valuesAfter(argv, '--own-worktree');
   const [pr] = valuesAfter(argv, '--pr');
   const [sha] = valuesAfter(argv, '--merge-sha');

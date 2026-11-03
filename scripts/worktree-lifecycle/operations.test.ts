@@ -927,7 +927,7 @@ function deps(fx: Fixture, overrides: Partial<MergeCleanupDeps> = {}, log: strin
   return {
     git: fx.git,
     holders: () => ({ holders: 0, unreadableCwd: 0, unreadableFd: 0 }),
-    terminals: () => 0,
+    orcaState: () => ({ known: false, agents: 0, terminals: 0 }),
     removeTree: (path) => {
       log.push(`remove:${path}`);
       const result = fx.git(['worktree', 'remove', path]);
@@ -1034,6 +1034,70 @@ describe('runMergeCleanup', () => {
     expect(existsSync(fx.primary)).toBe(true);
     expect(report.blockers).toHaveLength(1);
     expect(report.message).toMatch(/^CLEANUP_BLOCKED/);
+  });
+
+  it('does not bypass an Orca refusal with Git: Orca-known tree is preserved when Orca refuses', () => {
+    const fx = fixture();
+    const log: string[] = [];
+    const report = runMergeCleanup(
+      { primaryRoot: fx.primary, ownWorktree: fx.own, listed: [fx.manager], prNumber: 5, mergeSha: 's5', orchestratorHandle: 'h' },
+      deps(fx, {
+        orcaState: () => ({ known: true, agents: 0, terminals: 0 }),
+        removeTree: (path, orcaKnown) => {
+          log.push(`remove:${path}:${String(orcaKnown)}`);
+          return { ok: false, detail: 'orca refused: active agent check' };
+        },
+      }, log),
+    );
+    expect(existsSync(fx.manager)).toBe(true);
+    expect(log[0]).toBe(`remove:${fx.manager}:true`);
+    expect(report.message).toMatch(/^CLEANUP_BLOCKED 5 s5 merged; .*orca refused/);
+  });
+
+  it('preserves a tree with a live Orca agent or an incomplete Orca inventory', () => {
+    const fx = fixture();
+    const report = runMergeCleanup(
+      { primaryRoot: fx.primary, ownWorktree: fx.own, listed: [fx.manager, fx.smoke], prNumber: 6, mergeSha: 's6', orchestratorHandle: 'h' },
+      deps(fx, {
+        orcaState: (path) => {
+          if (path === fx.manager) return { known: true, agents: 1, terminals: 0 };
+          throw new Error('orca worktree ps is truncated');
+        },
+      }),
+    );
+    expect(existsSync(fx.manager)).toBe(true);
+    expect(existsSync(fx.smoke)).toBe(true);
+    expect(report.blockers.join('|')).toMatch(/1 live Orca agent/);
+    expect(report.blockers.join('|')).toMatch(/inventory unavailable or incomplete: orca worktree ps is truncated/);
+  });
+
+  it('keeps going and still sends exactly one blocker line when a tree throws', () => {
+    const fx = fixture();
+    const log: string[] = [];
+    const report = runMergeCleanup(
+      { primaryRoot: fx.primary, ownWorktree: fx.own, listed: [fx.manager, fx.smoke], prNumber: 7, mergeSha: 's7', orchestratorHandle: 'h' },
+      deps(fx, {
+        holders: (path) => {
+          if (path === fx.manager) throw new Error('process census could not read /proc/9/cwd: EIO');
+          return { holders: 0, unreadableCwd: 0, unreadableFd: 0 };
+        },
+      }, log),
+    );
+    expect(existsSync(fx.manager)).toBe(true);
+    expect(existsSync(fx.smoke)).toBe(false);
+    expect(log.filter((entry) => entry.startsWith('send:'))).toHaveLength(1);
+    expect(report.message).toMatch(/^CLEANUP_BLOCKED 7 s7 merged; .*unexpected error, tree preserved: process census could not read/);
+  });
+
+  it('preserves a tree whose differing launch copy remains instead of removing it', () => {
+    const fx = fixture();
+    writeFileSync(join(fx.manager, '.env'), 'LOCAL_ONLY=1\n');
+    const report = runMergeCleanup(
+      { primaryRoot: fx.primary, ownWorktree: fx.own, listed: [fx.manager], prNumber: 8, mergeSha: 's8', orchestratorHandle: 'h' },
+      deps(fx),
+    );
+    expect(existsSync(join(fx.manager, '.env'))).toBe(true);
+    expect(report.message).toMatch(/launch copy kept: \.env \(differs_from_primary\)/);
   });
 
   it('does not claim delivery when the send fails', () => {

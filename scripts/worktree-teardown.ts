@@ -25,6 +25,7 @@ import {
   WORKTREE_TEARDOWN_RUNTIME_PROFILE as RUNTIME,
   type RuntimeCommand,
 } from './worktree-teardown-runtime-profile.ts';
+import { removeIdenticalLaunchCopies, type LaunchCopyResult } from './worktree-lifecycle/launch-copies.ts';
 
 export type PostMergeTeardownOutcome =
   | 'cleanup_eligible'
@@ -209,6 +210,7 @@ export interface PostMergeTeardownReport {
   };
   readonly terminals?: TerminalEffects;
   readonly processes?: ProcessEffects;
+  readonly launchCopies?: LaunchCopyResult;
   readonly manifest?: DiscardManifest;
   readonly removal?: {
     readonly method: 'orca-force' | 'git-force';
@@ -1397,6 +1399,43 @@ export async function runPostMergeTeardown(
       processes,
       effects,
       error: `${String(processes.residual)} observable target processes remain`,
+    };
+  }
+
+  // Launch copies (.env, discuss-with-gpt local config): identical to the primary checkout's copy they
+  // go with the tree; differing or unverified ones are never force-deleted, so removal is deferred.
+  let launchCopies: LaunchCopyResult;
+  try {
+    launchCopies = removeIdenticalLaunchCopies(target, repositoryRoot, (gitArgs) => {
+      const run = runner({ command: 'git', args: gitArgs });
+      return { ok: run.ok, stdout: run.stdout, stderr: run.stderr };
+    });
+  } catch (error) {
+    return {
+      ...report,
+      repositoryRoot,
+      worktree: target,
+      outcome: 'quiesced_cleanup_deferred',
+      preflight,
+      terminals,
+      processes,
+      effects,
+      error: `launch-copy check failed, tree preserved: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  if (launchCopies.removed.length > 0) effects.push(`identical launch copies removed: ${launchCopies.removed.join(', ')}`);
+  if (launchCopies.preserved.length > 0) {
+    return {
+      ...report,
+      repositoryRoot,
+      worktree: target,
+      outcome: 'quiesced_cleanup_deferred',
+      preflight,
+      terminals,
+      processes,
+      effects,
+      launchCopies,
+      error: `launch copy preserved, tree not removed: ${launchCopies.preserved.map((item) => `${item.path} (${item.reason})`).join(', ')}`,
     };
   }
 

@@ -617,7 +617,11 @@ or read-back succeeded without corresponding remote/runtime evidence.
 **Launch copies.** Ignored `.env` and `.claude/skills/discuss-with-gpt/local.config.json`
 inside a worktree to be removed are launch copies when they are byte-identical to the same
 file in `PRIMARY_ROOT`. Remove identical copies together with their selected tree, before the
-lifecycle ignored-data gate runs. A copy that differs, has no readable primary counterpart, is
+lifecycle ignored-data gate runs. This applies to the selected `WT` first: before Step 9a
+run `merge-cleanup.ts --launch-copies-only --repo-root REPO --primary-root "$PRIMARY_ROOT"
+--worktree "$WT"`, and do not start 9b/9c removal while it exits non-zero. The post-merge
+teardown applies the same decision again after quiescence and defers removal (never
+force-deletes) when a differing or unverified copy remains. A copy that differs, has no readable primary counterpart, is
 tracked, or cannot be verified is preserved and reported by path and reason. Never print or
 copy file contents. `removeIdenticalLaunchCopies()` in
 `scripts/worktree-lifecycle/merge-cleanup.ts` is the one implementation; it never touches a
@@ -628,7 +632,11 @@ and checkout that must go: manager, smoke, verify, continuation and `/tmp/openco
 Clean up exactly those paths and nothing else. Each path must be a worktree of this
 repository in `git worktree list`, must not be `PRIMARY_ROOT` or your own worktree, and must
 have no live holder (readable cwd or fd, plus descendants; a denied `/proc` read is counted
-and reported, never taken as proof of absence) and no bound Orca terminal. Unlisted siblings,
+and reported, never taken as proof of absence), no live Orca agent and no bound Orca terminal.
+An Orca inventory that is unavailable, truncated or malformed preserves the tree. A tree Orca
+knows is removed only by non-force `orca worktree rm`; an Orca refusal is final and is never
+bypassed with Git. Plain non-force `git worktree remove` is used only for trees Orca does not
+know. A per-tree error preserves that tree and is reported; the other listed trees continue. Unlisted siblings,
 the primary checkout and live work are preserved. Delegated mode keeps its admission and
 process/identity protections and never uses Step 9b. After the PR worktree `WT` went through
 9a/9c, remove the other listed trees and report in one run:
