@@ -1,0 +1,16 @@
+  ┃
+  ┃  Merge agent reported GitHub refused PR #2770 because branch is behind and 7 required checks expected, despite
+  ┃  all checks green at dd1ad012. We are arranging a safe base update and current-head CI; preserve your smoke
+  ┃  resources and park on merge result, no duplicate merge.
+  ┃
+     + Thought: Preparing status update · 5.5s
+     + Thought: Preserving work state · 229ms
+     Understood. I’ll keep the exact-head smoke checkout and report preserved, avoid any duplicate merge attempt,
+     and remain parked awaiting the updated-head merge result.
+     ▣  Pack-Opk-312385c77a7a42f7913f40364b3686d6 · GPT-6 Luna · 9.2s
+  ┃
+  ┃
+  ┃
+  ┃  Pack-Opk-312385c77a7a42f7913f40364b3686d6 · GPT-6 Luna OpenAI · medium
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /home/che/orca/workspaces/orchestrator-pack/orchestrator-pack-mgr-2761-exec          105.6K (39%)  ctrl+p commands

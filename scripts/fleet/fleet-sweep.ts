@@ -182,21 +182,19 @@ export function isBusyScreen(screen: string, busyRe: RegExp = DEFAULT_BUSY_RE): 
     .filter((line) => line.trim() !== '')
     .slice(-BUSY_MARKER_WINDOW_LINES)
     .join('\n');
-  // OpenCode's idle status bar still prints "esc interrupt" beside the model,
-  // context percentage and ctrl+p commands. That chrome is not a running turn.
+  // OpenCode prints "esc interrupt" in its status bar only while a turn runs;
+  // the idle status bar shows the worktree path there instead.
   // A native braille spinner is positive active work. An active command may
   // wrap once (for example, a long sleep/CI command followed by "description")
   // before the model/status chrome; do not require the spinner to be the
   // literal final content line. Older spinner scrollback with later content
-  // remains ineligible, and the idle status bar alone is never work evidence.
+  // remains ineligible.
   const activeContent = contentLines(statusRegion);
   const last = activeContent.at(-1);
   if (last?.running || (activeContent.at(-2)?.running && last
     && !/^(?:>|User:|Assistant:|Tool:|\$|[→⚙])/u.test(last.text))) return true;
-  const withoutIdleChrome = statusRegion.split(/\r?\n/u)
-    .filter((line) => !/\bctrl\+p\s+commands\b/iu.test(line)).join('\n');
   busyRe.lastIndex = 0;
-  return busyRe.test(withoutIdleChrome);
+  return busyRe.test(statusRegion);
 }
 
 export function hasPollingEvidence(screen: string): boolean {
