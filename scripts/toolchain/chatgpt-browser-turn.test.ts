@@ -221,6 +221,7 @@ describe('Issue #1998 Target crash classification', () => {
     let sends = 0;
     const assistant = { role: 'assistant' as const, text: 'working', inProgress: true };
     const historicalUser = { role: 'user' as const, text: 'historical user' };
+    const historicalAnswer = { role: 'assistant' as const, text: 'historical answer' };
     const composer = scalarLocator({
       count: vi.fn(async () => 1),
       fill: vi.fn(async (value: string) => { composed = value; }),
@@ -255,17 +256,18 @@ describe('Issue #1998 Target crash classification', () => {
         if (selector === COMPOSER_SELECTOR) return composer;
         if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: vi.fn(async () => 0) });
         if (selector === MESSAGE_NODE_SELECTOR) {
+          // #2772 AC7: the reopened chat's last pre-send turn is a completed answer.
           const messages = sent
-            ? [historicalUser, { role: 'user' as const, text: composed }, assistant]
-            : [historicalUser];
+            ? [historicalUser, historicalAnswer, { role: 'user' as const, text: composed }, assistant]
+            : [historicalUser, historicalAnswer];
           return Object.assign(collectionLocator(messages, sent), {
             evaluateAll: vi.fn(async () => ({
               rows: messages.map((message, domIndex) => ({
                 role: message.role, text: message.text, key: `historical-user-1998-${domIndex}`,
-                domIndex, complete: true, completionReady: false, continuationVisible: false,
+                domIndex, complete: true, completionReady: message === historicalAnswer, continuationVisible: false,
               })),
               pageTurnEvidence: {
-                generationInProgress: sent, observedAssistantNodes: sent ? 1 : 0,
+                generationInProgress: sent, observedAssistantNodes: sent ? 2 : 1,
                 continueGeneratingVisible: false,
               },
             })),

@@ -25,6 +25,10 @@ import {
   __testWriteCapability,
 } from '../chatgpt-browser-turn/state.ts';
 import { atomicJson, configuredProfileKey, profileDirs, sha256 } from '../chatgpt-browser-turn/storage-common.ts';
+import {
+  absoluteProfilePathError, boundTargetReadFirstNextAction, boundTargetReadOnlyArgv,
+} from '../chatgpt-browser-turn/storage-common.ts';
+import { classifyArgv } from '../lib/gh-inventory-match.mjs';
 import * as coordination from '../chatgpt-browser-turn/coordination.ts';
 import { readDriverDiagnostic } from '../chatgpt-browser-turn/diagnostics.ts';
 import { classifyProductWall, productStatusText, witnessSurfaceProbeRequiresDowngrade, __testTiming, sendTurn, type BrowserConfig } from '../chatgpt-browser-turn/ui-adapter.ts';
@@ -1051,6 +1055,58 @@ describe('issue 1068 profile identity and legacy keys', () => {
     const folded = join(parent, 'mixedprofile');
     expect(configuredProfileKey(mixed, cdp)).not.toBe(configuredProfileKey(folded, cdp));
     expect(legacyConfiguredProfileIdentity(mixed)).toBe(legacyConfiguredProfileIdentity(folded));
+  });
+
+  it('#2772 AC9: accepted absolute aliases keep one key across three cwd roots; invalid shapes are refused', () => {
+    const windows = 'C:\\Users\\Automation\\Profile';
+    const forward = 'C:/Users/Automation/Profile';
+    const wsl = '/mnt/c/Users/Automation/Profile';
+    const posix = join(issue1068Root, 'absolute-profile');
+    const keysAt = (cwd: string) => {
+      const spy = vi.spyOn(process, 'cwd').mockReturnValue(cwd);
+      try {
+        return [windows, forward, wsl, posix].map((profile) => configuredProfileKey(profile, cdp));
+      } finally {
+        spy.mockRestore();
+      }
+    };
+    const roots = [issue1068Root, join(issue1068Root, 'nested', 'cwd'), '/'];
+    const [first, ...rest] = roots.map(keysAt);
+    for (const keys of rest) expect(keys).toEqual(first);
+    expect(first![0]).toBe(first![1]);
+    expect(first![0]).toBe(first![2]);
+    for (const valid of [windows, forward, wsl, posix]) expect(absoluteProfilePathError(valid, 'linux')).toBeUndefined();
+    expect(absoluteProfilePathError('\\\\server\\share\\Profile', 'win32')).toBeUndefined();
+    const invalid: ReadonlyArray<[string, NodeJS.Platform, string]> = [
+      ['profile', 'linux', 'profile_relative'],
+      ['./profile', 'linux', 'profile_relative'],
+      ['../profile', 'linux', 'profile_relative'],
+      ['C:profile', 'linux', 'profile_drive_relative'],
+      ['C:profile', 'win32', 'profile_drive_relative'],
+      ['\\\\server\\share\\Profile', 'linux', 'profile_unc_unsupported_on_platform'],
+      ['\\\\server', 'win32', 'profile_unc_server_share_required'],
+      ['\\Users\\Profile', 'win32', 'profile_rootless_windows_path'],
+      ['\\Users\\Profile', 'linux', 'profile_rootless_windows_path'],
+      ['  ', 'linux', 'profile_empty'],
+    ];
+    for (const [profile, platform, reason] of invalid) expect(absoluteProfilePathError(profile, platform)).toBe(reason);
+  });
+
+  it('#2772 AC6: every emitted read-first argv is accepted by the existing GitHub inventory matcher', () => {
+    for (const target of [
+      { kind: 'pr' as const, repo: 'acme/widgets', number: 7 },
+      { kind: 'issue' as const, repo: 'acme/widgets', number: 2772 },
+    ]) {
+      const argv = boundTargetReadOnlyArgv(target);
+      expect(argv[0]).toBe('scripts/gh');
+      expect(classifyArgv(argv.slice(1)).route).not.toBeNull();
+      const next = boundTargetReadFirstNextAction(target);
+      expect(next).toContain(`read-only first: ${argv.join(' ')}`);
+      expect(next).not.toMatch(/fresh chat|--new-chat/iu);
+    }
+    const unbound = boundTargetReadFirstNextAction(undefined);
+    expect(unbound).toContain('no trusted original-bound GitHub target');
+    expect(unbound).not.toMatch(/scripts\/gh/u);
   });
 
   it('AC6: active legacy possible_delivery blocks startup on the new key', () => {

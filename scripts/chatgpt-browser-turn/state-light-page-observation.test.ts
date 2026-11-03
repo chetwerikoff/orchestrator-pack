@@ -2209,8 +2209,12 @@ describe('Issue #2457 unproven terminal locator', () => {
           click: vi.fn(async () => { sent = true; currentUrl = conversationUrl; }),
         });
         const historicalUser = { role: 'user' as const, text: 'historical user' };
+        // #2772 AC7: the reopened chat's last pre-send turn is a completed answer.
+        const historicalAnswer = {
+          role: 'assistant' as const, text: 'historical answer', finalAction: true, finalActionInTurnContainer: true,
+        };
         const finalMessages = () => [
-          ...(currentUrl === conversationUrl ? [historicalUser] : []),
+          ...(currentUrl === conversationUrl ? [historicalUser, historicalAnswer] : []),
           ...(sent ? [
             { role: 'user' as const, text: composerText },
             { role: 'assistant' as const, text: 'synthetic reply', finalAction: true, finalActionInTurnContainer: true },
@@ -2244,7 +2248,7 @@ describe('Issue #2457 unproven terminal locator', () => {
                   })),
                   pageTurnEvidence: {
                     generationInProgress: false,
-                    observedAssistantNodes: sent ? 1 : 0, continueGeneratingVisible: false,
+                    observedAssistantNodes: sent ? 2 : 1, continueGeneratingVisible: false,
                   },
                 })),
               });
@@ -2490,10 +2494,10 @@ describe('existing generation behind a connection-recovery status', () => {
     return { page, click };
   }
 
-  it('presses Stop once and settles when the recovery status is shown', async () => {
+  it('never presses Stop and returns busy when the recovery status is shown (#2772 K5)', async () => {
     const { page, click } = recoveryPage(true);
-    await expect(__testWaitForExistingGeneration(page, Date.now() + 60_000)).resolves.toBe('settled');
-    expect(click).toHaveBeenCalledTimes(1);
+    await expect(__testWaitForExistingGeneration(page, Date.now() + 60_000)).resolves.toBe('busy');
+    expect(click).not.toHaveBeenCalled();
   });
 
   it('never presses Stop for an ordinary running generation', async () => {

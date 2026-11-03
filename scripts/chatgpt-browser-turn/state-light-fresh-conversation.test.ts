@@ -239,7 +239,9 @@ function makeLoserPage(
   let url = PROJECT_URL;
   let observationIndex = 0;
   const priorHistory: StateLightTestMessage[] = ownedPriorHistory
-    ? [{ role: 'user', text: 'historical user' }] : [];
+    // #2772 AC7: a reopened existing chat is idle only after its last turn completed.
+    ? [{ role: 'user', text: 'historical user' },
+      { role: 'assistant', text: 'historical answer', finalAction: true, finalActionInTurnContainer: true }] : [];
   const atomicOwnedHistory = (messages: StateLightTestMessage[], generating = false) =>
     Object.assign(collectionLocator(messages, generating), {
       evaluateAll: vi.fn(async () => ({
@@ -504,7 +506,7 @@ describe('state-light fresh conversation collision recovery', () => {
   // The following cases enter through the real existing state-light CLI and
   // guarded backend. Only the already-established browser/CDP fixture seams
   // are mocked; receipt/terminal/observation readers are not mocked.
-  async function deferredRetirementFixture(phase: 'not_sent' | 'sent_unbound' | 'harvested') {
+  async function deferredRetirementFixture(phase: 'not_sent' | 'sent_unbound' | 'sent_unharvested' | 'harvested') {
     const invocationId = randomUUID();
     const profile = '/tmp/profile';
     const cdp = 'http://127.0.0.1:9222';
@@ -540,7 +542,8 @@ describe('state-light fresh conversation collision recovery', () => {
         reason: 'positive_send_attempt',
       });
       transitionStateLightTurnObservation({
-        profileKey: 'collision-profile', invocationId, phase: 'sent_unbound',
+        profileKey: 'collision-profile', invocationId,
+        phase: phase === 'sent_unharvested' ? 'sent_unharvested' : 'sent_unbound',
         reason: 'positive_original_send', sendCount: 1, sendWitness: 'numeric_send_count',
         conversationUrl: SHARED_CONV,
       });
@@ -749,14 +752,61 @@ describe('state-light fresh conversation collision recovery', () => {
   });
 
 
-  it.each(['settled-unsent-last-page', 'contradictory-delivery'] as const)(
+  it.each([
+    ['not-sent terminal', 'not-sent', 0],
+    ['zero send count', 'POSSIBLY_DELIVERED', 0],
+  ] as const)('Issue #2772 K2: a contradictory sent_unharvested predecessor (%s) refuses before a failing census',
+    async (_name, delivery, sendCount) => {
+      const predecessor = await deferredRetirementFixture('sent_unharvested');
+      const attach = vi.mocked(attachOwnTarget);
+      predecessor.writeTerminal(delivery, sendCount);
+      let censusCalls = 0;
+      predecessor.fetchSpy.mockImplementation(async () => { censusCalls += 1; throw new Error('injected_census_unavailable'); });
+      const nextId = randomUUID();
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('NO-REPLAY-NEXT-2772-K2'));
+      mocks.browserQueue.length = 0;
+      enqueueBrowserForTurn(mocks, predecessor.turn.page);
+      const sendsBefore = predecessor.turn.getSends();
+      const run = [
+        ...STATE_LIGHT_TURN_BASE_ARGV,
+        '--invocation-id', nextId,
+        '--output', join(stateDir, 'successor-' + nextId + '.txt'),
+        '--new-chat', '--project-url', PROJECT_URL,
+        '--timeout-ms', '90000', '--poll-ms', '1',
+        '--predecessor-invocation-id', predecessor.args[6]!,
+        '--predecessor-attempt-identity', 'attempt-retire-2685',
+      ];
+      try {
+        attach.mockClear();
+        const output = await runStateLightTurnWithStdoutCapture(runStateLightTurn, run);
+        expect(output.result.send_count).toBe(0);
+        // A proof failure, never a nonblocking target_census_failed page-state cleanup.
+        expect(output.result.cause).toBe('predecessor_handoff_unproven:sent_dispatch_terminal_contradiction');
+        expect(String(output.result.next_action)).toMatch(/Reconcile the exact predecessor invocation read-only/u);
+        expect(censusCalls).toBe(0);
+        expect(attach).not.toHaveBeenCalled();
+        expect(predecessor.turn.page.close).not.toHaveBeenCalled();
+        expect(predecessor.turn.getSends()).toBe(sendsBefore);
+      } finally {
+        attach.mockImplementation(__testAttachOwnTargetFixture);
+        predecessor.fetchSpy.mockRestore();
+      }
+    });
+
+  it.each(['settled-unsent-last-page', 'contradictory-delivery', 'contradictory-delivery-census-failure', 'contradictory-delivery-gone'] as const)(
     'Issue #2685: the actual successor driver %s before any new Page Send',
     async (scenario) => {
       const predecessor = await deferredRetirementFixture('not_sent');
       const attach = vi.mocked(attachOwnTarget);
       const originalAttach = attach.getMockImplementation()!;
       predecessor.setOnlyPage();
-      if (scenario === 'contradictory-delivery') predecessor.writeTerminal('POSSIBLY_DELIVERED', 0);
+      const contradictory = scenario.startsWith('contradictory-delivery');
+      if (contradictory) predecessor.writeTerminal('POSSIBLY_DELIVERED', 0);
+      // #2772 AC8: a throwing census or an already-gone target never precedes the Send/phase proof.
+      if (scenario === 'contradictory-delivery-census-failure') {
+        predecessor.fetchSpy.mockImplementation(async () => { throw new Error('injected_census_unavailable'); });
+      }
+      if (scenario === 'contradictory-delivery-gone') predecessor.setGone();
       const nextId = randomUUID();
       const nextPrompt = 'NO-REPLAY-NEXT-2685-' + scenario;
       mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(nextPrompt));
@@ -782,11 +832,14 @@ describe('state-light fresh conversation collision recovery', () => {
         const output = await runStateLightTurnWithStdoutCapture(runStateLightTurn, run);
         expect(output.result.send_count).toBe(0);
         expect(predecessor.turn.page.close).not.toHaveBeenCalled();
-        if (scenario === 'contradictory-delivery') {
-          expect(output.result.cause).toBe('predecessor_cleanup_unconfirmed:not_sent_dispatch_unproven');
+        if (contradictory) {
+          // #2772 AC8: a Send/phase proof failure refuses as predecessor_handoff_unproven with read-only recovery.
+          expect(output.result.cause).toBe('predecessor_handoff_unproven:not_sent_dispatch_unproven');
+          expect(String(output.result.next_action)).toMatch(/Reconcile the exact predecessor invocation read-only/u);
           expect(attach).not.toHaveBeenCalled();
         } else {
-          expect(output.result.cause).not.toMatch(/^predecessor_cleanup_unconfirmed/u);
+          // #2772 AC8(a): a post-identity last_page_guard cleanup_unconfirmed permits the separately admitted fresh Page.
+          expect(output.result.cause).not.toMatch(/^predecessor_(?:cleanup_unconfirmed|handoff_unproven)/u);
           expect(attach).toHaveBeenCalledTimes(2);
         }
       } finally {
@@ -2013,7 +2066,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result).toMatchObject({
       state: 'ui_contract_mismatch',
       cause: 'conversation_unavailable',
-      next_action: expect.stringContaining('fresh chat'),
+      next_action: expect.stringContaining('read-only first'),
       send_count: 1,
       cleanup: 'unconfirmed',
     });
@@ -2334,7 +2387,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result).toMatchObject({
       state: 'ui_contract_mismatch',
       cause: 'conversation_unavailable',
-      next_action: expect.stringContaining('fresh chat'),
+      next_action: expect.stringContaining('read-only first'),
       conversation_id: SHARED_CONV,
       send_count: 0,
     });
@@ -2362,7 +2415,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result).toMatchObject({
       state: 'ui_contract_mismatch',
       cause: 'conversation_unavailable',
-      next_action: expect.stringContaining('fresh chat'),
+      next_action: expect.stringContaining('read-only first'),
       send_count: 0,
     });
     expect(solo.getSends()).toBe(0);
@@ -2393,8 +2446,11 @@ describe('state-light fresh conversation collision recovery', () => {
       conversation_id: SHARED_CONV,
       send_count: 0,
     });
-    expect(outcome.result.next_action).toMatch(/fresh chat/u);
-    expect(outcome.result.next_action).toMatch(/advice only/u);
+    // #2772 AC6: read-first original reconciliation; a redirect never recommends a fresh chat.
+    expect(outcome.result.next_action).toMatch(/^conversation unavailable/u);
+    expect(outcome.result.next_action).toMatch(/read-only first/u);
+    expect(outcome.result.next_action).toMatch(/no resend authority/u);
+    expect(outcome.result.next_action).not.toMatch(/fresh chat/iu);
     expect(outcome.result).not.toHaveProperty('recovery_available');
     expect(outcome.result).not.toHaveProperty('output');
     expect(JSON.stringify(outcome.result)).not.toContain(foreignReply);
@@ -3647,9 +3703,9 @@ describe('state-light fresh conversation collision recovery', () => {
       send_count: 1, cleanup: 'unconfirmed',
     });
     expect(outcome.result).not.toHaveProperty('conversation_id');
-    expect(outcome.result.next_action).toContain('exact bound GitHub target and original Page');
+    expect(outcome.result.next_action).toContain('read-only first');
     expect(outcome.result.next_action).toContain('page-probe only as a diagnostic');
-    expect(outcome.result.next_action).toContain('Do not retry or create a replacement invocation');
+    expect(outcome.result.next_action).toContain('no resend or replacement of a possibly delivered request');
     expect(fixture.alertReads()).toBe(2);
     expect(mocks.nowMs - startMs).toBeLessThan(68_000);
     expect(fixture.getSends()).toBe(1);
@@ -3862,8 +3918,8 @@ describe('state-light fresh conversation collision recovery', () => {
     });
     expect(outcome.result).not.toHaveProperty('conversation_id');
     expect(outcome.result.next_action).toContain('POSSIBLY_DELIVERED');
-    expect(outcome.result.next_action).toContain('exact bound GitHub target and original Page');
-    expect(outcome.result.next_action).toContain('Do not retry or create a replacement invocation');
+    expect(outcome.result.next_action).toContain('read-only first');
+    expect(outcome.result.next_action).toContain('no resend or replacement of a possibly delivered request');
     expect(mocks.nowMs - start).toBeLessThan(90_000);
     expect(fixture.getSends()).toBe(1);
     expect(fixture.page.goto).toHaveBeenCalledTimes(fixture.gotoAtSend());
@@ -7349,14 +7405,20 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
         }
         if (selector === MESSAGE_NODE_SELECTOR) {
           if (!sent) {
-            return Object.assign(collectionLocator([{ role: 'user', text: 'historical user' }]), {
+            // #2772 AC7: the reopened chat's last turn is a completed historical answer.
+            return Object.assign(collectionLocator([
+              { role: 'user', text: 'historical user' }, { role: 'assistant', text: 'historical answer' },
+            ]), {
               evaluateAll: vi.fn(async () => ({
                 rows: [{
                   role: 'user', text: 'historical user', key: 'historical-user-1990', domIndex: 0,
                   complete: true, completionReady: false, continuationVisible: false,
+                }, {
+                  role: 'assistant', text: 'historical answer', key: 'historical-assistant-1990', domIndex: 1,
+                  complete: true, completionReady: true, continuationVisible: false,
                 }],
                 pageTurnEvidence: {
-                  generationInProgress: false, observedAssistantNodes: 0,
+                  generationInProgress: false, observedAssistantNodes: 1,
                   continueGeneratingVisible: false,
                 },
               })),

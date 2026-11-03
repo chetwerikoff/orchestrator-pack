@@ -193,18 +193,21 @@ function censusAction(context: ExecuteIssueManagerBoundaryContext): ManagerNextA
   });
 }
 
+/** The fixer phase is the PR author: its trusted original-bound target is the manager's bound PR. */
+function boundPrNumber(context: ExecuteIssueManagerBoundaryContext): number | undefined {
+  const raw = context.prNumber;
+  return context.phase === 'fixer' && Number.isSafeInteger(raw) && raw! >= 1 ? raw : undefined;
+}
+
+// Inventory-listed read-only forms only (scripts/lib/gh-inventory-match.mjs); never `issue view --json state,body`.
 function githubFirstAction(context: ExecuteIssueManagerBoundaryContext): ManagerNextAction {
+  const pr = boundPrNumber(context);
   return managerNextAction({
     kind: 'execute-github-first-read-only',
     binding: actionBinding(context),
-    argv: [
-      'scripts/gh',
-      'issue',
-      'view',
-      String(context.issueNumber),
-      '--json',
-      'state,title,body,closedAt',
-    ],
+    argv: pr !== undefined
+      ? ['scripts/gh', 'pr', 'view', String(pr), '--json', 'number,state,headRefOid,headRefName,headRepository']
+      : ['scripts/gh', 'issue', 'view', String(context.issueNumber), '--json', 'state,title,body,closedAt'],
   });
 }
 
@@ -615,6 +618,16 @@ function classifyProbe(
           + 'preserve this exact unsettled invocation and its original single 1_800_000 ms post-checkpoint observation episode (never reset it); on an existing coordinator wake use only the caller-retained Task/Run/attempt/receipt-bound finite wait within the remaining budget, when its original receipt is trustworthy; harvest only after exact-owned attributable settlement; on exhaustion or missing original waiter/receipt keep the Dispatch nonterminal for existing supervisor recovery; the page-wide generation signal does not prove the incumbent is generating; do not send, replace, or create a wake',
           nextAction ?? undefined,
           nextAction ? 'orchestrator_watcher' : undefined,
+        );
+      }
+      // Any other still-generating inspect is a pause: no immediate argv (never the just-executed
+      // inspect again, never a GitHub-first read while generating, never an invented wake).
+      if (inspect?.generation_in_progress === true) {
+        return pause(
+          context, producer, 'external:content_authority_conflict', value,
+          'the Page is still generating and this inspect cannot attribute it to the retained invocation; '
+          + 'on the next existing coordinator/watcher wake, run only the exact-original read-only inspect of the retained '
+          + 'profile/invocation/target (or the original owner wait on its receipt); do not send, replace, Stop or create a wake',
         );
       }
       if (inspect) {

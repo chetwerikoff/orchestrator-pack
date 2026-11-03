@@ -32,7 +32,10 @@ import {
   type BrowserTurnCancellationDependencies,
   type BrowserTurnCancellationReceipt,
 } from './chatgpt-browser-turn/state-light-cancellation.ts';
-import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
+import {
+  absoluteProfilePathError, boundTargetReadFirstNextAction, configuredProfileKey,
+  PROFILE_ABSOLUTE_NEXT_STEP, PROFILE_ABSOLUTE_REQUIRED_CODE, type BoundGithubTarget,
+} from './chatgpt-browser-turn/storage-common.ts';
 import { launchingTerminalHandle } from './chatgpt-browser-turn/chat-bindings.ts';
 import {
   parseObservationHeartbeatLine,
@@ -365,6 +368,13 @@ export interface GithubEffectBaseline {
   readonly body_sha256?: string;
   /** PR head SHA (kind pr). */
   readonly head_sha?: string;
+  /** #2772 structured pre-SEND tuple: upper-cased REST state (OPEN) for an Issue or PR. */
+  readonly state?: string;
+  /** PR base/head repository (lower-cased `owner/name`) and ref at the pre-SEND boundary. */
+  readonly base_repository?: string;
+  readonly base_ref?: string;
+  readonly head_repository?: string;
+  readonly head_ref?: string;
   readonly captured_at: string;
 }
 
@@ -396,6 +406,10 @@ export function parseGithubEffectBaseline(value: unknown, expected: {
     || typeof body.captured_at !== 'string') return undefined;
   if (body.kind === 'issue' && (typeof body.body_sha256 !== 'string' || !/^[a-f0-9]{64}$/u.test(body.body_sha256))) return undefined;
   if (body.kind === 'pr' && (typeof body.head_sha !== 'string' || !/^[a-f0-9]{40}$/u.test(body.head_sha))) return undefined;
+  // Optional structured fields: absent is a legacy baseline (later effect_unverified); present must be well-formed.
+  for (const key of ['state', 'base_repository', 'base_ref', 'head_repository', 'head_ref'] as const) {
+    if (body[key] !== undefined && (typeof body[key] !== 'string' || !(body[key] as string).trim())) return undefined;
+  }
   return body as unknown as GithubEffectBaseline;
 }
 
@@ -875,6 +889,11 @@ export function deriveDelivery(result: ParsedTurnResult | null, childStartFailed
   if (result.state === 'output_conflict') {
     return sendCount === 0 ? 'not-sent' : 'POSSIBLY_DELIVERED';
   }
+  // #2772 AC1: an `ok` (including author_effect_pr_head_changed) without the owned-Send witness is never
+  // landed from cause or GitHub movement, and a zero count is not affirmative never-dispatched evidence.
+  if (result.state === 'ok' && (sendCount === 0 || result.cause === 'author_effect_pr_head_changed')) {
+    return 'POSSIBLY_DELIVERED';
+  }
   if (sendCount === 0) return 'not-sent';
   if (result.witness?.relation === 'reply_to' && (result.conversation_id || result.observation_uncertainty_diagnostics?.owned_prompt_seen)) {
     return 'landed';
@@ -1351,6 +1370,8 @@ export interface LaunchConfig {
   readonly secretCanaries?: readonly string[];
   readonly cancellationDependencies?: BrowserTurnCancellationDependencies;
   readonly deadlineTestControl?: LaunchDeadlineTestControl;
+  /** Terminal-time GitHub target readers; production uses the pack `scripts/gh` REST readers. */
+  readonly githubReaders?: GithubEffectReaders;
 }
 
 function scanArtifactForCanaries(path: string, canaries: readonly string[]): string[] {
@@ -1395,6 +1416,133 @@ async function publishEnvelopeAtCaller(config: LaunchConfig, envelope: TerminalE
   return { state: 'not_published' };
 }
 
+const TERMINAL_GITHUB_EFFECT_BUDGET_MS = 25_000;
+
+/** #2772 K6: the immutable launch-selected target from the child argv (`--bound-issue` or `--repo`/`--pr`). */
+function launchBoundTarget(config: LaunchConfig): BoundGithubTarget | undefined {
+  const issue = childOption(config, '--bound-issue');
+  if (issue) {
+    const match = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9][0-9]*)$/u.exec(issue);
+    return match ? { kind: 'issue', repo: match[1]!, number: Number(match[2]) } : undefined;
+  }
+  const repo = childOption(config, '--repo');
+  const pr = childOption(config, '--pr');
+  if (repo && pr && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repo) && /^[1-9][0-9]*$/u.test(pr)) {
+    return { kind: 'pr', repo, number: Number(pr) };
+  }
+  return undefined;
+}
+
+function sameBoundTarget(left: BoundGithubTarget, right: BoundGithubTarget): boolean {
+  return left.kind === right.kind && left.repo.toLowerCase() === right.repo.toLowerCase() && left.number === right.number;
+}
+
+/** #2772 K4: the parsed turn-result names this exact launch-selected invocation and profile. */
+function candidateIdentityMatchesLaunch(config: LaunchConfig, candidate: ParsedTurnResult): boolean {
+  const invocationId = childOption(config, '--invocation-id');
+  const profile = childOption(config, '--profile');
+  const cdp = childOption(config, '--cdp');
+  // A legacy launch without these selectors has no identity to compare against.
+  if (!invocationId || !profile || !cdp) return true;
+  if (config.invocationId !== undefined && config.invocationId !== invocationId) return false;
+  return candidate.invocation_id === invocationId
+    && candidate.configured_profile_key === configuredProfileKey(profile, cdp);
+}
+
+/**
+ * A candidate may reach the shared effect evaluator only when it is this exact child invocation and
+ * profile and the projection matched the original observation record. An absent, unreadable or
+ * mismatched record (null projection) never does.
+ */
+function candidateBoundToInvocation(
+  config: LaunchConfig, candidate: ParsedTurnResult, observation: FinalObservationProjection | null,
+): boolean {
+  const invocationId = childOption(config, '--invocation-id');
+  const profile = childOption(config, '--profile');
+  const cdp = childOption(config, '--cdp');
+  if (!invocationId || !profile || !cdp || (config.invocationId !== undefined && config.invocationId !== invocationId)) return false;
+  const profileKey = configuredProfileKey(profile, cdp);
+  if (candidate.invocation_id !== invocationId || candidate.configured_profile_key !== profileKey) return false;
+  // A missing or unreadable original observation record is never positive correlation (#2772 AC2).
+  return observation !== null;
+}
+
+/**
+ * The shared terminal-time GitHub effect check for candidate and no-candidate paths. It applies only
+ * when the re-read original receipt carries a baseline, and only after immutable receipt identity,
+ * exact invocation and still-current Task+Dispatch owner are re-established. It never changes
+ * lifecycle, incident, exit or delivery.
+ */
+async function terminalGithubEffect(
+  config: LaunchConfig, receipt: HandoffReceipt, candidateBound: boolean,
+): Promise<{ readonly classification: GithubEffectClassification; readonly target?: BoundGithubTarget } | undefined> {
+  let fresh: HandoffReceipt | null = null;
+  try {
+    fresh = readHandoffReceipt(config.handoffReceiptPath, {
+      runIdentity: config.runIdentity, attemptIdentity: config.attemptIdentity,
+    });
+  } catch {
+    fresh = null;
+  }
+  // Only the immutable launch selector names the original target; a receipt baseline never does (K6).
+  const bound = launchBoundTarget(config);
+  const unverified = (evidence: string) => ({
+    classification: { class: 'effect_unverified' as const, attribution: 'unverified' as const, evidence },
+    ...(bound ? { target: bound } : {}),
+  });
+  // A bound launch without a baseline still owes a bounded effect and the exact read-first step (K3).
+  if (fresh?.github_effect_baseline === undefined) return bound ? unverified('baseline_absent') : undefined;
+  const invocationId = childOption(config, '--invocation-id');
+  if (!candidateBound) return unverified('candidate_not_bound_to_invocation');
+  if (!invocationId || !sameHandoffIdentity(fresh, receipt) || fresh.invocation_id !== invocationId
+    || fresh.owner_task_id !== config.ownerTaskId || fresh.owner_dispatch_id !== config.ownerDispatchId) {
+    return unverified('receipt_identity_changed');
+  }
+  // A managed Task+Dispatch owner must be positively current, not merely not replaced (K1).
+  if (config.ownerTaskId && config.ownerDispatchId) {
+    const owner = observeOwnerCurrency(config.ownerTaskId, config.ownerDispatchId);
+    if (owner.state !== 'current') return unverified(owner.state === 'not_current' ? 'owner_not_current' : 'owner_unverified');
+  }
+  const baseline = parseGithubEffectBaseline(fresh.github_effect_baseline, {
+    invocationId, runIdentity: config.runIdentity, attemptIdentity: config.attemptIdentity,
+  });
+  if (!baseline) return unverified('baseline_absent');
+  const target = baselineBoundTarget(baseline);
+  if (!bound) return unverified('baseline_target_unbound');
+  if (!target || !sameBoundTarget(bound, target)) return unverified('baseline_target_mismatch');
+  let readers = config.githubReaders;
+  if (!readers) {
+    try { readers = await defaultGithubEffectReaders(); } catch { readers = undefined; }
+  }
+  if (!readers) return { ...unverified('github_reader_unavailable'), ...(target ? { target } : {}) };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const classification = await Promise.race([
+    classifyGithubEffect(baseline, readers),
+    new Promise<GithubEffectClassification>((done) => {
+      timer = setTimeout(() => done({
+        class: 'effect_unverified', attribution: 'unverified', evidence: 'github_read_timeout',
+      }), TERMINAL_GITHUB_EFFECT_BUDGET_MS);
+      timer.unref?.();
+    }),
+  ]).finally(() => { if (timer) clearTimeout(timer); });
+  return { classification, ...(target ? { target } : {}) };
+}
+
+/** Add only the bounded effect diagnostic and the executable exact-target read-only next_action. */
+async function withTerminalGithubEffect(
+  config: LaunchConfig, receipt: HandoffReceipt, envelope: TerminalEnvelope, candidateBound: boolean,
+): Promise<TerminalEnvelope> {
+  const effect = await terminalGithubEffect(config, receipt, candidateBound);
+  if (!effect) return envelope;
+  const readFirst = effect.target
+    && (envelope.lifecycle_outcome !== 'success' || envelope.turn_result_cause === 'author_effect_pr_head_changed');
+  return {
+    ...envelope,
+    ...(readFirst ? { next_action: boundTargetReadFirstNextAction(effect.target) } : {}),
+    diagnostics: boundedDiagnostics({ ...(envelope.diagnostics ?? {}), github_effect: effect.classification }),
+  };
+}
+
 interface CandidateCapture {
   firstCandidate: ParsedTurnResult | null;
   duplicateCandidate: boolean;
@@ -1437,6 +1585,9 @@ async function finalizeCandidatePath(
   const childExitDiagnostic: ChildExitDiagnostic = exited ? 'exited_within_grace' : 'retained_after_result';
   const candidateObservation = finalObservationProjection(config, heartbeatDiagnostics, candidate);
   const provenNoDispatch = affirmativelyNotDispatched(candidate, candidateObservation);
+  const candidateBound = candidateBoundToInvocation(config, candidate, candidateObservation);
+  const withEffect = (envelope: TerminalEnvelope): Promise<TerminalEnvelope> =>
+    withTerminalGithubEffect(config, receipt, envelope, candidateBound);
   const projectedTurnDiagnostics = {
     ...(candidate.cause === 'state_light_new_chat_send_slot_timeout' ? {
       send_slot_holder_invocation_id: candidate.send_slot_holder_invocation_id ?? 'unknown',
@@ -1469,8 +1620,28 @@ async function finalizeCandidatePath(
     ...conversationLocatorFields(config, candidate),
     ...turnTargetEnvelopeFields(candidate, candidateObservation?.record),
   });
+  if (!candidateIdentityMatchesLaunch(config, candidate)) {
+    // A foreign or misrouted turn-result is never this invocation's outcome (#2772 K4): keep none of its
+    // Send witness, count, target or next action, and borrow no harvested primary across the mismatch.
+    const foreignKeys = new Set([
+      'send_count', 'next_action', 'observed_turn_result_identity',
+      ...Object.keys(conversationLocatorFields(config, candidate)),
+      ...Object.keys(turnTargetEnvelopeFields(candidate, undefined)),
+    ]);
+    const base = incidentEnvelope('child_turn_result_identity_mismatch');
+    const envelope = Object.fromEntries(
+      Object.entries(base).filter(([key]) => !foreignKeys.has(key)),
+    ) as unknown as TerminalEnvelope;
+    await publishEnvelopeAtCaller(config, await withEffect({
+      ...envelope,
+      delivery: 'POSSIBLY_DELIVERED',
+      next_action: OWNER_RECONCILE_STEP,
+    }));
+    await abortManagedProcess(controller, runPromise);
+    return 1;
+  }
   if (capture.duplicateCandidate) {
-    await publishEnvelopeAtCaller(config, incidentEnvelope('child_terminal_result_duplicate'));
+    await publishEnvelopeAtCaller(config, await withEffect(incidentEnvelope('child_terminal_result_duplicate')));
     await abortManagedProcess(controller, runPromise);
     await delay(100);
     return 1;
@@ -1484,7 +1655,7 @@ async function finalizeCandidatePath(
       : resultDelivery === 'POSSIBLY_DELIVERED' || observedDelivery === 'POSSIBLY_DELIVERED'
         ? 'POSSIBLY_DELIVERED' : resultDelivery;
     const diagnostics = observed ? observed.replyDiagnostics : heartbeatDiagnostics;
-    const publication = await publishEnvelopeAtCaller(config, {
+    const publication = await publishEnvelopeAtCaller(config, await withEffect({
       schema: TERMINAL_SCHEMA,
       run_identity: config.runIdentity,
       attempt_identity: config.attemptIdentity,
@@ -1509,12 +1680,12 @@ async function finalizeCandidatePath(
       ...conversationLocatorFields(config, candidate),
       ...turnTargetEnvelopeFields(candidate, candidateObservation?.record),
       ...(diagnostics ? { diagnostics } : {}),
-    });
+    }));
     await abortManagedProcess(controller, runPromise);
     // An exact occupant is the authoritative event; this launch's success must not outrank its incident.
     return publication.state === 'occupied_exact' && publication.occupant.lifecycle_outcome !== 'success' ? 1 : 0;
   }
-  await publishEnvelopeAtCaller(config, incidentEnvelope(`child_turn_state:${candidate.state}`));
+  await publishEnvelopeAtCaller(config, await withEffect(incidentEnvelope(`child_turn_state:${candidate.state}`)));
   await abortManagedProcess(controller, runPromise);
   return 1;
 }
@@ -1534,12 +1705,38 @@ const REFUSAL_NEXT_STEPS: Readonly<Record<string, string>> = {
   receipt_create_or_index_readback_failed: 'reconcile the exact original invocation with wait --invocation-id before any new SEND; never resend blindly',
   receipt_create_failed: 'check the durable root permissions, then relaunch with fresh artifact basenames',
   canary_in_receipt: 'remove secret-bearing values from launch arguments, then relaunch with a fresh invocation id',
+  [PROFILE_ABSOLUTE_REQUIRED_CODE]: PROFILE_ABSOLUTE_NEXT_STEP,
 };
 
+const REFUSAL_REASON_CAP = 160;
+
+/**
+ * Bounded, scrubbed original refusal reason (for example `ENOENT` or a proof-failure code) that may reach
+ * caller stderr/companion: absolute paths, URLs and long tokens are redacted and the text is capped.
+ */
+export function boundedRefusalReason(message: unknown): string | undefined {
+  if (typeof message !== 'string' || !message.trim()) return undefined;
+  const scrubbed = message
+    .replace(/[a-z][a-z0-9+.-]*:\/\/\S+/giu, '<url>')
+    .replace(/(?:[A-Za-z]:)?[\\/][^\s'",;()]*/gu, (match) => (/[\\/][^\\/]/u.test(match) ? '<path>' : match))
+    // Long opaque tokens (digits, capitals or base64 punctuation) are redacted; lower snake_case codes stay.
+    .replace(/[A-Za-z0-9_+/=-]{24,}/gu, (match) => (/^[a-z_]+$/u.test(match) ? match : '<redacted>'))
+    .replace(/[^\x20-\x7e]/gu, '')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  if (!scrubbed) return undefined;
+  return scrubbed.length > REFUSAL_REASON_CAP ? `${scrubbed.slice(0, REFUSAL_REASON_CAP - 3)}...` : scrubbed;
+}
+
 function refusalDetails(code: string, details: Record<string, unknown> = {}): Record<string, unknown> {
-  const nextStep = typeof details.nextStep === 'string' && details.nextStep.trim()
+  const base = typeof details.nextStep === 'string' && details.nextStep.trim()
     ? details.nextStep : REFUSAL_NEXT_STEPS[code] ?? 'reconcile the exact original invocation before any new SEND';
-  return { ...details, nextStep };
+  // The caller sees the genuine bounded cause first, then the executable repair.
+  const reason = boundedRefusalReason(details.message);
+  const nextStep = reason && !base.startsWith('reason: ') ? `reason: ${reason}; ${base}` : base;
+  // The raw message never crosses the caller boundary; only its bounded reason does (#2772 K7).
+  const { message: _raw, ...rest } = details;
+  return { ...rest, ...(reason ? { message: reason } : {}), nextStep };
 }
 
 /** Companion schema for an authenticated detached-launcher pre-SEND refusal (non-authoritative). */
@@ -1772,6 +1969,9 @@ export function validateLaunchPreSpawn(input: LaunchConfig): LaunchPreSpawnValid
     ownerCurrency = observed.state;
     if (observed.state === 'not_current') return fail('owner_dispatch_not_current', { evidence: observed.evidence });
   }
+  // Lexical absolute user-data-dir before any profile key, occupancy hash or observation lookup.
+  const profileError = config.profile !== undefined ? absoluteProfilePathError(config.profile) : undefined;
+  if (profileError) return fail(PROFILE_ABSOLUTE_REQUIRED_CODE, { message: profileError });
   let predecessor: PredecessorDisposition;
   try {
     predecessor = verifyOptionalPredecessorHandoff(config);
@@ -2135,13 +2335,13 @@ export async function runLaunch(input: LaunchConfig): Promise<number> {
       }
     }
     if (!existing) {
-      await publishEnvelope(config, {
+      await publishEnvelope(config, await withTerminalGithubEffect(config, receipt, {
         schema: TERMINAL_SCHEMA, run_identity: config.runIdentity, attempt_identity: config.attemptIdentity,
         completion_mode: COMPLETION_MODE, handoff_receipt_path: config.handoffReceiptPath,
         launcher_started_at: launcherStartedAt, handoff_committed_at: receipt.handoff_committed_at,
         terminal_at: nowIso(), lifecycle_outcome: 'incident', incident, child_exit_code: childExitCode,
         ...await terminalNoResultEvidence(config, capture, 'child_terminal_result_missing', false, lastHeartbeatDiagnostics),
-      });
+      }, true));
     }
     if (cleanupProcess) await abortManagedProcess(controller, cleanupProcess);
     return existing?.lifecycle_outcome === 'success' ? 0 : 1;
@@ -2234,7 +2434,7 @@ export async function runLaunch(input: LaunchConfig): Promise<number> {
     await abortManagedProcess(controller, runPromise);
     capture.drainStdoutBuffer();
     ingestTrailingCandidate();
-    await publishEnvelopeAtCaller(config, {
+    await publishEnvelopeAtCaller(config, await withTerminalGithubEffect(config, receipt, {
       schema: TERMINAL_SCHEMA,
       run_identity: config.runIdentity,
       attempt_identity: config.attemptIdentity,
@@ -2253,7 +2453,7 @@ export async function runLaunch(input: LaunchConfig): Promise<number> {
         false,
         lastHeartbeatDiagnostics,
       ),
-    });
+    }, true));
     await abortManagedProcess(controller, runPromise);
     return 1;
   };
@@ -2284,7 +2484,7 @@ export async function runLaunch(input: LaunchConfig): Promise<number> {
     const evidence = spawnFailed
       ? { delivery: deliveryWithoutTurnResult(true), ...conversationLocatorFields(config) }
       : await terminalNoResultEvidence(config, capture, 'child_terminal_result_missing', false, lastHeartbeatDiagnostics);
-    await publishEnvelopeAtCaller(config, {
+    await publishEnvelopeAtCaller(config, await withTerminalGithubEffect(config, receipt, {
       schema: TERMINAL_SCHEMA,
       run_identity: config.runIdentity,
       attempt_identity: config.attemptIdentity,
@@ -2301,7 +2501,7 @@ export async function runLaunch(input: LaunchConfig): Promise<number> {
         ...evidence.diagnostics,
         child_exit: { outcome: completion.result?.outcome, signal: completion.result?.signal },
       }),
-    });
+    }, true));
     await abortManagedProcess(controller, runPromise);
     return 1;
   }
@@ -2359,49 +2559,123 @@ export function readHandoffReceipt(
 
 export type GithubEffectClass = 'target_progress_observed' | 'effect_unverified';
 
+/** Structured exact PR tuple read through the pack GitHub REST transport. */
+export interface GithubPrTuple {
+  readonly repository: string;
+  readonly number: number;
+  /** Upper-cased REST state, e.g. OPEN or CLOSED. */
+  readonly state: string;
+  readonly base_repository: string;
+  readonly base_ref: string;
+  readonly head_repository: string;
+  readonly head_ref: string;
+  readonly head_oid: string;
+}
+
+/** Structured exact Issue tuple read through the pack GitHub REST transport. */
+export interface GithubIssueTuple {
+  readonly repository: string;
+  readonly number: number;
+  readonly state: string;
+  readonly body_sha256: string;
+}
+
 export interface GithubEffectReaders {
-  readonly prHead: (repo: string, pr: number) => Promise<string | undefined>;
-  readonly issueBodySha256: (repo: string, issue: number) => Promise<string | undefined>;
+  readonly prTuple: (repo: string, pr: number) => Promise<GithubPrTuple | undefined>;
+  readonly issueTuple: (repo: string, issue: number) => Promise<GithubIssueTuple | undefined>;
 }
 
 async function defaultGithubEffectReaders(): Promise<GithubEffectReaders> {
   const driver = await import('./chatgpt-browser-turn/state-light-turn-base.ts');
   return {
-    prHead: async (repo, pr) => (await driver.readPrAuthorHeadViaPackGh({ repo, pr } as never))?.sha,
-    issueBodySha256: async (repo, issue) => await driver.readIssueBodySha256ViaPackGh(repo, issue),
+    prTuple: async (repo, pr) => {
+      const head = await driver.readPrAuthorHeadViaPackGh({ repo: repo.toLowerCase(), pr });
+      return head && head.baseRef !== undefined ? {
+        repository: repo.toLowerCase(), number: pr, state: head.state.toUpperCase(),
+        base_repository: head.baseRepo, base_ref: head.baseRef,
+        head_repository: head.headRepo, head_ref: head.headRef, head_oid: head.sha,
+      } : undefined;
+    },
+    issueTuple: async (repo, issue) => {
+      const tuple = await driver.readIssueTupleViaPackGh(repo.toLowerCase(), issue);
+      return tuple?.state ? {
+        repository: repo.toLowerCase(), number: issue, state: tuple.state, body_sha256: tuple.bodySha256,
+      } : undefined;
+    },
   };
 }
 
+export type GithubEffectClassification = {
+  readonly class: GithubEffectClass; readonly attribution: 'unverified'; readonly evidence: string; readonly target?: string;
+};
+
+function sameTuple(left: object, right: object): boolean {
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+  for (const key of keys) {
+    if ((left as Record<string, unknown>)[key] !== (right as Record<string, unknown>)[key]) return false;
+  }
+  return true;
+}
+
 /**
- * Exact bound-target task progress after child/launcher loss: two classes only. A changed exact
- * target is progress with attribution unverified (concurrent writers included); unchanged, missing,
- * unreadable or baseline-absent evidence is effect_unverified. Neither proves Send or authorship.
+ * The one shared terminal-time GitHub target-progress evaluator. Two coherent post-SEND reads of the
+ * exact baseline-bound structured tuple are compared with the captured pre-SEND baseline. Only a still-OPEN
+ * same PR with unchanged base/head repository+ref and an advanced head OID, or a still-OPEN same Issue with a
+ * changed body digest, is target_progress_observed; attribution stays unverified (a concurrent same-target
+ * writer is not excluded). Everything else is effect_unverified. Neither proves Send, authorship or acceptance.
  */
 export async function classifyGithubEffect(
   baseline: GithubEffectBaseline | undefined, readers: GithubEffectReaders,
-): Promise<{ readonly class: GithubEffectClass; readonly attribution: 'unverified'; readonly evidence: string;
-  readonly target?: string }> {
+): Promise<GithubEffectClassification> {
   const unverified = (evidence: string, target?: string) => ({
     class: 'effect_unverified' as const, attribution: 'unverified' as const, evidence, ...(target ? { target } : {}),
   });
   if (!baseline) return unverified('baseline_absent');
   const target = `${baseline.repo}${baseline.kind === 'pr' ? '/pull/' : '#'}${baseline.number}`;
+  const repo = baseline.repo.toLowerCase();
+  const baselineOpen = baseline.state?.toUpperCase() === 'OPEN';
   try {
     if (baseline.kind === 'pr') {
-      const first = await readers.prHead(baseline.repo, baseline.number);
-      const second = first ? await readers.prHead(baseline.repo, baseline.number) : undefined;
+      if (!baseline.state || !baseline.base_repository || !baseline.base_ref
+        || !baseline.head_repository || !baseline.head_ref) return unverified('baseline_tuple_incomplete', target);
+      if (!baselineOpen) return unverified('baseline_target_not_open', target);
+      const first = await readers.prTuple(baseline.repo, baseline.number);
+      const second = first ? await readers.prTuple(baseline.repo, baseline.number) : undefined;
       if (!first || !second) return unverified('pr_head_unreadable', target);
-      if (first !== second) return unverified('pr_head_not_stable', target);
-      if (first === baseline.head_sha) return unverified('pr_head_unchanged', target);
+      if (!sameTuple(first, second)) return unverified('pr_head_not_stable', target);
+      if (first.repository.toLowerCase() !== repo || first.number !== baseline.number) {
+        return unverified('target_identity_changed', target);
+      }
+      if (first.state.toUpperCase() !== 'OPEN') return unverified('target_not_open', target);
+      if (first.base_repository.toLowerCase() !== baseline.base_repository.toLowerCase()
+        || first.base_ref !== baseline.base_ref) return unverified('pr_base_retargeted', target);
+      if (first.head_repository.toLowerCase() !== baseline.head_repository.toLowerCase()
+        || first.head_ref !== baseline.head_ref) return unverified('pr_head_rereferenced', target);
+      if (!/^[a-f0-9]{40}$/u.test(first.head_oid)) return unverified('pr_head_unreadable', target);
+      if (first.head_oid === baseline.head_sha) return unverified('pr_head_unchanged', target);
       return { class: 'target_progress_observed', attribution: 'unverified', evidence: 'pr_head_advanced_stable', target };
     }
-    const digest = await readers.issueBodySha256(baseline.repo, baseline.number);
-    if (!digest) return unverified('issue_body_unreadable', target);
-    if (digest === baseline.body_sha256) return unverified('issue_body_unchanged', target);
+    if (!baseline.state) return unverified('baseline_tuple_incomplete', target);
+    if (!baselineOpen) return unverified('baseline_target_not_open', target);
+    const first = await readers.issueTuple(baseline.repo, baseline.number);
+    const second = first ? await readers.issueTuple(baseline.repo, baseline.number) : undefined;
+    if (!first || !second) return unverified('issue_body_unreadable', target);
+    if (!sameTuple(first, second)) return unverified('issue_not_stable', target);
+    if (first.repository.toLowerCase() !== repo || first.number !== baseline.number) {
+      return unverified('target_identity_changed', target);
+    }
+    if (first.state.toUpperCase() !== 'OPEN') return unverified('target_not_open', target);
+    if (!/^[a-f0-9]{64}$/u.test(first.body_sha256)) return unverified('issue_body_unreadable', target);
+    if (first.body_sha256 === baseline.body_sha256) return unverified('issue_body_unchanged', target);
     return { class: 'target_progress_observed', attribution: 'unverified', evidence: 'issue_body_digest_changed', target };
   } catch {
     return unverified('github_read_failed', target);
   }
+}
+
+/** The trusted original-bound target of an exact invocation-bound baseline (never a guessed target). */
+export function baselineBoundTarget(baseline: GithubEffectBaseline | undefined): BoundGithubTarget | undefined {
+  return baseline ? { kind: baseline.kind, repo: baseline.repo, number: baseline.number } : undefined;
 }
 
 export interface OwnerWaitPageWitness {
@@ -2536,9 +2810,11 @@ async function ownerWaitReap(input: {
     delivery,
     observed_invocation_id: invocationId,
     recovery_available: false,
-    next_action: page.state === 'conversation_unavailable'
-      ? 'conversation unavailable: start a fresh chat (advice only; no resend authority)'
-      : OWNER_RECONCILE_STEP,
+    // Read-first: the exact baseline-bound target, then the original reconciliation; a redirect is
+    // never a fresh-chat recommendation and never disproves an earlier Send.
+    next_action: (page.state === 'conversation_unavailable'
+      ? 'conversation unavailable (redirect; any earlier Send remains possibly delivered, no resend authority). ' : '')
+      + boundTargetReadFirstNextAction(baselineBoundTarget(baseline)),
     ...(record ? turnTargetEnvelopeFields(undefined, record) : {}),
     ...(record?.send_count !== undefined ? { send_count: record.send_count } : {}),
     ...(typeof receipt.child_cwd === 'string' ? { cwd: receipt.child_cwd } : {}),

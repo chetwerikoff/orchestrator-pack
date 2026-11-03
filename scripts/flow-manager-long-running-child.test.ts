@@ -9,6 +9,7 @@ import {
   readFileSync,
   statSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -27,6 +28,7 @@ import {
   TERMINAL_ENVELOPE_NAME_SUFFIX,
   TERMINAL_ENVELOPE_ROOT,
   TERMINAL_SCHEMA,
+  boundedRefusalReason,
   classifyGithubEffect,
   deriveDelivery,
   ensureDurableArtifactRoot,
@@ -51,6 +53,8 @@ import {
   runWait,
   type GithubEffectBaseline,
   type GithubEffectReaders,
+  type GithubIssueTuple,
+  type GithubPrTuple,
   type HandoffReceipt,
   type LaunchConfig,
   type LaunchDeadlineTestControl,
@@ -570,7 +574,7 @@ describe('observable post-send exits (#2416)', () => {
     admitStateLightTurnObservation({ profileKey, invocationId, marker: 'OPKTURNV1a97e3f70e9c07fa75c0f03840c0528a2' });
     transitionStateLightTurnObservation({ profileKey, invocationId, phase: 'dispatching', reason: 'fixture' });
     transitionStateLightTurnObservation({ profileKey, invocationId, phase: 'sent_unbound', reason: 'fixture', sendCount: 1, sendWitness: 'numeric_send_count' });
-    const result = makeTurnResult({ invocation_id: invocationId });
+    const result = makeTurnResult({ invocation_id: invocationId, configured_profile_key: profileKey });
     const fixture = nodeFixture(`
       let termReceived = false;
       process.on('SIGTERM', () => { termReceived = true; });
@@ -862,7 +866,7 @@ describe('flow-manager long-running child (#1164)', () => {
       '--invocation-id', 'inv',
       '--terminal-envelope', join(root, 'envelope.json'),
       '--output', join(root, 'reply.txt'),
-      '--profile', 'p',
+      '--profile', join(root, 'profile'),
       '--cdp', 'http://127.0.0.1:9222',
       '--input', join(root, 'prompt.txt'),
       '--owner-task-id', 'task-2378', '--owner-dispatch-id', 'dispatch-2378',
@@ -1751,6 +1755,16 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(deriveDelivery(makeParsedTurnResult(), false)).toBe('landed');
   });
 
+  it('never derives not-sent for a send_count-zero success or PR-author effect (#2772 AC1)', () => {
+    const zero = { observation_uncertainty_diagnostics: { cause: 'ok', send_count: 0, owned_prompt_seen: false }, resolved_send_count: 0, witness: undefined };
+    expect(deriveDelivery(makeParsedTurnResult(zero), false)).toBe('POSSIBLY_DELIVERED');
+    expect(deriveDelivery(makeParsedTurnResult({ ...zero, cause: 'author_effect_pr_head_changed' }), false)).toBe('POSSIBLY_DELIVERED');
+    expect(deriveDelivery(makeParsedTurnResult({ ...zero, cause: 'author_effect_pr_head_changed', resolved_send_count: 1 }), false)).toBe('POSSIBLY_DELIVERED');
+    // A proven pre-send refusal stays not-sent; an owned-marker witness stays landed.
+    expect(deriveDelivery(makeParsedTurnResult({ state: 'output_conflict', ...zero, cause: 'output_conflict:exists' }), false)).toBe('not-sent');
+    expect(deriveDelivery({ ...makeParsedTurnResult({ ...zero, resolved_send_count: 1 }), owned_marker_confirmed: true }, false)).toBe('landed');
+  });
+
   it('admits a settled predecessor across its original Task and Run without predecessor effects (#2750 AC14-15)', async () => {
     const root = tempDir('opk-predecessor-child-');
     const stateDir = tempDir('opk-predecessor-observation-');
@@ -2212,7 +2226,7 @@ describe('flow-manager long-running child (#1164)', () => {
       '--handoff-receipt', paths.receipt,
       '--terminal-envelope', paths.envelope,
       '--output', paths.output,
-      '--profile', 'fixture-profile',
+      '--profile', join(root, 'fixture-profile'),
       '--cdp', 'http://127.0.0.1:9222',
       '--input', join(repoRoot, 'scripts/chatgpt-browser-turn/README.md'),
     ]);
@@ -2966,7 +2980,7 @@ function issueBaselineFor(id: string, overrides: Record<string, unknown> = {}): 
   return {
     schema: GITHUB_EFFECT_BASELINE_SCHEMA, invocation_id: ids.invocation, run_identity: ids.run,
     attempt_identity: ids.attempt, repo: 'acme/widgets', kind: 'issue', number: 2750,
-    body_sha256: ISSUE_BODY_BEFORE, captured_at: '2026-11-02T00:00:00.500Z', ...overrides,
+    body_sha256: ISSUE_BODY_BEFORE, state: 'OPEN', captured_at: '2026-11-02T00:00:00.500Z', ...overrides,
   } as GithubEffectBaseline;
 }
 
@@ -2975,7 +2989,8 @@ function prBaselineFor(id: string, overrides: Record<string, unknown> = {}): Git
   return {
     schema: GITHUB_EFFECT_BASELINE_SCHEMA, invocation_id: ids.invocation, run_identity: ids.run,
     attempt_identity: ids.attempt, repo: 'acme/widgets', kind: 'pr', number: 7,
-    head_sha: HEAD_BEFORE, captured_at: '2026-11-02T00:00:00.500Z', ...overrides,
+    head_sha: HEAD_BEFORE, state: 'OPEN', base_repository: 'acme/widgets', base_ref: 'main',
+    head_repository: 'acme/widgets', head_ref: 'feature-7', captured_at: '2026-11-02T00:00:00.500Z', ...overrides,
   } as GithubEffectBaseline;
 }
 
@@ -3027,8 +3042,40 @@ const finishedPage: OwnerWaitPageReader = async () => ({
   state: 'page_finished', evidence: 'stable_finished_generation', reply_length: 24_012,
 });
 
-function githubReaders(overrides: Partial<GithubEffectReaders> = {}): GithubEffectReaders {
-  return { prHead: async () => HEAD_AFTER, issueBodySha256: async () => ISSUE_BODY_AFTER, ...overrides };
+function prTupleFor(oid: string, overrides: Partial<GithubPrTuple> = {}): GithubPrTuple {
+  return {
+    repository: 'acme/widgets', number: 7, state: 'OPEN', base_repository: 'acme/widgets', base_ref: 'main',
+    head_repository: 'acme/widgets', head_ref: 'feature-7', head_oid: oid, ...overrides,
+  };
+}
+
+function issueTupleFor(digest: string, overrides: Partial<GithubIssueTuple> = {}): GithubIssueTuple {
+  return { repository: 'acme/widgets', number: 2750, state: 'OPEN', body_sha256: digest, ...overrides };
+}
+
+/** Head/digest-shaped fixture readers lifted to the structured exact-target tuples (#2772). */
+interface ValueReaders {
+  readonly prHead?: (repo: string, pr: number) => Promise<string | undefined>;
+  readonly issueBodySha256?: (repo: string, issue: number) => Promise<string | undefined>;
+}
+
+function tupleReaders(values: ValueReaders, extra: {
+  readonly pr?: Partial<GithubPrTuple>; readonly issue?: Partial<GithubIssueTuple>;
+} = {}): GithubEffectReaders {
+  return {
+    prTuple: async (repo, pr) => {
+      const oid = await values.prHead?.(repo, pr);
+      return oid ? prTupleFor(oid, { repository: repo, number: pr, ...extra.pr }) : undefined;
+    },
+    issueTuple: async (repo, issue) => {
+      const digest = await values.issueBodySha256?.(repo, issue);
+      return digest ? issueTupleFor(digest, { repository: repo, number: issue, ...extra.issue }) : undefined;
+    },
+  };
+}
+
+function githubReaders(overrides: ValueReaders = {}): GithubEffectReaders {
+  return tupleReaders({ prHead: async () => HEAD_AFTER, issueBodySha256: async () => ISSUE_BODY_AFTER, ...overrides });
 }
 
 function ownerWaitOptions(
@@ -3443,10 +3490,10 @@ describe('Issue #2750 owner-wait reaper matrix (AC1-AC3)', () => {
   describe('GitHub task-progress classes', () => {
     const readers = (head?: string | undefined, second: string | undefined = head, digest?: string | undefined): GithubEffectReaders => {
       let call = 0;
-      return {
+      return tupleReaders({
         prHead: async () => (++call === 1 ? head : second),
         issueBodySha256: async () => digest,
-      };
+      });
     };
     const rows: ReadonlyArray<{
       name: string; baseline: GithubEffectBaseline | undefined; readers: GithubEffectReaders;
@@ -3457,20 +3504,38 @@ describe('Issue #2750 owner-wait reaper matrix (AC1-AC3)', () => {
       { name: 'PR head unchanged', baseline: prBaselineFor('g'), readers: readers(HEAD_BEFORE), class: 'effect_unverified', evidence: 'pr_head_unchanged' },
       { name: 'PR heads differ between reads', baseline: prBaselineFor('g'), readers: readers(HEAD_AFTER, 'c'.repeat(40)), class: 'effect_unverified', evidence: 'pr_head_not_stable' },
       { name: 'PR head unreadable', baseline: prBaselineFor('g'), readers: readers(undefined), class: 'effect_unverified', evidence: 'pr_head_unreadable' },
-      { name: 'PR second read unreadable', baseline: prBaselineFor('g'), readers: { prHead: vi.fn().mockResolvedValueOnce(HEAD_AFTER).mockResolvedValueOnce(undefined), issueBodySha256: async () => ISSUE_BODY_AFTER }, class: 'effect_unverified', evidence: 'pr_head_unreadable' },
+      { name: 'PR second read unreadable', baseline: prBaselineFor('g'), readers: tupleReaders({ prHead: vi.fn().mockResolvedValueOnce(HEAD_AFTER).mockResolvedValueOnce(undefined), issueBodySha256: async () => ISSUE_BODY_AFTER }), class: 'effect_unverified', evidence: 'pr_head_unreadable' },
       { name: 'Issue body digest changed', baseline: issueBaselineFor('g'), readers: readers(undefined, undefined, ISSUE_BODY_AFTER), class: 'target_progress_observed', evidence: 'issue_body_digest_changed' },
       { name: 'Issue body digest unchanged', baseline: issueBaselineFor('g'), readers: readers(undefined, undefined, ISSUE_BODY_BEFORE), class: 'effect_unverified', evidence: 'issue_body_unchanged' },
       { name: 'Issue body unreadable', baseline: issueBaselineFor('g'), readers: readers(undefined, undefined, undefined), class: 'effect_unverified', evidence: 'issue_body_unreadable' },
       {
         name: 'PR reader throws', baseline: prBaselineFor('g'),
-        readers: { prHead: async () => { throw new Error('gh failed'); }, issueBodySha256: async () => ISSUE_BODY_AFTER },
+        readers: tupleReaders({ prHead: async () => { throw new Error('gh failed'); }, issueBodySha256: async () => ISSUE_BODY_AFTER }),
         class: 'effect_unverified', evidence: 'github_read_failed',
       },
       {
         name: 'Issue reader throws', baseline: issueBaselineFor('g'),
-        readers: { prHead: async () => HEAD_AFTER, issueBodySha256: async () => { throw new Error('gh failed'); } },
+        readers: tupleReaders({ prHead: async () => HEAD_AFTER, issueBodySha256: async () => { throw new Error('gh failed'); } }),
         class: 'effect_unverified', evidence: 'github_read_failed',
       },
+      // #2772 AC2: structured exact-target tuples; any lifecycle or identity drift is effect_unverified.
+      { name: 'PR closed after SEND (head advanced)', baseline: prBaselineFor('g'), readers: tupleReaders({ prHead: async () => HEAD_AFTER }, { pr: { state: 'CLOSED' } }), class: 'effect_unverified', evidence: 'target_not_open' },
+      { name: 'PR merged after SEND (head advanced)', baseline: prBaselineFor('g'), readers: tupleReaders({ prHead: async () => HEAD_AFTER }, { pr: { state: 'MERGED' } }), class: 'effect_unverified', evidence: 'target_not_open' },
+      { name: 'PR base retargeted (head advanced)', baseline: prBaselineFor('g'), readers: tupleReaders({ prHead: async () => HEAD_AFTER }, { pr: { base_ref: 'release' } }), class: 'effect_unverified', evidence: 'pr_base_retargeted' },
+      { name: 'PR base repository changed', baseline: prBaselineFor('g'), readers: tupleReaders({ prHead: async () => HEAD_AFTER }, { pr: { base_repository: 'acme/fork' } }), class: 'effect_unverified', evidence: 'pr_base_retargeted' },
+      { name: 'PR head re-referenced to another branch', baseline: prBaselineFor('g'), readers: tupleReaders({ prHead: async () => HEAD_AFTER }, { pr: { head_ref: 'other-branch' } }), class: 'effect_unverified', evidence: 'pr_head_rereferenced' },
+      { name: 'PR head repository changed', baseline: prBaselineFor('g'), readers: tupleReaders({ prHead: async () => HEAD_AFTER }, { pr: { head_repository: 'someone/fork' } }), class: 'effect_unverified', evidence: 'pr_head_rereferenced' },
+      { name: 'PR identity drift (reader answered a different number)', baseline: prBaselineFor('g'), readers: { prTuple: async () => prTupleFor(HEAD_AFTER, { number: 8 }), issueTuple: async () => undefined }, class: 'effect_unverified', evidence: 'target_identity_changed' },
+      { name: 'PR tuple unstable across reads (state flips)', baseline: prBaselineFor('g'), readers: (() => { let n = 0; return { prTuple: async () => prTupleFor(HEAD_AFTER, { state: ++n === 1 ? 'OPEN' : 'CLOSED' }), issueTuple: async () => undefined }; })(), class: 'effect_unverified', evidence: 'pr_head_not_stable' },
+      { name: 'legacy PR baseline without lifecycle tuple', baseline: prBaselineFor('g', { state: undefined, base_repository: undefined, base_ref: undefined, head_repository: undefined, head_ref: undefined }), readers: readers(HEAD_AFTER), class: 'effect_unverified', evidence: 'baseline_tuple_incomplete' },
+      { name: 'PR baseline captured while not open', baseline: prBaselineFor('g', { state: 'CLOSED' }), readers: readers(HEAD_AFTER), class: 'effect_unverified', evidence: 'baseline_target_not_open' },
+      { name: 'Issue closed after SEND (body changed)', baseline: issueBaselineFor('g'), readers: tupleReaders({ issueBodySha256: async () => ISSUE_BODY_AFTER }, { issue: { state: 'CLOSED' } }), class: 'effect_unverified', evidence: 'target_not_open' },
+      { name: 'Issue identity drift', baseline: issueBaselineFor('g'), readers: { prTuple: async () => undefined, issueTuple: async () => issueTupleFor(ISSUE_BODY_AFTER, { repository: 'acme/other' }) }, class: 'effect_unverified', evidence: 'target_identity_changed' },
+      { name: 'Issue body unstable across two reads', baseline: issueBaselineFor('g'), readers: (() => { let n = 0; return tupleReaders({ issueBodySha256: async () => (++n === 1 ? ISSUE_BODY_AFTER : 'e'.repeat(64)) }); })(), class: 'effect_unverified', evidence: 'issue_not_stable' },
+      { name: 'legacy Issue baseline without state', baseline: issueBaselineFor('g', { state: undefined }), readers: readers(undefined, undefined, ISSUE_BODY_AFTER), class: 'effect_unverified', evidence: 'baseline_tuple_incomplete' },
+      // #2772 AC4: a newly seen PR on a guessed branch is never a positive settlement for an Issue-bound run.
+      { name: 'new PR seen on a guessed branch for an Issue-bound baseline', baseline: issueBaselineFor('g'), readers: { prTuple: async () => prTupleFor(HEAD_AFTER, { number: 99, head_ref: 'guessed-branch' }), issueTuple: async () => issueTupleFor(ISSUE_BODY_BEFORE) }, class: 'effect_unverified', evidence: 'issue_body_unchanged' },
+      { name: 'new PR with no pre-SEND absence witness (no baseline)', baseline: undefined, readers: { prTuple: async () => prTupleFor(HEAD_AFTER, { number: 99 }), issueTuple: async () => undefined }, class: 'effect_unverified', evidence: 'baseline_absent' },
     ];
 
     it.each(rows)('classifyGithubEffect: $name', async (row) => {
@@ -3485,11 +3550,12 @@ describe('Issue #2750 owner-wait reaper matrix (AC1-AC3)', () => {
     it('reads only the exact baseline-bound target', async () => {
       const prHead = vi.fn(async () => HEAD_AFTER);
       const issueBodySha256 = vi.fn(async () => ISSUE_BODY_AFTER);
-      await classifyGithubEffect(prBaselineFor('g', { repo: 'acme/other', number: 91 }), { prHead, issueBodySha256 });
+      await classifyGithubEffect(prBaselineFor('g', { repo: 'acme/other', number: 91 }), tupleReaders({ prHead, issueBodySha256 }));
       expect(prHead.mock.calls).toEqual([['acme/other', 91], ['acme/other', 91]]);
       expect(issueBodySha256).not.toHaveBeenCalled();
-      await classifyGithubEffect(issueBaselineFor('g', { repo: 'acme/other', number: 55 }), { prHead, issueBodySha256 });
-      expect(issueBodySha256.mock.calls).toEqual([['acme/other', 55]]);
+      await classifyGithubEffect(issueBaselineFor('g', { repo: 'acme/other', number: 55 }), tupleReaders({ prHead, issueBodySha256 }));
+      // Two coherent post-SEND reads of the exact Issue too (#2772).
+      expect(issueBodySha256.mock.calls).toEqual([['acme/other', 55], ['acme/other', 55]]);
     });
 
     it('parseGithubEffectBaseline accepts only the exact invocation/Run/attempt-bound well-formed baseline', () => {
@@ -3508,7 +3574,15 @@ describe('Issue #2750 owner-wait reaper matrix (AC1-AC3)', () => {
         issueBaselineFor('g', { number: 0 }),
         prBaselineFor('g', { head_sha: 'abc' }),
         prBaselineFor('g', { kind: 'commit' }),
+        prBaselineFor('g', { state: '' }),
+        prBaselineFor('g', { base_ref: 7 }),
+        issueBaselineFor('g', { state: 42 }),
       ];
+      // #2772: the optional lifecycle tuple round-trips; a legacy baseline without it still parses.
+      expect(parseGithubEffectBaseline(prBaselineFor('g'), expected)).toMatchObject({
+        state: 'OPEN', base_repository: 'acme/widgets', base_ref: 'main', head_repository: 'acme/widgets', head_ref: 'feature-7',
+      });
+      expect(parseGithubEffectBaseline(issueBaselineFor('g', { state: undefined }), expected)).toMatchObject({ kind: 'issue' });
       for (const value of bad) expect(parseGithubEffectBaseline(value, expected)).toBeUndefined();
     });
 
@@ -3571,8 +3645,10 @@ describe('Issue #2750 owner-wait reaper matrix (AC1-AC3)', () => {
       // A finished Page is not delivery proof; nothing is fabricated.
       expect(envelope.delivery).toBe('POSSIBLY_DELIVERED');
       expect(envelope.recovery_available).toBe(false);
-      expect(String(envelope.next_action)).toMatch(row.fresh ? /fresh chat/u : /reconcile the exact original invocation/u);
-      if (!row.fresh) expect(String(envelope.next_action)).not.toMatch(/fresh chat/u);
+      // #2772 AC5/AC6: a redirect is read-first original reconciliation, never a fresh-chat recommendation.
+      expect(String(envelope.next_action)).toMatch(/reconcile the exact original invocation/u);
+      if (row.fresh) expect(String(envelope.next_action)).toMatch(/^conversation unavailable/u);
+      expect(String(envelope.next_action)).not.toMatch(/fresh chat/iu);
       expect(envelope.owned_target_id).toBe('target-2750');
     });
 
@@ -4048,6 +4124,24 @@ describe('Issue #2750 managed adapter refusal matrix (AC10-AC13, AC17)', () => {
       name: 'predecessor_handoff_unproven (no such predecessor locator)', code: 'predecessor_handoff_unproven',
       build: (ctx) => [...ctx.args, '--predecessor-invocation-id', 'inv-missing', '--predecessor-attempt-identity', 'attempt-missing'],
     },
+    // #2772 AC9: missing/one-sided versus self selector pairs; the retired same-Task code never appears.
+    {
+      name: 'predecessor pair one-sided (invocation only)', code: 'predecessor_invocation_and_attempt_required',
+      build: (ctx) => [...ctx.args, '--predecessor-invocation-id', 'inv-earlier'],
+    },
+    {
+      name: 'predecessor pair one-sided (attempt only)', code: 'predecessor_invocation_and_attempt_required',
+      build: (ctx) => [...ctx.args, '--predecessor-attempt-identity', 'attempt-earlier'],
+    },
+    {
+      name: 'predecessor self pair', code: 'predecessor_self_invocation_forbidden',
+      build: (ctx) => [...ctx.args, '--predecessor-invocation-id', 'inv-m', '--predecessor-attempt-identity', 'attempt-earlier'],
+    },
+    // #2772 AC9: invalid relative/drive-relative/unsupported UNC --profile is refused before any allocation.
+    { name: 'relative --profile', code: 'profile_absolute_user_data_dir_required', build: (ctx) => withValue(ctx.args, '--profile', 'chrome-profile') },
+    { name: 'dot-relative --profile', code: 'profile_absolute_user_data_dir_required', build: (ctx) => withValue(ctx.args, '--profile', './chrome-profile') },
+    { name: 'drive-relative --profile', code: 'profile_absolute_user_data_dir_required', build: (ctx) => withValue(ctx.args, '--profile', 'C:chrome-profile') },
+    { name: 'UNC --profile on a non-Windows host', code: 'profile_absolute_user_data_dir_required', build: (ctx) => withValue(ctx.args, '--profile', '\\\\server\\share\\profile') },
     { name: 'invalid_cwd', code: 'invalid_cwd', build: (ctx) => withValue(ctx.args, '--cwd', join(ctx.root, 'no-such-worktree')) },
     {
       name: 'terminal_envelope_name_not_wakeable', code: 'terminal_envelope_name_not_wakeable',
@@ -4123,6 +4217,28 @@ describe('Issue #2750 managed adapter refusal matrix (AC10-AC13, AC17)', () => {
     expect(existsSync(ctx.paths.envelope)).toBe(false);
     expect(existsSync(ctx.paths.output)).toBe(false);
     expect(existsSync(refusalCompanionPath(ctx.paths.receipt))).toBe(false);
+    expect(result.lines[0]).not.toContain('predecessor_exact_pair_same_task_required');
+    if (row.code === 'profile_absolute_user_data_dir_required') {
+      expect(result.lines[0]).toContain('--profile <absolute-user-data-dir>');
+      // No profile-keyed state was allocated for the refused relative key.
+      expect(existsSync(join(ctx.root, 'state'))).toBe(false);
+    }
+    if (row.code === 'predecessor_handoff_unproven') {
+      // The bounded genuine reason reaches the caller, never a generic handoff mismatch.
+      expect(result.lines[0]).toMatch(/predecessor_handoff_unproven; nextStep: reason: \S/u);
+      expect(result.lines[0]).not.toMatch(/handoff mismatch/iu);
+    }
+  });
+
+  it('bounds and scrubs a forwarded refusal reason (#2772 AC9)', () => {
+    expect(boundedRefusalReason('ENOENT: no such file or directory, open \'/home/someone/.local/state/x/locator.json\''))
+      .toBe("ENOENT: no such file or directory, open '<path>'");
+    expect(boundedRefusalReason('see https://example.invalid/a?token=1 now')).toBe('see <url> now');
+    expect(boundedRefusalReason('token ghp_' + 'A1'.repeat(20))).toBe('token <redacted>');
+    expect(boundedRefusalReason('invocation_observation_occupied_use_fresh_id')).toBe('invocation_observation_occupied_use_fresh_id');
+    expect(boundedRefusalReason('x'.repeat(500))!.length).toBeLessThanOrEqual(160);
+    expect(boundedRefusalReason('   ')).toBeUndefined();
+    expect(boundedRefusalReason(undefined)).toBeUndefined();
   });
 
   describe('post-spawn evidence tiers (a launcher may already have run: SEND unknown)', () => {
@@ -4180,7 +4296,8 @@ describe('Issue #2750 managed adapter refusal matrix (AC10-AC13, AC17)', () => {
       });
       expect(result.code).toBe(2);
       expect(result.lines).toHaveLength(1);
-      expect(result.lines[0]).toMatch(/invocation_admission_failed_use_fresh_id; nextStep: relaunch with a fresh --invocation-id/u);
+      // #2772 AC9: the genuine bounded launcher reason reaches the caller before the repair.
+      expect(result.lines[0]).toMatch(/invocation_admission_failed_use_fresh_id; nextStep: reason: invocation_observation_occupied_use_fresh_id; relaunch with a fresh --invocation-id/u);
       expect(result.lines[0]).not.toMatch(SEND_UNKNOWN);
       expect(result.stdout).toBe('');
     });
@@ -4583,6 +4700,28 @@ describe('Issue #2750 predecessor identity and continuity (AC14-AC15)', () => {
       expect(scenario.protectedFiles()).toEqual(before);
       expect(existsSync(scenario.config.handoffReceiptPath)).toBe(false);
       expect(existsSync(scenario.config.terminalEnvelopePath)).toBe(false);
+    });
+
+    it('a launcher refusal never emits the raw message or an absolute path on caller stderr (#2772 K7)', async () => {
+      const scenario = predecessorScenario({ skipLocator: true });
+      const raw = validateLaunchPreSpawn(scenario.config);
+      expect(raw.ok).toBe(false);
+      const writes: string[] = [];
+      const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: string | Uint8Array) => {
+        writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+        return true;
+      });
+      try {
+        expect(await runLaunch(scenario.config)).toBe(2);
+      } finally {
+        stderr.mockRestore();
+      }
+      const emitted = writes.join('');
+      expect(emitted).toContain('predecessor_handoff_unproven');
+      expect(emitted).toMatch(/ENOENT|receipt_locator/u);
+      expect(emitted).not.toContain(scenario.root);
+      expect(emitted).not.toMatch(/"message":"[^"]*\/(?:tmp|home)\//u);
+      expect(emitted).not.toMatch(/(?<![a-z<])\/(?:tmp|home)\/[^\s"']+/u);
     });
 
     it('refuses a foreign attempt selector and a foreign profile/CDP selector', () => {
@@ -5153,8 +5292,10 @@ describe('Issue #2524: final persisted no-result terminal projection', () => {
 
   it('keeps actual child results authoritative over an unrelated harvested no-result projection', async () => {
     const result = makeTurnResult({ invocation_id: 'inv-2524-synthetic' });
+    // A genuine driver result always carries this launch's configured profile key (#2772 K4).
     const success = await savedTerminal({
-      phase: 'harvested', sendCount: 1, reply: 'synthetic reply!!', childResult: result,
+      phase: 'harvested', sendCount: 1, reply: 'synthetic reply!!',
+      childResult: (profileKey) => ({ ...result, configured_profile_key: profileKey }),
     });
     expect(success.exitCode).toBe(0);
     expect(success.envelope).toMatchObject({
@@ -5170,7 +5311,10 @@ describe('Issue #2524: final persisted no-result terminal projection', () => {
       },
     });
     const incident = await savedTerminal({
-      phase: 'harvested', sendCount: 1, reply: 'synthetic reply!!', childResult: incidentResult,
+      phase: 'harvested', sendCount: 1, reply: 'synthetic reply!!',
+      childResult: (profileKey, invocationId) => ({
+        ...incidentResult, invocation_id: invocationId, configured_profile_key: profileKey,
+      }),
     });
     expect(incident.exitCode).toBe(1);
     expect(incident.envelope).toMatchObject({
@@ -5233,23 +5377,31 @@ describe('Issue #2524: final persisted no-result terminal projection', () => {
     expect(envelope.diagnostics).not.toHaveProperty('last_heartbeat');
   });
 
-  it.each(['invocation', 'profile'] as const)(
-    'refuses to borrow a harvested primary across a parsed %s mismatch', async (mismatch) => {
-      const { envelope } = await savedTerminal({
+  it.each([
+    ['invocation', false], ['profile', false], ['invocation', true], ['profile', true],
+  ] as const)(
+    'never publishes success or borrows a harvested primary across a parsed %s mismatch (forged witness %s) (#2772 K4)',
+    async (mismatch, forgedWitness) => {
+      const { envelope, exitCode } = await savedTerminal({
         phase: 'harvested', sendCount: 1, reply: 'synthetic reply!!', heartbeat: true,
         childResult: (profileKey, invocationId) => matchingSuccess(profileKey, invocationId, {
           ...(mismatch === 'invocation' ? { invocation_id: 'foreign-invocation' } : {}),
           ...(mismatch === 'profile' ? { configured_profile_key: 'foreign-profile' } : {}),
+          // A forged service Send witness would otherwise derive a landed delivery.
+          ...(forgedWitness ? { witness: makeTurnResult({}).witness } : {}),
         }),
       });
+      expect(exitCode).toBe(1);
       expect(envelope).toMatchObject({
-        lifecycle_outcome: 'success', turn_result_state: 'ok',
-        delivery: 'POSSIBLY_DELIVERED', send_count: 1,
+        lifecycle_outcome: 'incident', incident: 'child_turn_result_identity_mismatch',
+        turn_result_state: 'ok', delivery: 'POSSIBLY_DELIVERED',
         observed_invocation_id: mismatch === 'invocation' ? 'foreign-invocation' : 'inv-2524-synthetic',
-        conversation_locator: 'conv-uuid', recovery_available: true,
-        diagnostics: { last_reply_length: 0, last_reply_sha256_head: 'deadbeef00000000' },
       });
-      expect(envelope.diagnostics).not.toHaveProperty('persisted_observation');
+      expect(String(envelope.next_action)).toMatch(/reconcile the exact original invocation/u);
+      for (const foreign of ['send_count', 'conversation_locator', 'owned_target_id']) {
+        expect(envelope).not.toHaveProperty(foreign);
+      }
+      expect(envelope.diagnostics ?? {}).not.toHaveProperty('persisted_observation');
     },
   );
 
@@ -5563,5 +5715,220 @@ describe('Issue #2718 PR-author --repo/--pr adapter admission', () => {
     expect(bound).toHaveLength(1);
     expect(bound[0]).toContain('--cwd <worktree>');
     expect(runbook.some((line) => line.startsWith('PR-author-only variant'))).toBe(true);
+  });
+});
+
+describe('Issue #2772 AC3: launcher terminal GitHub effect on the bound candidate path', () => {
+  const profile = '/synthetic/browser-profile-2772';
+  const cdp = 'http://127.0.0.1:9222';
+
+  async function launchWithBaseline(input: {
+    id: string; baseline?: GithubEffectBaseline; result: Partial<TurnResultV1>; readers: GithubEffectReaders;
+    /** Seed this invocation's original observation record, as the real driver would. */
+    seedRecord?: boolean;
+    /** Immutable launch selectors (#2772 K6); default is the exact `acme/widgets` PR #7 author binding. */
+    selectors?: readonly string[];
+    /** Managed Task+Dispatch owner: current at launch, then this store state at terminal time (K1). */
+    owner?: 'current' | 'absent' | 'unreadable' | 'replaced';
+    /** How the fixture child ends (K3): its result line, an exit without one, or a startup hang. */
+    mode?: 'result' | 'exit' | 'hang';
+  }) {
+    const root = tempDir(`opk-2772-${input.id}-`);
+    let ownerStore: { file: string; replaced: string } | null = null;
+    if (input.owner) {
+      const env = { OPK_BASE_DIR: join(root, 'opk-base'), OPK_PROJECT_ID: OWNER_PROJECT };
+      for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
+      const staging = join(root, 'replaced-store');
+      const stagingEnv = { OPK_BASE_DIR: staging, OPK_PROJECT_ID: OWNER_PROJECT };
+      const replaced = writeAssignmentStore(stagingEnv, [{ taskId: OWNER_TASK, dispatchId: 'dispatch-replacement' }]);
+      ownerStore = { file: writeAssignmentStore(env, [{ taskId: OWNER_TASK, dispatchId: OWNER_DISPATCH }]), replaced };
+    }
+    if (input.mode === 'hang') vi.stubEnv('OPK_FM_LONG_CHILD_NO_CANDIDATE_GRACE_MS', '200');
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
+    const ids = fixtureIds(input.id);
+    const paths = launchPaths(root, input.id);
+    const result = makeTurnResult({
+      invocation_id: ids.invocation, configured_profile_key: configuredProfileKey(profile, cdp), ...input.result,
+    });
+    // The launcher refuses an occupied invocation id, so the record is staged and the child (the
+    // driver stand-in) publishes it after launch.
+    let staged: { from: string; to: string } | null = null;
+    if (input.seedRecord) {
+      const profileKey = configuredProfileKey(profile, cdp);
+      seedObservation({ profileKey, invocation: ids.invocation, cdp, root }, 'sent');
+      const to = observationRecordPath(profileKey, ids.invocation);
+      staged = { from: join(root, 'staged-observation.json'), to };
+      renameSync(to, staged.from);
+    }
+    // The fixture child stands in for the driver: it adds the exact baseline to its original receipt.
+    const fixture = nodeFixture(`
+      const fs = require('node:fs');
+      const baseline = ${JSON.stringify(input.baseline ?? null)};
+      const staged = ${JSON.stringify(staged)};
+      if (staged) fs.renameSync(staged.from, staged.to);
+      const ownerStore = ${JSON.stringify(ownerStore)};
+      const ownerChange = ${JSON.stringify(input.owner ?? 'current')};
+      if (ownerStore && ownerChange === 'absent') fs.rmSync(ownerStore.file);
+      if (ownerStore && ownerChange === 'unreadable') fs.writeFileSync(ownerStore.file, '{ not json');
+      if (ownerStore && ownerChange === 'replaced') fs.copyFileSync(ownerStore.replaced, ownerStore.file);
+      const mode = ${JSON.stringify(input.mode ?? 'result')};
+      if (baseline) {
+        const receipt = JSON.parse(fs.readFileSync(${JSON.stringify(paths.receipt)}, 'utf8'));
+        fs.writeFileSync(${JSON.stringify(paths.receipt)}, JSON.stringify({ ...receipt, github_effect_baseline: baseline }) + '\\n', { mode: 0o600 });
+      }
+      if (mode === 'hang') setInterval(() => {}, 1000);
+      else if (mode === 'exit') process.exit(0);
+      else process.stdout.write(JSON.stringify(${JSON.stringify(result)}) + '\\n', () => process.exit(0));
+    `);
+    const selectors = input.selectors ?? ['--repo', 'acme/widgets', '--pr', '7'];
+    const code = await runFixtureLaunch(root, {
+      runIdentity: ids.run, attemptIdentity: ids.attempt, invocationId: ids.invocation, profile, cdp,
+      handoffReceiptPath: paths.receipt, terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output, cwd: repoRoot, childCommand: fixture.command,
+      childArgs: [...fixture.args, '--', '--cdp', cdp, '--profile', profile, '--invocation-id', ids.invocation, ...selectors],
+      githubReaders: input.readers,
+      ...(input.owner ? { ownerTaskId: OWNER_TASK, ownerDispatchId: OWNER_DISPATCH } : {}),
+    });
+    return { code, envelope: readTerminalEnvelope(paths.envelope) };
+  }
+
+  const zeroCount = { cause: 'author_effect_pr_head_changed', witness: undefined, observation_uncertainty_diagnostics: { cause: 'author_effect_pr_head_changed', send_count: 0, owned_prompt_seen: false } };
+
+  it('classifies the exact bound PR, keeps POSSIBLY_DELIVERED, and leads with the exact read-only argv', async () => {
+    const prHead = vi.fn(async () => HEAD_AFTER);
+    const { envelope } = await launchWithBaseline({
+      id: 'bound', baseline: prBaselineFor('bound'), result: zeroCount, readers: tupleReaders({ prHead }),
+      seedRecord: true,
+    });
+    expect(envelope).toMatchObject({ delivery: 'POSSIBLY_DELIVERED', turn_result_cause: 'author_effect_pr_head_changed' });
+    expect((envelope!.diagnostics as Record<string, any>).github_effect).toMatchObject({
+      class: 'target_progress_observed', evidence: 'pr_head_advanced_stable', attribution: 'unverified',
+    });
+    expect(prHead.mock.calls).toEqual([['acme/widgets', 7], ['acme/widgets', 7]]);
+    expect(String(envelope!.next_action)).toContain(
+      'read-only first: scripts/gh pr view 7 --repo acme/widgets --json number,state,headRefOid,headRefName,headRepository');
+    expect(String(envelope!.next_action)).not.toMatch(/fresh chat/iu);
+  });
+
+  it('never consults GitHub for a candidate that is not this exact invocation', async () => {
+    const prHead = vi.fn(async () => HEAD_AFTER);
+    const { envelope } = await launchWithBaseline({
+      id: 'foreign', baseline: prBaselineFor('foreign'),
+      result: { ...zeroCount, invocation_id: 'inv-someone-else' }, readers: tupleReaders({ prHead }),
+    });
+    expect(prHead).not.toHaveBeenCalled();
+    expect((envelope!.diagnostics as Record<string, any> | undefined)?.github_effect).toMatchObject({
+      class: 'effect_unverified', evidence: 'candidate_not_bound_to_invocation',
+    });
+  });
+
+  it('a missing original observation record is never positive candidate binding', async () => {
+    const prHead = vi.fn(async () => HEAD_AFTER);
+    const { envelope } = await launchWithBaseline({
+      id: 'norecord', baseline: prBaselineFor('norecord'), result: zeroCount, readers: tupleReaders({ prHead }),
+      seedRecord: false,
+    });
+    expect(prHead).not.toHaveBeenCalled();
+    expect((envelope!.diagnostics as Record<string, any> | undefined)?.github_effect).toMatchObject({
+      class: 'effect_unverified', evidence: 'candidate_not_bound_to_invocation',
+    });
+    expect(envelope!.delivery).toBe('POSSIBLY_DELIVERED');
+  });
+
+  it.each(['absent', 'unreadable', 'replaced'] as const)(
+    'never reports progress unless the managed owner is positively current at terminal time: %s store (#2772 K1)',
+    async (owner) => {
+      const prHead = vi.fn(async () => HEAD_AFTER);
+      const { envelope } = await launchWithBaseline({
+        id: `owner-${owner}`, baseline: prBaselineFor(`owner-${owner}`), result: zeroCount,
+        readers: tupleReaders({ prHead }), seedRecord: true, owner,
+      });
+      expect(prHead).not.toHaveBeenCalled();
+      expect((envelope!.diagnostics as Record<string, any>).github_effect).toMatchObject({
+        class: 'effect_unverified', attribution: 'unverified',
+        evidence: owner === 'replaced' ? 'owner_not_current' : 'owner_unverified',
+      });
+      expect(String(envelope!.next_action)).toContain('read-only first: scripts/gh pr view 7 --repo acme/widgets');
+    },
+  );
+
+  it('reports progress for a managed owner that is still current (#2772 K1 positive)', async () => {
+    const prHead = vi.fn(async () => HEAD_AFTER);
+    const { envelope } = await launchWithBaseline({
+      id: 'owner-current', baseline: prBaselineFor('owner-current'), result: zeroCount,
+      readers: tupleReaders({ prHead }), seedRecord: true, owner: 'current',
+    });
+    expect((envelope!.diagnostics as Record<string, any>).github_effect).toMatchObject({
+      class: 'target_progress_observed', evidence: 'pr_head_advanced_stable',
+    });
+  });
+
+  it.each([
+    ['foreign repository', { repo: 'other/repo' }],
+    ['foreign PR number', { number: 8 }],
+    ['issue instead of the bound PR', { kind: 'issue', body_sha256: 'a'.repeat(64) }],
+  ] as const)('never reads or recommends a baseline target that differs from the launch selector: %s (#2772 K6)',
+    async (_name, overrides) => {
+      const prHead = vi.fn(async () => HEAD_AFTER);
+      const { envelope } = await launchWithBaseline({
+        id: 'mismatch', baseline: prBaselineFor('mismatch', overrides as Record<string, unknown>), result: zeroCount,
+        readers: tupleReaders({ prHead }), seedRecord: true,
+      });
+      expect(prHead).not.toHaveBeenCalled();
+      expect((envelope!.diagnostics as Record<string, any>).github_effect).toMatchObject({
+        class: 'effect_unverified', evidence: 'baseline_target_mismatch',
+      });
+      // Only the original launch-selected target is recommended.
+      expect(String(envelope!.next_action)).toContain('scripts/gh pr view 7 --repo acme/widgets');
+      expect(String(envelope!.next_action)).not.toMatch(/other\/repo|pr view 8|issue view/u);
+    });
+
+  it('never trusts a baseline target when the launch carried no bound selector (#2772 K6)', async () => {
+    const prHead = vi.fn(async () => HEAD_AFTER);
+    const { envelope } = await launchWithBaseline({
+      id: 'unbound', baseline: prBaselineFor('unbound'), result: zeroCount,
+      readers: tupleReaders({ prHead }), seedRecord: true, selectors: [],
+    });
+    expect(prHead).not.toHaveBeenCalled();
+    expect((envelope!.diagnostics as Record<string, any>).github_effect).toMatchObject({
+      class: 'effect_unverified', evidence: 'baseline_target_unbound',
+    });
+    expect(String(envelope!.next_action ?? '')).not.toContain('acme/widgets');
+  });
+
+  it.each(['exit', 'hang'] as const)(
+    'a bound launch whose baseline was never written keeps a bounded effect and the selector read-first step: child %s (#2772 K3)',
+    async (mode) => {
+      const prHead = vi.fn(async () => HEAD_AFTER);
+      const { envelope } = await launchWithBaseline({
+        id: `nobaseline-${mode}`, result: zeroCount, readers: tupleReaders({ prHead }), mode,
+      });
+      expect(envelope).toMatchObject({ lifecycle_outcome: 'incident', delivery: 'POSSIBLY_DELIVERED' });
+      expect(prHead).not.toHaveBeenCalled();
+      expect((envelope!.diagnostics as Record<string, any>).github_effect).toEqual({
+        class: 'effect_unverified', attribution: 'unverified', evidence: 'baseline_absent',
+      });
+      expect(String(envelope!.next_action)).toContain(
+        'read-only first: scripts/gh pr view 7 --repo acme/widgets --json number,state,headRefOid,headRefName,headRepository');
+    },
+  );
+
+  it('a bound Issue launch without a baseline recommends only its exact Issue read (#2772 K3)', async () => {
+    const { envelope } = await launchWithBaseline({
+      id: 'nobaseline-issue', result: zeroCount, readers: tupleReaders({}), mode: 'exit',
+      selectors: ['--bound-issue', 'acme/widgets#42'],
+    });
+    expect((envelope!.diagnostics as Record<string, any>).github_effect).toMatchObject({ evidence: 'baseline_absent' });
+    expect(String(envelope!.next_action)).toContain('scripts/gh issue view 42 --repo acme/widgets');
+  });
+
+  it('adds nothing when the original receipt carries no baseline (legacy launch)', async () => {
+    const prHead = vi.fn(async () => HEAD_AFTER);
+    const { envelope } = await launchWithBaseline({
+      id: 'legacy', result: zeroCount, readers: tupleReaders({ prHead }), selectors: [],
+    });
+    expect(prHead).not.toHaveBeenCalled();
+    expect((envelope!.diagnostics as Record<string, any> | undefined)?.github_effect).toBeUndefined();
+    expect(envelope!.delivery).toBe('POSSIBLY_DELIVERED');
   });
 });

@@ -1,0 +1,50 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2772,
+  "declared_paths": [
+    "docs/browser-gpt-turn-runbook.md",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/chatgpt-browser-turn/storage-common.ts",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/execute-issue-manager-boundary.test.ts",
+    "scripts/lib/execute-issue-manager-boundary.ts",
+    "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts"
+  ],
+  "denylist": [
+    ".cache/",
+    ".config/",
+    ".env",
+    ".env.local",
+    ".local/",
+    "credentials/",
+    "node_modules/",
+    "packages/core/",
+    "runtime-state/",
+    "secrets/",
+    "state/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/browser-gpt-turn-runbook.md",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-send-delivery.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn-base.ts",
+    "scripts/chatgpt-browser-turn/storage-common.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/execute-issue-manager-boundary.test.ts",
+    "scripts/lib/execute-issue-manager-boundary.ts",
+    "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts"
+  ],
+  "source_revision": "ef55df88874f4803773b9a3108a043127ba9a4db"
+}
