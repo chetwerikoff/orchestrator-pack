@@ -244,7 +244,7 @@ hook chains. B5 proofs remain disposable per-push; verified parent
 retry, not false authorization. OpenCode task/smoke requires a validated
 absolute `PACK_EXECUTOR_OPENCODE_BIN` for all probes, overlay and spawn.
 Inherited Bash permissions remain in place; terminal launcher containment
-denies are appended for codex, agent-launch and bsk command-text patterns,
+denies are appended for codex, codex exec, agent-launch and bsk command-text patterns,
 including common environment-prefix, subshell and path-prefixed forms. This
 does not establish shell-parser behavior for quoting or encoding obfuscation,
 which remains unsupported native evidence. Synthetic permission maps cannot
