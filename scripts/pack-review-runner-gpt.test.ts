@@ -7871,6 +7871,8 @@ describe('Issue #2761 normal source-settling Opus triage', () => {
     process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
     delete process.env.PACK_GPT_BROWSER_CHAT_URL;
     const calls: Array<{ args: readonly string[]; cwd: string; input: string; timeoutMs: number }> = [];
+    const todoParent = path.join(storeRoot, '.local', 'state', 'orchestrator-session', 'orchestrator-pack');
+    const todoParentExistedBeforeRun = existsSync(todoParent);
     const fence = String.fromCharCode(96).repeat(3);
     const output = await startPackReview({
       projectId: 'orchestrator-pack', storeRoot,
@@ -7906,7 +7908,7 @@ describe('Issue #2761 normal source-settling Opus triage', () => {
       },
     });
     const run = getPackReviewRun(String(output.runId),{projectId:'orchestrator-pack',storeRoot});
-    return { output,run,calls,storeRoot,capture };
+    return { output,run,calls,storeRoot,capture,todoParent,todoParentExistedBeforeRun };
   }
 
   it('groups duplicate blocking sources, persists once and appends a single deferred TODO', async () => {
@@ -7930,9 +7932,15 @@ describe('Issue #2761 normal source-settling Opus triage', () => {
     })]);
     expect(test.run?.findings).toHaveLength(3);
     expect(readFileSync(test.capture,'utf8')).toContain('duplicate');
-    const todo = path.join(test.storeRoot,'.local','state','orchestrator-session',
-      'orchestrator-pack','review-todo.md');
-    expect(readFileSync(todo,'utf8').trim().split('\n')).toHaveLength(1);
+    expect(test.todoParentExistedBeforeRun).toBe(false);
+    expect(existsSync(test.todoParent)).toBe(true);
+    const todo = path.join(test.todoParent,'review-todo.md');
+    const lines = readFileSync(todo,'utf8').trim().split('\n');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^\d{4}-\d{2}-\d{2} \| repo=chetwerikoff\/orchestrator-pack \| PR=#1276 \|/);
+    expect(lines[0]).toContain(`head=${HEAD_A}`);
+    expect(lines[0]).toContain(`runId=${test.run!.id} groupId=${projection.deferred[0]!.groupId}`);
+    expect(lines[0]).toContain('reason=Originally advisory cosmetic issue');
   });
 
   it('keeps original source union when output mapping or installed help is invalid', async () => {

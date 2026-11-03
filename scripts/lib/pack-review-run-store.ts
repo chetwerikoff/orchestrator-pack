@@ -2632,7 +2632,10 @@ export function appendPackReviewDeferredTodos(
     }
     const project = normalizePackReviewProjectId(run.projectId);
     if (project !== run.projectId) return {appended:0,skipped:0,error:'project_identity_untrusted'};
-    const todoPath = join(homedir(),'.local','state','orchestrator-session',project,'review-todo.md');
+    // Honor process-local HOME in isolated Vitest workers: the native
+    // os.homedir() lookup can still see the parent process environment.
+    const todoHome = process.env.HOME || homedir();
+    const todoPath = join(todoHome,'.local','state','orchestrator-session',project,'review-todo.md');
     let appended=0, skipped=0;
     try {
       mkdirSync(dirname(todoPath),{recursive:true});
