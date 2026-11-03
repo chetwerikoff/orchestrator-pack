@@ -2,10 +2,10 @@
 
 import '../toolchain/native-entrypoint-preflight.ts';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { performance } from 'node:perf_hooks';
-import { isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
 import { SUPPORTED_NODE_MAJOR } from '../toolchain/node-runtime-contract.mjs';
 import { evaluateCommandRuntimePreflight } from '../lib/command-runtime-bootstrap.mjs';
@@ -45,9 +45,11 @@ import {
   type ExecutorRoute,
   type SemanticExecutorProfile,
 } from '../executor-profile-policy.ts';
-import { installManagerPushGuard } from './manager-push-guard.ts';
+import { installManagerPushGuard, restoreManagerPushGuardForClaude } from './manager-push-guard.ts';
 import { runSupervisedWorkerStart, readTerminalGoneDispatch, type SupervisedWorkerStartResult, type WorkerStartMode } from './supervised-worker-start.ts';
 import type { TerminalGoneAssignmentEvidence } from '../lib/worker-assignment-runtime.ts';
+import { collectProcessEvidence } from '../worktree-lifecycle/operations.ts';
+import { parseGitWorktreePorcelain } from '../worktree-lifecycle/core.ts';
 
 export const LAUNCH_ASSISTANT_SCHEMA = 'supervised-task-launch-assistant/v1' as const;
 export const LAUNCH_STARTUP_OBSERVATION_WINDOW_MS = 30_000;
@@ -146,7 +148,7 @@ export interface ExecutorProfile {
   readonly effort?: string;
   readonly agentName?: string;
   readonly inlineConfigJson?: string;
-  /** Profile-pinned absolute OpenCode binary spawned and probed; absent means bare `opencode`. */
+  /** Required profile-pinned absolute OpenCode binary, shared by all probes and spawn. */
   readonly executable?: string;
   readonly providerArgs?: readonly string[];
   readonly names: readonly [string, string, string];
@@ -273,6 +275,16 @@ export interface LaunchInput {
   readonly startMode?: WorkerStartMode;
 }
 
+export interface RestoreWorktreeIdentity {
+  readonly id: string;
+  readonly path: string;
+}
+
+export interface RestoreQuiescenceWitness {
+  /** Sorted all-workspace terminal identities; changed snapshots require reconciliation. */
+  readonly terminalFingerprint: string;
+}
+
 export interface ManagerPushGuardRequest {
   readonly repository: string;
   readonly worktreePath: string;
@@ -295,11 +307,17 @@ export interface LaunchDependencies {
   readonly createManagerTask: (runId: string, brief: string) => Promise<EdgeResult<{ readonly taskId: string; readonly status: string }>>;
   readonly observeDispatch: (taskId: string) => Promise<EdgeResult<DispatchObservation>>;
   readonly readCurrentAssignment: (issueNumber: number) => WorkerAssignment | null;
+  /** Read-only Orca worktree-show; never infer identity from --worktree text alone. */
+  readonly resolveRestoreWorktree?: (selector: string) => Promise<EdgeResult<RestoreWorktreeIdentity>>;
+  /** Complete all-workspace native terminal list and Linux CWD/descendant census. */
+  readonly observeRestoreQuiescence?: (path: string) => Promise<EdgeResult<RestoreQuiescenceWitness>>;
   /** Native exact-Dispatch/worker-absent witness, not an assignment/store guess. */
   readonly proveTerminalGone?: (assignment: WorkerAssignment) => Promise<TerminalGoneAssignmentEvidence | null>;
   readonly prepareWorktree: (input: WorktreePreparationRequest) => Promise<EdgeResult<PreparedWorktree>>;
-  /** Manager-only pre-push guard (Issue #2732); installed and observed on fresh and `--existing-terminal` placement. */
+  /** Non-Claude manager push guard; a resolved Claude-family manager is the local route. */
   readonly installManagerPushGuard?: (input: ManagerPushGuardRequest) => Promise<EdgeResult<true>> | EdgeResult<true>;
+  /** Restore recorded B5 hooks only on an existing Claude-family manager worktree. */
+  readonly restoreClaudeManagerGuard?: (worktreePath: string) => Promise<EdgeResult<true>> | EdgeResult<true>;
   readonly finalizeProfile?: (profile: ExecutorProfile, worktreePath: string, resumeSession?: string, dataRoot?: string) => Promise<EdgeResult<ExecutorProfile>>;
   readonly adapter: RuntimeAdapter;
   readonly runSupervisedStart: typeof runSupervisedWorkerStart;
@@ -781,6 +799,50 @@ export async function claudePaneProfileObserved(
   return modelLine.test(footer) && effortLine.test(footer);
 }
 
+/** Conservative native all-workspace terminal + Linux /proc process snapshot. */
+export async function observeQuiescentRestoreCensus(
+  adapter: RuntimeAdapter,
+  worktreePath: string,
+  processCensus: (path: string) => readonly unknown[] = collectProcessEvidence,
+  platform: string = process.platform,
+): Promise<EdgeResult<RestoreQuiescenceWitness>> {
+  const refusal = (cause: string, evidence: Readonly<Record<string, unknown>> = {}): EdgeResult<RestoreQuiescenceWitness> => ({
+    status: 'continue', cause, actor: 'operator', evidence,
+    nextAction: { kind: 'reconcile_worktree_setup',
+      note: 'inspect the exact orca terminal list, orchestration dispatch-show/worker-show and Linux /proc CWD/descendants; stop/abandon only the supported bound identity, quiesce execution and retry serially' },
+  });
+  if (platform !== 'linux' || !isAbsolute(worktreePath) || !adapter.listWorkersAsync) {
+    return refusal('worktree_restore_census_unsupported');
+  }
+  let selected: string;
+  try { selected = realpathSync(worktreePath); }
+  catch { return refusal('worktree_restore_path_unavailable'); }
+  const listed = await adapter.listWorkersAsync({ workspace: selected });
+  if (listed.status !== 'ok') return refusal('worktree_restore_terminals_incomplete', { reason: listed.reason });
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  for (const item of listed.value) {
+    if (item.identity.runtime !== adapter.id || !item.identity.id.trim() || !item.identity.generation.trim()
+      || !isAbsolute(item.workspacePath)) return refusal('worktree_restore_terminal_identity_invalid');
+    let canonical: string;
+    try { canonical = realpathSync(item.workspacePath); }
+    catch { return refusal('worktree_restore_terminal_path_unavailable'); }
+    const key = [item.identity.id, item.identity.generation, canonical].join(':');
+    if (seen.has(key)) return refusal('worktree_restore_terminal_identity_ambiguous');
+    seen.add(key);
+    if (canonical === selected) return refusal('worktree_restore_target_terminal_retained',
+      { terminalId: item.identity.id, terminalGeneration: item.identity.generation });
+    keys.push(key);
+  }
+  let processes: readonly unknown[];
+  try { processes = processCensus(selected); }
+  catch (error) { return refusal('worktree_restore_process_census_unavailable',
+    { diagnostic: error instanceof Error ? error.message : String(error) }); }
+  if (!Array.isArray(processes)) return refusal('worktree_restore_process_census_unavailable');
+  if (processes.length !== 0) return refusal('worktree_restore_target_process_retained', { processCount: processes.length });
+  return { status: 'ok', value: { terminalFingerprint: keys.sort().join('\\u0000') } };
+}
+
 export async function runSupervisedTaskLaunchAssistant(
   input: LaunchInput,
   deps: LaunchDependencies,
@@ -952,6 +1014,52 @@ export async function runSupervisedTaskLaunchAssistant(
     ), { ...resources, ...(early.value.dispatchId ? { dispatchId: early.value.dispatchId } : {}) }, startedAtMs, timings, deps.now);
   }
 
+  // AC5 is only a serialized, quiescent reuse of a currently Issue-bound
+  // predecessor. An --existing-terminal handoff is a different operation:
+  // its retained terminal is never misrepresented as a zero-terminal census.
+  const restoration = input.workClass !== 'merge' && Boolean(input.worktreeSelector && !input.existingTerminal && earlyCurrent);
+  let restoreBefore: { readonly selected: RestoreWorktreeIdentity; readonly census: RestoreQuiescenceWitness } | null = null;
+  if (restoration && earlyCurrent) {
+    const refuse = (cause: string, extra: Readonly<Record<string, unknown>> = {}): Omit<Extract<EdgeResult<true>, { status: 'continue' }>, 'status'> => ({
+      cause, actor: 'operator', evidence: extra,
+      nextAction: { kind: 'reconcile_dispatch',
+        note: 'verify the exact Issue/old and new Task/Run/assignment, native dispatch-show/worker-show, all-workspace orca terminal list and Linux /proc; quiesce and retry one operator-serialized --worktree launch' },
+    });
+    if (earlyCurrent.issueNumber !== input.issueNumber || earlyCurrent.repository !== resources.repository
+      || earlyCurrent.provider !== deps.adapter.id || earlyCurrent.kind !== 'local'
+      || earlyCurrent.role !== (input.workClass === 'manager' ? 'orchestrator' : 'worker')
+      || !deps.proveTerminalGone || !deps.resolveRestoreWorktree || !deps.observeRestoreQuiescence) {
+      return continued(input, 'dispatch_admission_early', refuse('worktree_restore_ownership_unproven'),
+        resources, startedAtMs, timings, deps.now);
+    }
+    if (input.workClass === 'manager' && earlyCurrent.taskId !== taskId) {
+      const oldMember = await deps.proveManagerTaskMembership(input.runId!, earlyCurrent.taskId);
+      if (oldMember.status !== 'ok' || oldMember.value.taskId !== earlyCurrent.taskId) {
+        return continued(input, 'dispatch_admission_early', refuse('worktree_restore_old_run_membership_unproven'),
+          resources, startedAtMs, timings, deps.now);
+      }
+    }
+    const oldDispatch = earlyCurrent.taskId === taskId ? early : await deps.observeDispatch(earlyCurrent.taskId);
+    const gone = earlyCurrent.taskId === taskId ? earlyGone : await deps.proveTerminalGone(earlyCurrent);
+    const selected = await deps.resolveRestoreWorktree(input.worktreeSelector!);
+    // AC5 permits only a failed, abandoned or revoked (native cancelled) predecessor.
+    // General terminal-gone observations also include completed Dispatches, but
+    // those must never re-enter dirty-worktree restoration and replay work.
+    if (oldDispatch.status !== 'ok' || oldDispatch.value.kind !== 'present'
+      || !['failed', 'abandoned', 'cancelled'].includes(oldDispatch.value.status ?? '')
+      || oldDispatch.value.dispatchId !== earlyCurrent.bindingKey || !gone
+      || gone.taskId !== earlyCurrent.taskId || gone.dispatchId !== earlyCurrent.bindingKey
+      || gone.dispatchState !== oldDispatch.value.status || !gone.workerAbsent
+      || selected.status !== 'ok' || !gone.worktreeId || gone.worktreeId !== selected.value.id) {
+      return continued(input, 'dispatch_admission_early', refuse('worktree_restore_old_dispatch_unproven'),
+        resources, startedAtMs, timings, deps.now);
+    }
+    const census = await deps.observeRestoreQuiescence(selected.value.path);
+    if (census.status !== 'ok') return continued(input, 'dispatch_admission_early', census,
+      resources, startedAtMs, timings, deps.now);
+    restoreBefore = { selected: selected.value, census: census.value };
+  }
+
   const providerMode = profile.route === 'provider_new_top_level';
   let reusedIdentity: RuntimeWorkerIdentity | undefined;
   const prepareStep = (): Promise<EdgeResult<PreparedWorktree>> => {
@@ -985,14 +1093,23 @@ export async function runSupervisedTaskLaunchAssistant(
     ...(providerMode ? { providerTopLevel: true } : {}),
     ...(input.workClass === 'manager' ? { managerRefresh: true } : {}),
     ...(input.workClass === 'merge' ? { primaryReuseRoot: input.primaryRoot } : {}),
-    ...(input.workClass === 'manager' && input.taskId?.trim() ? { managerTaskRunId: input.runId?.trim() } : {}),
+    ...(input.workClass === 'manager' && input.runId?.trim() ? { managerTaskRunId: input.runId.trim() } : {}),
     ...(input.workClass !== 'merge' && input.worktreeSelector && earlyCurrent
       ? { reuseAssignment: earlyCurrent } : {}),
     });
   };
   const prepared = await checkpoint('worktree_prepare', timings, deps.now, async (): Promise<EdgeResult<PreparedWorktree>> => {
     const placed = await prepareStep();
-    if (placed.status !== 'ok' || input.workClass !== 'manager' || !deps.installManagerPushGuard) return placed;
+    if (placed.status !== 'ok' || input.workClass !== 'manager') return placed;
+    // A prior non-Claude manager's guard must remain in force until every
+    // final Dispatch/assignment/quiescence admission succeeds. Retire it only
+    // immediately before a newly admitted Claude-family start.
+    if (profile.family === 'claude') return placed;
+    if (!deps.installManagerPushGuard) return {
+      status: 'continue', cause: 'manager_push_guard_unobserved', actor: 'operator', evidence: {},
+      nextAction: { kind: 'reconcile_worktree_setup',
+        note: 'restore the guarded non-Claude manager route before starting a manager' },
+    };
     // The selected project's default only: a PR-head base branch must never stand in for it.
     const defaultBranch = text(input.defaultBranch);
     const guard = placed.value.path && defaultBranch
@@ -1062,6 +1179,39 @@ export async function runSupervisedTaskLaunchAssistant(
       'reconcile the competing Dispatch; do not call worker-start on this terminal',
     ), { ...resources, ...(final.value.dispatchId ? { dispatchId: final.value.dispatchId } : {}) }, startedAtMs, timings, deps.now);
   }
+  if (restoreBefore && earlyCurrent) {
+    const current = input.issueNumber ? deps.readCurrentAssignment(input.issueNumber) : null;
+    const old = earlyCurrent.taskId === taskId ? final : await deps.observeDispatch(earlyCurrent.taskId);
+    const gone = await deps.proveTerminalGone!(earlyCurrent);
+    const selected = await deps.resolveRestoreWorktree!(input.worktreeSelector!);
+    const unchangedAssignment = current?.assignmentId === earlyCurrent.assignmentId
+      && current.generation === earlyCurrent.generation
+      && current.taskId === earlyCurrent.taskId && current.bindingKey === earlyCurrent.bindingKey;
+    if (!unchangedAssignment || old.status !== 'ok' || old.value.kind !== 'present'
+      || !['failed', 'abandoned', 'cancelled'].includes(old.value.status ?? '')
+      || old.value.dispatchId !== earlyCurrent.bindingKey || !gone
+      || gone.taskId !== earlyCurrent.taskId || gone.dispatchId !== earlyCurrent.bindingKey
+      || gone.dispatchState !== old.value.status || !gone.workerAbsent
+      || selected.status !== 'ok' || selected.value.id !== restoreBefore.selected.id
+      || resolve(selected.value.path) !== resolve(restoreBefore.selected.path)
+      || prepared.value.setupWitness !== 'proven_reuse'
+      || prepared.value.id !== restoreBefore.selected.id || !prepared.value.path
+      || resolve(prepared.value.path) !== resolve(restoreBefore.selected.path)) {
+      return continued(input, 'dispatch_admission_final', {
+        cause: 'worktree_restore_final_identity_changed', actor: 'operator', evidence: {},
+        nextAction: { kind: 'reconcile_dispatch', note: 'reinspect old/new Task, exact Dispatch and selected worktree without worker-start; retry only after serialized quiescence' },
+      }, resources, startedAtMs, timings, deps.now);
+    }
+    const finalCensus = await deps.observeRestoreQuiescence!(selected.value.path);
+    if (finalCensus.status !== 'ok') return continued(input, 'dispatch_admission_final', finalCensus,
+      resources, startedAtMs, timings, deps.now);
+    if (finalCensus.value.terminalFingerprint !== restoreBefore.census.terminalFingerprint) {
+      return continued(input, 'dispatch_admission_final', {
+        cause: 'worktree_restore_terminal_inventory_changed', actor: 'operator', evidence: {},
+        nextAction: { kind: 'reconcile_dispatch', note: 'reinspect the full all-workspace Orca inventory and /proc before a new operator-serialized attempt' },
+      }, resources, startedAtMs, timings, deps.now);
+    }
+  }
   // Early admission rested on an owned terminal predecessor. If the final read no
   // longer shows that same exact proof (including an absent Dispatch after the
   // assignment was retired), no same-Task successor spawns or starts.
@@ -1071,6 +1221,18 @@ export async function runSupervisedTaskLaunchAssistant(
         ...(early.value.kind === 'present' && early.value.status ? { status: early.value.status } : {}) },
       finalCurrent, 'the predecessor proof changed before start; reconcile it, do not call worker-start on this Task',
     ), resources, startedAtMs, timings, deps.now);
+  }
+
+  if (input.workClass === 'manager' && profile.family === 'claude'
+    && prepared.value.setupWitness === 'proven_reuse') {
+    if (!prepared.value.path || !deps.restoreClaudeManagerGuard) return continued(input, 'dispatch_admission_final', {
+      cause: 'manager_local_hooks_unobserved', actor: 'operator', evidence: {},
+      nextAction: { kind: 'reconcile_worktree_setup',
+        note: 'inspect this worktree core.hooksPath and B5 originalHooksPath; restore inherited hooks only after final admission, then retry' },
+    }, resources, startedAtMs, timings, deps.now);
+    const restored = await deps.restoreClaudeManagerGuard(prepared.value.path);
+    if (restored.status !== 'ok') return continued(input, 'dispatch_admission_final', restored,
+      resources, startedAtMs, timings, deps.now);
   }
 
   let terminal: RuntimeWorker | undefined;
@@ -1706,6 +1868,7 @@ async function observeManagerWorktreeIdentity(
   id: string,
   path: string,
   execute: ChildExecutor,
+  requireManagerDefaultBranch: boolean = true,
 ): Promise<EdgeResult<ManagerWorktreeIdentity>> {
   if (request.worktreeSelector && !selectorMatchesObservedWorktree(request.worktreeSelector, id, path)) {
     return worktreeContinue<ManagerWorktreeIdentity>(
@@ -1761,14 +1924,14 @@ async function observeManagerWorktreeIdentity(
   const branch = branchRef.slice('refs/heads/'.length);
   const owners = entries.filter((entry) => entry.branch === branchRef);
   const defaultBranch = managerDefaultBranch(request);
-  if (!defaultBranch) {
+  if (!defaultBranch && requireManagerDefaultBranch) {
     return worktreeContinue<ManagerWorktreeIdentity>(
       'manager_worktree_default_branch_unresolved',
       { worktreeId: id },
       'resolve the selected project default branch before manager worktree refresh',
     );
   }
-  if (!branch || branch === defaultBranch || owners.length !== 1) {
+  if (!branch || (defaultBranch && branch === defaultBranch) || owners.length !== 1) {
     return worktreeContinue<ManagerWorktreeIdentity>(
       'manager_worktree_branch_not_distinct',
       { worktreeId: id, branch: branch || 'unknown', ownerCount: owners.length },
@@ -2141,7 +2304,9 @@ async function reuseTerminalOwnedWorktree(
       return refusal('manager_pr_resume_task_unproven');
     }
   }
-  const identity = await observeManagerWorktreeIdentity(request, id, path, execute);
+  // Executor-class reuse does not require manager-only default-branch refresh
+  // metadata: exact native ownership and unique local branch remain mandatory.
+  const identity = await observeManagerWorktreeIdentity(request, id, path, execute, Boolean(request.managerRefresh));
   if (identity.status !== 'ok') return identity;
 
   const status = await execute(['git', 'status', '--porcelain=v1', '--untracked-files=all'],
@@ -2221,7 +2386,9 @@ export async function prepareWorktreeWithOrca(
     const id = text(worktree?.id);
     const path = text(worktree?.path);
     if (!id || !path) return worktreeContinue('worktree_prepare_failed_or_unknown');
-    if (!request.managerRefresh) {
+    if (!request.managerRefresh || request.reuseAssignment) {
+      // An explicitly bound, quiescent manager restoration must preserve dirty
+      // HEAD/tracked/untracked bytes, not enter the clean-only refresh path.
       return reuseTerminalOwnedWorktree(request, id, path, execute);
     }
     return refreshManagerWorktree(request, id, path, execute);
@@ -2286,6 +2453,52 @@ export async function prepareWorktreeWithOrca(
   }
   const repositoryId = matches[0]!.id;
   const repositoryRoot = matches[0]!.path;
+  // Native prune is repository-wide, not target-specific. On normal fresh
+  // starts it must not silently delete another temporarily unavailable
+  // worktree's Git-admin record (including its local guard configuration).
+  const registry = await execute(['git', 'worktree', 'list', '--porcelain'], undefined, undefined, repositoryRoot);
+  const registryRepair = 'inspect git worktree list --porcelain and the exact missing checkout/mount; lock retained worktrees and run a reviewed native git worktree prune only for disposable entries, then retry without cleaning dirty bytes';
+  if (!registry.ok) return worktreeContinue('worktree_registry_inspect_failed',
+    { selectedRepository: repository, registeredRoot: repositoryRoot }, registryRepair);
+  let registrations: ReturnType<typeof parseGitWorktreePorcelain>;
+  try { registrations = parseGitWorktreePorcelain(registry.stdout); }
+  catch { return worktreeContinue('worktree_registry_inspect_malformed',
+    { selectedRepository: repository, registeredRoot: repositoryRoot }, registryRepair); }
+  if (!registrations.some((entry) => resolve(entry.path) === resolve(repositoryRoot) && !entry.prunable)) {
+    return worktreeContinue('worktree_registry_root_unproven',
+      { selectedRepository: repository, registeredRoot: repositoryRoot }, registryRepair);
+  }
+  const stale = registrations.filter((entry) => entry.prunable);
+  const selectedStale = request.worktreeName
+    ? stale.filter((entry) => basename(entry.path) === request.worktreeName)
+    : [];
+  if (selectedStale.length > 0) {
+    const candidate = selectedStale.length === 1 ? selectedStale[0] : null;
+    // Native prune is repository-wide. Skip unrelated prunable registrations;
+    // only the exact selected name may trigger prune, and only when it is the
+    // sole prunable entry and Git's dry-run proves that isolated effect.
+    const matching = candidate && stale.length === 1
+      && resolve(candidate.path) !== resolve(repositoryRoot)
+      && existsSync(dirname(candidate.path)) && !existsSync(candidate.path);
+    if (!matching) return worktreeContinue('worktree_registry_prune_ambiguous',
+      { selectedRepository: repository, prunableCount: stale.length }, registryRepair);
+    const preview = await execute(['git', 'worktree', 'prune', '--dry-run', '--verbose', '--expire=now'],
+      undefined, undefined, repositoryRoot);
+    const lines = [preview.stdout, preview.stderr].join('\n').split(/\r?\n/u)
+      .map((line) => line.trim()).filter(Boolean);
+    // Git prints the admin registration name, not the missing path. If its
+    // exact planned effect cannot be tied to the operator-selected name,
+    // leave every registration untouched for native manual inspection.
+    if (!preview.ok || lines.length !== 1
+      || !lines[0]!.startsWith(`Removing worktrees/${request.worktreeName}:`)) {
+      return worktreeContinue('worktree_registry_prune_ambiguous',
+        { selectedRepository: repository, prunableCount: stale.length }, registryRepair);
+    }
+    const pruned = await execute(['git', 'worktree', 'prune', '--expire=now'],
+      undefined, undefined, repositoryRoot);
+    if (!pruned.ok) return worktreeContinue('worktree_registry_prune_failed',
+      { selectedRepository: repository, registeredRoot: repositoryRoot }, registryRepair);
+  }
   // The ordinary fresh path still uses origin/<default>. The exceptional PR
   // path must positively identify the only Issue-closing PR and fetched SHA
   // before invoking the native worktree-create mutation.
@@ -2529,6 +2742,20 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
     ),
     readCurrentAssignment: (issueNumber) =>
       currentWorkerAssignment(resolveWorkerAssignmentStorePath(target.projectId, env), issueNumber),
+    resolveRestoreWorktree: async (selector) => {
+      const result = resultRecord(envelope(await child([
+        'orca', 'worktree', 'show', '--worktree', selector, '--json',
+      ], cwd, env)));
+      const worktree = result && record(result.worktree) ? result.worktree : null;
+      const id = text(worktree?.id);
+      const path = text(worktree?.path);
+      return id && isAbsolute(path) ? { status: 'ok', value: { id, path } } : {
+        status: 'continue', cause: 'worktree_restore_selection_unproven', actor: 'provider',
+        nextAction: { kind: 'reconcile_worktree_setup',
+          note: 'inspect orca worktree show for the exact selected --worktree and retry after reconciliation' },
+      };
+    },
+    observeRestoreQuiescence: (path) => observeQuiescentRestoreCensus(adapter, path),
     proveTerminalGone: (assignment) => readTerminalGoneDispatch(assignment,
       (args) => child(['orca', ...args], cwd, env)),
     observeDispatch: async (taskId) => dispatchEdge(envelope(await child([
@@ -2544,6 +2771,13 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       return installed.ok ? { status: 'ok', value: true, evidence: installed.evidence } : {
         status: 'continue', cause: installed.cause, actor: 'operator', evidence: installed.evidence,
         nextAction: { kind: 'reconcile_worktree_setup', note: installed.note },
+      };
+    },
+    restoreClaudeManagerGuard: (worktreePath) => {
+      const restored = restoreManagerPushGuardForClaude(worktreePath);
+      return restored.ok ? { status: 'ok', value: true, evidence: restored.evidence } : {
+        status: 'continue', cause: restored.cause, actor: 'operator', evidence: restored.evidence,
+        nextAction: { kind: 'reconcile_worktree_setup', note: restored.note },
       };
     },
     prepareWorktree: async (request) => prepareWorktreeWithOrca(

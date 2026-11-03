@@ -192,6 +192,72 @@ Manager with an existing Task uses `--work-class manager --run <run-id> --task
 manager --run <run-id> --manager-brief <caller-serialized-brief> --worktree-name
 <name> --base-branch origin/main`.
 
+For Issue #2754, an explicit **one-at-a-time, operator-serialized**
+`--worktree` restore/switch may reuse the *same* Task or a new Task only
+after both early and final admission correlate the old terminal Dispatch,
+Issue/Run/old-and-new Task, assignment and exact worktree, a complete
+unscoped native `orca terminal list` census through
+`listWorkersAsync({workspace: selectedPath})` with
+`truncated=false`, exact integer `totalCount` and **zero target rows**
+(including idle/exited/pinned), plus two successful empty Linux /proc
+CWD/descendant scans through `collectProcessEvidence`. These read-only
+snapshots do not establish atomic one-live-writer or full agent-PID/CWD
+coverage; simultaneous restorers of the same worktree are **unsupported**.
+For any ambiguous prior effect, stop and reconcile exact native Dispatch and
+terminal identities with the coordinator; never automatically clear the dirty
+checkout or assume a failed attempt had no side effects. An ordinary fresh launch does **not** run native prune: selected-repository
+`git worktree list --porcelain` must show a single exact vanished temporary
+registration matching the operator-selected name, with an available parent,
+and `git worktree prune --dry-run --verbose --expire=now` must identify
+only its exact Git-admin record before native prune. Any other prunable row,
+unavailable mount or ambiguous preview refuses for explicit operator inspection
+and locking/restoration of retained worktrees; Git-native manual repair is
+preferred to destructive guessing. See
+[operator commands](target_repo_setup.md#operator-serialized-quiescent-dirty-worktree-handover-issue-2754).
+
+The existing scoped `supervised-worker-start.ts stop-external` CLI (syntax in
+`docs/target_repo_setup.md`) provides fresh-instance **read-only** exact
+Issue/Run/Task/assignment/Dispatch/worktree/terminal-generation admission.
+It currently returns `unsupported` or `stop_unknown` with the supported
+coordinator/operator remedy: no installed generation-safe close plus same-Dispatch
+abandon has been proven, so this CLI does **not** claim or effect `stopped`.
+An externally bound stop must re-verify terminal handle **and generation**,
+Issue, Task, Run, assignment, Dispatch and worktree. Where the installed Orca
+producer supports both exact effects, close the exact pane, abandon its
+exact Dispatch, and independently read back terminal absence and same-Dispatch
+termination. Unsupported/partial/unknown close or missing read-back is never
+`stopped`, and a worktree-wide kill is forbidden. No new public stop RPC or
+guessed native abandon command is authorized.
+
+B5 hook installation for the selected manager worktree is family-based:
+`workClass=manager` **and not Claude** installs B5; a resolved Claude-family
+manager local route must be unguarded. On reuse the previous B5 remains
+effective through *final* native Dispatch/assignment/quiescence admission:
+only after that check succeeds and immediately before Claude's spawn may the
+exact recorded original `core.hooksPath` and guard keys be restored. A
+refused admission leaves the old manager guard intact; ambiguous restoration
+also refuses.
+Independent sibling managers retain their own effective guards and original
+hook chains. B5 proofs remain disposable per-push; verified parent
+`uv.lock` enables `uv export --frozen --offline` and isolated hash-locked
+`uv run` without `--offline`, with uv/network failure reported for a push
+retry, not false authorization. OpenCode task/smoke requires a validated
+absolute `PACK_EXECUTOR_OPENCODE_BIN` for all probes, overlay and spawn.
+Inherited Bash permissions remain in place; terminal launcher containment
+denies are appended for codex, codex exec, agent-launch and bsk command-text patterns,
+including common environment-prefix, subshell and path-prefixed forms. This
+does not establish shell-parser behavior for quoting or encoding obfuscation,
+which remains unsupported native evidence. Synthetic permission maps cannot
+substitute for installed native-effect observation.
+
+The B5 structural declaration-only exception (AC15) remains **disabled**
+until an administrator positively verifies the effective required current-head
+`PR scope guard` on `main` (including missing/red/stale ordinary-merge
+refusal), or an equivalent existing mandatory pack-owned merge authority.
+An optional CI check is insufficient. Until then use canonical
+producer-generated declarations and the existing authorized worker/PR path,
+without hook-time GitHub reads or new content validators.
+
 Launch/status/`nextAction` handling is owned once in `## Deterministic reconciliation`.
 
 ## Supervised initial delivery and WorkerAssignment

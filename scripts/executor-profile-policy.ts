@@ -51,7 +51,7 @@ export interface SemanticExecutorProfile {
   readonly model: string;
   readonly effort: string;
   readonly cursorContext?: string;
-  /** Absolute OpenCode binary the profile pins; absent means the bare `opencode` token. */
+  /** Validated absolute OpenCode binary required for task and smoke probes/spawns. */
   readonly opencodeExecutable?: string;
   readonly names: ExecutorProfileNames;
 }
@@ -224,7 +224,11 @@ export function pinnedProbeCommand(
   profile: Pick<SemanticExecutorProfile, 'family' | 'opencodeExecutable'>,
   command: readonly string[],
 ): readonly string[] {
-  return profile.family === 'opencode' && profile.opencodeExecutable && command[0] === 'opencode'
+  if (profile.family !== 'opencode') return command;
+  if (!profile.opencodeExecutable || !validOpenCodeExecutablePath(profile.opencodeExecutable)) {
+    throw new Error('opencode_executable_invalid');
+  }
+  return command[0] === 'opencode'
     ? [profile.opencodeExecutable, ...command.slice(1)] : command;
 }
 
@@ -290,12 +294,12 @@ export function resolveSemanticExecutorProfile(input: {
     return { ok: false, code: 'executor_profile_malformed', variables: ['PACK_EXECUTOR_CURSOR_CONTEXT'] };
   }
 
-  const rawOpenCodeExecutable = descriptor.family === 'opencode' && input.surface === 'task'
+  const opencodeExecutable = descriptor.family === 'opencode'
     ? input.env[OPENCODE_EXECUTABLE_VARIABLE]
     : undefined;
-  // Only a genuinely absent variable keeps the legacy bare token; a supplied blank
-  // or malformed pin is refused, never reinterpreted as PATH lookup.
-  const opencodeExecutable = rawOpenCodeExecutable;
+  if (descriptor.family === 'opencode' && opencodeExecutable === undefined) {
+    return { ok: false, code: 'executor_profile_missing', variables: [OPENCODE_EXECUTABLE_VARIABLE] };
+  }
   if (opencodeExecutable !== undefined && !validOpenCodeExecutablePath(opencodeExecutable)) {
     return { ok: false, code: 'executor_profile_malformed', variables: [OPENCODE_EXECUTABLE_VARIABLE] };
   }
@@ -549,8 +553,10 @@ export function buildExecutorCommand(profile: SemanticExecutorProfile, resumeSes
     };
   }
 
-  const executable = profile.surface === 'task'
-    ? profile.opencodeExecutable ?? descriptor.taskExecutable : descriptor.smokeExecutable;
+  if (!profile.opencodeExecutable || !validOpenCodeExecutablePath(profile.opencodeExecutable)) {
+    throw new Error('opencode_executable_invalid');
+  }
+  const executable = profile.opencodeExecutable;
   const agentName = `pack-opk-${randomUUID().replaceAll('-', '')}`;
   const permission = withOpenCodeFleetBrowserDenies(undefined);
   const agent = {
@@ -569,7 +575,7 @@ export function buildExecutorCommand(profile: SemanticExecutorProfile, resumeSes
 }
 
 export interface OpenCodeAgentOverlay {
-  /** Profile-pinned absolute binary; defaults to the bare `opencode` token. */
+  /** Profile-pinned absolute binary; a bare token is not an allowed launch. */
   readonly executable?: string;
   readonly agentName: string;
   readonly baseline: Readonly<Record<string, unknown>>;
@@ -646,7 +652,11 @@ export function openCodeAgentConfigFromInfo(baseline: Readonly<Record<string, un
 }
 
 
-/** Preserve inherited permissions; append precise executable-token denies last. */
+/**
+ * Retain inherited Bash permissions and append literal launcher containment denies.
+ * These patterns catch common wrappers but do not establish shell-parser behavior
+ * for quoting or encoding obfuscation; that remains unsupported native evidence.
+ */
 export function withOpenCodeFleetBrowserDenies(permission: unknown): Record<string, unknown> {
   const inherited = record(permission) ? permission : {};
   const appendDeny = (value: unknown, pattern: string): Record<string, unknown> => {
@@ -655,11 +665,21 @@ export function withOpenCodeFleetBrowserDenies(permission: unknown): Record<stri
   };
   const executablePatterns = [
     'bsk', '/bsk', '/*/bsk', '~?bsk', '~?*/bsk', 'env bsk',
+    'codex', '/codex', '/*/codex', '~?codex', '~?*/codex', 'env codex',
+    'agent-launch', '/agent-launch', '/*/agent-launch', '~?agent-launch', '~?*/agent-launch', 'env agent-launch',
   ];
-  const bashPatterns = executablePatterns.flatMap((pattern) => [`${pattern}`, `${pattern} *`]);
+  const bashPatterns = [
+    ...executablePatterns.flatMap((pattern) => [`${pattern}`, `${pattern} *`]),
+    '*codex*', '*agent-launch*', '*/bsk*',
+  ];
   return {
     ...inherited,
+    // Preserve all inherited Bash grants, then put the literal containment
+    // denials last so common env/subshell/path prefixes are covered. This is
+    // not evidence for quote/encoding obfuscation of shell command text.
     bash: bashPatterns.reduce<unknown>((rules, pattern) => appendDeny(rules, pattern), inherited.bash),
+    codex: appendDeny(inherited.codex, '*'),
+    'agent-launch': appendDeny(inherited['agent-launch'], '*'),
     skill: appendDeny(inherited.skill, 'browser-skill'),
     read: ['*.env', '*.env.*'].reduce<unknown>((rules, pattern) => appendDeny(rules, pattern), inherited.read),
   };
@@ -734,8 +754,8 @@ export function openCodeControlPort(agentName: string): number {
 
 export function buildOpenCodeAgentOverlay(input: OpenCodeAgentOverlay): ExecutorInvocationShape {
   if (input.resumeSession !== undefined && !validOpenCodeResumeSession(input.resumeSession)) throw new Error('opencode_resume_session_invalid');
-  const executable = input.executable ?? 'opencode';
-  if (executable !== 'opencode' && !validOpenCodeExecutablePath(executable)) throw new Error('opencode_executable_invalid');
+  const executable = input.executable;
+  if (!executable || !validOpenCodeExecutablePath(executable)) throw new Error('opencode_executable_invalid');
   const baseline = openCodeAgentConfigFromInfo(input.baseline);
   const permission = withOpenCodeFleetBrowserDenies(undefined);
   const agent = {
@@ -770,8 +790,8 @@ export function openCodeLaunchHasFleetBrowserDenies(
 ): boolean {
   const { command, inlineConfigJson, agentName } = invocation;
   // A pinned profile admits only its exact absolute binary, never a bare fallback.
-  const binary = invocation.executable ?? 'opencode';
-  if (binary !== 'opencode' && !validOpenCodeExecutablePath(binary)) return false;
+  const binary = invocation.executable;
+  if (!binary || !validOpenCodeExecutablePath(binary)) return false;
   if (!inlineConfigJson || !agentName) return false;
   const assignment = `OPENCODE_CONFIG_CONTENT=${quote(inlineConfigJson)} `;
   if (!command.startsWith(assignment)) return false;
