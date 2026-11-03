@@ -3416,16 +3416,37 @@ export async function observePreSendPagePredicate(
   between();
   if (observed.pageTurnEvidence?.generationInProgress === true) return busy('generation_in_progress');
   if (observed.pageTurnEvidence?.continueGeneratingVisible === true) return busy('continue_generating_visible');
-  if (!observed.transcriptIncomplete && observed.snapshot?.complete === true
-    && observed.snapshot.carriers.some((carrier) =>
-      carrier.role === 'user' && normalizeVisibleText(carrier.text).length > 0)
-    && observed.pageTurnEvidence?.generationInProgress === false) {
-    // A Stop reappearing after an idle read conflicts with it: busy, never idle.
-    const finalStop = await readFreshStopVisible(page, deadlineMs);
-    if (finalStop !== false) return busy(finalStop === true ? 'contradictory' : 'unreadable');
-    return { verdict: 'idle' };
+  if (!lastTurnCompleted(observed)) return { verdict: 'pending' };
+  // A Stop reappearing after an idle read conflicts with it: busy, never idle.
+  const finalStop = await readFreshStopVisible(page, deadlineMs);
+  if (finalStop !== false) return busy(finalStop === true ? 'contradictory' : 'unreadable');
+  // Concordant recheck: the same completed last turn, still not generating.
+  const again = await readPageObservation(page, undefined, undefined, true, deadlineMs);
+  between();
+  if (again.pageTurnEvidence?.generationInProgress === true) return busy('contradictory');
+  if (again.pageTurnEvidence?.continueGeneratingVisible === true) return busy('contradictory');
+  if (!lastTurnCompleted(again)
+    || atomicSnapshotSignature(again.snapshot!) !== atomicSnapshotSignature(observed.snapshot!)) {
+    return { verdict: 'pending' };
   }
-  return { verdict: 'pending' };
+  return { verdict: 'idle' };
+}
+
+/**
+ * Idle requires the newest carrier to be a non-empty assistant reply with affirmative completion and
+ * no Continue control, answering an earlier non-empty user turn: a trailing unanswered user turn or
+ * an unfinished assistant is never idle, whatever Stop/generation show.
+ */
+function lastTurnCompleted(observed: PageObservationResult): boolean {
+  const snapshot = observed.snapshot;
+  if (observed.transcriptIncomplete || snapshot?.complete !== true
+    || observed.pageTurnEvidence?.generationInProgress !== false) return false;
+  const ordered = [...snapshot.carriers].sort((left, right) => left.domIndex - right.domIndex);
+  const last = ordered.at(-1);
+  if (!last || last.role !== 'assistant' || last.completionReady !== true || last.continuationVisible === true
+    || normalizeVisibleText(last.text).length === 0) return false;
+  return ordered.slice(0, -1).some((carrier) =>
+    carrier.role === 'user' && normalizeVisibleText(carrier.text).length > 0);
 }
 
 /** Fail closed when the existing Continue generating control is visible or unreadable.
@@ -8812,18 +8833,8 @@ async function retireExplicitPredecessor(input: {
     return refuse('predecessor_identity_unproven');
   }
   const pinId = original.owned_target!.id;
-  let census: Awaited<ReturnType<typeof listCdpPageTargets>>;
-  try {
-    // No sibling Page may become a cleanup target; census is exact ID only.
-    census = await listCdpPageTargets(input.cdp,
-      Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, input.deadlineMs - Date.now())));
-  } catch {
-    return refuse('target_census_failed');
-  }
-  const found = census.filter((target) => target.id === pinId);
-  if (found.length === 0) return { status: 'confirmed', targetId: pinId, cause: 'already_gone' };
-  // Send/phase proof failures are decided before any census ambiguity, so a proof failure
-  // can never be reported as (nonblocking) page-state.
+  // Send/phase proof failures are decided before any census call, error or already_gone, so a proof
+  // failure can never be reported as (nonblocking) page-state cleanup (#2772 AC8).
   // A synthesized cleanup-only result carries no Send attempt witness.
   // Never use that default to override contrary terminal delivery evidence.
   if (original.phase === 'not_sent'
@@ -8834,6 +8845,16 @@ async function retireExplicitPredecessor(input: {
     && (terminalDelivery !== 'landed' || terminalSendCount !== 1)) {
     return refuse('harvested_terminal_unverified');
   }
+  let census: Awaited<ReturnType<typeof listCdpPageTargets>>;
+  try {
+    // No sibling Page may become a cleanup target; census is exact ID only.
+    census = await listCdpPageTargets(input.cdp,
+      Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, input.deadlineMs - Date.now())));
+  } catch {
+    return refuse('target_census_failed');
+  }
+  const found = census.filter((target) => target.id === pinId);
+  if (found.length === 0) return { status: 'confirmed', targetId: pinId, cause: 'already_gone' };
   if (found.length !== 1 || Date.now() >= input.deadlineMs) return refuse('target_census_failed');
   let browser: any;
   try {
@@ -9838,6 +9859,7 @@ export async function runGuardedOwnedTabRetirement(
 }
 
 export const __testFinalizeTurn = finalizeTurn;
+export const __testPreSendLastTurnCompleted = lastTurnCompleted;
 export const __testBrowserOrPageDefinitelyLost = browserOrPageDefinitelyLost;
 export const __testWaitForExistingGeneration = waitForExistingGeneration;
 export const __testConversationPageSelection = {

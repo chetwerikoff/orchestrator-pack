@@ -62,6 +62,7 @@ import {
   __setStateLightPrAuthorHooksForTest, findOtherPrAuthorHolder, isExactLivePrAuthorLauncher,
   prAuthorHeadEffect, prAuthorHeadMismatch, prelaunchPrAuthorOccupant, PR_AUTHOR_CANONICAL_ENTRY,
   PR_AUTHOR_CANONICAL_LAUNCHER, PR_AUTHOR_HEAD_POLL_FLOOR_MS, scanPrAuthorCandidates, observePreSendPagePredicate,
+  __testPreSendLastTurnCompleted,
   type PrAuthorBinding, type PrAuthorHeadObservation, type PrAuthorProcessReader,
 } from './state-light-turn-base.ts';
 import { CONVERSATION_LOAD_ERROR_HEADING_SELECTOR, heldPage429Diagnostic, observeHeldPageConversation429 } from './ui-adapter-base.ts';
@@ -376,17 +377,21 @@ describe('Issue #2596 production recovery caller boundaries', () => {
           if (kind === 'original' && known && sent && selector === USER_MESSAGE_SELECTOR)
             return scalarLocator({ count: async () => { throw new Error('owned read lost'); } });
           const messages = kind === 'successor' ? finalMessages
-            : sent ? known ? finalMessages.slice(0, 1) : [] : known ? [{ role: 'user' as const, text: 'history' }] : [];
+            : sent ? known ? finalMessages.slice(0, 1) : [] : known ? [{ role: 'user' as const, text: 'history' }, { role: 'assistant' as const, text: 'history answer' }] : [];
           if (selector === MESSAGE_NODE_SELECTOR) {
             if (known && kind === 'original' && !sent) {
               return Object.assign(collectionLocator(messages), {
                 evaluateAll: vi.fn(async () => ({
+                  // #2772 AC7: the reopened chat's last turn is a completed answer.
                   rows: [{
                     role: 'user', text: 'history', key: 'historical-user-2596', domIndex: 0,
                     complete: true, completionReady: false, continuationVisible: false,
+                  }, {
+                    role: 'assistant', text: 'history answer', key: 'historical-assistant-2596', domIndex: 1,
+                    complete: true, completionReady: true, continuationVisible: false,
                   }],
                   pageTurnEvidence: {
-                    generationInProgress: false, observedAssistantNodes: 0,
+                    generationInProgress: false, observedAssistantNodes: 1,
                     continueGeneratingVisible: false,
                   },
                 })),
@@ -829,7 +834,7 @@ describe('production attempted-send result and durable envelope', () => {
       evaluateAll: vi.fn(async () => ({
         rows: messages.map((message, domIndex) => ({
           role: message.role, text: message.text, key: message.key, domIndex,
-          complete: message.complete !== false, completionReady: false,
+          complete: message.complete !== false, completionReady: message.role === 'assistant',
           continuationVisible: false,
         })),
         pageTurnEvidence: { generationInProgress: generation, observedAssistantNodes: 1, continueGeneratingVisible: false },
@@ -930,7 +935,11 @@ describe('production attempted-send result and durable envelope', () => {
             text: scenario === 'blank-user-history' ? '' : 'historical user',
             key: 'historical-user-key-2495', domIndex: 0,
             complete: true, completionReady: false, continuationVisible: false,
-          }],
+          }, ...(assistantOnly ? [] : [{
+            // #2772 AC7: a completed historical answer ends the reopened chat.
+            role: 'assistant', text: 'historical answer', key: 'historical-assistant-key-2495', domIndex: 1,
+            complete: true, completionReady: true, continuationVisible: false,
+          }])],
           ...(empty ? {} : { pageTurnEvidence: {
             generationInProgress: scenario === 'unknown-generation'
               ? 'unknown' : scenario === 'active-generation',
@@ -1008,7 +1017,10 @@ describe('production attempted-send result and durable envelope', () => {
       let now = 10_000;
       let text = '';
       let attempts = 0;
-      const users = [{ role: 'user' as const, text: 'historical user' }];
+      // #2772 AC7: the reopened chat's last pre-send turn is a completed answer.
+      const users: Array<{ role: 'user' | 'assistant'; text: string }> = [
+        { role: 'user', text: 'historical user' }, { role: 'assistant', text: 'historical answer' },
+      ];
       const send = vi.fn(async () => {
         attempts++;
         if (scenario === 'witness_then_throw') users.push({ role: 'user', text });
@@ -1036,7 +1048,7 @@ describe('production attempted-send result and durable envelope', () => {
                 evaluateAll: vi.fn(async () => ({
                   rows: users.map((message, domIndex) => ({
                     role: message.role, text: message.text, key: `historical-user-2541-${domIndex}`,
-                    domIndex, complete: true, completionReady: false, continuationVisible: false,
+                    domIndex, complete: true, completionReady: message.role === 'assistant', continuationVisible: false,
                   })),
                   pageTurnEvidence: {
                     generationInProgress: false, observedAssistantNodes: 0,
@@ -1676,7 +1688,9 @@ describe('Issue #2560: 60-second owned existing-chat composer recovery', () => {
         complete: !incomplete,
         completionReady: false,
         continuationVisible: false,
-      }, ...(scenario === 'finished-setup' ? [{
+      }, ...(!userless ? [{
+        // #2772 AC7: pre-send idle needs a completed newest assistant. Only 'finished-setup' also
+        // renders the last-turn finished actions that waive the 30s resume watch (other locator).
         role: 'assistant', text: 'finished historical assistant',
         key: 'data-message-id:history-assistant-2560',
         domIndex: 1, complete: true, completionReady: true,
@@ -3820,7 +3834,7 @@ describe('Issue #2718 PR-author PRE-SEND gate in the production turn', () => {
       evaluateAll: vi.fn(async () => ({
         rows: messages.map((message, domIndex) => ({
           role: message.role, text: message.text, key: message.key, domIndex,
-          complete: true, completionReady: false, continuationVisible: false,
+          complete: true, completionReady: message.role === 'assistant', continuationVisible: false,
         })),
         pageTurnEvidence: { generationInProgress: false, observedAssistantNodes: 1, continueGeneratingVisible: false },
       })),
@@ -4416,12 +4430,13 @@ describe('Issue #2750 AC22 finished long CodeMirror-virtualized reply and AC9 at
     return outer;
   }
 
-  const plainRow = (role: 'user' | 'assistant', key: string, text: () => string) => ({
+  const plainRow = (role: 'user' | 'assistant', key: string, text: () => string, finished = false) => ({
     getAttribute: (name: string) => {
       if (name === MESSAGE_AUTHOR_ROLE_ATTR) return role === 'user' ? 'user-message' : 'assistant-message';
       return name === 'data-message-id' ? key : null;
     },
-    closest: () => ({ querySelector: () => null }),
+    closest: () => ({ querySelector: (selector: string) =>
+      finished && selector === ASSISTANT_TURN_ACTION_SELECTOR ? {} : null }),
     querySelector: (selector: string) => selector === `[${MESSAGE_AUTHOR_ROLE_ATTR}]`
       ? { getAttribute: () => role === 'user' ? 'user-message' : 'assistant-message' } : null,
     querySelectorAll: () => [],
@@ -4452,7 +4467,8 @@ describe('Issue #2750 AC22 finished long CodeMirror-virtualized reply and AC9 at
       ? () => deliveredText.replace(/OPKTURNV1[0-9a-f]+/u, 'OPKTURNV1' + '77'.repeat(16)) : () => deliveredText;
     const history = [
       plainRow('user', 'data-message-id:older-user-2750', () => 'older user'),
-      plainRow('assistant', 'data-message-id:older-assistant-2750', () => 'older assistant'),
+      // #2772 AC7: the reopened chat ends on a completed historical answer.
+      plainRow('assistant', 'data-message-id:older-assistant-2750', () => 'older assistant', true),
     ];
     const ownUser = plainRow('user', 'data-message-id:own-user-2750', owned);
     const assistant = buildVirtualizedAssistant({
@@ -4715,6 +4731,31 @@ describe('Issue #2772 AC7/AC11: shared side-effect-free pre-SEND page observatio
     const result = await observePreSendPagePredicate(page, Date.now() + 5_000);
     expect(result).toEqual({ verdict: 'busy', predicate });
     for (const mutation of Object.values(mutations)) expect(mutation).not.toHaveBeenCalled();
+  });
+
+  describe('idle requires a completed newest assistant answering an earlier user turn', () => {
+    const carrier = (role: 'user' | 'assistant', domIndex: number, extra: Record<string, unknown> = {}) => ({
+      role, domIndex, text: role + ' text ' + domIndex, fingerprint: 'f' + domIndex, key: 'k' + domIndex, ...extra,
+    });
+    const observation = (carriers: unknown[], extra: Record<string, unknown> = {}) => ({
+      messages: [], ownedWindowCompletionReady: false, transcriptIncomplete: false,
+      snapshot: { complete: true, carriers }, pageTurnEvidence: { generationInProgress: false }, ...extra,
+    }) as any;
+    it.each([
+      ['completed last assistant', [carrier('user', 0), carrier('assistant', 1, { completionReady: true })], {}, true],
+      ['DOM order, not array order, decides the newest', [carrier('assistant', 1, { completionReady: true }), carrier('user', 0)], {}, true],
+      ['trailing unanswered user turn', [carrier('user', 0), carrier('assistant', 1, { completionReady: true }), carrier('user', 2)], {}, false],
+      ['user only', [carrier('user', 0)], {}, false],
+      ['unfinished last assistant', [carrier('user', 0), carrier('assistant', 1, { completionReady: false })], {}, false],
+      ['completion unknown', [carrier('user', 0), carrier('assistant', 1)], {}, false],
+      ['Continue on last assistant', [carrier('user', 0), carrier('assistant', 1, { completionReady: true, continuationVisible: true })], {}, false],
+      ['empty last assistant', [carrier('user', 0), carrier('assistant', 1, { completionReady: true, text: '  ' })], {}, false],
+      ['assistant with no earlier user', [carrier('assistant', 0, { completionReady: true })], {}, false],
+      ['incomplete transcript', [carrier('user', 0), carrier('assistant', 1, { completionReady: true })], { transcriptIncomplete: true }, false],
+      ['generation unknown', [carrier('user', 0), carrier('assistant', 1, { completionReady: true })], { pageTurnEvidence: {} }, false],
+    ] as const)('%s', (_name, carriers, extra, idle) => {
+      expect(__testPreSendLastTurnCompleted(observation([...carriers], extra))).toBe(idle);
+    });
   });
 
   it('an expired deadline is unreadable busy, never idle', async () => {

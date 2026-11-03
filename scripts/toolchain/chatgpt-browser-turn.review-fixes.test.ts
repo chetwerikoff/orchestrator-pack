@@ -1086,6 +1086,7 @@ describe('issue 1068 profile identity and legacy keys', () => {
       ['\\\\server\\share\\Profile', 'linux', 'profile_unc_unsupported_on_platform'],
       ['\\\\server', 'win32', 'profile_unc_server_share_required'],
       ['\\Users\\Profile', 'win32', 'profile_rootless_windows_path'],
+      ['\\Users\\Profile', 'linux', 'profile_rootless_windows_path'],
       ['  ', 'linux', 'profile_empty'],
     ];
     for (const [profile, platform, reason] of invalid) expect(absoluteProfilePathError(profile, platform)).toBe(reason);

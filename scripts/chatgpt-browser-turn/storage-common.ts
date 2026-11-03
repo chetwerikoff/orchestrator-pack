@@ -46,7 +46,9 @@ export function absoluteProfilePathError(profile: string, platform: NodeJS.Platf
       ? undefined : 'profile_unc_server_share_required';
   }
   if (/^[A-Za-z]:/u.test(value)) return /^[A-Za-z]:[\\/]/u.test(value) ? undefined : 'profile_drive_relative';
-  if (value.startsWith('/') || value.startsWith('\\')) return platform === 'win32' ? 'profile_rootless_windows_path' : undefined;
+  // A single leading backslash is a Windows root-relative path on every platform, never POSIX absolute.
+  if (value.startsWith('\\')) return 'profile_rootless_windows_path';
+  if (value.startsWith('/')) return platform === 'win32' ? 'profile_rootless_windows_path' : undefined;
   return 'profile_relative';
 }
 

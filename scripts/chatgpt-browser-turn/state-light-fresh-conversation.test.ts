@@ -239,7 +239,9 @@ function makeLoserPage(
   let url = PROJECT_URL;
   let observationIndex = 0;
   const priorHistory: StateLightTestMessage[] = ownedPriorHistory
-    ? [{ role: 'user', text: 'historical user' }] : [];
+    // #2772 AC7: a reopened existing chat is idle only after its last turn completed.
+    ? [{ role: 'user', text: 'historical user' },
+      { role: 'assistant', text: 'historical answer', finalAction: true, finalActionInTurnContainer: true }] : [];
   const atomicOwnedHistory = (messages: StateLightTestMessage[], generating = false) =>
     Object.assign(collectionLocator(messages, generating), {
       evaluateAll: vi.fn(async () => ({
@@ -749,14 +751,20 @@ describe('state-light fresh conversation collision recovery', () => {
   });
 
 
-  it.each(['settled-unsent-last-page', 'contradictory-delivery'] as const)(
+  it.each(['settled-unsent-last-page', 'contradictory-delivery', 'contradictory-delivery-census-failure', 'contradictory-delivery-gone'] as const)(
     'Issue #2685: the actual successor driver %s before any new Page Send',
     async (scenario) => {
       const predecessor = await deferredRetirementFixture('not_sent');
       const attach = vi.mocked(attachOwnTarget);
       const originalAttach = attach.getMockImplementation()!;
       predecessor.setOnlyPage();
-      if (scenario === 'contradictory-delivery') predecessor.writeTerminal('POSSIBLY_DELIVERED', 0);
+      const contradictory = scenario.startsWith('contradictory-delivery');
+      if (contradictory) predecessor.writeTerminal('POSSIBLY_DELIVERED', 0);
+      // #2772 AC8: a throwing census or an already-gone target never precedes the Send/phase proof.
+      if (scenario === 'contradictory-delivery-census-failure') {
+        predecessor.fetchSpy.mockImplementation(async () => { throw new Error('injected_census_unavailable'); });
+      }
+      if (scenario === 'contradictory-delivery-gone') predecessor.setGone();
       const nextId = randomUUID();
       const nextPrompt = 'NO-REPLAY-NEXT-2685-' + scenario;
       mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(nextPrompt));
@@ -782,7 +790,7 @@ describe('state-light fresh conversation collision recovery', () => {
         const output = await runStateLightTurnWithStdoutCapture(runStateLightTurn, run);
         expect(output.result.send_count).toBe(0);
         expect(predecessor.turn.page.close).not.toHaveBeenCalled();
-        if (scenario === 'contradictory-delivery') {
+        if (contradictory) {
           // #2772 AC8: a Send/phase proof failure refuses as predecessor_handoff_unproven with read-only recovery.
           expect(output.result.cause).toBe('predecessor_handoff_unproven:not_sent_dispatch_unproven');
           expect(String(output.result.next_action)).toMatch(/Reconcile the exact predecessor invocation read-only/u);
@@ -7355,14 +7363,20 @@ describe('Issue #1990 late-banner execute-Issue recovery', () => {
         }
         if (selector === MESSAGE_NODE_SELECTOR) {
           if (!sent) {
-            return Object.assign(collectionLocator([{ role: 'user', text: 'historical user' }]), {
+            // #2772 AC7: the reopened chat's last turn is a completed historical answer.
+            return Object.assign(collectionLocator([
+              { role: 'user', text: 'historical user' }, { role: 'assistant', text: 'historical answer' },
+            ]), {
               evaluateAll: vi.fn(async () => ({
                 rows: [{
                   role: 'user', text: 'historical user', key: 'historical-user-1990', domIndex: 0,
                   complete: true, completionReady: false, continuationVisible: false,
+                }, {
+                  role: 'assistant', text: 'historical answer', key: 'historical-assistant-1990', domIndex: 1,
+                  complete: true, completionReady: true, continuationVisible: false,
                 }],
                 pageTurnEvidence: {
-                  generationInProgress: false, observedAssistantNodes: 0,
+                  generationInProgress: false, observedAssistantNodes: 1,
                   continueGeneratingVisible: false,
                 },
               })),

@@ -1420,8 +1420,8 @@ const TERMINAL_GITHUB_EFFECT_BUDGET_MS = 25_000;
 
 /**
  * A candidate may reach the shared effect evaluator only when it is this exact child invocation and
- * profile: the projection matched the original observation record, or that record is absent and the
- * candidate equals the exact child args. A present but mismatched record (null projection) never does.
+ * profile and the projection matched the original observation record. An absent, unreadable or
+ * mismatched record (null projection) never does.
  */
 function candidateBoundToInvocation(
   config: LaunchConfig, candidate: ParsedTurnResult, observation: FinalObservationProjection | null,
@@ -1432,13 +1432,8 @@ function candidateBoundToInvocation(
   if (!invocationId || !profile || !cdp || (config.invocationId !== undefined && config.invocationId !== invocationId)) return false;
   const profileKey = configuredProfileKey(profile, cdp);
   if (candidate.invocation_id !== invocationId || candidate.configured_profile_key !== profileKey) return false;
-  if (observation) return true;
-  try {
-    readStateLightTurnObservation(profileKey, invocationId);
-    return false;
-  } catch {
-    return true;
-  }
+  // A missing or unreadable original observation record is never positive correlation (#2772 AC2).
+  return observation !== null;
 }
 
 /**

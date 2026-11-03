@@ -9,6 +9,7 @@ import {
   readFileSync,
   statSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -5688,6 +5689,8 @@ describe('Issue #2772 AC3: launcher terminal GitHub effect on the bound candidat
 
   async function launchWithBaseline(input: {
     id: string; baseline?: GithubEffectBaseline; result: Partial<TurnResultV1>; readers: GithubEffectReaders;
+    /** Seed this invocation's original observation record, as the real driver would. */
+    seedRecord?: boolean;
   }) {
     const root = tempDir(`opk-2772-${input.id}-`);
     vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', join(root, 'state'));
@@ -5696,10 +5699,22 @@ describe('Issue #2772 AC3: launcher terminal GitHub effect on the bound candidat
     const result = makeTurnResult({
       invocation_id: ids.invocation, configured_profile_key: configuredProfileKey(profile, cdp), ...input.result,
     });
+    // The launcher refuses an occupied invocation id, so the record is staged and the child (the
+    // driver stand-in) publishes it after launch.
+    let staged: { from: string; to: string } | null = null;
+    if (input.seedRecord) {
+      const profileKey = configuredProfileKey(profile, cdp);
+      seedObservation({ profileKey, invocation: ids.invocation, cdp, root }, 'sent');
+      const to = observationRecordPath(profileKey, ids.invocation);
+      staged = { from: join(root, 'staged-observation.json'), to };
+      renameSync(to, staged.from);
+    }
     // The fixture child stands in for the driver: it adds the exact baseline to its original receipt.
     const fixture = nodeFixture(`
       const fs = require('node:fs');
       const baseline = ${JSON.stringify(input.baseline ?? null)};
+      const staged = ${JSON.stringify(staged)};
+      if (staged) fs.renameSync(staged.from, staged.to);
       if (baseline) {
         const receipt = JSON.parse(fs.readFileSync(${JSON.stringify(paths.receipt)}, 'utf8'));
         fs.writeFileSync(${JSON.stringify(paths.receipt)}, JSON.stringify({ ...receipt, github_effect_baseline: baseline }) + '\\n', { mode: 0o600 });
@@ -5722,6 +5737,7 @@ describe('Issue #2772 AC3: launcher terminal GitHub effect on the bound candidat
     const prHead = vi.fn(async () => HEAD_AFTER);
     const { envelope } = await launchWithBaseline({
       id: 'bound', baseline: prBaselineFor('bound'), result: zeroCount, readers: tupleReaders({ prHead }),
+      seedRecord: true,
     });
     expect(envelope).toMatchObject({ delivery: 'POSSIBLY_DELIVERED', turn_result_cause: 'author_effect_pr_head_changed' });
     expect((envelope!.diagnostics as Record<string, any>).github_effect).toMatchObject({
@@ -5743,6 +5759,19 @@ describe('Issue #2772 AC3: launcher terminal GitHub effect on the bound candidat
     expect((envelope!.diagnostics as Record<string, any> | undefined)?.github_effect).toMatchObject({
       class: 'effect_unverified', evidence: 'candidate_not_bound_to_invocation',
     });
+  });
+
+  it('a missing original observation record is never positive candidate binding', async () => {
+    const prHead = vi.fn(async () => HEAD_AFTER);
+    const { envelope } = await launchWithBaseline({
+      id: 'norecord', baseline: prBaselineFor('norecord'), result: zeroCount, readers: tupleReaders({ prHead }),
+      seedRecord: false,
+    });
+    expect(prHead).not.toHaveBeenCalled();
+    expect((envelope!.diagnostics as Record<string, any> | undefined)?.github_effect).toMatchObject({
+      class: 'effect_unverified', evidence: 'candidate_not_bound_to_invocation',
+    });
+    expect(envelope!.delivery).toBe('POSSIBLY_DELIVERED');
   });
 
   it('adds nothing when the original receipt carries no baseline (legacy launch)', async () => {
