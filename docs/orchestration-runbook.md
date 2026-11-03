@@ -242,14 +242,13 @@ hook chains. B5 proofs remain disposable per-push; verified parent
 `uv.lock` enables `uv export --frozen --offline` and isolated hash-locked
 `uv run` without `--offline`, with uv/network failure reported for a push
 retry, not false authorization. OpenCode task/smoke requires a validated
-absolute `PACK_EXECUTOR_OPENCODE_BIN` for all probes, overlay and spawn,
-plus terminal `codex`, `codex exec`, `agent-launch` and existing browser
-denies. Because shell wrappers can evade executable-prefix patterns under
-inherited Bash allow, affected OpenCode agents now deny **all** Bash tool
-calls, including benign shell commands; other permitted non-shell tools remain
-available. Choose approved non-shell actions or an executor alternative
-rather than a bypass. Synthetic permission maps cannot substitute for
-installed native-effect observation.
+absolute `PACK_EXECUTOR_OPENCODE_BIN` for all probes, overlay and spawn.
+Inherited Bash permissions remain in place; terminal launcher containment
+denies are appended for codex, agent-launch and bsk command-text patterns,
+including common environment-prefix, subshell and path-prefixed forms. This
+does not establish shell-parser behavior for quoting or encoding obfuscation,
+which remains unsupported native evidence. Synthetic permission maps cannot
+substitute for installed native-effect observation.
 
 The B5 structural declaration-only exception (AC15) remains **disabled**
 until an administrator positively verifies the effective required current-head

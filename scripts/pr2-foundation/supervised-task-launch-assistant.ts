@@ -2469,14 +2469,15 @@ export async function prepareWorktreeWithOrca(
       { selectedRepository: repository, registeredRoot: repositoryRoot }, registryRepair);
   }
   const stale = registrations.filter((entry) => entry.prunable);
-  if (stale.length > 0) {
-    const candidate = stale.length === 1 ? stale[0] : null;
-    // A same-name, Git-marked prunable registration is only a candidate.
-    // Require an available parent directory plus Git's exact dry-run set.
-    // A missing mount, multiple candidates, or a non-matching admin name
-    // cannot authorize a bulk --expire=now prune.
-    const matching = candidate && request.worktreeName
-      && basename(candidate.path) === request.worktreeName
+  const selectedStale = request.worktreeName
+    ? stale.filter((entry) => basename(entry.path) === request.worktreeName)
+    : [];
+  if (selectedStale.length > 0) {
+    const candidate = selectedStale.length === 1 ? selectedStale[0] : null;
+    // Native prune is repository-wide. Skip unrelated prunable registrations;
+    // only the exact selected name may trigger prune, and only when it is the
+    // sole prunable entry and Git's dry-run proves that isolated effect.
+    const matching = candidate && stale.length === 1
       && resolve(candidate.path) !== resolve(repositoryRoot)
       && existsSync(dirname(candidate.path)) && !existsSync(candidate.path);
     if (!matching) return worktreeContinue('worktree_registry_prune_ambiguous',

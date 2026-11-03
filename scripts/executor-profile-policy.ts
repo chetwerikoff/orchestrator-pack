@@ -653,10 +653,9 @@ export function openCodeAgentConfigFromInfo(baseline: Readonly<Record<string, un
 
 
 /**
- * Shell command text is not an executable identity. A prefixed Bash command,
- * subshell or environment wrapper can run codex/agent-launch without matching
- * any finite leading-token glob. Keep non-Bash permissions, but fail closed for
- * Bash on these OpenCode agents until native executable-level control exists.
+ * Retain inherited Bash permissions and append literal launcher containment denies.
+ * These patterns catch common wrappers but do not establish shell-parser behavior
+ * for quoting or encoding obfuscation; that remains unsupported native evidence.
  */
 export function withOpenCodeFleetBrowserDenies(permission: unknown): Record<string, unknown> {
   const inherited = record(permission) ? permission : {};
@@ -669,14 +668,16 @@ export function withOpenCodeFleetBrowserDenies(permission: unknown): Record<stri
     'codex', '/codex', '/*/codex', '~?codex', '~?*/codex', 'env codex',
     'agent-launch', '/agent-launch', '/*/agent-launch', '~?agent-launch', '~?*/agent-launch', 'env agent-launch',
   ];
-  const bashPatterns = executablePatterns.flatMap((pattern) => [`${pattern}`, `${pattern} *`]);
+  const bashPatterns = [
+    ...executablePatterns.flatMap((pattern) => [`${pattern}`, `${pattern} *`]),
+    '*codex*', '*agent-launch*', '*/bsk*',
+  ];
   return {
     ...inherited,
-    // Do not carry inherited Bash allow/ask (including '*' or 'git *').
-    // Even an apparently benign command prefix can hide a second executable.
-    // Specific denials remain visible for native diagnostics; the final
-    // wildcard denial covers arbitrary wrappers before any shell effect.
-    bash: appendDeny(bashPatterns.reduce<unknown>((rules, pattern) => appendDeny(rules, pattern), {}), '*'),
+    // Preserve all inherited Bash grants, then put the literal containment
+    // denials last so common env/subshell/path prefixes are covered. This is
+    // not evidence for quote/encoding obfuscation of shell command text.
+    bash: bashPatterns.reduce<unknown>((rules, pattern) => appendDeny(rules, pattern), inherited.bash),
     codex: appendDeny(inherited.codex, '*'),
     'agent-launch': appendDeny(inherited['agent-launch'], '*'),
     skill: appendDeny(inherited.skill, 'browser-skill'),

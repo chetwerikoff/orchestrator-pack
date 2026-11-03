@@ -508,12 +508,15 @@ function runtimeAdapter(input: {
 
 const FIXTURE_OPENCODE_BIN = '/opt/opencode/1.18.35/bin/opencode';
 const FIXTURE_FORBIDDEN_OPEN_CODE_BASH = [
-  'bsk', '/bsk', '/*/bsk', '~?bsk', '~?*/bsk', 'env bsk',
-  'codex', '/codex', '/*/codex', '~?codex', '~?*/codex', 'env codex',
-  'agent-launch', '/agent-launch', '/*/agent-launch', '~?agent-launch', '~?*/agent-launch', 'env agent-launch',
-].flatMap((pattern) => [pattern, `${pattern} *`]);
+  ...[
+    'bsk', '/bsk', '/*/bsk', '~?bsk', '~?*/bsk', 'env bsk',
+    'codex', '/codex', '/*/codex', '~?codex', '~?*/codex', 'env codex',
+    'agent-launch', '/agent-launch', '/*/agent-launch', '~?agent-launch', '~?*/agent-launch', 'env agent-launch',
+  ].flatMap((pattern) => [pattern, `${pattern} *`]),
+  '*codex*', '*agent-launch*', '*/bsk*',
+];
 const FIXTURE_FORBIDDEN_OPEN_CODE_PERMISSIONS = {
-  bash: { ...Object.fromEntries(FIXTURE_FORBIDDEN_OPEN_CODE_BASH.map((pattern) => [pattern, 'deny'])), '*': 'deny' },
+  bash: Object.fromEntries(FIXTURE_FORBIDDEN_OPEN_CODE_BASH.map((pattern) => [pattern, 'deny'])),
   codex: { '*': 'deny' },
   'agent-launch': { '*': 'deny' },
   skill: { 'browser-skill': 'deny' },
@@ -2038,22 +2041,18 @@ describe('supervised Task launch assistant', () => {
         ...remaining.slice(lastReadIndex + 1),
       ];
     };
-    // The captured OpenCode 1.18.35 fixture stays immutable. Project only the
-    // pack's newly enforced terminal policies into the synthetic native output.
-    const newBash = [
-      ...FIXTURE_FORBIDDEN_OPEN_CODE_BASH.map((pattern) => ({ permission: 'bash', pattern, action: 'deny' })),
-      { permission: 'bash', pattern: '*', action: 'deny' },
-    ];
+    // Preserve captured Bash rules and append only literal launcher denies. This
+    // synthetic path does not claim to cover shell quoting/encoding obfuscation.
+    const newBash = FIXTURE_FORBIDDEN_OPEN_CODE_BASH
+      .map((pattern) => ({ permission: 'bash', pattern, action: 'deny' }));
     const newTools = ['codex', 'agent-launch'].map((permission) => ({ permission, pattern: '*', action: 'deny' }));
     const withCurrentSafetyDenies = (rules: FixtureRule[]): FixtureRule[] => {
       const base = withSyntheticReadDenies(rules);
-      const firstBash = base.findIndex((rule) => rule.permission === 'bash');
-      const beforeBash = firstBash < 0 ? base.length : firstBash;
-      const insertAt = base.slice(0, beforeBash).filter((rule) => rule.permission !== 'bash').length;
-      const nonShell = base.filter((rule) => rule.permission !== 'bash');
-      const insert = [...nonShell.slice(0, insertAt), ...newBash, ...nonShell.slice(insertAt)];
-      // No inherited Bash allow survives; the historical terminal tool-output
-      // rule is still last and all non-Bash permissions retain their order.
+      const lastBash = base.findLastIndex((rule) => rule.permission === 'bash');
+      const insertAt = lastBash < 0 ? base.length : lastBash + 1;
+      const insert = [...base.slice(0, insertAt), ...newBash, ...base.slice(insertAt)];
+      // Keep inherited Bash grants and all other captured rules in order;
+      // the containment denies follow the last inherited Bash rule.
       return [...insert.slice(0, -1), ...newTools, insert[insert.length - 1]!];
     };
     const selectedDataRoot = join(tmpdir(), 'opk2447-synthetic-xdg-data');
@@ -2314,7 +2313,7 @@ describe('supervised Task launch assistant', () => {
   });
 
 
-  it('denies all Bash wrappers after inherited broad allows while preserving non-shell permissions', () => {
+  it('retains inherited Bash grants and denies common launcher-containing commands while preserving non-shell permissions', () => {
     const invocation = buildOpenCodeAgentOverlay({
       executable: FIXTURE_OPENCODE_BIN, agentName: 'pack-opk-fixture',
       baseline: {
@@ -2348,17 +2347,18 @@ describe('supervised Task launch assistant', () => {
     expect(agent.model).toBe('fixture/provider-model');
     expect(agent.variant).toBe('high');
     expect(agent.prompt).toBe('original prompt');
-    expect(Object.entries(agent.permission.bash).slice(-(deniedBash.length + 1)))
-      .toEqual([...deniedBash.map((pattern) => [pattern, 'deny']), ['*', 'deny']]);
-    expect(agent.permission.bash).toEqual(FIXTURE_FORBIDDEN_OPEN_CODE_PERMISSIONS.bash);
-    for (const wrapped of ['OPK_FLAG=1 codex exec', 'env -i codex exec',
-      'command agent-launch', "sh -c 'agent-launch dangerous'", 'git status; codex exec']) {
-      // The native permission for arbitrary Bash text is the wildcard deny,
-      // not an incomplete pattern dictionary claimed to parse shell grammar.
-      const rules = Object.entries(agent.permission.bash);
-      expect(rules.at(-1)).toEqual(['*', 'deny']);
-      expect(rules.some(([pattern, action]) => pattern === '*' && action === 'allow'), wrapped).toBe(false);
-    }
+    expect(Object.entries(agent.permission.bash).slice(-deniedBash.length))
+      .toEqual(deniedBash.map((pattern) => [pattern, 'deny']));
+    expect(agent.permission.bash['*']).toBe('allow');
+    expect(agent.permission.bash['git *']).toBe('allow');
+    const bashAction = (command: string) => Object.entries(agent.permission.bash)
+      .filter(([pattern]) => new RegExp('^' + pattern.replaceAll('.', '\\.').replaceAll('*', '.*')
+        .replaceAll('?', '.') + '$', 'u').test(command)).at(-1)?.[1];
+    expect(bashAction('git status')).toBe('allow');
+    for (const wrapped of [
+      'env -i codex exec', "sh -c 'codex exec dangerous'", '/usr/local/bin/codex exec',
+      'env -i agent-launch --help', "sh -c 'agent-launch dangerous'", '/usr/local/bin/agent-launch dangerous',
+    ]) expect(bashAction(wrapped), wrapped).toBe('deny');
     expect(agent.permission.skill).toEqual({ 'fixture-safe': 'allow', '*': 'allow', 'browser-skill': 'deny' });
     expect(agent.permission.edit).toBe('allow');
     const readRules = Object.entries(agent.permission.read);
@@ -3471,7 +3471,7 @@ The words Firefighter universal appear here only as prose.`;
     expect(fixture.calls.some((call) => call.argv.includes('prune'))).toBe(false);
   });
 
-  it('prunes only after exact vanished selected-name registration and single native dry-run effect', async () => {
+  it('prunes an exact selected-name stale registration only when the native dry-run proves an isolated effect', async () => {
     const temp = mkdtempSync(join(tmpdir(), 'opk-2754-prune-'));
     const vanished = join(temp, 'wt');
     const foreign = join(temp, 'retained-on-unmounted-volume');
@@ -3489,14 +3489,19 @@ The words Firefighter universal appear here only as prose.`;
       });
       const result = await prepareWorktreeWithOrca(invocation, fixture.execute);
       expect(result.status).toBe('ok');
-      expect(fixture.calls.map((call) => call.argv.slice(0, 3).join(' '))).toContain('git worktree prune');
       expect(fixture.calls.filter((call) => call.argv[2] === 'prune')).toEqual([
         { argv: ['git', 'worktree', 'prune', '--dry-run', '--verbose', '--expire=now'], cwd: REGISTERED_ORCA_ROOT },
         { argv: ['git', 'worktree', 'prune', '--expire=now'], cwd: REGISTERED_ORCA_ROOT },
       ]);
 
+      const unrelated = freshRepoFixture({ gitInventory: [...main, ...entry(foreign)].join('\n') });
+      const unrelatedResult = await prepareWorktreeWithOrca(invocation, unrelated.execute);
+      expect(unrelatedResult.status).toBe('ok');
+      expect(unrelated.calls.some((call) => call.argv[2] === 'prune')).toBe(false);
+      expect(unrelated.calls.some((call) => call.argv[0] === 'orca'
+        && call.argv[1] === 'worktree' && call.argv[2] === 'create')).toBe(true);
+
       for (const [label, options] of [
-        ['unrelated missing registration', { gitInventory: [...main, ...entry(foreign)].join('\n') }],
         ['more than one prunable record', { gitInventory: [...main, ...entry(vanished), ...entry(foreign)].join('\n') }],
         ['dry-run effect not tied to selected name', { gitInventory: inventory, prunePreview: 'Removing worktrees/foreign: unavailable\n' }],
         ['native dry-run unavailable', { gitInventory: inventory, prunePreviewOk: false }],
@@ -3508,6 +3513,7 @@ The words Firefighter universal appear here only as prose.`;
         expect(ambiguous.calls.some((call) => call.argv.includes('create') || (
           call.argv[2] === 'prune' && !call.argv.includes('--dry-run')))).toBe(false);
       }
+
       const failed = freshRepoFixture({
         gitInventory: inventory,
         prunePreview: 'Removing worktrees/wt: gitdir file points to non-existent location\n',
@@ -3518,6 +3524,8 @@ The words Firefighter universal appear here only as prose.`;
       expect(failed.calls.some((call) => call.argv[2] === 'create')).toBe(false);
     } finally { rmSync(temp, { recursive: true, force: true }); }
   });
+
+
 
   it('accepts a fresh worktree with no setup receipt', async () => {
     const fixture = freshRepoFixture({ setupState: 'absent' });
@@ -6424,9 +6432,9 @@ describe('Issue #2754 AC11-AC12 pinned OpenCode task and smoke policy', () => {
     }
   });
 
-  it('denies inherited Bash wildcard and specific executable allows while preserving non-Bash tools', () => {
+  it('retains inherited Bash grants and denies common launcher-containing commands', () => {
     const inherited = {
-      bash: { '*': 'allow', codex: 'allow', 'codex *': 'allow',
+      bash: { '*': 'allow', 'git *': 'allow', codex: 'allow', 'codex *': 'allow',
         'agent-launch': 'allow', 'agent-launch *': 'allow' },
       codex: 'allow', 'agent-launch': 'allow', skill: 'allow', read: 'allow',
     };
@@ -6449,11 +6457,23 @@ describe('Issue #2754 AC11-AC12 pinned OpenCode task and smoke policy', () => {
       bash: Record<string, string>; codex: Record<string, string>;
       'agent-launch': Record<string, string>; skill: Record<string, string>;
     };
-    expect(selected.bash['*']).toBe('deny');
+    expect(selected.bash['*']).toBe('allow');
+    expect(selected.bash['git *']).toBe('allow');
     expect(selected.bash.codex).toBe('deny');
     expect(selected.bash['codex *']).toBe('deny');
     expect(selected.bash['agent-launch']).toBe('deny');
     expect(selected.bash['agent-launch *']).toBe('deny');
+    expect(selected.bash['*codex*']).toBe('deny');
+    expect(selected.bash['*agent-launch*']).toBe('deny');
+    expect(selected.bash['*/bsk*']).toBe('deny');
+    const bashAction = (command: string) => Object.entries(selected.bash)
+      .filter(([pattern]) => new RegExp('^' + pattern.replaceAll('.', '\\.').replaceAll('*', '.*')
+        .replaceAll('?', '.') + '$', 'u').test(command)).at(-1)?.[1];
+    expect(bashAction('git status')).toBe('allow');
+    for (const command of [
+      'env -i codex exec', "sh -c 'codex exec dangerous'", '/usr/local/bin/codex exec',
+      'env -i agent-launch --help', "sh -c 'agent-launch dangerous'", '/usr/local/bin/agent-launch dangerous',
+    ]) expect(bashAction(command), command).toBe('deny');
     expect(selected.codex['*']).toBe('deny');
     expect(selected['agent-launch']['*']).toBe('deny');
     expect(selected.skill['browser-skill']).toBe('deny');
