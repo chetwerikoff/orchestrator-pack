@@ -16,7 +16,6 @@ import {
   type LifecycleOperations,
 } from './operations.ts';
 import type { ExpectedWorktreeIdentity } from './core.ts';
-import { execFileSync } from 'node:child_process';
 import { closeSync, openSync, realpathSync } from 'node:fs';
 import { defaultProcessCensus } from '../worktree-teardown.ts';
 import {
@@ -870,7 +869,9 @@ afterEach(() => {
 });
 
 function sh(cwd: string, ...args: string[]): string {
-  return execFileSync('git', args, { cwd, encoding: 'utf8' });
+  const result = runProcessSync({ command: 'git', args, cwd, inheritParentEnv: true, timeoutMs: 60_000 });
+  if (!result.ok) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+  return result.stdout;
 }
 
 const LOCAL_CONFIG = '.claude/skills/discuss-with-gpt/local.config.json';
@@ -914,12 +915,10 @@ function fixture(): Fixture {
     writeFileSync(join(tree, LOCAL_CONFIG), '{"a":1}\n');
   }
   const git: GitRunner = (args) => {
-    try {
-      return { ok: true, stdout: execFileSync('git', ['-C', primary, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }), stderr: '' };
-    } catch (error) {
-      const failure = error as { stdout?: string; stderr?: string };
-      return { ok: false, stdout: failure.stdout ?? '', stderr: failure.stderr ?? '' };
-    }
+    const result = runProcessSync({
+      command: 'git', args: ['-C', primary, ...args], inheritParentEnv: true, timeoutMs: 60_000,
+    });
+    return { ok: result.ok, stdout: result.stdout, stderr: result.stderr };
   };
   return { primary, own, manager, smoke, unrelated, git };
 }

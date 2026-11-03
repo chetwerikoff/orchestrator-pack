@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
-import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseGitWorktreePorcelain, normalizeWorktreePath } from './core.ts';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { collectProcessCensus } from './operations.ts';
 
 /**
@@ -274,11 +274,11 @@ export function runMergeCleanup(input: MergeCleanupInput, deps: MergeCleanupDeps
 }
 
 function spawn(command: string, args: readonly string[], cwd?: string): GitResult {
-  const result = spawnSync(command, [...args], { cwd, encoding: 'utf8', timeout: 120_000 });
+  const result = runProcessSync({ command, args, cwd, inheritParentEnv: true, timeoutMs: 120_000 });
   return {
-    ok: result.status === 0 && !result.error,
-    stdout: result.stdout ?? '',
-    stderr: `${result.stderr ?? ''}${result.error ? String(result.error) : ''}`,
+    ok: result.ok,
+    stdout: result.stdout,
+    stderr: `${result.stderr}${result.error ? String(result.error) : ''}`,
   };
 }
 
