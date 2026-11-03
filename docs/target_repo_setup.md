@@ -420,16 +420,15 @@ inspect the actual uv error, restore network/cache as appropriate, then
 **retry the push**, never bypass the guard. OpenCode task **and smoke**
 launches must export `PACK_EXECUTOR_OPENCODE_BIN` as the validated absolute
 installed `opencode` executable; verify probes and spawn use that exact
-binary, not a PATH-first mise version. The pack overlay also denies
-`codex`, `codex exec`, `agent-launch`, `bsk`, browser-skill and secret
-read tools even under inherited broad allows. An inherited wildcard Bash
-allow is **not safe** against shell wrappers (`env -i`, `command`, variable
-assignment, `sh -c`), so affected OpenCode agents now deny **all Bash tool
-invocations**, including otherwise benign shell commands, until a real native
-executable-level restriction is demonstrated. Use permitted non-shell tools
-or an operator-approved executor alternative, never a Bash bypass. Native
-permission effects must be observed where available; synthetic fixture maps
-are not proof.
+binary, not a PATH-first mise version. The pack overlay preserves
+the existing `bsk`/browser-skill and secret-read controls under inherited
+broad allows. Inherited Bash permissions remain in place: terminal
+launcher-command denies are appended for documented `codex`, `codex exec`,
+`agent-launch` and `bsk` command-text patterns, including common
+environment-prefix, subshell and path-prefixed forms. These patterns do
+not deny all Bash invocations or establish shell-parser coverage for
+quoting, encoding or other obfuscation. Native permission effects must
+be observed where available; synthetic fixture maps are not proof.
 
 **AC15 remains disabled**: do not add a B5 declaration-only exception on
 the strength of a merely executed CI job. A repository administrator must
