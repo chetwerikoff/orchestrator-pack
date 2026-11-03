@@ -24,6 +24,7 @@ import {
   isRetryablePackReviewZeroSendCollision,
   parseArgs,
   reconcileStalePackReviewRuns,
+  frozenSavedGptSourceIdentity,
   maybeAdmitPackReviewBodyAmendment,
   observeGptPackReviewAttempt,
   resolveCurrentPrHead,
@@ -33,12 +34,15 @@ import {
 import type { CarryoverReplayResult } from './pack-review-carryover.js';
 import {
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+  PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
+  selectPackReviewGptSourceCardinality,
+  PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION,
   commitPackReviewTerminal,
   initializePackReviewAuthority,
   readPackReviewAuthority,
   reconcilePackReviewTier,
 } from './pack-review-state.js';
-import { packReviewDeliveryNeedsResume, restorePackReviewAuthoritativeRequiredStatus } from './lib/pack-review-delivery.js';
+import { packReviewDeliveryNeedsResume, restorePackReviewAuthoritativeRequiredStatus, classifyPackReviewPayload } from './lib/pack-review-delivery.js';
 import {
   createPackReviewRun,
   derivePackReviewNoJudgmentBudgetOutcome,
@@ -47,6 +51,10 @@ import {
   setPackReviewRunTerminal,
   terminalizePackReviewStaleRun,
   updatePackReviewRun,
+  validatePackReviewTriageResult,
+  projectPackReviewEffectiveFindings,
+  appendPackReviewDeferredTodos,
+  type PackReviewRunRecord,
   type PackReviewGptRoundRecord,
 } from './lib/pack-review-run-store.js';
 import { acquireReviewStartClaim, testReviewStartClaimOwnership } from './lib/review-start-claim-store.js';
@@ -1824,14 +1832,14 @@ describe('GPT plural source round (Issue #1276)', () => {
         'source-02': [{ stdout: successfulCleanReviewPayload('inv-plural-source-02') }],
         'source-03': [{ stdout: successfulCleanReviewPayload('inv-plural-source-03') }],
       },
-      fixtureIssueTitle: "[T1] Existing source cardinality", fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
+      fixtureIssueTitle: "[T3] Existing three-source cardinality", fixtureIssueBody: '```complexity-tier\ntier: T3\n```',
       fixtureIssueNumber: 1276,
       claimMode: 'preacquired',
     });
 
     expect(result.ok).toBe(true);
     const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
-    expect(run?.reviewRound).toMatchObject({ tier: 'T1', roundOrdinal: 1, cardinality: 3 });
+    expect(run?.reviewRound).toMatchObject({ tier: 'T3', roundOrdinal: 1, cardinality: 3 });
     expect(run?.reviewRound?.sourceSlots).toHaveLength(3);
     expect(run?.reviewRound?.sourceSlots.every((slot) => slot.lifecycle === 'terminal')).toBe(true);
   });
@@ -1854,7 +1862,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixturePostReviewHeadSha: HEAD_A,
       fixtureReviewStdout: cleanTerminalPayload(),
-      fixtureIssueTitle: "[T1] Source confirmation", fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
+      fixtureIssueTitle: "[T3] Three-source confirmation", fixtureIssueBody: '```complexity-tier\ntier: T3\n```',
       fixtureIssueNumber: 1276,
       claimMode: 'preacquired',
       ...overrides,
@@ -2220,6 +2228,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
           issueUrl: 'https://api.github.com/repos/chetwerikoff/orchestrator-pack/issues/1276',
         });
       },
+      fixtureRequiredStatusReader: async () => statusStates.at(-1),
       fixtureRequiredStatusWriter: async (request) => {
         statusStates.push(request.state);
       },
@@ -3363,7 +3372,7 @@ describe('Issue #1393 legacy aggregate compatibility and runner harvest matrix',
       fixturePrState: 'OPEN',
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixturePostReviewHeadSha: HEAD_A,
-      fixtureIssueTitle: "[T1] Source slot recovery", fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
+      fixtureIssueTitle: "[T3] Source slot recovery", fixtureIssueBody: '```complexity-tier\ntier: T3\n```',
       fixtureIssueNumber: 1276,
       claimMode: 'preacquired',
       ...overrides,
@@ -4106,6 +4115,7 @@ describe('Issue #2451 zero-judgment budget and wrapper projection', () => {
     const options = { projectId: 'orchestrator-pack', storeRoot };
     const round = plannedStoredGptRound();
     round.tier = 'T2';
+    round.accountingVersion = PACK_REVIEW_LOGICAL_CAP_MAP_VERSION;
     round.sourceSlots = round.sourceSlots.map((slot) => ({
       ...slot, lifecycle: 'terminal' as const, invocationId: `inv-${slot.ordinal}`,
       attemptOrdinal: 1,
@@ -4119,8 +4129,8 @@ describe('Issue #2451 zero-judgment budget and wrapper projection', () => {
       canonicalRepository: 'chetwerikoff/orchestrator-pack',
       trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
       accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
-      reviewCycleId: 'cycle-2451', logicalRoundOrdinal: 1, logicalRoundCap: 2,
-      automaticBudgetDisposition: 'consume', reviewRound: round,
+      reviewCycleId: 'cycle-2451', logicalRoundOrdinal: 1, logicalRoundCap: 1,
+      resolvedReviewer: 'gpt', automaticBudgetDisposition: 'consume', reviewRound: round,
     }).run;
     const failed = setPackReviewRunTerminal(created.id, 'failed', {
       failureReason: 'gpt_source_non_complete:source-01:connect_over_cdp_failed',
@@ -5044,7 +5054,7 @@ describe('Issue #2496 r03 genuine GPT source delivery and status observation', (
     });
     const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot: f.storeRoot });
     expect(run?.reviewRound?.reviewer).toBe('gpt');
-    expect(run?.reviewRound?.sourceSlots).toHaveLength(3);
+    expect(run?.reviewRound?.sourceSlots).toHaveLength(2);
     expect(run?.deliveryOutcomes.workerNotification?.state).toBe('failed');
     expect(f.statuses).toEqual(['pending', 'success']);
     expect(reader).toHaveBeenCalledWith(HEAD_A);
@@ -5127,7 +5137,7 @@ describe('Issue #2496 r03 genuine GPT source delivery and status observation', (
     const priorAttempts = priorRun?.reviewRound?.sourceSlots.map((slot) => ({
       slotId: slot.slotId, invocationId: slot.invocationId, attemptOrdinal: slot.attemptOrdinal,
     }));
-    expect(priorAttempts).toHaveLength(3);
+    expect(priorAttempts).toHaveLength(2);
     const noNewSourceInvocations = vi.fn(() => { throw new Error('journaled status resume must never resend GPT sources'); });
     const recovered = await startPackReview({
       ...f.input,
@@ -6753,7 +6763,7 @@ describe('Issue #2659 ARCH23:01 old cooldown history versus a newer partial sour
     });
     expect(b1Result, JSON.stringify(b1Result)).toMatchObject({
       ok: true, created: true, status: 'up_to_date',
-      coverage: { kind: 'complete', completedSourceCount: 3, cardinality: 3 },
+      coverage: { kind: 'complete', completedSourceCount: 2, cardinality: 2 },
     });
     expect(b1Result.runId).not.toBe(original.id);
     expect(b1Result.runId).not.toBe(successor.id);
@@ -7836,5 +7846,444 @@ describe('Issue #2719 CLI and manager interpretation of primary and secondary re
     for (const record of [settled, { ...settled, schema: PACK_GPT_REVIEW_RESULT_SCHEMA }]) {
       expect(classifyExecuteIssueManagerRecord(record, reviewContext)).toMatchObject({ exitCode: 0 });
     }
+  });
+});
+
+
+describe('Issue #2761 normal source-settling Opus triage', () => {
+  const help = [
+    '--print', '--output-format', '--json-schema', '--model', '--effort',
+    '--restricted', '--tools', '--strict-mcp-config', '--permission-mode',
+  ].join(' ');
+  const groups = [
+    {
+      members: [{ slotId: 'source-01', index: 0 }, { slotId: 'source-02', index: 0 }],
+      decision: 'FIX_NOW', reason: 'Same reachable bug reported twice',
+    },
+    {
+      members: [{ slotId: 'source-03', index: 0 }],
+      decision: 'DEFER', reason: 'Originally advisory cosmetic issue',
+    },
+  ];
+  async function settled(opusGroups: unknown, options: {
+    noSchemaFlag?: boolean; noRestrictedFlag?: boolean; clean?: boolean;
+  } = {}) {
+    const storeRoot = tempRoot('opk-2761-triage-settle-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot,capture);
+    selectProjectCard(storeRoot);
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    const calls: Array<{ args: readonly string[]; cwd: string; input: string; timeoutMs: number }> = [];
+    const todoParent = path.join(storeRoot, '.local', 'state', 'orchestrator-session', 'orchestrator-pack');
+    const todoParentExistedBeforeRun = existsSync(todoParent);
+    const fence = String.fromCharCode(96).repeat(3);
+    const output = await startPackReview({
+      projectId: 'orchestrator-pack', storeRoot,
+      sourceRepoRoot: repoRoot, prNumber: 1276, headSha: HEAD_A,
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixturePrState: 'OPEN',
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixturePostReviewHeadSha: HEAD_A,
+      fixtureIssueTitle: '[T3] Synthetic source triage',
+      fixtureIssueBody: fence + 'complexity-tier\ntier: T3\n' + fence,
+      fixtureIssueNumber: 1276,
+      claimMode: 'preacquired',
+      fixtureReviewBySourceSlot: options.clean ? {
+        'source-01': [{ stdout: successfulCleanReviewPayload('inv-source-01') }],
+        'source-02': [{ stdout: successfulCleanReviewPayload('inv-source-02') }],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
+      } : {
+        'source-01': [{ stdout: findingsPayload('duplicate') }],
+        'source-02': [{ stdout: findingsPayload('duplicate') }],
+        'source-03': [{ stdout: findingsPayload('cosmetic', 'warning') }],
+      },
+      fixtureOpusTriageHelp: (() => {
+        let text = help;
+        if (options.noSchemaFlag) text = text.replace('--json-schema', '');
+        if (options.noRestrictedFlag) text = text.replace('--restricted', '');
+        return text;
+      })(),
+      fixtureOpusTriageProcess: async (request) => {
+        calls.push(request);
+        return {
+          outcome: 'exit', ok: true, exitCode: 0, signal: null,
+          stdout: JSON.stringify({
+            type: 'result', is_error: false, structured_output: { groups: opusGroups },
+          }),
+          stderr: '', timedOut: false, cancelled: false,
+        };
+      },
+    });
+    const run = getPackReviewRun(String(output.runId),{projectId:'orchestrator-pack',storeRoot});
+    return { output,run,calls,storeRoot,capture,todoParent,todoParentExistedBeforeRun };
+  }
+
+  it('groups duplicate blocking sources, persists once and appends a single deferred TODO', async () => {
+    const test = await settled(groups);
+    expect(test.calls).toHaveLength(1);
+    expect(test.calls[0]?.args).toEqual([
+      '--print', '--output-format', 'json', '--json-schema', expect.any(String),
+      '--model', 'claude-opus-5-5', '--effort', 'medium',
+      '--restricted', '--tools', 'Read,Grep,Glob', '--strict-mcp-config',
+      '--permission-mode', 'dontAsk',
+    ]);
+    expect(test.calls[0]?.timeoutMs).toBe(900_000);
+    expect(test.run?.gptTriageAttempt).toBeDefined();
+    expect(test.run?.gptTriage?.groups).toHaveLength(2);
+    const projection = projectPackReviewEffectiveFindings(test.run!);
+    expect(projection).toMatchObject({
+      mode: 'triaged', blocking: true, effectiveBlockingGroupCount: 1,
+    });
+    expect(projection.fixNow).toEqual([expect.objectContaining({
+      members: ['source-01:0','source-02:0'],slotIds: ['source-01','source-02'],
+    })]);
+    expect(test.run?.findings).toHaveLength(3);
+    expect(readFileSync(test.capture,'utf8')).toContain('duplicate');
+    expect(test.todoParentExistedBeforeRun).toBe(false);
+    expect(existsSync(test.todoParent)).toBe(true);
+    const todo = path.join(test.todoParent,'review-todo.md');
+    const lines = readFileSync(todo,'utf8').trim().split('\n');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^\d{4}-\d{2}-\d{2} \| repo=chetwerikoff\/orchestrator-pack \| PR=#1276 \|/);
+    expect(lines[0]).toContain(`head=${HEAD_A}`);
+    expect(lines[0]).toContain(`runId=${test.run!.id} groupId=${projection.deferred[0]!.groupId}`);
+    expect(lines[0]).toContain('reason=Originally advisory cosmetic issue');
+  });
+
+  it('keeps original source union when output mapping or installed help is invalid', async () => {
+    for (const scenario of [
+      { opusGroups: [{ members: [{ slotId: 'source-01',index:0 }],
+        decision: 'REJECT',reason:'No independent proof' }] },
+      { opusGroups: groups,noSchemaFlag: true },
+    ]) {
+      const test = await settled(scenario.opusGroups,{noSchemaFlag:scenario.noSchemaFlag});
+      expect(test.run?.gptTriageAttempt).toBeDefined();
+      expect(test.run?.gptTriage).toBeUndefined();
+      expect(projectPackReviewEffectiveFindings(test.run!)).toMatchObject({
+        mode: 'plain', blocking:true,effectiveBlockingGroupCount:2,
+      });
+      expect(test.calls).toHaveLength(scenario.noSchemaFlag ? 0 : 1);
+    }
+  });
+
+  it('triage plain-union fallback gives each original blocker an actionable packet after invalid or unsupported Opus', async () => {
+    const invalid = await settled([{
+      members: [{ slotId: 'source-01', index: 0 }],
+      decision: 'REJECT', reason: 'Unproven and incomplete source mapping',
+    }]);
+    const plain = projectPackReviewEffectiveFindings(invalid.run!);
+    expect(plain.mode).toBe('plain');
+    expect(plain.blocking).toBe(true);
+    expect(plain.effectiveBlockingGroupCount).toBe(2);
+    expect(plain.fixNow.map((row) => row.members[0])).toEqual(['source-01:0','source-02:0']);
+    expect(plain.groups).toEqual([]); // fallback is not disguised as valid deduplication
+    const published = readFileSync(invalid.capture,'utf8');
+    expect(published).toContain('Original blocking source fixer packet (plain-union fallback)');
+    expect(published).toContain('ORIGINAL_BLOCKER source-01:0');
+    expect(published).toContain('ORIGINAL_BLOCKER source-02:0');
+    const unsupported = await settled(groups, { noSchemaFlag: true });
+    expect(unsupported.calls).toHaveLength(0);
+    expect(unsupported.run?.gptTriageAttempt).toBeDefined();
+    expect(unsupported.run?.gptTriage).toBeUndefined();
+    expect(projectPackReviewEffectiveFindings(unsupported.run!).fixNow).toHaveLength(2);
+    expect(readFileSync(unsupported.capture,'utf8')).toContain('ORIGINAL_BLOCKER source-02:0');
+  });
+
+  it('triage TODO append idempotently uses the existing store lock and never changes a valid verdict on failure', async () => {
+    const test = await settled(groups);
+    const todo = path.join(test.todoParent,'review-todo.md');
+    expect(readFileSync(todo,'utf8').trim().split('\n')).toHaveLength(1);
+    const replay = appendPackReviewDeferredTodos(test.run!.id, {
+      projectId: 'orchestrator-pack', storeRoot: test.storeRoot,
+    });
+    expect(replay).toMatchObject({ appended: 0, skipped: 1 });
+    rmSync(todo, { force: true });
+    mkdirSync(todo);
+    const failed = appendPackReviewDeferredTodos(test.run!.id, {
+      projectId: 'orchestrator-pack', storeRoot: test.storeRoot,
+    });
+    expect(failed.error).toBe('todo_target_not_regular_file');
+    expect(projectPackReviewEffectiveFindings(getPackReviewRun(test.run!.id, {
+      projectId: 'orchestrator-pack', storeRoot: test.storeRoot,
+    })!)).toMatchObject({ mode: 'triaged', blocking: true, effectiveBlockingGroupCount: 1 });
+  });
+
+  it('tiered source coverage keeps 1/2/3 source selection separate from historical three-slot records and logical rounds', () => {
+    for (const [tier, cardinality] of [
+      ['T1',1],['T2',2],['T3',3],
+    ] as const) {
+      expect(selectPackReviewGptSourceCardinality({
+        reviewer:'gpt', tier, roundOrdinal:1,
+        accountingVersion:PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
+      })).toBe(cardinality);
+      expect(selectPackReviewGptSourceCardinality({
+        reviewer:'gpt', tier, roundOrdinal:1,
+        accountingVersion:PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      })).toBe(3);
+    }
+    expect(selectPackReviewGptSourceCardinality({
+      reviewer:'gpt',tier:'T3',roundOrdinal:2,
+      accountingVersion:PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
+    })).toBe(3);
+    expect(() => selectPackReviewGptSourceCardinality({
+      reviewer:'gpt',tier:'T2',roundOrdinal:1,accountingVersion:'unknown-source-version',
+    })).toThrow();
+    expect(() => selectPackReviewGptSourceCardinality({
+      reviewer:'gpt',tier:'T2',roundOrdinal:2,
+      accountingVersion:PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
+    })).toThrow();
+  });
+
+  it('effective fixer handoff emits one valid deduplicated packet or original blocking occurrences on plain fallback', async () => {
+    const valid = await settled(groups);
+    const projected = projectPackReviewEffectiveFindings(valid.run!);
+    expect(projected).toMatchObject({ mode:'triaged',blocking:true,effectiveBlockingGroupCount:1 });
+    expect(projected.fixNow).toHaveLength(1);
+    const validComment = readFileSync(valid.capture,'utf8');
+    expect(validComment).toContain('FIX_NOW fixer packet (deduplicated)');
+    expect(validComment).toContain('FIX_NOW ' + projected.fixNow[0]!.groupId);
+    const invalid = await settled([{ members: [{ slotId:'source-01',index:0 }],
+      decision:'FIX_NOW',reason:'Missing second occurrence' }]);
+    const plain = projectPackReviewEffectiveFindings(invalid.run!);
+    expect(plain).toMatchObject({ mode:'plain',blocking:true,effectiveBlockingGroupCount:2 });
+    expect(plain.fixNow).toHaveLength(2);
+    expect(readFileSync(invalid.capture,'utf8')).toContain('ORIGINAL_BLOCKER source-01:0');
+    const clean = await settled(groups,{clean:true});
+    expect(projectPackReviewEffectiveFindings(clean.run!).blocking).toBe(false);
+    const skill = readFileSync(path.join(repoRoot,'.cursor','skills','execute-issue-with-gpt','SKILL.md'),'utf8');
+    expect(skill).toContain('ORIGINAL_BLOCKER');
+    expect(skill).toContain('FIX_NOW');
+  });
+
+  it('triage one-shot confinement falls back to the plain union when the CLI lacks --restricted and never re-invokes on zero union', async () => {
+    const unsupported = await settled(groups,{noRestrictedFlag:true});
+    expect(unsupported.calls).toHaveLength(0);
+    expect(unsupported.run?.gptTriageAttempt).toBeDefined();
+    expect(unsupported.run?.gptTriage).toBeUndefined();
+    const empty = await settled(groups,{clean:true});
+    expect(empty.calls).toHaveLength(0);
+    expect(empty.run?.gptTriageAttempt).toBeUndefined();
+  });
+
+  it('does not claim or invoke triage for an empty settled source union', async () => {
+    const test = await settled(groups,{clean:true});
+    expect(test.calls).toHaveLength(0);
+    expect(test.run?.gptTriageAttempt).toBeUndefined();
+  });
+});
+
+describe('Issue #2761: blocking triage requires independent causal evidence', () => {
+  const authenticHead = () => {
+    const result = runProcessSync({
+      command: 'git', args: ['-C', repoRoot, 'rev-parse', 'HEAD'],
+      inheritParentEnv: true, timeoutMs: 10_000,
+    });
+    expect(result.ok).toBe(true);
+    return result.stdout.trim();
+  };
+  const triageRun = (summary: string, severity = 'blocking'): PackReviewRunRecord => ({
+    id: 'triage-proof-run',
+    targetSha: authenticHead(),
+    sourceRepoRoot: repoRoot,
+    reviewCycleId: 'triage-proof-cycle',
+    logicalRoundOrdinal: 1,
+    reviewRound: {
+      schema: 'pack-review-gpt-round/v1', reviewer: 'gpt', tier: 'T1',
+      roundOrdinal: 1, cardinality: 1, issueNumber: 2761,
+      boundIssueSnapshotDigest: 'a'.repeat(64),
+      sourceSlots: [{
+        slotId: 'source-01', ordinal: 1, lifecycle: 'terminal',
+        terminalClass: 'complete_findings',
+        payload: { findings: [{ type: 'quality', code: 'triage-proof',
+          severity, summary, details: summary }] },
+      }],
+    },
+  } as unknown as PackReviewRunRecord);
+
+  it('triage end-to-end validates mixed exact-head blocker, low-harm DEFER and unreachable REJECT without hiding raw findings', () => {
+    const base = triageRun('Synthetic mixed fixture');
+    const head = base.targetSha;
+    const file = 'scripts/pack-review-runner.ts';
+    const shown = runProcessSync({ command:'git',
+      args:['-C',repoRoot,'--no-pager','show',head + ':' + file],
+      inheritParentEnv:true,timeoutMs:10_000,
+    });
+    expect(shown.ok).toBe(true);
+    const lines = shown.stdout.split(/\r?\n/);
+    function citation(needle: string): string {
+      const index = lines.findIndex((line) => line.includes(needle));
+      expect(index, 'missing reviewed-head witness for ' + needle).toBeGreaterThanOrEqual(0);
+      return file + ':' + (index+1) + ' ' + lines[index]!.trim();
+    }
+    const original = [
+      {type:'quality',code:'duplicate',path:file,severity:'blocking',
+        summary:'Original reachable blocker duplicates a real state bug',
+        details:'Distinct reviewer slots observed the same reachable state defect'},
+      {type:'quality',code:'cosmetic-source-label',path:file,severity:'blocking',
+        summary:'Optional Sources display cosmetic label is visually truncated',
+        details:'A minor display label formatting defect only'},
+      {type:'quality',code:'empty-occurrences-claim',path:file,severity:'blocking',
+        summary:'Empty occurrences still invoke Opus even when there are no findings',
+        details:'The occurrences collection guard allegedly fails to prevent invocation'},
+      {type:'quality',code:'advisory',path:file,severity:'warning',
+        summary:'Optional cosmetic text is slightly misaligned',
+        details:'Advisory visual inconvenience'},
+    ];
+    const round = {
+      ...base.reviewRound!,tier:'T3' as const,cardinality:3,
+      sourceSlots:[
+        {slotId:'source-01',ordinal:1,lifecycle:'terminal' as const,
+          terminalClass:'complete_findings',payload:{findings:[original[0]!]}},
+        {slotId:'source-02',ordinal:2,lifecycle:'terminal' as const,
+          terminalClass:'complete_findings',payload:{findings:[original[0]!]}},
+        {slotId:'source-03',ordinal:3,lifecycle:'terminal' as const,
+          terminalClass:'complete_findings',payload:{findings:original.slice(1)}},
+      ],
+    };
+    const raw = round.sourceSlots.flatMap((slot) =>
+      slot.payload.findings.map((finding) => ({...finding,sourceSlotId:slot.slotId})));
+    const run = {
+      ...base,reviewRound:round,findings:raw,reviewVerdict:'findings',findingCount:raw.length,
+    } as unknown as PackReviewRunRecord;
+    const choices = [
+      {members:[{slotId:'source-01',index:0},{slotId:'source-02',index:0}],
+        decision:'FIX_NOW' as const,reason:'Retain one distinct reachable blocker'},
+      {members:[{slotId:'source-03',index:0}],decision:'DEFER' as const,
+        reason:'Fix cost and effort outweigh minor cosmetic display label harm',lowImpact:true,
+        codeEvidence:citation('Sources: 2/3 (degraded after timeout)')},
+      {members:[{slotId:'source-03',index:1}],decision:'REJECT' as const,
+        reason:'The occurrences guard returns before invocation; trigger unreachable',
+        codeEvidence:citation('if (occurrences.length === 0) return null;')},
+      {members:[{slotId:'source-03',index:2}],decision:'DEFER' as const,
+        reason:'Originally advisory minor cosmetic issue'},
+    ];
+    const triage = validatePackReviewTriageResult(run,choices);
+    const saved = {
+      ...run,gptTriage:triage,gptTriageAttempt:{
+        schema:'pack-review-gpt-triage-attempt/v1' as const,
+        runId:run.id,targetSha:run.targetSha,cycleId:run.reviewCycleId!,
+        roundOrdinal:run.logicalRoundOrdinal!,
+        issueDigest:run.reviewRound!.boundIssueSnapshotDigest,
+        rawFindingsDigest:createHash('sha256').update(JSON.stringify(raw)).digest('hex'),
+        attemptedAtUtc:'2026-11-03T00:00:00.000Z',
+      },
+    } as PackReviewRunRecord;
+    const projection = projectPackReviewEffectiveFindings(saved);
+    expect(projection).toMatchObject({mode:'triaged',blocking:true,effectiveBlockingGroupCount:1});
+    expect(projection.fixNow).toHaveLength(1);
+    expect(projection.fixNow[0]!.members).toEqual(['source-01:0','source-02:0']);
+    expect(projection.deferred).toHaveLength(2);
+    expect(projection.groups.find((g) => g.decision === 'REJECT')?.members).toEqual(['source-03:1']);
+    expect(saved.findings).toEqual(raw); // original audit union never changed
+    expect(classifyPackReviewPayload({
+      verdict:'findings',findingCount:raw.length,findings:raw,
+    } as Parameters<typeof classifyPackReviewPayload>[0],saved)).toMatchObject({
+      requiredStatus:'failure',blocking:true,
+    });
+    expect(() => validatePackReviewTriageResult(run, choices.map((choice,index) => index === 1
+      ? {...choice,reason:'Minor cosmetic display inconvenience only'} : choice)))
+      .toThrow(/blocking downgrade lacks independent/); // missing economic reasoning
+    const protectedRun = {
+      ...run,reviewRound:{...round,sourceSlots:[{
+        ...round.sourceSlots[0]!,payload:{findings:[{
+          ...original[0]!,
+          summary:'Required status falsely green when empty occurrences bypass safety',
+          details:'The occurrences collection allegedly triggers a false success before evidence',
+        }]},
+      }]},
+    } as unknown as PackReviewRunRecord;
+    expect(() => validatePackReviewTriageResult(protectedRun,[{
+      members:[{slotId:'source-01',index:0}],decision:'REJECT',
+      reason:'occurrences guard returns before invocation; unreachable',
+      codeEvidence:citation('if (occurrences.length === 0) return null;'),
+    }])).toThrow(/blocking downgrade lacks independent/);
+  });
+
+  it.each([
+    'Required pack-review check reports success before source comments are verified',
+    'Worker remains blocked indefinitely after lost Browser-GPT response',
+    'failed required CI job exits 0 so the PR can merge',
+    'An authorized operation writes outside its declared scope',
+  ])('rejects REJECT and economic DEFER for a blocking claim even with an authentic unrelated line: %s', (summary) => {
+    const run = triageRun(summary);
+    const citation = "scripts/pack-review-runner.ts:1 import './toolchain/native-entrypoint-preflight.ts';";
+    const shown = runProcessSync({ command: 'git',
+      args: ['-C', repoRoot, '--no-pager', 'show', run.targetSha + ':scripts/pack-review-runner.ts'],
+      inheritParentEnv: true, timeoutMs: 10_000,
+    });
+    expect(shown.ok).toBe(true);
+    expect(shown.stdout.split(/\r?\n/)[0]).toContain("native-entrypoint-preflight.ts");
+    for (const decision of ['REJECT', 'DEFER'] as const) {
+      expect(() => validatePackReviewTriageResult(run, [{
+        members: [{ slotId: 'source-01', index: 0 }], decision,
+        reason: 'Model asserts this is safe', codeEvidence: citation, lowImpact: true,
+      }])).toThrow(/blocking downgrade lacks independent causal or low-harm proof/);
+    }
+    expect(validatePackReviewTriageResult(run, [{
+      members: [{ slotId: 'source-01', index: 0 }],
+      decision: 'FIX_NOW', reason: 'Retain original blocking consequence',
+    }]).groups).toEqual([expect.objectContaining({ decision: 'FIX_NOW' })]);
+  });
+
+  it('allows a model DEFER on a genuinely original nonblocking source finding', () => {
+    const run = triageRun('Optional cosmetic label is truncated', 'warning');
+    const result = validatePackReviewTriageResult(run, [{
+      members: [{ slotId: 'source-01', index: 0 }],
+      decision: 'DEFER', reason: 'Advisory-only visual inconvenience',
+    }]);
+    expect(result.groups).toEqual([expect.objectContaining({
+      decision: 'DEFER', slotIds: ['source-01'],
+      members: ['source-01:0'],
+    })]);
+  });
+});
+
+describe('Issue #2761: legacy unversioned source-accounting recovery identity', () => {
+  function roundWithSources(
+    version: string,
+    count: number,
+    usable: number,
+  ): PackReviewGptRoundRecord {
+    return {
+      schema: 'pack-review-gpt-round/v1', reviewer: 'gpt',
+      tier: 'T2', accountingVersion: version, roundOrdinal: 1,
+      cardinality: count, issueNumber: 2761,
+      boundIssueSnapshotDigest: 'b'.repeat(64),
+      sourceSlots: Array.from({ length: count }, (_, index) => ({
+        slotId: 'source-' + String(index + 1).padStart(2, '0'),
+        ordinal: index + 1,
+        lifecycle: index < usable ? 'terminal' as const : 'planned' as const,
+        ...(index < usable ? {
+          terminalClass: 'complete_clean',
+          terminalResult: { source_comment_authority: 'credentialed_github' },
+          payload: { findings: [] },
+        } : {}),
+      })),
+    };
+  }
+  it.each([0, 1])('preserves prelogical missing-run-version source identity for %i/3', (usable) => {
+    const round = roundWithSources(PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION, 3, usable);
+    const run = { reviewRound: round, accountingVersion: undefined } as PackReviewRunRecord;
+    expect(frozenSavedGptSourceIdentity(run)).toBe(true);
+    expect(frozenSavedGptSourceIdentity({ ...run, reviewRound: {
+      ...round, cardinality: 2, sourceSlots: round.sourceSlots.slice(0, 2),
+    } })).toBe(false);
+  });
+  it('retains strict version equality for logical/tiered generations', () => {
+    const oldLogical = roundWithSources(PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, 3, 0);
+    expect(frozenSavedGptSourceIdentity({
+      reviewRound: oldLogical, accountingVersion: undefined,
+    } as PackReviewRunRecord)).toBe(false);
+    const tiered = roundWithSources(PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION, 2, 1);
+    expect(frozenSavedGptSourceIdentity({
+      reviewRound: tiered, accountingVersion: undefined,
+    } as PackReviewRunRecord)).toBe(false);
+    expect(frozenSavedGptSourceIdentity({
+      reviewRound: tiered, accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+    } as PackReviewRunRecord)).toBe(false);
+    expect(frozenSavedGptSourceIdentity({
+      reviewRound: tiered, accountingVersion: PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
+    } as PackReviewRunRecord)).toBe(true);
   });
 });

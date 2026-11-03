@@ -63,7 +63,7 @@ function tempRoot(prefix = 'opk-1591-'): string {
   return root;
 }
 
-function issueBody(tier: 'T1' | 'T2' = 'T1'): string {
+function issueBody(tier: 'T1' | 'T2' | 'T3' = 'T1'): string {
   return [
     '```complexity-tier',
     `tier: ${tier}`,
@@ -643,7 +643,7 @@ describe('Issue #1591 GitHub-first 3/3-or-timed-2/3 recovery', () => {
       fixturePostReviewHeadSha: HEAD_A,
       fixturePostReviewPrBody: 'Closes #1591',
       fixtureRepoSlug: REPO,
-      fixtureIssueTitle: "[T1] Issue 1591 recovery fixture", fixtureIssueBody: issueBody(),
+      fixtureIssueTitle: "[T3] Issue 1591 recovery fixture", fixtureIssueBody: issueBody('T3'),
       fixtureIssueNumber: 1591,
       fixtureReviewStdout: JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] }),
       fixtureGptSourceCommentTransport: transport,
@@ -662,7 +662,7 @@ describe('Issue #1591 GitHub-first 3/3-or-timed-2/3 recovery', () => {
       fixtureRequiredStatusWriter: async () => {},
       fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
       fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
-      fixtureBoundIssueSnapshotBytes: issueBody(),
+      fixtureBoundIssueSnapshotBytes: issueBody('T3'),
       claimMode: 'preacquired',
     });
 
@@ -730,7 +730,7 @@ describe('Issue #1591 GitHub-first 3/3-or-timed-2/3 recovery', () => {
       fixturePostReviewHeadSha: HEAD_A,
       fixturePostReviewPrBody: 'Closes #1591',
       fixtureRepoSlug: REPO,
-      fixtureIssueTitle: "[T1] Issue 1591 recovery fixture", fixtureIssueBody: issueBody(),
+      fixtureIssueTitle: "[T3] Issue 1591 recovery fixture", fixtureIssueBody: issueBody('T3'),
       fixtureIssueNumber: 1591,
       fixtureReviewStdout: JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] }),
       fixtureGptSourceCommentTransport: transport,
@@ -753,7 +753,7 @@ describe('Issue #1591 GitHub-first 3/3-or-timed-2/3 recovery', () => {
       fixtureRequiredStatusWriter: async () => {},
       fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
       fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
-      fixtureBoundIssueSnapshotBytes: issueBody(),
+      fixtureBoundIssueSnapshotBytes: issueBody('T3'),
       claimMode: 'preacquired',
     });
 

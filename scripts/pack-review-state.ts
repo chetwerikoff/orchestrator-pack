@@ -7,6 +7,7 @@ export const PACK_REVIEW_AUTHORITY_SCHEMA_VERSION = 1;
 export const PACK_REVIEW_TERMINAL_CONTRACT_VERSION = 2;
 export const PACK_REVIEW_CAP_MAP_VERSION = 'issue-1063-1-2-4';
 export const PACK_REVIEW_LOGICAL_CAP_MAP_VERSION = 'issue-1826-logical-rounds-1-1-2';
+export const PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION = 'issue-2761-tiered-sources-1-2-3';
 export const PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION = PACK_REVIEW_CAP_MAP_VERSION;
 export const PACK_REVIEW_LEGACY_CAP_MAP_VERSION = 'legacy-frozen';
 export const PACK_REVIEW_CAPS = Object.freeze({ T1: 1, T2: 2, T3: 4 });
@@ -63,7 +64,25 @@ export function selectPackReviewGptSourceCardinality(input: {
   if (!Number.isInteger(input.roundOrdinal) || input.roundOrdinal <= 0) {
     throw new PackReviewAuthorityError('cap_state_invalid', 'roundOrdinal must be a positive integer');
   }
-  if (input.accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION) return 3;
+  if (input.accountingVersion === PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION) {
+    if (input.roundOrdinal > PACK_REVIEW_LOGICAL_CAPS[input.tier]) {
+      throw new PackReviewAuthorityError('cap_state_invalid', 'tiered source round ordinal exceeds logical tier cap');
+    }
+    return input.tier === 'T1' ? 1 : input.tier === 'T2' ? 2 : 3;
+  }
+  if (input.accountingVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION) {
+    if (input.roundOrdinal > PACK_REVIEW_LOGICAL_CAPS[input.tier]) {
+      throw new PackReviewAuthorityError('cap_state_invalid', 'historical source round ordinal exceeds logical tier cap');
+    }
+    return 3;
+  }
+  if (input.accountingVersion !== undefined
+      && input.accountingVersion !== PACK_REVIEW_CAP_MAP_VERSION
+      && input.accountingVersion !== PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION
+      && input.accountingVersion !== PACK_REVIEW_LEGACY_CAP_MAP_VERSION) {
+    throw new PackReviewAuthorityError('cap_state_invalid', 'unknown GPT source accounting version');
+  }
+  // Prelogical records retain the original distinct-head source selection.
   return input.roundOrdinal === 1 || input.tier === 'T3' ? 3 : 1;
 }
 export type PackReviewCycleState =
@@ -133,7 +152,7 @@ export interface PackReviewCycle {
   atCapHash?: string;
   reviewStageComplete?: boolean;
   reviewStageCompletedAtUtc?: string;
-  settlementKind?: 'same_head_issue_resolution';
+  settlementKind?: 'same_head_issue_resolution' | 'rewritten_head';
   reviewStartConsumed?: boolean;
   resetProvenance?: PackReviewResetProvenance;
 }
@@ -1252,7 +1271,15 @@ export function commitPackReviewTerminal(input: {
         }
       }
       const consumedCount = cycleConsumedCount(cycle);
-      if (terminal.reviewVerdict === 'clean' && terminal.findingCount === 0) {
+      // Preserve the immutable raw terminal as "findings"; the canonical
+      // already-classified COMMENT status alone describes whether these
+      // findings contain any effective blockers. Advisory-only findings are
+      // a completed review, not a mandatory fixer or a fabricated clean run.
+      const nonBlockingLogicalFindings = isLogicalRoundCycle(cycle)
+        && terminal.reviewVerdict === 'findings'
+        && input.status === 'commented';
+      if ((terminal.reviewVerdict === 'clean' && terminal.findingCount === 0)
+          || nonBlockingLogicalFindings) {
         if (!isLogicalRoundCycle(cycle) || consumedCount >= cycle.frozenCap) {
           cycle.state = 'closed';
           cycle.closedAtUtc = nowIso(input.options);
@@ -1420,6 +1447,52 @@ export function settleLogicalPackReviewFindingsByStrictDescendant(input: {
         );
       }
 
+      current.evidence = undefined;
+      current.triage = undefined;
+      current.publication = undefined;
+      return current;
+    },
+  });
+}
+
+export function settleLogicalPackReviewFindingsByRewrittenHead(input: {
+  prNumber: number;
+  expectedTransitionSeq: number;
+  reviewedHeadSha: string;
+  currentHeadSha: string;
+  options: PackReviewAuthorityOptions;
+}): PackReviewAuthorityDocument {
+  const reviewedHeadSha = normalizeSha(input.reviewedHeadSha, 'reviewedHeadSha');
+  const currentHeadSha = normalizeSha(input.currentHeadSha, 'currentHeadSha');
+  if (reviewedHeadSha === currentHeadSha) {
+    throw new PackReviewAuthorityError('findings_settlement_invalid', 'rewritten head must differ from reviewed findings head');
+  }
+  return commitPackReviewAuthorityTransition({
+    prNumber: input.prNumber,
+    expectedTransitionSeq: input.expectedTransitionSeq,
+    nextPhase: 'head_observed',
+    options: input.options,
+    mutate(current) {
+      if (current.currentHeadSha !== currentHeadSha) {
+        throw new PackReviewAuthorityError('findings_settlement_head_stale', current.currentHeadSha);
+      }
+      const cycle = current.cycle;
+      if (!cycle || !isLogicalRoundCycle(cycle)
+          || cycle.state !== 'open_findings'
+          || cycle.reviewStageComplete === true
+          || cycleConsumedCount(cycle) < 1
+          || cycleConsumedCount(cycle) >= cycle.frozenCap
+          || current.terminal?.reviewVerdict !== 'findings'
+          || current.terminal.targetSha !== reviewedHeadSha) {
+        throw new PackReviewAuthorityError(
+          'findings_settlement_invalid',
+          'rewritten head requires the exact unfinished pre-cap logical findings checkpoint',
+        );
+      }
+      cycle.state = 'open';
+      cycle.closedAtUtc = undefined;
+      cycle.atCapHash = undefined;
+      cycle.settlementKind = 'rewritten_head';
       current.evidence = undefined;
       current.triage = undefined;
       current.publication = undefined;

@@ -10,6 +10,8 @@ import { parseIssueScopeFences } from '@orchestrator-pack/shared/lib/issue_parse
 export interface TierGateFloorOptions {
   repoRoot?: string;
   draftPath?: string;
+  projectId?: string;
+  env?: Readonly<NodeJS.ProcessEnv>;
 }
 
 function hasFence(text: string, name: string): boolean {
@@ -82,10 +84,17 @@ export function checkContractEvidenceFloor(
   draftText: string,
   options: TierGateFloorOptions = {},
 ): { ok: boolean; errors: string[] } {
-  const result = checkContractEvidence(draftText, {
+  // Keep the selected-card options in a value so the existing .d.mts
+  // signature (outside Issue scope) does not reject runtime-supported fields.
+  const contractOptions = {
     repoRoot: options.repoRoot ?? process.cwd(),
     draftPath: options.draftPath,
-  }) as { ok: boolean; errors: string[]; skipped?: boolean };
+    projectId: options.projectId,
+    env: options.env,
+  };
+  const result = checkContractEvidence(draftText, contractOptions) as {
+    ok: boolean; errors: string[]; skipped?: boolean;
+  };
   if (result.ok || result.skipped) return { ok: true, errors: [] };
   return {
     ok: false,

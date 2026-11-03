@@ -1,0 +1,25 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2773,
+  "declared_paths": [
+    "docs/declarations/2773.pr-scope.json",
+    "scripts/fleet/fixtures/opencode-idle-own-stop.screen.txt",
+    "scripts/fleet/fixtures/opencode-working-no-spinner.screen.txt",
+    "scripts/fleet/fleet-sweep.test.ts",
+    "scripts/fleet/fleet-sweep.ts",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts"
+  ],
+  "denylist": [
+    ".orchestrator-pack/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/fleet/"
+  ],
+  "source_revision": "aaac6180448039b22a35cce280043cdd5d8034a3"
+}

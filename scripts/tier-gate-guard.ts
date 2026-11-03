@@ -3,21 +3,23 @@ import { readFileSync } from 'node:fs';
 import { checkTierGateGuard, formatTierGatePassMessage } from './lib/tier-gate-core.ts';
 import { isDirectCliExecution, runReviewerTsCli } from './lib/reviewer-ts-cli.ts';
 
-function parseArgs(argv: string[]): { text: string | null; textFile: string | null; repoRoot?: string } {
+function parseArgs(argv: string[]): { text: string | null; textFile: string | null; repoRoot?: string; projectId?: string } {
   let text: string | null = null;
   let textFile: string | null = null;
   let repoRoot: string | undefined;
+  let projectId: string | undefined;
   for (let index = 2; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--text') text = String(argv[++index] ?? '');
     else if (arg === '--text-file') textFile = String(argv[++index] ?? '');
     else if (arg === '--repo-root') repoRoot = String(argv[++index] ?? '');
+    else if (arg === '--project') projectId = String(argv[++index] ?? '');
     else throw new Error('unknown argument: ' + arg);
   }
   if ((text === null) === (textFile === null)) {
     throw new Error('exactly one of --text or --text-file is required');
   }
-  return { text, textFile, ...(repoRoot ? { repoRoot } : {}) };
+  return { text, textFile, ...(repoRoot ? { repoRoot } : {}), ...(projectId ? { projectId } : {}) };
 }
 
 export function runCli(argv: string[]): number {
@@ -32,6 +34,7 @@ export function runCli(argv: string[]): number {
   const result = checkTierGateGuard(text, {
     ...(options.repoRoot ? { repoRoot: options.repoRoot } : {}),
     ...(options.textFile ? { draftPath: options.textFile } : {}),
+    ...(options.projectId ? { projectId: options.projectId } : {}),
   });
   if (!result.ok) {
     for (const error of result.errors) process.stderr.write('tier-gate guard: ' + error + '\n');

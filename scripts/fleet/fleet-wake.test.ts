@@ -132,26 +132,6 @@ function config(overrides: Partial<FleetWakeConfig> = {}): FleetWakeConfig {
   };
 }
 
-/** Synthetic read-only git worktree list/rev-parse/common-dir responses. */
-function selectedProjectGit(
-  cwd: string, args: readonly string[],
-): string | undefined {
-  const worktrees = [primary, workerBase + '/one', workerBase + '/two'];
-  const foreignNested = workerBase + '/two/nested-foreign';
-  const roots = [...worktrees, foreignNested, '/other/project', '/lookalike/project'];
-  const root = roots.filter((entry) => cwd === entry || cwd.startsWith(entry + '/'))
-    .sort((a, b) => b.length - a.length)[0];
-  if (args[0] === 'worktree') {
-    return worktrees.map((entry) => 'worktree ' + entry + '\0HEAD abc\0\0').join('');
-  }
-  if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return root;
-  if (args[0] === 'rev-parse' && args[1] === '--path-format=absolute' && args[2] === '--git-common-dir') {
-    return worktrees.includes(root ?? '') ? '/simulated/common/selected.git'
-      : '/simulated/common/foreign.git';
-  }
-  return undefined;
-}
-
 function fakeOrca(
   screens: Readonly<Record<string, string>>,
   calls: string[][],
@@ -196,8 +176,6 @@ async function tick(input: {
   readNamedReview?: FleetAlarmTickOptions['readNamedReview'];
   readPackReviewStage?: FleetAlarmTickOptions['readPackReviewStage'];
   resolveSelectedReviewProject?: FleetAlarmTickOptions['resolveSelectedReviewProject'];
-  readGit?: FleetAlarmTickOptions['readGit'];
-  canonicalPath?: FleetAlarmTickOptions['canonicalPath'];
   probePid?: FleetAlarmTickOptions['probePid'];
   readPackReviewRuns?: FleetAlarmTickOptions['readPackReviewRuns'];
   reconcilePackReview?: FleetAlarmTickOptions['reconcilePackReview'];
@@ -231,8 +209,6 @@ async function tick(input: {
     ...(input.readNamedReview ? { readNamedReview: input.readNamedReview } : {}),
     ...(input.readPackReviewStage ? { readPackReviewStage: input.readPackReviewStage } : {}),
     ...(input.resolveSelectedReviewProject ? { resolveSelectedReviewProject: input.resolveSelectedReviewProject } : {}),
-    ...(input.readGit ? { readGit: input.readGit } : {}),
-    ...(input.canonicalPath ? { canonicalPath: input.canonicalPath } : {}),
     ...(input.probePid ? { probePid: input.probePid } : {}),
     ...(input.readPackReviewRuns ? { readPackReviewRuns: input.readPackReviewRuns } : {}),
     ...(input.reconcilePackReview ? { reconcilePackReview: input.reconcilePackReview } : {}),
@@ -312,7 +288,6 @@ describe('fleet alarm', () => {
           observedInvocationId: 'worker', terminalHandle: 'one', cwd: workerBase + '/one',
           lifecycleOutcome: 'success', turnResultState: 'ok' },
       ],
-      readGit: selectedProjectGit, canonicalPath: (path) => path,
       readPackReviewRuns: () => [], readCurrentAssignments: () => [],
       resolveSelectedReviewProject: () => ({
         projectId: 'orchestrator-pack', repository: 'test/project', primaryRoot: primary,
@@ -384,12 +359,11 @@ describe('fleet alarm', () => {
           lifecycleOutcome: 'success', turnResultState: 'ok',
         }],
         resolveSelectedReviewProject: () => ({ projectId: 'fixture', repository: 'test/project', primaryRoot: primary }),
-        readGit: selectedProjectGit, canonicalPath: (path) => path,
         listUnreadRunMessages: () => [], listOpenPulls: () => [], readWorktreeHead: () => undefined,
       });
       expect(result.state).toBe(exclude ? 'nothing_stopped' : 'sent');
       expect(calls.some((call) => call[1] === 'read' && call.includes(architectHandle))).toBe(!exclude);
-      expect(sendsTo(calls, architectHandle)).toHaveLength(exclude ? 0 : 2);
+      expect(sendsTo(calls, architectHandle)).toHaveLength(exclude ? 0 : 1);
       if (!exclude) expect(sendsTo(calls, 'coord')[0]?.join(' ')).toContain(architectHandle);
     } finally { target.mockRestore(); }
   });
@@ -605,7 +579,6 @@ describe('fleet alarm', () => {
     const selected = {
       terminals: [terminals[0]!, exactPane, terminals[2]!],
       config: config({ selectedRepository: 'test/project' }),
-      readGit: selectedProjectGit, canonicalPath: (path: string) => path,
       readPackReviewRuns: () => [], readCurrentAssignments: () => [], listOpenPulls: () => [],
       resolveSelectedReviewProject: () => ({
         projectId: 'orchestrator-pack', primaryRoot: primary, repository: 'test/project',
@@ -626,7 +599,7 @@ describe('fleet alarm', () => {
       'terminal', 'send', '--terminal', 'one',
       '--text', 'Wake: GPT turn ' + invocationId + ' ended, read ' + envelope.path,
       '--enter',
-    ], ['terminal', 'send', '--terminal', 'one', '--enter']]);
+    ]]);
 
     const repeated = await tick({
       ...selected, screens: { coord: 'idle', one: 'done and ready for new Task', two: 'working\nesc interrupt' },
@@ -635,7 +608,7 @@ describe('fleet alarm', () => {
     expect(sendsTo(repeated.calls, 'one')).toHaveLength(0);
   });
 
-  it('Issue #2687: skips Git worktree probes for historical envelopes without an eligible STOPPED launcher', async () => {
+  it('Issue #2773: legacy STOPPED envelope route wakes a standalone-clone cwd without Git worktree probes', async () => {
     const owner: FleetTerminal = { ...terminals[1]!, incarnationId: 'current-stop-owner', status: 'running' };
     const history: TerminalEnvelopeEvent[] = Array.from({ length: 12 }, (_, index) => ({
       path: '/tmp/opencode/history-' + index + '-terminal.json',
@@ -643,46 +616,33 @@ describe('fleet alarm', () => {
       terminalHandle: 'retired-' + index, cwd: workerBase + '/one/scripts',
       lifecycleOutcome: 'success', turnResultState: 'ok',
     }));
+    // A standalone clone outside every selected worktree no longer blocks the exact owner.
     const matching: TerminalEnvelopeEvent = {
-      ...history[0]!, path: '/tmp/opencode/current-stop-terminal.json',
+      ...history[0]!, path: '/tmp/opencode/current-stop-terminal.json', cwd: '/tmp/opencode/standalone-clone',
       invocationId: 'current-id', observedInvocationId: 'current-id', terminalHandle: owner.handle,
     };
-    let gitReads = 0;
-    let cardReads = 0;
     const input: Parameters<typeof tick>[0] = {
       config: config({ selectedRepository: 'test/project' }),
       terminals: [terminals[0]!, owner], screens: { coord: 'idle', one: 'done' },
       listTerminalEnvelopes: () => history, listOpenPulls: () => [],
       readPackReviewRuns: () => [], readCurrentAssignments: () => [],
-      resolveSelectedReviewProject: () => {
-        cardReads += 1;
-        return { projectId: 'orchestrator-pack', repository: 'test/project', primaryRoot: primary };
-      },
-      canonicalPath: (path) => path,
-      readGit: (cwd, args) => { gitReads += 1; return selectedProjectGit(cwd, args); },
+      resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack', repository: 'test/project', primaryRoot: primary }),
     };
     const irrelevant = await tick(input);
-    // runFleetAlarmTick independently validates this project card once per tick
-    // for stale pack-review reconciliation, even with an empty run census.
-    // The twelve unrelated envelopes must add neither another card read nor a Git probe.
-    expect(gitReads).toBe(0);
-    expect(cardReads).toBe(1);
     expect(sendsTo(irrelevant.calls, owner.handle)).toHaveLength(0);
 
     const busy = await tick({
       ...input, screens: { coord: 'idle', one: 'working\nesc interrupt' },
       listTerminalEnvelopes: () => [matching],
     });
-    expect(gitReads).toBe(0);
-    expect(cardReads).toBe(2); // Another independent stale-review identity read; no GPT probe.
     expect(sendsTo(busy.calls, owner.handle)).toHaveLength(0);
 
     const positive = await tick({ ...input, listTerminalEnvelopes: () => [...history, matching] });
-    expect(gitReads).toBeGreaterThan(0);
-    // Three ordinary stale-review identity reads across three ticks plus exactly
-    // one selected-project membership validation for the eligible STOPPED launcher.
-    expect(cardReads).toBe(4);
-    expect(sendsTo(positive.calls, owner.handle).filter((row) => row.includes('--text'))).toHaveLength(1);
+    expect(sendsTo(positive.calls, owner.handle)).toEqual([[
+      'terminal', 'send', '--terminal', owner.handle,
+      '--text', 'Wake: GPT turn current-id ended, read ' + matching.path, '--enter',
+    ]]);
+    expect(positive.calls.some((call) => call.includes('git'))).toBe(false);
   });
 
   it('r05: old post-send/generation proof is not a Wake gate once exact landed GPT evidence exists', async () => {
@@ -696,7 +656,6 @@ describe('fleet alarm', () => {
       config: config({ selectedRepository: 'test/project' }),
       resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack',
         primaryRoot: primary, repository: 'test/project' }),
-      readGit: selectedProjectGit, canonicalPath: (path) => path,
       listTerminalEnvelopes: () => [event],
     });
     expect(sendsTo(parked.calls, 'one').filter((call) => call.includes('--text'))).toHaveLength(1);
@@ -729,7 +688,6 @@ describe('fleet alarm', () => {
       config: config({ selectedRepository: 'test/project' }),
       resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack',
         primaryRoot: primary, repository: 'test/project' }),
-      readGit: selectedProjectGit, canonicalPath: (path) => path,
       listTerminalEnvelopes: () => [foreign, matching] });
     expect(sendsTo(observed.calls, 'one').filter((call) => call.includes('--text'))).toHaveLength(1);
     expect(sendsTo(observed.calls, 'one')[0]?.join(' ')).toContain(matching.path);
@@ -942,7 +900,7 @@ describe('fleet alarm', () => {
       readWorktreeHead: (worktreePath) => worktreePath === manager.worktreePath ? head : undefined,
     });
     const sent = await run(() => []);
-    expect(sendsTo(sent.calls, 'mgr')).toHaveLength(2);
+    expect(sendsTo(sent.calls, 'mgr')).toHaveLength(1);
     expect(sendsTo(sent.calls, 'mgr')[0]).toContain(
       `Advisory: CI on ${head} finished for PR #153 - re-check only if you own this PR; no new Task authority`);
     expect(sendsTo((await run(() => null)).calls, 'mgr')).toHaveLength(0);
@@ -1288,7 +1246,6 @@ describe('Issue #2463 parked-producer compatibility with r05', () => {
       config: config({ selectedRepository: 'test/project' }),
       resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack',
         primaryRoot: primary, repository: 'test/project' }),
-      readGit: selectedProjectGit, canonicalPath: (path) => path,
       screens: { coord: 'idle', one: 'PARKED on GPT turn inv-command' },
       listTerminalEnvelopes: () => [event] });
     const text = textTo(result.calls)[0] ?? '';
@@ -1350,7 +1307,7 @@ describe('Issue #2510 URL-bound-only saved chat alarms', () => {
       const store = new BoundBannerStore();
       const first = await tick({ config: settings, store, terminals: workers, screens: quiet,
         readChats: async () => [chat()] });
-      expect(sendsTo(first.calls, 'one')).toHaveLength(2);
+      expect(sendsTo(first.calls, 'one')).toHaveLength(1);
       expect(sendsTo(first.calls, 'coord')).toHaveLength(0);
       expect(sendsTo(first.calls, 'two')).toHaveLength(0);
       expect(sentText(first.calls, 'one')).toContain(saved);
@@ -1368,7 +1325,7 @@ describe('Issue #2510 URL-bound-only saved chat alarms', () => {
       const next = () => tick({ config: settings, store, terminals: workers, screens: quiet,
         readChats: async () => [chat(saved, 'stalled')] });
       expect(sendsTo((await next()).calls, 'one')).toHaveLength(0);
-      expect(sendsTo((await next()).calls, 'one')).toHaveLength(2);
+      expect(sendsTo((await next()).calls, 'one')).toHaveLength(1);
       expect(sendsTo((await next()).calls, 'one')).toHaveLength(0);
     }));
 
@@ -1396,8 +1353,8 @@ describe('Issue #2510 URL-bound-only saved chat alarms', () => {
           && call.includes(saved))).toHaveLength(0);
       }));
 
-  it.each(['first', 'second', 'thrown-first', 'thrown-second'] as const)(
-    'never routes failed %s bound-pane send/confirmation through coordinator', async (failure) =>
+  it.each(['first', 'thrown-first'] as const)(
+    'never routes failed %s bound-pane send through coordinator', async (failure) =>
       isolatedBindings(async (home) => {
         writeChatBinding(saved, workers[1]!.worktreePath, { HOME: home });
         const executor: OrcaExecutor = (args) => {
@@ -1413,19 +1370,13 @@ describe('Issue #2510 URL-bound-only saved chat alarms', () => {
         const store = new BoundBannerStore();
         const result = await tick({ config: settings, terminals: workers, screens: quiet, executor, store,
           readChats: async () => [chat()], listOpenPulls: () => [] });
-        expect(sendsTo(result.calls, 'one')).toHaveLength(failure.includes('first') ? 1 : 2);
+        expect(sendsTo(result.calls, 'one')).toHaveLength(1);
         expect(sendsTo(result.calls, 'coord')).toHaveLength(0);
-        // A failed first text+Enter is still ambiguous. A failed confirming Enter
-        // follows a successful submission and is a delivered, non-replayable Wake.
+        // A failed single text+Enter send is ambiguous and stays non-replayable.
         const bannerMark = [...store.parkedWakeEvents].find((key) => key.startsWith('banner:one:'));
         expect(bannerMark).toBeDefined();
-        expect(store.readParkedWakeEventStatus(bannerMark!)).toBe(
-          failure.includes('first') ? 'attempted_unverified' : 'sent');
-        expect(result.logs.join(' ')).toContain(
-          failure.includes('first') ? 'send failed/uncertain chat banner' : 'sent chat banner');
-        if (failure === 'second') {
-          expect(result.logs.join(' ')).toContain('unit wake confirming Enter failed after delivery');
-        }
+        expect(store.readParkedWakeEventStatus(bannerMark!)).toBe('attempted_unverified');
+        expect(result.logs.join(' ')).toContain('send failed/uncertain chat banner');
         const next = await tick({ config: settings, terminals: workers, screens: quiet, store,
           readChats: async () => [chat()], listOpenPulls: () => [] });
         expect(sendsTo(next.calls, 'one')).toHaveLength(0);
@@ -1927,7 +1878,6 @@ describe('Issue #2441 read-only diagnostic tick non-interference', () => {
       resolveSelectedReviewProject: () => ({
         projectId: 'orchestrator-pack', repository: 'test/project', primaryRoot: primary,
       }),
-      readGit: selectedProjectGit, canonicalPath: (path) => path,
       readPackReviewRuns: () => [], readCurrentAssignments: () => [], listOpenPulls: () => [],
       executor: (args) => {
         if (args[1] === 'send') order.push('legacy-send');
@@ -1994,7 +1944,6 @@ describe('Issue #2485 / #2687: exact producer instead of ambiguous substring', (
       config: config({ selectedRepository: 'test/project' }),
       resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack', repository: 'test/project',
         primaryRoot: primary }),
-      readGit: selectedProjectGit, canonicalPath: (path) => path,
       listTerminalEnvelopes: () => envelopes });
 
   it.each([
@@ -2063,29 +2012,29 @@ describe('Issue #2485 / #2687: exact producer instead of ambiguous substring', (
     expect(paneText(unrelated.calls, 'coord')).toHaveLength(0);
   });
 
-  it('keeps independent per-pane event marks after an exact dual-pane settlement', async () => {
+  it('Issue #2773: two panes parked on the same GPT invocation receive no Wake', async () => {
     const store = new MemoryWakeStore();
-    store.markParkedWakeEvent('gpt:' + event.path);
-    const first = await simple({ coord: 'idle', one: parked, two: parked }, store);
-    expect(paneText(first.calls, 'one')).toHaveLength(1);
-    expect(paneText(first.calls, 'two')).toHaveLength(1);
-    const repeated = await simple({ coord: 'idle', one: parked, two: parked }, store);
+    for (const tickIndex of [0, 1]) {
+      const result = await simple({ coord: 'idle', one: parked, two: parked }, store, [event]);
+      expect(paneText(result.calls, 'one')).toHaveLength(0);
+      expect(paneText(result.calls, 'two')).toHaveLength(0);
+      if (tickIndex === 0) expect(paneText(result.calls, 'coord').join(' ')).toContain('GPT producer evidence uncertain');
+    }
+    expect([...store.parkedWakeEvents].filter((key) => key.startsWith('event:'))).toHaveLength(0);
+  });
+
+  it('distinct exact GPT facts wake each own parked pane once with independent marks', async () => {
+    const store = new MemoryWakeStore();
+    const changed: TerminalEnvelopeEvent = { ...event, path: '/tmp/opencode/other-terminal.json',
+      invocationId: 'other-token', observedInvocationId: 'other-token' };
+    const screens = { coord: 'idle', one: 'PARKED on GPT turn other-token', two: parked };
+    const first = await simple(screens, store, [event, changed]);
+    expect(paneText(first.calls, 'one')).toEqual([expect.stringContaining('other-terminal.json')]);
+    expect(paneText(first.calls, 'two')).toEqual([expect.stringContaining('2485-r05-terminal.json')]);
+    const repeated = await simple(screens, store, [event, changed]);
     expect(paneText(repeated.calls, 'one')).toHaveLength(0);
     expect(paneText(repeated.calls, 'two')).toHaveLength(0);
     expect([...store.parkedWakeEvents].filter((key) => key.startsWith('event:'))).toHaveLength(2);
-  });
-
-  it('a different completed exact GPT fact wakes only its new parked pane', async () => {
-    const store = new MemoryWakeStore();
-    const first = await simple({ coord: 'idle', one: parked, two: parked }, store);
-    expect(paneText(first.calls, 'one')).toHaveLength(1);
-    expect(paneText(first.calls, 'two')).toHaveLength(1);
-    const changed: TerminalEnvelopeEvent = { ...event, path: '/tmp/opencode/other-terminal.json',
-      invocationId: 'other-token', observedInvocationId: 'other-token' };
-    const next = await simple({ coord: 'idle', one: 'PARKED on GPT turn other-token', two: parked },
-      store, [event, otherPaneEvent, changed]);
-    expect(paneText(next.calls, 'one')).toHaveLength(1);
-    expect(paneText(next.calls, 'two')).toHaveLength(0);
   });
 
   it('AC5: bare-shell suspicion is the only Wake veto and raises one coordinator alarm', async () => {
@@ -2164,7 +2113,7 @@ describe('Issue #2485 / #2687: exact producer instead of ambiguous substring', (
     const store = new MemoryWakeStore();
     const matched = await tick({ ...params, store, screens: { coord: 'idle', one: 'PARKED on CI on ' + sha } });
     expect(paneText(matched.calls, 'one')).toHaveLength(1);
-    expect(sendsTo(matched.calls, 'one')).toHaveLength(2);
+    expect(sendsTo(matched.calls, 'one')).toHaveLength(1);
     expect(sendsTo((await tick({ ...params, store,
       screens: { coord: 'idle', one: 'PARKED on CI on ' + sha } })).calls, 'one')).toHaveLength(0);
     const unrelated = await tick({ ...params,
@@ -2980,7 +2929,6 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
   };
   const selectedProjectEvidence = {
     resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack', repository, primaryRoot: primary }),
-    readGit: selectedProjectGit, canonicalPath: (path: string) => path,
   };
   const executorFor = (
     screens: Readonly<Record<string, string>>,
@@ -3138,7 +3086,7 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
         checkRunsFinishedAt: () => completed,
       });
       expect(texts(first.calls)).toHaveLength(1);
-      expect(sendsTo(first.calls, manager.handle)).toHaveLength(2); // text plus one Enter
+      expect(sendsTo(first.calls, manager.handle)).toHaveLength(1); // one text+Enter send
       expect(first.result).toMatchObject({
         state: 'no_orchestrator', paneWakeAttempts: 1, paneWakeConfirmed: 1, paneWakeNotConfirmed: 0,
       });
@@ -3297,7 +3245,7 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
       [manager.handle]: 'PARKED on GPT turn inv-mgr334',
     }, [manager], manager, 'live', true) });
     expect(texts(failedConfirm.calls)).toHaveLength(1);
-    expect(sendsTo(failedConfirm.calls, manager.handle)).toHaveLength(2);
+    expect(sendsTo(failedConfirm.calls, manager.handle)).toHaveLength(1);
     expect(failedConfirm.result).toMatchObject({
       paneWakeAttempts: 1, paneWakeConfirmed: 1, paneWakeNotConfirmed: 0,
     });
@@ -3365,7 +3313,7 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
       const textsToCoordinator = sendsTo(positive.calls, coordinator.handle).filter((call) => call.includes('--text'));
       expect(textsToCoordinator).toHaveLength(1);
       expect(textsToCoordinator[0]?.join(' ')).toContain('recovery needed');
-      expect(sendsTo(positive.calls, coordinator.handle)).toHaveLength(2);
+      expect(sendsTo(positive.calls, coordinator.handle)).toHaveLength(1);
       expect(sendsTo(positive.calls, oldHandle)).toHaveLength(0);
       expect(positive.calls.some((call) => call[0] === 'orchestration' && call[1] === 'dispatch-show')).toBe(true);
     }
@@ -3540,7 +3488,7 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
       expect.stringContaining('GPT turn turn-terminal-one ended'),
       expect.stringContaining('GPT turn turn-terminal-two ended'),
     ]);
-    expect(sendsTo(second.calls, manager.handle)).toHaveLength(4);
+    expect(sendsTo(second.calls, manager.handle)).toHaveLength(2);
     expect(second.result).toMatchObject({ paneWakeAttempts: 2, paneWakeConfirmed: 2, paneWakeNotConfirmed: 0 });
 
     const third = await step();
@@ -3574,7 +3522,6 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     screens: { coord: 'idle', one: screen }, store,
     resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack',
       repository, primaryRoot: primary }),
-    canonicalPath: (path) => path, readGit: selectedProjectGit,
     listOpenPulls: () => [], listTerminalEnvelopes: () => [],
     checkRunsFinishedAt: () => undefined, readNamedPull: () => undefined,
     readPackReviewStage: () => undefined, readNamedReview: () => undefined,
@@ -3620,11 +3567,10 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     expect([...texts(first.calls, manager.handle), ...texts(repeat.calls, manager.handle)])
       .toEqual([expect.stringContaining('ended state ok')]);
     // Named Wake is independent of the ordinary coordinator STOPPED alarm result.
-    // Require the actual text+Enter send and confirming Enter, with no replay.
+    // Require the single text+Enter send, with no replay.
     expect(sendsTo(first.calls, manager.handle)).toEqual([
       ['terminal', 'send', '--terminal', manager.handle, '--text',
         expect.stringContaining('ended state ok'), '--enter'],
-      ['terminal', 'send', '--terminal', manager.handle, '--enter'],
     ]);
     expect(sendsTo(repeat.calls, manager.handle)).toHaveLength(0);
     expect(first.result).toEqual({ state: 'nothing_stopped' });
@@ -3652,11 +3598,10 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     expect([...texts(first.calls, manager.handle), ...texts(repeat.calls, manager.handle)])
       .toEqual([expect.stringContaining('ended state checks-completed')]);
     // Named Wake is independent of the ordinary coordinator STOPPED alarm result.
-    // Require the actual text+Enter send and confirming Enter, with no replay.
+    // Require the single text+Enter send, with no replay.
     expect(sendsTo(first.calls, manager.handle)).toEqual([
       ['terminal', 'send', '--terminal', manager.handle, '--text',
         expect.stringContaining('ended state checks-completed'), '--enter'],
-      ['terminal', 'send', '--terminal', manager.handle, '--enter'],
     ]);
     expect(sendsTo(repeat.calls, manager.handle)).toHaveLength(0);
     expect(first.result).toEqual({ state: 'nothing_stopped' });
@@ -3999,6 +3944,37 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     expect(sends((await run()).calls)).toHaveLength(0);
   });
 
+  it('Issue #2773: exact invocation ID wakes the parked owner from a standalone clone cwd or a launcher tab handle', async () => {
+    const parked = 'PARKED on GPT turn inv-a';
+    for (const landed of [
+      // AppliedIn PR 306: child cwd is a standalone clone outside every selected linked worktree.
+      event('inv-a', { cwd: '/tmp/opencode/appliedin-301-pr306-author' }),
+      event('inv-a', { cwd: undefined }),
+      // Issue 2772: the long-run launcher ran in its own, since exited, Orca tab.
+      event('inv-a', { terminalHandle: 'term_launcher_tab_exited' }),
+    ]) {
+      const store = new MemoryWakeStore();
+      const first = await scenario(parked, { listTerminalEnvelopes: () => [landed] }, store);
+      expect(texts(first.calls, manager.handle)).toEqual([expect.stringContaining('GPT-turn-inv-a ended state ok')]);
+      expect(texts(first.calls, coordinator.handle)).toHaveLength(0);
+      expect(sends((await scenario(parked, { listTerminalEnvelopes: () => [landed] }, store)).calls)).toHaveLength(0);
+    }
+  });
+
+  it('Issue #2773: an uncertain GPT park still receives its own 30-minute Reminder', async () => {
+    const parked = 'PARKED on GPT turn inv-a';
+    const store = new MemoryWakeStore();
+    const start = Date.parse('2026-11-03T00:00:00Z');
+    const deficient = [event('inv-a'), event('inv-a', { path: '/tmp/opencode/inv-a-duplicate-terminal.json' })];
+    const run = (now: number) => scenario(parked, { listTerminalEnvelopes: () => deficient, now: () => now }, store);
+    const first = await run(start);
+    expect(texts(first.calls, coordinator.handle).join(' ')).toContain('GPT producer evidence uncertain');
+    expect(texts(first.calls, manager.handle)).toHaveLength(0);
+    expect(texts((await run(start + 29 * 60_000)).calls, manager.handle)).toHaveLength(0);
+    const due = await run(start + 30 * 60_000);
+    expect(texts(due.calls, manager.handle)).toEqual([expect.stringContaining('Reminder: parked 30 min')]);
+  });
+
   it('F3 triplet is suppressed only when every member path was already woken (#2731)', async () => {
     const parked = 'PARKED on GPT turns inv-a, inv-b, inv-c';
     const envelopes = [event('inv-a'), event('inv-b'), event('inv-c')];
@@ -4023,10 +3999,6 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     ] });
     expect(sends(unrelated.calls)).toHaveLength(0);
     for (const deficient of [
-      event('inv-a', { cwd: undefined }),
-      event('inv-a', { cwd: '/other/project' }),
-      event('inv-a', { cwd: workerBase + '/two/nested-foreign/child' }),
-      event('inv-a', { cwd: workerBase + '/two-prefix-decoy' }),
       event('inv-a', { lifecycleOutcome: undefined, turnResultState: undefined }),
       event('inv-a', { lifecycleOutcome: 'success', turnResultState: 'rate_limit' }),
     ]) {
@@ -4063,7 +4035,7 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     }
   });
 
-  it('F3 legacy STOPPED completion requires exact observed ID, settled result, pane and selected Git membership', async () => {
+  it('F3 legacy STOPPED completion requires exact observed ID, settled result and pane', async () => {
     const confirmed = event('inv-a');
     const store = new MemoryWakeStore();
     const read = () => scenario('done', { listTerminalEnvelopes: () => [confirmed] }, store);
@@ -4072,7 +4044,6 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     for (const deficient of [
       event('inv-a', { observedInvocationId: undefined }),
       event('inv-a', { cwd: undefined }),
-      event('inv-a', { cwd: '/other/project' }),
       event('inv-a', { terminalHandle: 'foreign' }),
       event('inv-a', { lifecycleOutcome: undefined, turnResultState: undefined }),
       event('inv-a', { lifecycleOutcome: 'incident', turnResultState: 'ok' }),
@@ -4353,23 +4324,18 @@ describe('Issue #2687: original receipt association never replaces GPT completio
     listTerminalEnvelopes: () => [envelope], readPackReviewRuns: () => [],
     resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack',
       primaryRoot: primary, repository: 'test/project' }),
-    readGit: selectedProjectGit, canonicalPath: (path) => path,
     ...overrides,
   });
   const textTo = (calls: readonly string[][], handle: string) =>
     sendsTo(calls, handle).filter((row) => row.includes('--text'));
 
-  it('associates missing observed ID via current native receipt only as an alarm, not GPT completion', async () => {
+  it('Issue #2773: a GPT park ignores receipt-only association; missing observed ID stays pending', async () => {
     const store = new MemoryWakeStore();
     const missingObserved = event();
     const first = await perform(missingObserved, store);
     expect(textTo(first.calls, owner.handle)).toHaveLength(0);
-    expect(textTo(first.calls, coordinator.handle)[0]?.join(' ')).toContain('GPT producer evidence uncertain');
+    expect(textTo(first.calls, coordinator.handle)).toHaveLength(0);
     expect(sends((await perform(missingObserved, store)).calls)).toHaveLength(0);
-    const unrelated = await perform(missingObserved, new MemoryWakeStore(), {
-      readOriginalHandoffReceipt: () => ({ ...receipt, invocation_id: 'foreign-invocation' }),
-    });
-    expect(textTo(unrelated.calls, coordinator.handle)).toHaveLength(0);
   });
 
   it('allows original-receipt-bound non-ok failure Wake before the unfinished triplet completes', async () => {
@@ -4412,11 +4378,11 @@ describe('Issue #2687: original receipt association never replaces GPT completio
     expect(again.logs.filter((line) => line.startsWith('no bindable owner'))).toHaveLength(0);
   });
 
-  it('conflicting direct observed handle can be associated by receipt only as uncertainty', async () => {
-    const wrong = await perform(event({ observedInvocationId: 'inv-a',
+  it('Issue #2773: a foreign launcher handle with the exact observed ID is an ordinary partial triplet', async () => {
+    const launcherTab = await perform(event({ observedInvocationId: 'inv-a',
       terminalHandle: 'foreign-launch-handle' }));
-    expect(textTo(wrong.calls, owner.handle)).toHaveLength(0);
-    expect(textTo(wrong.calls, coordinator.handle)[0]?.join(' ')).toContain('GPT producer evidence uncertain');
+    expect(textTo(launcherTab.calls, owner.handle)).toHaveLength(0);
+    expect(textTo(launcherTab.calls, coordinator.handle)).toHaveLength(0);
   });
 });
 
@@ -4628,7 +4594,7 @@ describe('Issue #2687 authorized review correction: one fresh recipient check', 
     expect([...store.parkedWakeEvents].filter((key) => key.startsWith('park-uncertain:'))).toHaveLength(0);
     const safe = await tick({ config: wakeConfig, terminals: [coordinator, worker],
       screens: { coord: 'idle', one: unknownPark }, store, ...emptyFacts });
-    expect(sendsTo(safe.calls, coordinator.handle)).toHaveLength(2);
+    expect(sendsTo(safe.calls, coordinator.handle)).toHaveLength(1);
     const repeated = await tick({ config: wakeConfig, terminals: [coordinator, worker],
       screens: { coord: 'idle', one: unknownPark }, store, ...emptyFacts });
     expect(sendsTo(repeated.calls, coordinator.handle)).toHaveLength(0);
@@ -4638,42 +4604,30 @@ describe('Issue #2687 authorized review correction: one fresh recipient check', 
     const unverified: FleetTerminal = { ...coordinator, title: '', agentIdentity: undefined };
     const first = await tick({ config: wakeConfig, terminals: [unverified, worker],
       screens: { coord: 'working\nesc interrupt', one: unknownPark }, ...emptyFacts });
-    expect(sendsTo(first.calls, coordinator.handle)).toHaveLength(2);
+    expect(sendsTo(first.calls, coordinator.handle)).toHaveLength(1);
     expect(sendsTo(first.calls, coordinator.handle)[0]?.join(' ')).toContain('unknown parked producer');
   });
 
-  it('refuses a pre-send shell transition but retains delivery after text+Enter', async () => {
-    for (const phase of ['before-text', 'between-text-enter'] as const) {
-      const store = new MemoryWakeStore();
-      let shell = false;
-      let listReads = 0;
-      const executor: OrcaExecutor = (args) => {
-        if (phase === 'before-text' && args[0] === 'terminal' && args[1] === 'list'
-          && ++listReads >= 2) shell = true;
-        const isCoordinatorText = args[0] === 'terminal' && args[1] === 'send'
-          && args.includes(coordinator.handle) && args.includes('--text');
-        if (phase === 'between-text-enter' && isCoordinatorText) shell = true;
-        return fakeOrca({ coord: 'idle', one: unknownPark }, [],
-          [{ ...coordinator, ...(shell ? { title: 'zsh' } : {}) }, worker])(args);
-      };
-      const first = await tick({ config: wakeConfig, terminals: [coordinator, worker],
-        screens: { coord: 'idle', one: unknownPark }, executor, store, ...emptyFacts });
-      expect(sendsTo(first.calls, coordinator.handle).filter((row) => !row.includes('--text'))).toHaveLength(0);
-      expect(sendsTo(first.calls, coordinator.handle).filter((row) => row.includes('--text')))
-        .toHaveLength(phase === 'before-text' ? 0 : 1);
-      const uncertainMarks = [...store.parkedWakeEvents].filter((key) => key.startsWith('park-uncertain:'));
-      expect(uncertainMarks).toHaveLength(phase === 'before-text' ? 0 : 1);
-      if (phase === 'between-text-enter') {
-        expect(store.readParkedWakeEventStatus(uncertainMarks[0]!)).toBe('sent');
-        expect(first.logs.join(' ')).toContain('unit wake recipient unsafe before confirming Enter; skipped');
-      }
-      const safe = await tick({ config: wakeConfig, terminals: [coordinator, worker],
-        screens: { coord: 'idle', one: unknownPark }, store, ...emptyFacts });
-      expect(sendsTo(safe.calls, coordinator.handle)).toHaveLength(phase === 'before-text' ? 2 : 0);
-      const repeated = await tick({ config: wakeConfig, terminals: [coordinator, worker],
-        screens: { coord: 'idle', one: unknownPark }, store, ...emptyFacts });
-      expect(sendsTo(repeated.calls, coordinator.handle)).toHaveLength(0);
-    }
+  it('refuses a pre-send shell transition, then sends one text+Enter once safe', async () => {
+    const store = new MemoryWakeStore();
+    let shell = false;
+    let listReads = 0;
+    const executor: OrcaExecutor = (args) => {
+      if (args[0] === 'terminal' && args[1] === 'list' && ++listReads >= 2) shell = true;
+      return fakeOrca({ coord: 'idle', one: unknownPark }, [],
+        [{ ...coordinator, ...(shell ? { title: 'zsh' } : {}) }, worker])(args);
+    };
+    const first = await tick({ config: wakeConfig, terminals: [coordinator, worker],
+      screens: { coord: 'idle', one: unknownPark }, executor, store, ...emptyFacts });
+    expect(sendsTo(first.calls, coordinator.handle)).toHaveLength(0);
+    expect([...store.parkedWakeEvents].filter((key) => key.startsWith('park-uncertain:'))).toHaveLength(0);
+    const safe = await tick({ config: wakeConfig, terminals: [coordinator, worker],
+      screens: { coord: 'idle', one: unknownPark }, store, ...emptyFacts });
+    expect(sendsTo(safe.calls, coordinator.handle)).toEqual([
+      expect.arrayContaining(['--terminal', coordinator.handle, '--text', '--enter'])]);
+    const repeated = await tick({ config: wakeConfig, terminals: [coordinator, worker],
+      screens: { coord: 'idle', one: unknownPark }, store, ...emptyFacts });
+    expect(sendsTo(repeated.calls, coordinator.handle)).toHaveLength(0);
   });
 
 
@@ -4754,7 +4708,6 @@ describe('Issue #2687 authorized review correction: one fresh recipient check', 
         listTerminalEnvelopes: () => [envelope],
         resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack',
           primaryRoot: primary, repository: 'test/project' }),
-        readGit: selectedProjectGit, canonicalPath: (path) => path,
         listOpenPulls: () => [],
       } : {
         config: config({ ...wakeConfig, selectedRepository: 'test/project' }),
@@ -4763,7 +4716,7 @@ describe('Issue #2687 authorized review correction: one fresh recipient check', 
         readNamedPull: () => ({ number: 2691, headSha: sha, state: 'open', merged: false }),
         supervisedPullOwner: (_pull, panes) => panes.find((pane) => pane.handle === worker.handle),
       };
-      for (const phase of ['before-text', 'between-text-enter'] as const) {
+      for (const phase of ['before-text'] as const) {
         for (const change of ['shell', 'busy'] as const) {
           const store = new MemoryWakeStore();
           let seenInitialScreen = false;
@@ -4774,8 +4727,6 @@ describe('Issue #2687 authorized review correction: one fresh recipient check', 
             if (readsWorker) seenInitialScreen = true;
             const secondList = args[0] === 'terminal' && args[1] === 'list' && seenInitialScreen;
             if (phase === 'before-text' && secondList) changed = true;
-            if (phase === 'between-text-enter' && args[0] === 'terminal'
-              && args[1] === 'send' && args.includes(worker.handle) && args.includes('--text')) changed = true;
             const recipient: FleetTerminal = changed && change === 'shell'
               ? { ...worker, title: 'zsh', agentIdentity: 'shell' } : worker;
             const screen = changed && change === 'busy' ? 'working\nesc interrupt' : 'done';
@@ -4786,17 +4737,10 @@ describe('Issue #2687 authorized review correction: one fresh recipient check', 
             screens: { coord: 'working\nesc interrupt', one: 'done' }, ...emptyFacts, ...extra };
           const first = await tick({ ...base, executor });
           const initialSends = sendsTo(first.calls, worker.handle);
-          expect(initialSends.filter((row) => !row.includes('--text'))).toHaveLength(0);
-          expect(initialSends.filter((row) => row.includes('--text')))
-            .toHaveLength(phase === 'before-text' ? 0 : 1);
-          const eventMarks = [...store.parkedWakeEvents].filter((key) => key.startsWith('event:'));
-          expect(eventMarks).toHaveLength(phase === 'before-text' ? 0 : 1);
-          if (phase === 'between-text-enter') {
-            expect(store.readParkedWakeEventStatus(eventMarks[0]!)).toBe('sent');
-            expect(first.logs.join(' ')).toContain('unit wake recipient unsafe before confirming Enter; skipped');
-          }
+          expect(initialSends).toHaveLength(0);
+          expect([...store.parkedWakeEvents].filter((key) => key.startsWith('event:'))).toHaveLength(0);
           const safe = await tick(base);
-          expect(sendsTo(safe.calls, worker.handle)).toHaveLength(phase === 'before-text' ? 2 : 0);
+          expect(sendsTo(safe.calls, worker.handle)).toHaveLength(1);
           const repeat = await tick(base);
           expect(sendsTo(repeat.calls, worker.handle)).toHaveLength(0);
         }
@@ -4814,7 +4758,7 @@ describe('Issue #2687 authorized review correction: one fresh recipient check', 
           terminals: [coordinator, worker], screens: { coord: 'working\nesc interrupt', one: 'done' },
           ...emptyFacts, ...extra, executor: unknownTitle,
         });
-        expect(sendsTo(allowed.calls, worker.handle)).toHaveLength(2);
+        expect(sendsTo(allowed.calls, worker.handle)).toHaveLength(1);
       }
     },
   );
@@ -4835,14 +4779,13 @@ describe('Issue #2687 authorized review correction: one fresh recipient check', 
       now: () => Date.parse('2026-10-22T11:43:00Z'),
       resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack',
         primaryRoot: primary, repository: 'test/project' }),
-      canonicalPath: (path) => path, readGit: selectedProjectGit,
       ...emptyFacts,
     });
     vi.stubEnv('ORCH_HANDLE', 'coord-old');
     try {
       writeFileSync(file, 'ORCH_HANDLE=coord-new\n');
       const parked = await run(new MemoryWakeStore(), dueScreen);
-      expect(sendsTo(parked.calls, old.handle)).toHaveLength(2);
+      expect(sendsTo(parked.calls, old.handle)).toHaveLength(1);
       const event: TerminalEnvelopeEvent = {
         path: '/tmp/opencode/repinned-old-worker-terminal.json',
         invocationId: 'repinned-invocation', observedInvocationId: 'repinned-invocation',
@@ -4850,12 +4793,12 @@ describe('Issue #2687 authorized review correction: one fresh recipient check', 
         lifecycleOutcome: 'success', turnResultState: 'ok',
       };
       const gpt = await run(new MemoryWakeStore(), 'done', event);
-      expect(sendsTo(gpt.calls, old.handle)).toHaveLength(2);
+      expect(sendsTo(gpt.calls, old.handle)).toHaveLength(1);
       expect(sendsTo(gpt.calls, old.handle).filter((row) => row.includes('--text'))).toHaveLength(1);
       rmSync(file);
       const noCoordinator = await run(new MemoryWakeStore(), dueScreen);
       expect(noCoordinator.result.state).toBe('no_orchestrator');
-      expect(sendsTo(noCoordinator.calls, old.handle)).toHaveLength(2);
+      expect(sendsTo(noCoordinator.calls, old.handle)).toHaveLength(1);
       expect(sendsTo(noCoordinator.calls, latest.handle)).toHaveLength(0);
     } finally {
       vi.unstubAllEnvs();
@@ -5047,7 +4990,6 @@ describe('Issue #2749 B9-6: exact primary-root near-effect Dispatch admission', 
         workspaceRe: /(?:\/home\/user\/project$|\/orca\/workspaces\/project\/)/u }),
       listTerminalEnvelopes: () => [envelope], listOpenPulls: () => [],
       readCurrentAssignments: () => [], readPackReviewRuns: () => [],
-      readGit: selectedProjectGit, canonicalPath: (path) => path,
       resolveSelectedReviewProject: () => ({
         projectId: 'orchestrator-pack', repository: 'test/project', primaryRoot: primary,
       }),
@@ -5060,7 +5002,7 @@ describe('Issue #2749 B9-6: exact primary-root near-effect Dispatch admission', 
     const store = new MemoryWakeStore();
     const first = await exercise('stable', store);
     expect(deliveredText(first.calls)).toHaveLength(1);
-    expect(sendsTo(first.calls, rootAgent.handle)).toHaveLength(2);
+    expect(sendsTo(first.calls, rootAgent.handle)).toHaveLength(1);
     expect(deliveredText((await exercise('stable', store)).calls)).toHaveLength(0);
     expect(deliveredText((await exercise('unbound')).calls)).toHaveLength(0);
   });
@@ -5079,7 +5021,7 @@ describe('Issue #2749 B9-6: exact primary-root near-effect Dispatch admission', 
     const screen = park + '\n>';
     const first = await exercise('stable', store, screen);
     expect(deliveredText(first.calls)).toHaveLength(1);
-    expect(sendsTo(first.calls, rootAgent.handle)).toHaveLength(2);
+    expect(sendsTo(first.calls, rootAgent.handle)).toHaveLength(1);
     expect(deliveredText((await exercise('stable', store, screen)).calls)).toHaveLength(0);
   });
 

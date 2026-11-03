@@ -1,0 +1,42 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2761,
+  "declared_paths": [
+    ".cursor/skills/execute-issue-with-gpt/SKILL.md",
+    "docs/chatgpt-task-execution-runbook.md",
+    "prompts/pack_pr_review_contract.md",
+    "scripts/lib/pack-gpt-source-comment-runner.cases.ts",
+    "scripts/lib/pack-review-delivery.ts",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner-issue-1591.test.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.test.ts",
+    "scripts/pack-review-state.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/skills/execute-issue-with-gpt/SKILL.md",
+    "docs/chatgpt-task-execution-runbook.md",
+    "prompts/pack_pr_review_contract.md",
+    "scripts/lib/execute-issue-manager-boundary.test.ts",
+    "scripts/lib/pack-gpt-source-comment-runner.cases.ts",
+    "scripts/lib/pack-review-delivery.ts",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/pack-pr-review-contract.test.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner-issue-1591.test.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.test.ts",
+    "scripts/pack-review-state.ts",
+    "scripts/review-delivery.test.ts"
+  ],
+  "source_revision": "6dbed36197caf3a504e7d8af0611975b69af33de"
+}

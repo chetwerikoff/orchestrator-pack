@@ -307,11 +307,31 @@ function parseRequiredSmokeScenarioLines(raw) {
 }
 
 function findSmokePlanRuntimeIdentifiers(scenario) {
-  const value = `${scenario.action}\n${scenario.expected}`;
-  return [...new Set(
-    [...value.matchAll(/\b(?:term|run|msg)_[A-Za-z0-9][A-Za-z0-9._:-]*\b/gu)]
-      .map((match) => match[0]),
-  )];
+  const tokens = new Set();
+  for (const [kind, value] of [['action', scenario.action], ['expected', scenario.expected]]) {
+    for (const match of value.matchAll(/\b(?:term|run|msg)_[A-Za-z0-9][A-Za-z0-9._:-]*\b/gu)) {
+      const before = value.slice(0, match.index);
+      const after = value.slice(match.index + match[0].length);
+      // Function-call names such as run_check() are not runtime-owned identities.
+      if (/^\s*\(/u.test(after)) continue;
+      const structured = /(?:^|[\s([{])(?:--[a-z-]*id|(?:runtime|session|run|term|terminal|msg|message)[-_ ]?(?:id|handle)|(?:target|witness))\s*(?:[:=]|\s+)\s*['"`]?$/iu.test(before);
+      const executable = /\b(?:execute|resume|attach|poll|fetch|read|open|inspect|cancel|dispatch|connect|query|target)\s+['"`]?$/iu.test(before)
+        || (kind === 'action' && /\brun\s+['"`]?$/iu.test(before));
+      const directExecutable = kind === 'action' && /^\s*['"`]?\s*$/u.test(before);
+      // A standalone expected value is a runtime witness, not an explanatory mention.
+      const directExpected = kind === 'expected'
+        && /^\s*['"`]?\s*$/u.test(before)
+        && /^\s*['"`]?\s*$/u.test(after);
+      // CLI options and positional arguments can carry session-owned values.
+      const optionValue = /(?:^|\s)--[a-z][a-z0-9-]*(?:=|\s+)\s*['"`]?$/iu.test(before);
+      const positionalCommand = kind === 'action'
+        && /^\s*(?:node|npm|npx|python(?:3)?|bun|deno|bash|sh)\s+\S+/iu.test(before);
+      if (structured || executable || directExecutable || directExpected || optionValue || positionalCommand) {
+        tokens.add(match[0]);
+      }
+    }
+  }
+  return [...tokens];
 }
 
 function findSmokePlanMutableEvidenceTokens(scenario) {
@@ -463,7 +483,7 @@ export function checkSmokeTestPlan(markdown) {
     }
     for (const token of findSmokePlanRuntimeIdentifiers(scenario)) {
       errors.push(
-        `smoke-test-plan scenario ${ordinal} contains run-owned runtime identifier literal: ${token}`,
+        `smoke-test-plan scenario ${ordinal} contains run-owned runtime identifier literal: ${token}; replace with stable non-session-bound inputs and rerun the guard`,
       );
     }
     for (const token of findSmokePlanMutableEvidenceTokens(scenario)) {

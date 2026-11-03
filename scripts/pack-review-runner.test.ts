@@ -88,11 +88,14 @@ import {
   resolveBoundIssueSnapshot,
 } from './lib/reverify-bound-issue-snapshot.ts';
 import {
+  PACK_REVIEW_LOGICAL_CAPS,
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
   commitPackReviewTerminal,
+  createNewPackReviewCycle,
   initializePackReviewAuthority,
   observePackReviewHead,
   readPackReviewAuthority,
+  selectPackReviewGptSourceCardinality,
   settleLogicalPackReviewFindingsByStrictDescendant,
   stableJson,
 } from './pack-review-state.ts';
@@ -1282,6 +1285,95 @@ describe('Issue #1826 logical-round smoke independence', () => {
       reviewStageComplete: true,
     });
   });
+  it('Issue #2767: admits round 2 on a verified rebased head but refuses same-head and unverified ancestry', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'pack-review-2767-rebased-head-'));
+    roots.push(parent);
+    const storeRoot = join(parent, 'store');
+    setupHarness(storeRoot);
+    const findingsHead = '7'.repeat(40);
+    const rebasedHead = '8'.repeat(40);
+    const prNumber = 2767;
+    const issueBody = [
+      '```complexity-tier\ntier: T3\nadvisory-prior: T3\n```',
+      '```smoke-test-plan\nscenarios:\n  - action: review rebased head | expected: PASS\n```',
+    ].join('\n\n');
+    const options = { storeRoot };
+    initializePackReviewAuthority({
+      prNumber, headSha: findingsHead, tier: 'T3',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options,
+    });
+    const common = {
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: process.cwd(),
+      prNumber,
+      headSha: findingsHead,
+      claimMode: 'preacquired' as const,
+      fixtureCurrentPrHeadSha: findingsHead,
+      fixturePostReviewHeadSha: findingsHead,
+      fixturePrState: 'OPEN' as const,
+      fixturePrBody: `Closes #${prNumber}`,
+      fixturePostReviewPrBody: `Closes #${prNumber}`,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureIssueNumber: prNumber,
+      fixtureIssueTitle: '[T3] Rebased head fixture', fixtureIssueBody: issueBody,
+      fixtureReviewerLayerOverrides: { Process: 'codex', User: 'codex' },
+      fixtureEmulateWin32Selector: true,
+      fixtureRequiredStatusWriter: async () => {},
+      fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    };
+    const first = await startPackReview({
+      ...common,
+      fixtureReviewStdout: JSON.stringify({
+        verdict: 'findings', findingCount: 1,
+        findings: [{ severity: 'blocking', title: 'round one finding' }],
+      }),
+      fixtureGithubReviewId: 276701,
+    });
+    expect(first).toMatchObject({ ok: true, created: true });
+    expect(readPackReviewAuthority(prNumber, options)?.cycle).toMatchObject({
+      state: 'open_findings', frozenTier: 'T3', frozenCap: 2,
+      consumedRoundOrdinals: [1],
+    });
+
+    const sameHead = await startPackReview({
+      ...common, fixtureReviewStdout: cleanPayload(), fixtureGithubReviewId: 276702,
+    });
+    expect(sameHead).toMatchObject({
+      ok: false, created: false, reason: 'prior_round_findings_unresolved', httpStatus: 409,
+    });
+    expect(String(sameHead.nextAction)).toContain('a rebase is allowed');
+
+    const rebasedInput = {
+      ...common,
+      headSha: rebasedHead,
+      fixtureCurrentPrHeadSha: rebasedHead,
+      fixturePostReviewHeadSha: rebasedHead,
+      fixtureReviewStdout: cleanPayload(),
+      fixtureGithubReviewId: 276703,
+    };
+    const unknown = await startPackReview({
+      ...rebasedInput, fixtureReviewCompareStatus: 'unavailable',
+    });
+    expect(unknown).toMatchObject({
+      ok: false, created: false, reason: 'prior_round_findings_unresolved',
+    });
+    expect(readPackReviewAuthority(prNumber, options)?.cycle?.consumedRoundOrdinals).toEqual([1]);
+
+    const round2 = await startPackReview({
+      ...rebasedInput, fixtureReviewCompareStatus: 'diverged',
+    });
+    expect(round2).toMatchObject({ ok: true, created: true, headSha: rebasedHead });
+    expect(readPackReviewAuthority(prNumber, options)).toMatchObject({
+      currentHeadSha: rebasedHead,
+      cycle: {
+        state: 'closed', frozenTier: 'T3', frozenCap: 2,
+        consumedRoundOrdinals: [1, 2],
+        settlementKind: 'rewritten_head', reviewStageComplete: true,
+      },
+    });
+  });
+
   it('does not create a native same-round replacement when the prior run lacks a native binding', async () => {
     const parent = mkdtempSync(join(tmpdir(), 'pack-review-1826-native-unbound-'));
     roots.push(parent);
@@ -3321,12 +3413,11 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     },
   );
 
-  it.each(['cycle', 'round-cap', 'source-coverage', 'source-identity', 'repository'])('refuses %s mismatch in disposable persisted evidence', async (kind) => {
+  it.each(['cycle', 'source-coverage', 'source-identity', 'repository'])('refuses %s mismatch in disposable persisted evidence', async (kind) => {
     const f = fixture();
     const path = join(f.options.storeRoot, 'runs', `${f.run.id}.json`);
     const raw = JSON.parse(readFileSync(path, 'utf8')) as PackReviewRunRecord;
     if (kind === 'cycle') raw.reviewCycleId = 'other-cycle';
-    if (kind === 'round-cap') raw.logicalRoundCap = 3;
     if (kind === 'repository') raw.canonicalRepository = 'other/project';
     if (kind === 'source-identity') {
       const receipt = (raw.reviewRound!.sourceSlots[2]!.terminalResult as { source_comment_receipt: { runId: string } }).source_comment_receipt;
@@ -4141,6 +4232,31 @@ describe('Issue #2537 promoted T2-at-cap second-round required CI gate', () => {
 });
 
 
+/** Synthetic historical checkpoint: older logical cycles kept advisory findings
+ * at cap even though the GitHub success status had already been published.
+ * Current tiered runs must NOT recreate this state through normal review.
+ */
+function restoreHistoricalAdvisoryAtCap(prNumber: number, storeRoot: string): void {
+  const file = join(storeRoot, 'authority', `pr-${prNumber}.json`);
+  const historical = readPackReviewAuthority(prNumber, { storeRoot });
+  if (!historical?.cycle || historical.cycle.state !== 'closed'
+      || historical.cycle.consumedRoundOrdinals?.length !== historical.cycle.frozenCap) {
+    throw new Error('expected completed synthetic advisory cycle before historic restoration');
+  }
+  historical.cycle.state = 'at_cap_open_findings';
+  delete historical.cycle.closedAtUtc;
+  delete historical.cycle.reviewStageComplete;
+  delete historical.cycle.reviewStageCompletedAtUtc;
+  historical.cycle.atCapHash = createHash('sha256').update(stableJson({
+    cycleId: historical.cycle.cycleId,
+    frozenCap: historical.cycle.frozenCap,
+    consumedRoundOrdinals: historical.cycle.consumedRoundOrdinals,
+  })).digest('hex');
+  writeFileSync(file, JSON.stringify(historical));
+  expect(readPackReviewAuthority(prNumber, { storeRoot })?.cycle?.state)
+    .toBe('at_cap_open_findings');
+}
+
 describe('Issue #2537 historical first-round status readback', () => {
   it('repairs old same-head cap-one success to pending without starting another reviewer', async () => {
     const root = mkdtempSync(join(tmpdir(), 'pack-review-2537-old-success-'));
@@ -4177,6 +4293,7 @@ describe('Issue #2537 historical first-round status readback', () => {
     });
     expect(first).toMatchObject({ ok: true, created: true });
     expect(currentStatus).toBe('success');
+    restoreHistoricalAdvisoryAtCap(prNumber, storeRoot);
     const original = readPackReviewAuthority(prNumber, { storeRoot })!;
     expect(original.cycle).toMatchObject({ frozenTier: 'T2', frozenCap: 1,
       state: 'at_cap_open_findings', consumedRoundOrdinals: [1] });
@@ -4304,6 +4421,7 @@ describe('Issue #2537 scoped final-cap promotion and status integrity', () => {
       fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
     });
     expect(first).toMatchObject({ ok: true, created: true });
+    restoreHistoricalAdvisoryAtCap(prNumber, storeRoot);
     const authority = readPackReviewAuthority(prNumber, { storeRoot })!;
     expect(authority.cycle).toMatchObject({
       frozenTier: 'T2', frozenCap: 1, state: 'at_cap_open_findings',
@@ -4938,7 +5056,7 @@ describe('Issue #2576 owned worktree lifecycle with real disposable Git', () => 
     });
     expect(first, JSON.stringify(first)).toMatchObject({
       ok: true, status: 'reviewing',
-      coverage: { kind: 'partial', completedSourceCount: 2, cardinality: 3 },
+      coverage: { kind: 'partial', completedSourceCount: 1, cardinality: 2 },
     });
     const runId = String(first.runId);
     const target = join(f.storeRoot, 'worktrees', runId);
@@ -5585,11 +5703,11 @@ describe('Issue #2607 first-round findings: exact-head CLI and COMMENT resume', 
     const first = await runPackGptReviewCommand({ prNumber, reviewer: 'gpt' }, {
       env: process.env, stderr: { write: () => undefined },
       startReview: commandStart2607(storeRoot, {
-        ...fixture, fixtureCrashAfterGptSourceCredentialedCount: 3,
+        ...fixture, fixtureCrashAfterGptSourceCredentialedCount: 1,
       }),
     });
     expect(first.exitCode).toBe(1);
-    expect(source.sent()).toBe(3);
+    expect(source.sent()).toBe(1);
     const originalId = String(first.result.runId);
     expect(getPackReviewRun(originalId, { projectId: 'orchestrator-pack', storeRoot })).toMatchObject({
       reviewerExecutionRunId: undefined, executedReviewer: undefined,
@@ -5612,7 +5730,7 @@ describe('Issue #2607 first-round findings: exact-head CLI and COMMENT resume', 
       },
     });
     expect(resumed.result.reviewerExecutionRunId).toBe(originalId);
-    expect(source.sent()).toBe(3);
+    expect(source.sent()).toBe(1);
     expect(review.posts()).toBe(1);
     expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })).toHaveLength(1);
     expect(getPackReviewRun(originalId, { projectId: 'orchestrator-pack', storeRoot }))
@@ -5646,7 +5764,7 @@ describe('Issue #2607 first-round findings: exact-head CLI and COMMENT resume', 
     const first = await runPackGptReviewCommand({ prNumber, reviewer: 'gpt' }, {
       env: process.env, stderr: { write: () => undefined },
       startReview: commandStart2607(storeRoot, {
-        ...fixture, fixtureCrashAfterGptSourceCredentialedCount: 3,
+        ...fixture, fixtureCrashAfterGptSourceCredentialedCount: 1,
       }),
     });
     expect(first.exitCode).toBe(1);
@@ -5759,8 +5877,8 @@ describe('Issue #2607 first-round findings: exact-head CLI and COMMENT resume', 
         fixtureCurrentPrHeadSha: HEAD, fixturePostReviewHeadSha: HEAD,
         fixturePrState: 'OPEN', fixtureRepoSlug: repository,
         fixturePrBody: 'Closes #' + prNumber, fixturePostReviewPrBody: 'Closes #' + prNumber,
-        fixtureIssueNumber: prNumber, fixtureIssueTitle: '[T1] Acquired harvest failure',
-        fixtureIssueBody: issueBody, fixtureReviewStdout: cleanPayload(),
+        fixtureIssueNumber: prNumber, fixtureIssueTitle: '[T3] Acquired harvest failure',
+        fixtureIssueBody: ['```complexity-tier', 'tier: T3', '```'].join('\n'), fixtureReviewStdout: cleanPayload(),
         fixtureReviewBySourceSlot: attempts,
         fixtureAfterGptInvocationBound: async ({ slotId, invocationId }) => {
           sent.push(slotId);
@@ -6094,7 +6212,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     });
     const newId = String(next.result.runId);
     expect(newId).not.toBe(f.original.id);
-    expect(f.freshStarts).toEqual(['source-01', 'source-02', 'source-03']);
+    expect(f.freshStarts).toEqual(['source-01', 'source-02']);
     const old = getPackReviewRun(f.original.id, f.options)!;
     expect(old).toMatchObject({
       id: f.original.id, status: 'failed',
@@ -6200,7 +6318,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     },
   );
 
-  it('does not claim fresh-run authority for a changed head, unowned claim, or mismatched frozen cap', async () => {
+  it('does not claim fresh-run authority for a changed head or unowned claim', async () => {
     const moved = fixture();
     const movedHead = 'b'.repeat(40);
     const changed = await moved.reconcile({ fixtureCurrentPrHeadSha: movedHead });
@@ -6225,12 +6343,6 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     });
     expect(noClaim).toMatchObject({ ok: false, created: false });
     expect(listPackReviewRuns(claim.options)).toHaveLength(1);
-
-    const cap = fixture({ logicalRoundCap: 2 });
-    expect(getPackReviewRun(cap.original.id, cap.options)?.logicalRoundCap).toBe(2);
-    const denied = await cap.start();
-    expect(denied.result.created).not.toBe(true);
-    expect(listPackReviewRuns(cap.options)).toHaveLength(1);
   });
 
 
@@ -6324,9 +6436,9 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
 
   it('refuses exceptional same-head admission with a mismatched reviewer', async () => {
     const f = fixture();
-    updatePackReviewRun(f.original.id, { resolvedReviewer: 'codex' }, f.options);
-    const next = await f.start();
-    expect(next.result.created).not.toBe(true);
+    expect(() => updatePackReviewRun(f.original.id, { resolvedReviewer: 'codex' }, f.options))
+      .toThrow(/GPT logical source version\/round identity mismatch/);
+    expect(getPackReviewRun(f.original.id, f.options)?.resolvedReviewer).toBe('gpt');
     expect(f.freshStarts).toEqual([]);
     expect(listPackReviewRuns(f.options)).toHaveLength(1);
   });
@@ -6354,7 +6466,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     expect(repeated.result.created).not.toBe(true);
     expect(listPackReviewRuns(f.options)).toHaveLength(2);
     expect(f.reviews).toHaveLength(1);
-    expect(f.freshStarts).toEqual(['source-01', 'source-02', 'source-03']);
+    expect(f.freshStarts).toEqual(['source-01', 'source-02']);
   });
 
   it('never replays the historical HEAD as the current PR-led target after a head change', async () => {
@@ -6401,16 +6513,15 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
         },
       });
       expect(r2.result, JSON.stringify(r2.result)).toMatchObject({
-        created: true, headSha: HEAD, runnerReason: 'gpt_sources_waiting_for_grace:0/3',
+        created: true, headSha: HEAD, runnerReason: 'gpt_sources_incomplete_after_grace:0/2',
       });
       r2Id = String(r2.result.runId);
       expect(r2Id).not.toBe(f.original.id);
       expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
 
-      // The two persisted gates have different authorities. In both orders,
-      // reconcile must refuse zero-send terminalization after only one expires:
-      // (1) dead-PID heartbeat/updatedAt stale gate, (2) earliest finite source
-      // admission (createdAt fallback) 0/3 grace. No immediate recovery shortcut.
+      // A fresh T2 is exactly 2/2 and has no legacy 2/3 degraded grace.
+      // Source admission alone never terminalizes: a dead-owner stale check
+      // remains authoritative even when the source grace clock is older.
       const activeR2 = getPackReviewRun(r2Id, f.options)!;
       const admissions = activeR2.reviewRound!.sourceSlots
         .map((slot) => Date.parse(slot.admissionStartedAtUtc ?? ''))
@@ -6438,29 +6549,25 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
 
       vi.setSystemTime(new Date(firstBoundary));
-      const afterOneGate = await f.reconcile({ runId: r2Id });
-      expect(afterOneGate.results.some((row) => row.runId === r2Id && row.terminalized)).toBe(false);
-      expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
+      const afterFirstDeadline = await f.reconcile({ runId: r2Id });
       if (firstGate === 'stale') {
-        // This ordinary reconcile may return before producing a graceExpired
-        // diagnostic; prove the persisted admission deadline is still pending
-        // and no required status reconciliation or terminalization occurred.
-        expect(Date.now()).toBeLessThan(zeroSendBoundary);
-        expect(afterOneGate.results.find((row) => row.runId === r2Id)).toMatchObject({
-          terminalized: false, statusReconciled: false,
-        });
+        // Tiered T2 0/2 does not wait for the old 2/3 grace deadline.
+        expect(afterFirstDeadline.results.find((row) => row.runId === r2Id && row.terminalized))
+          .toMatchObject({ terminalized: true, statusReconciled: true });
+      } else {
+        // Source deadline alone cannot prove the runner is dead.
+        expect(afterFirstDeadline.results.some((row) => row.runId === r2Id && row.terminalized))
+          .toBe(false);
+        expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
+        vi.setSystemTime(new Date(staleBoundary - 1));
+        const justBeforeStale = await f.reconcile({ runId: r2Id });
+        expect(justBeforeStale.results.some((row) => row.runId === r2Id && row.terminalized))
+          .toBe(false);
+        vi.setSystemTime(new Date(staleBoundary));
+        const atStale = await f.reconcile({ runId: r2Id });
+        expect(atStale.results.find((row) => row.runId === r2Id && row.terminalized))
+          .toMatchObject({ terminalized: true, statusReconciled: true });
       }
-
-      vi.setSystemTime(new Date(settleBoundary - 1));
-      const justBefore = await f.reconcile({ runId: r2Id });
-      expect(justBefore.results.some((row) => row.runId === r2Id && row.terminalized)).toBe(false);
-      expect(getPackReviewRun(r2Id, f.options)?.status).toBe('preparing');
-
-      vi.setSystemTime(new Date(settleBoundary));
-      const atBothGates = await f.reconcile({ runId: r2Id });
-      expect(atBothGates.results.find((row) => row.runId === r2Id && row.terminalized)).toMatchObject({
-        terminalized: true, statusReconciled: true,
-      });
     } finally {
       vi.useRealTimers();
     }
@@ -6489,7 +6596,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       expect(r3.result).toMatchObject({ created: false, runnerReason: 'gpt_rate_limit_history_unsafe' });
       expect(f.reviews).toHaveLength(0);
       expect(listPackReviewRuns(f.options)).toHaveLength(2);
-      expect(f.freshStarts).toHaveLength(3);
+      expect(f.freshStarts).toHaveLength(2);
     } else {
       expect(r3.result, JSON.stringify(r3.result)).toMatchObject({
         created: true, reused: false, headSha: HEAD, publicationVerified: true,
@@ -6498,7 +6605,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       expect(String(r3.result.runId)).not.toBe(f.original.id);
       expect(listPackReviewRuns(f.options)).toHaveLength(3);
       expect(f.reviews).toHaveLength(1);
-      expect(f.freshStarts).toHaveLength(6);
+      expect(f.freshStarts).toHaveLength(4);
       expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })
         ?.cycle?.consumedRoundOrdinals).toEqual([1]);
     }
@@ -6761,5 +6868,81 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     expect(String(incumbent.result.detail)).toContain('observe the original runner PID and stale grace');
     expect(f.freshStarts).toEqual([]);
     expect(listPackReviewRuns(f.options)).toHaveLength(1);
+  });
+});
+
+describe('Issue #2777 historical logical round cap on read', () => {
+  const projectId = 'orchestrator-pack';
+  const histVersion = 'issue-1826-logical-rounds-1-1-2';
+
+  function harness() {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2777-historical-cap-'));
+    roots.push(root);
+    const storeRoot = join(root, 'store');
+    setupHarness(storeRoot);
+    process.env.PACK_REVIEWER = 'gpt';
+    process.env.PACK_REVIEW_BOUND_REVIEWER = 'gpt';
+    return { storeRoot, options: { projectId, storeRoot } };
+  }
+
+  function t3Run(storeRoot: string, input: { ordinal: number; cap?: number; roundOrdinal?: number }) {
+    const round: PackReviewGptRoundRecord = {
+      schema: 'pack-review-gpt-round/v1', reviewer: 'gpt', tier: 'T3',
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      roundOrdinal: input.roundOrdinal ?? input.ordinal, cardinality: 3, issueNumber: 2777,
+      boundIssueSnapshotDigest: 'd'.repeat(64),
+      sourceSlots: [1, 2, 3].map((ordinal) => ({
+        slotId: 'source-0' + ordinal, ordinal, lifecycle: 'planned' as const,
+      })),
+    };
+    return createPackReviewRun({
+      projectId, storeRoot, prNumber: 515, headSha: HEAD,
+      trustedPackRoot: process.cwd(), sourceRepoRoot: process.cwd(),
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      reviewCycleId: 'cycle-2777', logicalRoundOrdinal: input.ordinal,
+      ...(input.cap === undefined ? {} : { logicalRoundCap: input.cap }),
+      automaticBudgetDisposition: 'consume', resolvedReviewer: 'gpt', reviewRound: round,
+    }).run;
+  }
+
+  it('loads a saved T3 record whose cap (1) differs from today\'s T3 cap', () => {
+    expect(PACK_REVIEW_LOGICAL_CAPS.T3).not.toBe(1);
+    const { storeRoot, options } = harness();
+    const created = t3Run(storeRoot, { ordinal: 1, cap: PACK_REVIEW_LOGICAL_CAPS.T3 });
+    const path = join(storeRoot, 'runs', `${created.id}.json`);
+    const saved = JSON.parse(readFileSync(path, 'utf8')) as PackReviewRunRecord;
+    // Realistic historical file: written when the T3 cap was 1.
+    saved.logicalRoundCap = 1;
+    saved.accountingVersion = histVersion;
+    writeFileSync(path, JSON.stringify(saved));
+    expect(PACK_REVIEW_LOGICAL_CAP_MAP_VERSION).toBe(histVersion);
+    expect(getPackReviewRun(created.id, options)).toMatchObject({
+      id: created.id, logicalRoundCap: 1, logicalRoundOrdinal: 1, accountingVersion: histVersion,
+    });
+    // The project-store scan is not aborted by the historical row.
+    expect(listPackReviewRuns(options).map((run) => run.id)).toEqual([created.id]);
+  });
+
+  it('still enforces current caps at new-round admission', () => {
+    const { storeRoot, options } = harness();
+    const overCap = PACK_REVIEW_LOGICAL_CAPS.T3 + 1;
+    expect(() => t3Run(storeRoot, { ordinal: overCap, cap: PACK_REVIEW_LOGICAL_CAPS.T3 })).toThrow();
+    expect(() => selectPackReviewGptSourceCardinality({
+      reviewer: 'gpt', tier: 'T3', roundOrdinal: overCap, accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+    })).toThrow(/exceeds logical tier cap/);
+    expect(createNewPackReviewCycle('T3', { capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION }).frozenCap)
+      .toBe(PACK_REVIEW_LOGICAL_CAPS.T3);
+    expect(listPackReviewRuns(options)).toEqual([]);
+  });
+
+  it('keeps the other logical identity checks', () => {
+    const { storeRoot } = harness();
+    expect(() => t3Run(storeRoot, { ordinal: 1 }))
+      .toThrow(/GPT logical source version\/round identity mismatch/);
+    expect(() => t3Run(storeRoot, { ordinal: 2, cap: 2, roundOrdinal: 1 }))
+      .toThrow(/GPT logical source version\/round identity mismatch/);
+    expect(() => t3Run(storeRoot, { ordinal: 2, cap: 1, roundOrdinal: 2 }))
+      .toThrow(/logicalRoundOrdinal exceeds logicalRoundCap/);
   });
 });

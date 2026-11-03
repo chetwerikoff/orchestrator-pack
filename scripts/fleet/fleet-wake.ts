@@ -2,9 +2,9 @@
 import '../toolchain/native-entrypoint-preflight.ts';
 import { createHash } from 'node:crypto';
 import { runProcessSync } from '../kernel/subprocess.ts';
-import { existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readlinkSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTargetContext, type TargetContext } from '../lib/target-context.ts';
 import {
@@ -326,8 +326,6 @@ export interface FleetAlarmTickOptions {
   /** Offline fixtures; production revalidates the selected registered card. */
   readonly resolveSelectedReviewProject?: () => Pick<TargetContext, 'projectId' | 'repository' | 'primaryRoot'>;
   /** Read-only fake Git witness for selected-project membership in the existing test suite. */
-  readonly readGit?: (cwd: string, args: readonly string[]) => string | undefined;
-  readonly canonicalPath?: (path: string) => string;
   /** Read-only fake Linux proc/namespace observation; never starts a child. */
   readonly probePid?: (pid: number) => ProcessObservation;
   readonly readPackReviewRuns?: () => readonly PackReviewRunRecord[];
@@ -1354,44 +1352,6 @@ function readLinuxProcess(pid: number): ProcessObservation {
   } catch { return { state: 'unverified' }; }
 }
 
-function gitRead(cwd: string, args: readonly string[]): string | undefined {
-  try {
-    const result = runProcessSync({ command: 'git', args: [...args], cwd, timeoutMs: 5_000, inheritParentEnv: true });
-    return result.ok ? result.stdout.trim() : undefined;
-  } catch { return undefined; }
-}
-
-function insideRoot(path: string, root: string): boolean {
-  const rel = relative(root, path);
-  return rel === '' || (rel !== '..' && !rel.startsWith('../') && !rel.startsWith('..\\') && !isAbsolute(rel));
-}
-
-/** One selected project card plus real Git common-dir/worktree roots; remote URL is not sufficient. */
-function selectedGitWorktree(cwd: string, config: FleetWakeConfig, options: FleetAlarmTickOptions): boolean {
-  if (!isAbsolute(cwd) || !config.selectedRepository) return false;
-  try {
-    const card = (options.resolveSelectedReviewProject ?? (() =>
-      resolveTargetContext({ projectId: config.projectId })))();
-    if (card.projectId !== config.projectId
-      || card.repository.toLowerCase() !== config.selectedRepository.toLowerCase()
-      || !samePath(card.primaryRoot, config.primary)) return false;
-    const canonical = options.canonicalPath ?? realpathSync;
-    const read = options.readGit ?? gitRead;
-    const primary = canonical(card.primaryRoot);
-    const child = canonical(cwd);
-    const rootString = read(child, ['rev-parse', '--show-toplevel']);
-    const baseCommon = read(primary, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
-    const childCommon = read(child, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
-    const worktreeList = read(primary, ['worktree', 'list', '--porcelain', '-z']);
-    if (!rootString || !baseCommon || !childCommon || !worktreeList) return false;
-    const root = canonical(rootString);
-    if (!insideRoot(child, root) || canonical(baseCommon) !== canonical(childCommon)) return false;
-    const linked = worktreeList.split('\0').filter((part) => part.startsWith('worktree '))
-      .map((part) => { try { return canonical(part.slice('worktree '.length)); } catch { return ''; } });
-    return linked.includes(root) && linked.includes(primary);
-  } catch { return false; }
-}
-
 // Named, exact events alone can authorize a direct re-check; no substring or filename fallback.
 function resolveParkEvent(
   wait: string,
@@ -1620,38 +1580,25 @@ function gptTerminalResolution(
   producer: NamedProducer,
   pane: FleetPaneObservation,
   events: readonly TerminalEnvelopeEvent[],
-  options: FleetAlarmTickOptions,
   terminals: readonly FleetTerminal[],
-  executor: OrcaExecutor,
+  sameIdParkCount: ReadonlyMap<string, number>,
 ): { readonly match?: ProducerResolution; readonly deficient: boolean } {
   const ids = producer.kind === 'gpt-multi' ? producer.ids ?? [] : [producer.id ?? ''];
   if (ids.some((id) => !id)) return { deficient: false };
   const active = terminals.filter((row) => row.handle === pane.handle
     && terminalsIdentity(row) === terminalsIdentity(pane) && row.status?.toLowerCase() !== 'exited');
   if (active.length !== 1 || !pane.incarnationId) return { deficient: false };
-  let assignments: readonly WorkerAssignmentRecord[] | null | undefined;
-  const receiptMatches = (event: TerminalEnvelopeEvent, id: string): boolean => {
-    if (!event.runIdentity || !event.attemptIdentity || !event.handoffReceiptPath) return false;
-    if (assignments === undefined) {
-      try { assignments = (options.readCurrentAssignments
-        ?? (() => listCurrentWorkerAssignmentRecords(resolveWorkerAssignmentStorePath(options.config.projectId))))(); }
-      catch { assignments = null; }
-    }
-    const owner = nativeReceiptLaunchingOwner(event, options, [pane], terminals, executor, assignments, false);
-    return owner?.invocationId === id && terminalsIdentity(owner.pane) === terminalsIdentity(pane);
-  };
+  // Another parked pane naming the same invocation makes the owner ambiguous.
+  if (ids.some((id) => (sameIdParkCount.get(id) ?? 0) > 1)) return { deficient: true };
   let deficient = false;
   const settled: TerminalEnvelopeEvent[] = [];
   for (const id of ids) {
-    const associated = events.filter((event) => (
-      (event.observedInvocationId === id && event.terminalHandle === pane.handle)
-      || receiptMatches(event, id)
-    ));
+    // The exact invocation ID named by the pane's own final PARKED line binds the
+    // envelope; the launcher tab and the child cwd are incidental.
+    const associated = events.filter((event) => event.observedInvocationId === id);
     if (associated.length === 0) continue; // No attributable landed artifact is ordinary pending.
     if (associated.length !== 1) { deficient = true; continue; }
     const event = associated[0]!;
-    const exact = event.observedInvocationId === id && event.terminalHandle === pane.handle
-      && typeof event.cwd === 'string' && selectedGitWorktree(event.cwd, options.config, options);
     const settledOutcome = event.lifecycleOutcome === 'success' || event.lifecycleOutcome === 'incident'
       || (typeof event.turnResultState === 'string' && event.turnResultState.length > 0
         && !/^(?:pending|running|in_progress|unknown|unverified)$/iu.test(event.turnResultState));
@@ -1659,7 +1606,7 @@ function gptTerminalResolution(
       || (event.lifecycleOutcome === 'incident' && event.turnResultState === 'ok')
       || (typeof event.turnResultState === 'string'
         && /^(?:pending|running|in_progress|unknown|unverified)$/iu.test(event.turnResultState));
-    if (!exact || !settledOutcome || contradicts) { deficient = true; continue; }
+    if (!settledOutcome || contradicts) { deficient = true; continue; }
     // A coherent terminal outcome means the producer ended, not that it
     // succeeded. Original-owner non-ok incident delivery remains independent.
     settled.push(event);
@@ -1805,19 +1752,9 @@ async function sendMarkedUnitMessage(
     if (producerFactId) counts.attemptedProducerFacts.add(handle + ':' + producerFactId);
   }
   let delivered = false;
-  try {
-    // This first send includes text AND Enter. A later safety failure may
-    // withhold only the confirming Enter, never re-arm an already sent Wake.
-    delivered = sendCoordinator(executor, handle, message);
-    if (delivered) {
-      await sleepMs(4_000);
-      if (stillSelected && !stillSelected()) {
-        log('unit wake recipient unsafe before confirming Enter; skipped: ' + key);
-      } else if (!submitCoordinator(executor, handle)) {
-        log('unit wake confirming Enter failed after delivery: ' + key);
-      }
-    }
-  } catch { /* A successful first send remains delivered even if confirmation throws. */ }
+  // The single send carries text AND Enter; it already submits.
+  try { delivered = sendCoordinator(executor, handle, message); }
+  catch { /* An unverified send is not delivered. */ }
   if (!delivered) { log('unit wake delivery unverified: ' + key); return false; }
   try { for (const mark of allMarks) store.markParkedWakeEvent(mark, 'sent'); }
   catch { log('unit wake delivered but final mark unverified: ' + key); return false; }
@@ -1840,6 +1777,14 @@ async function wakeNamedParkedProducers(
 ): Promise<void> {
   const now = (options.now ?? Date.now)();
   const envelopes = (options.listTerminalEnvelopes ?? listTerminalEnvelopes)();
+  const sameIdParkCount = new Map<string, number>();
+  for (const pane of observations) {
+    if (pane.state !== 'PARKED' || !pane.wait || bareShellHandles.has(pane.handle)) continue;
+    const named = parseNamedParkedProducer(pane.wait);
+    for (const id of named?.kind === 'gpt' ? [named.id!] : named?.kind === 'gpt-multi' ? named.ids ?? [] : []) {
+      sameIdParkCount.set(id, (sameIdParkCount.get(id) ?? 0) + 1);
+    }
+  }
   const observed = new Map<string, string>();
   for (const pane of observations) {
     if (pane.state !== 'PARKED' || !pane.wait) continue;
@@ -1890,7 +1835,7 @@ async function wakeNamedParkedProducers(
     };
     let uncertainty: string | undefined;
     if (producer?.kind === 'gpt' || producer?.kind === 'gpt-multi') {
-      const result = gptTerminalResolution(producer, pane, envelopes, options, terminals, executor);
+      const result = gptTerminalResolution(producer, pane, envelopes, terminals, sameIdParkCount);
       match = result.match;
       if (result.deficient) uncertainty = 'GPT producer evidence uncertain';
     } else if (producer?.kind === 'time') {
@@ -1925,7 +1870,6 @@ async function wakeNamedParkedProducers(
     if (uncertainty) {
       await alarmParkUncertainty(uncertainty, pane, pane.wait, epoch, options, store,
         executor, sleepMs, log, counts, stillParkedOwner);
-      continue;
     }
     if (!producer) {
       // Coordinator-answer has an independent, already-marked coordinator route.
@@ -2093,8 +2037,6 @@ async function wakePanesOnEvents(
       && candidate.status?.toLowerCase() !== 'exited'
       && !bareShellHandles.has(candidate.handle));
     if (matched.length !== 1) continue;
-    // Historical global envelopes without a current eligible native receiver need no Git census.
-    if (!selectedGitWorktree(envelope.cwd, options.config, options)) continue;
     const pane = matched[0]!;
     const observedId = safeUnitAtom(envelope.observedInvocationId);
     const safePath = safeUnitAtom(envelope.path);

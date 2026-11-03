@@ -36,10 +36,16 @@ remedy proposal but never erase an otherwise valid defect.
 
 ## 5. Operational envelope is explicit
 
-Review reasoning is calibrated to one operator, WSL2, low concurrency, and no
-untrusted local control-plane input. The PR itself remains untrusted review
-content. Reviewers distinguish reachable failures from multi-tenant/high-
-concurrency hypotheticals not reachable here.
+Review reasoning is calibrated to one operator on a native Linux workstation
+with moderate local concurrency: an orchestrator, architect, up to about three
+managers per project, timer/supervisor actors, and shared Browser-GPT panes.
+Untrusted surfaces include PR content, web pages, ChatGPT replies, and imported
+files; any shared resource can be reached by concurrent pack actors. A race is
+reachable when those actors can overlap on the same resource. A narrow window
+or low observed frequency does not disprove it: repeated ticks can encounter it.
+REJECT a race only with exact-reviewed-head file:line proof that overlap cannot
+occur (single writer, lock, strictly sequential caller, or exclusive resource).
+Otherwise choose FIX_NOW or DEFER by the concrete harm, not estimated probability.
 
 ## 6. Security and scope carve-out
 
