@@ -48,7 +48,7 @@ export interface LifecycleOperations {
   readonly runner?: CommandRunner;
   readonly orcaExecutable?: string;
   readonly lockPath?: string;
-  readonly processCensus?: (worktreePath: string) => readonly ProcessEvidence[];
+  readonly processCensus?: (worktreePath: string) => readonly ProcessEvidence[] | ProcessCensusResult;
 }
 
 export interface LifecycleExpectedWorktreeIdentity extends ExpectedWorktreeIdentity {
@@ -64,6 +64,19 @@ export interface ProcessEvidence {
   readonly ppid: number;
   readonly starttime: string;
   readonly cwd: string | null;
+  /** First readable open file descriptor target under the worktree, when that (not the cwd) made the process a holder. */
+  readonly fd?: string;
+}
+
+/** Observations the census could not make; denied reads are counted, never treated as proof of absence. */
+export interface ProcessObservations {
+  readonly unreadableCwd: number;
+  readonly unreadableFd: number;
+}
+
+export interface ProcessCensusResult {
+  readonly processes: readonly ProcessEvidence[];
+  readonly observations: ProcessObservations;
 }
 
 export interface TerminalEvidence {
@@ -119,6 +132,7 @@ export interface LifecycleTerminalReport {
   readonly postClassification?: WorktreeClassificationReport;
   readonly standardTeardown?: unknown;
   readonly processes?: readonly ProcessEvidence[];
+  readonly processObservations?: ProcessObservations;
   readonly terminals?: readonly TerminalEvidence[];
   readonly branchDeletion?: 'deleted' | 'not-present' | 'refused' | 'not-applicable';
   readonly error?: string;
@@ -133,6 +147,7 @@ interface RecoverySnapshot {
   readonly pr?: PrIdentity;
   readonly gates: Omit<RecoveryGates, 'freshRecheck'>;
   readonly processes: readonly ProcessEvidence[];
+  readonly processObservations: ProcessObservations;
   readonly terminals: readonly TerminalEvidence[];
   readonly errors: readonly string[];
 }
@@ -245,17 +260,73 @@ function parseTerminalPayload(payload: unknown): TerminalEvidence[] {
   });
 }
 
+/** Filesystem reads the census uses; injectable so denied reads can be exercised without root. */
+export interface ProcIo {
+  readonly readdirSync: (path: string) => string[];
+  readonly readFileSync: (path: string, encoding: 'utf8') => string;
+  readonly readlinkSync: (path: string) => string;
+}
+
+const defaultProcIo: ProcIo = {
+  readdirSync: (path) => readdirSync(path),
+  readFileSync: (path, encoding) => readFileSync(path, encoding),
+  readlinkSync: (path) => readlinkSync(path),
+};
+
 function isGone(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'ENOENT'
     || (error as NodeJS.ErrnoException).code === 'ESRCH';
 }
 
-function readProcessSnapshot(name: string): ProcessEvidence | null {
+function isDenied(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException).code === 'EACCES'
+    || (error as NodeJS.ErrnoException).code === 'EPERM';
+}
+
+function underTarget(path: string | null, target: string): boolean {
+  return path !== null && (path === target || path.startsWith(`${target}/`));
+}
+
+/** First readable fd target of the process under `target`; denied or vanished reads are counted, not fatal. */
+function readFdHolder(
+  name: string,
+  target: string,
+  counters: { unreadableFd: number },
+  io: ProcIo,
+): string | undefined {
+  let entries: string[];
+  try {
+    entries = io.readdirSync(`/proc/${name}/fd`);
+  } catch (error) {
+    if (isDenied(error)) counters.unreadableFd += 1;
+    else if (!isGone(error)) {
+      throw new TypeError(`process census could not read /proc/${name}/fd: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return undefined;
+  }
+  for (const entry of entries) {
+    let link: string;
+    try {
+      link = normalizeWorktreePath(io.readlinkSync(`/proc/${name}/fd/${entry}`).replace(/ \(deleted\)$/, ''));
+    } catch {
+      continue;
+    }
+    if (underTarget(link, target)) return link;
+  }
+  return undefined;
+}
+
+function readProcessSnapshot(
+  name: string,
+  target: string,
+  counters: { unreadableCwd: number; unreadableFd: number },
+  io: ProcIo,
+): ProcessEvidence | null {
   const pid = Number.parseInt(name, 10);
   if (!Number.isInteger(pid) || pid <= 1) return null;
   let stat: string;
   try {
-    stat = readFileSync(`/proc/${name}/stat`, 'utf8');
+    stat = io.readFileSync(`/proc/${name}/stat`, 'utf8');
   } catch (error) {
     if (isGone(error)) return null;
     throw new TypeError(`process census could not read /proc/${name}/stat: ${error instanceof Error ? error.message : String(error)}`);
@@ -268,29 +339,32 @@ function readProcessSnapshot(name: string): ProcessEvidence | null {
   }
   let cwd: string | null = null;
   try {
-    cwd = normalizeWorktreePath(readlinkSync(`/proc/${name}/cwd`).replace(/ \(deleted\)$/, ''));
+    cwd = normalizeWorktreePath(io.readlinkSync(`/proc/${name}/cwd`).replace(/ \(deleted\)$/, ''));
   } catch (error) {
-    if (!isGone(error)) {
+    if (isDenied(error)) counters.unreadableCwd += 1;
+    else if (!isGone(error)) {
       throw new TypeError(`process census could not read /proc/${name}/cwd: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  return { pid, ppid, starttime, cwd };
+  const fd = underTarget(cwd, target) ? undefined : readFdHolder(name, target, counters, io);
+  return { pid, ppid, starttime, cwd, ...(fd ? { fd } : {}) };
 }
 
-export function collectProcessEvidence(worktreePath: string): ProcessEvidence[] {
+export function collectProcessCensus(worktreePath: string, io: ProcIo = defaultProcIo): ProcessCensusResult {
   const target = normalizeWorktreePath(worktreePath);
   let names: string[];
   try {
-    names = readdirSync('/proc').filter((name) => /^\d+$/.test(name));
+    names = io.readdirSync('/proc').filter((name) => /^\d+$/.test(name));
   } catch (error) {
     throw new TypeError(`process census could not enumerate /proc: ${error instanceof Error ? error.message : String(error)}`);
   }
+  const counters = { unreadableCwd: 0, unreadableFd: 0 };
   const snapshots = names
-    .map(readProcessSnapshot)
+    .map((name) => readProcessSnapshot(name, target, counters, io))
     .filter((row): row is ProcessEvidence => row !== null);
   const selected = new Set(
     snapshots
-      .filter((row) => row.cwd === target || row.cwd?.startsWith(`${target}/`))
+      .filter((row) => underTarget(row.cwd, target) || row.fd !== undefined)
       .map((row) => row.pid),
   );
   let changed = true;
@@ -303,9 +377,16 @@ export function collectProcessEvidence(worktreePath: string): ProcessEvidence[] 
       }
     }
   }
-  return snapshots
-    .filter((row) => selected.has(row.pid))
-    .sort((left, right) => left.pid - right.pid);
+  return {
+    processes: snapshots
+      .filter((row) => selected.has(row.pid))
+      .sort((left, right) => left.pid - right.pid),
+    observations: counters,
+  };
+}
+
+export function collectProcessEvidence(worktreePath: string): ProcessEvidence[] {
+  return [...collectProcessCensus(worktreePath).processes];
 }
 
 function resolveRepositoryId(repositoryRoot: string, rows: readonly OrcaWorktreeRow[]): string | null {
@@ -667,9 +748,17 @@ function collectRecoverySnapshot(
     errors.push(error instanceof Error ? error.message : String(error));
   }
   let processes: readonly ProcessEvidence[] = [];
+  let processObservations: ProcessObservations = { unreadableCwd: 0, unreadableFd: 0 };
   let processCensusOk = true;
   try {
-    processes = (operations.processCensus ?? collectProcessEvidence)(expected.path);
+    const censusResult = (operations.processCensus ?? collectProcessCensus)(expected.path);
+    if (Array.isArray(censusResult)) {
+      processes = censusResult;
+    } else {
+      const result = censusResult as ProcessCensusResult;
+      processes = result.processes;
+      processObservations = result.observations;
+    }
   } catch (error) {
     processCensusOk = false;
     errors.push(error instanceof Error ? error.message : String(error));
@@ -692,6 +781,7 @@ function collectRecoverySnapshot(
       processesAbsent: processCensusOk && processes.length === 0,
     },
     processes,
+    processObservations,
     terminals,
     errors,
   };
@@ -777,6 +867,7 @@ function recoverGitOnly(
         gates,
         effects: [],
         processes: fresh.processes,
+        processObservations: fresh.processObservations,
         terminals: fresh.terminals,
         ...(!allPass ? { error: fresh.errors.join('; ') || 'one or more guarded Git-only recovery gates failed' } : {}),
       };
@@ -800,6 +891,7 @@ function recoverGitOnly(
           effects,
           postClassification: postFailure.classification,
           processes: fresh.processes,
+          processObservations: fresh.processObservations,
           terminals: fresh.terminals,
           error: commandError(removal, 'git', removalArgs),
         };
@@ -848,6 +940,7 @@ function recoverGitOnly(
       effects,
       postClassification: post.classification,
       processes: fresh.processes,
+      processObservations: fresh.processObservations,
       terminals: fresh.terminals,
       branchDeletion,
       ...(!absent || !unrelatedStable
