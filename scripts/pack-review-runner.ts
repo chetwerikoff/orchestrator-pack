@@ -1831,6 +1831,15 @@ function formatGithubReviewBody(run: PackReviewRunRecord, payload: ReviewPayload
     lines.push('');
   } else if (payload.findings.length > 0 && run.reviewRound) {
     lines.push('Triage: not verified; original source union and blocking decisions apply.', '');
+    if (effective?.blocking) {
+      lines.push('## Original blocking source fixer packet (plain-union fallback)', '',
+        'No deduplication was authorized; pass each original blocking source occurrence to the fixer.', '');
+      for (const row of effective.fixNow) {
+        lines.push('- ORIGINAL_BLOCKER ' + row.members[0] + ' — ' + row.code
+          + '; ' + row.reason + '; slot=' + row.slotIds[0]);
+      }
+      lines.push('');
+    }
   }
   lines.push('---', '_Automated review by orchestrator-pack pack-owned runner_');
   return lines.join('\n');
@@ -3159,6 +3168,29 @@ function harnessSourceResolution(
 }
 
 
+/** The native dontAsk mode still honors preapproved user tools. Without a
+ * closed user allow set, --allowedTools Read/Grep/Glob is NOT a denylist.
+ * Refuse native triage rather than trusting adversarial source.json instructions.
+ */
+export function hasReadOnlyOpusTriageUserSettings(settings: unknown): boolean {
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return false;
+  const permissions = (settings as { permissions?: unknown }).permissions;
+  if (!permissions || typeof permissions !== 'object' || Array.isArray(permissions)) return false;
+  const p = permissions as Record<string, unknown>;
+  if (p.blockReadsOutsideWorkingDirectories !== true
+      || (p.additionalDirectories !== undefined
+        && (!Array.isArray(p.additionalDirectories) || p.additionalDirectories.length !== 0))
+      || (p.blockReadsExemptPaths !== undefined
+        && (!Array.isArray(p.blockReadsExemptPaths) || p.blockReadsExemptPaths.length !== 0))) return false;
+  if (p.defaultMode !== undefined && p.defaultMode !== 'default'
+      && p.defaultMode !== 'dontAsk') return false;
+  // A user-level allow for Bash, WebFetch, Task, MCP, wildcard patterns or
+  // another tool survives dontAsk. Only these exact read names are admissible.
+  return p.allow === undefined || (Array.isArray(p.allow)
+    && p.allow.every((rule) => typeof rule === 'string'
+      && ['Read','Grep','Glob'].includes(rule)));
+}
+
 /** Only a source-settling runner may call this. A failed capability or an unsafe
  * read boundary is an ordinary original-union fallback, never another reviewer.
  * The child works in an isolated input directory rather than in the untrusted
@@ -3232,19 +3264,8 @@ async function invokeSettledGptOpusTriage(options: {
           || !lstatSync(userDirectory).isDirectory()
           || !lstatSync(configPath).isFile()
           || lstatSync(configPath).isSymbolicLink()) return null;
-      const settings = JSON.parse(readFileSync(configPath, 'utf8')) as {
-        permissions?: {
-          blockReadsOutsideWorkingDirectories?: unknown;
-          additionalDirectories?: unknown;
-          blockReadsExemptPaths?: unknown;
-        };
-      };
-      const permissions = settings?.permissions;
-      if (permissions?.blockReadsOutsideWorkingDirectories !== true
-          || (Array.isArray(permissions.additionalDirectories) && permissions.additionalDirectories.length !== 0)
-          || (permissions.additionalDirectories !== undefined && !Array.isArray(permissions.additionalDirectories))
-          || (Array.isArray(permissions.blockReadsExemptPaths) && permissions.blockReadsExemptPaths.length !== 0)
-          || (permissions.blockReadsExemptPaths !== undefined && !Array.isArray(permissions.blockReadsExemptPaths))) return null;
+      const settings: unknown = JSON.parse(readFileSync(configPath, 'utf8'));
+      if (!hasReadOnlyOpusTriageUserSettings(settings)) return null;
     } catch { return null; }
   }
 
