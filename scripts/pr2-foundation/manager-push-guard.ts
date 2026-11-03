@@ -389,7 +389,7 @@ const RUFF_PIN = /\[\[package\]\]\s*\n\s*name\s*=\s*"ruff"\s*\n\s*version\s*=\s*
 /**
  * Positive 3: `ruff format` then `ruff check --fix`. Version, hashes and config come from the already-published
  * parent. Ruff is never taken from PATH: uv installs exactly the parent's `uv.lock` requirement (with its recorded
- * artifact hashes) from its offline cache into an isolated environment, so a same-version shim cannot stand in.
+ * artifact hashes) in an isolated environment. An empty cache may fetch the verified artifact; a same-version PATH shim cannot stand in.
  */
 function ruffReproductionFailure(cwd: string, parent: string, commit: string, published: readonly string[],
   changedPaths: readonly string[]): string | null {
@@ -431,16 +431,18 @@ function ruffReproductionFailure(cwd: string, parent: string, commit: string, pu
     writeFileSync(requirements, `${requirement[0].replaceAll('\n', ' \\\n')}\n`);
     const run = (args: string[]) => runProcessSync({
       command: 'uv', cwd: work, env: tool,
-      args: ['run', '--offline', '--no-project', '--no-config', '--isolated', '--with-requirements', requirements, '--', 'ruff', ...args],
+      args: ['run', '--no-project', '--no-config', '--isolated', '--with-requirements', requirements, '--', 'ruff', ...args],
     });
     const version = run(['--version']);
     const reported = /^ruff (\S+)/u.exec(trimmed(version.stdout))?.[1];
-    if (!version.ok || reported !== pin) {
-      return `locked ruff ${pin} is unavailable from the offline uv cache (${reported ?? 'not runnable'})`;
-    }
-    if (!run(['format', '--no-cache', '.']).ok) return 'ruff format failed on the parent tree';
+    const uvFailure = (operation: string, failed: ReturnType<typeof run>): string =>
+      `${operation}: ${trimmed(failed.stderr) || trimmed(failed.stdout) || 'uv execution failed'}; retry the push`;
+    if (!version.ok) return uvFailure(`locked ruff ${pin} resolution failed`, version);
+    if (reported !== pin) return `locked ruff ${pin} is unavailable (reported ${reported ?? 'no version'}); retry the push`;
+    const formatted = run(['format', '--no-cache', '.']);
+    if (!formatted.ok) return uvFailure('ruff format failed on the parent tree', formatted);
     const fixed = run(['check', '--fix', '--no-cache', '.']);
-    if (fixed.exitCode === null || fixed.exitCode > 1) return 'ruff check --fix failed on the parent tree';
+    if (fixed.exitCode === null || fixed.exitCode > 1) return uvFailure('ruff check --fix failed on the parent tree', fixed);
     const outEnv = { GIT_DIR: gitDir, GIT_WORK_TREE: work, GIT_INDEX_FILE: join(dir, 'result-index') };
     const added = git(work, [...PROOF_GIT, 'add', '-A', '-f', '.'], undefined, outEnv);
     const tree = trimmed(git(work, ['write-tree'], undefined, outEnv).stdout);
@@ -676,6 +678,8 @@ export interface ManagerPushGuardInstallRequest {
   readonly endpointMatchesRepository: (url: string) => boolean;
   /** Verified clean same-invocation placement tip; absent on reuse/provider placement. */
   readonly placementSeedOid?: string;
+  /** Optional synchronous test-only observation at the exact pre-effect sibling snapshot. */
+  readonly afterSiblingSnapshot?: () => void;
 }
 
 export type ManagerPushGuardInstallResult =
@@ -781,18 +785,26 @@ export function installManagerPushGuard(request: ManagerPushGuardInstallRequest)
       'git worktree list failed; repair the repository registry before installing the push guard', evidence);
   }
   const before = snapshotHooks(roots);
+  // A deterministic fixture can synchronize two worktrees after both have
+  // observed their pre-effect sibling snapshots. Production leaves this unset.
+  request.afterSiblingSnapshot?.();
   const extension = git(worktree, ['config', '--file', commonConfig, '--get', 'extensions.worktreeConfig']);
   const extensionWasOn = extension.ok && trimmed(extension.stdout) === 'true';
   if (!extensionWasOn) {
     // Git ignores config.worktree until the extension is on; enabling it would silently activate any dormant setting
     // there and change which hooks the manager or a sibling runs, or where it pushes.
     const dormant = dormantWorktreeConfigFiles(common);
-    if (dormant.length > 0) {
+    // A sibling installer can enable the shared extension between our first
+    // read and its worktree-local config write. Re-read that native setting:
+    // a now-enabled extension means those entries are active, not dormant.
+    const enabledBySibling = trimmed(git(worktree, ['config', '--file', commonConfig,
+      '--get', 'extensions.worktreeConfig']).stdout) === 'true';
+    if (dormant.length > 0 && !enabledBySibling) {
       return refuse('manager_push_guard_dormant_worktree_config',
         `config.worktree already holds settings (hooks, push URL or others) in ${dormant.join(', ')} while extensions.worktreeConfig is off; enabling per-worktree config would activate them and change what the manager or a sibling runs or pushes to. Move those settings into the shared config or remove them, then rerun the supervised launch`,
         { ...evidence, dormant });
     }
-    if (!git(worktree, ['config', '--file', commonConfig, 'extensions.worktreeConfig', 'true']).ok) {
+    if (!enabledBySibling && !git(worktree, ['config', '--file', commonConfig, 'extensions.worktreeConfig', 'true']).ok) {
       return refuse('manager_push_guard_worktree_config_unavailable',
         'enable extensions.worktreeConfig manually (git config extensions.worktreeConfig true) after checking tooling compatibility, then rerun the supervised launch', evidence);
     }
@@ -806,7 +818,16 @@ export function installManagerPushGuard(request: ManagerPushGuardInstallRequest)
       if (value === null) git(worktree, ['config', '--worktree', '--unset', key]);
       else git(worktree, ['config', '--worktree', key, value]);
     }
-    if (!extensionWasOn) git(worktree, ['config', '--file', commonConfig, '--unset', 'extensions.worktreeConfig']);
+    // Another linked worktree may have installed its own guard while this install ran.
+    // Never disable the shared extension while any worktree still selects worktree-local hooks.
+    const anyActiveLocalHooks = roots.some((root) => worktreeConfig(root, 'core.hooksPath') !== null);
+    // A sibling may be writing its config before its final hooksPath selection.
+    // Never disable the extension beneath such an in-flight sibling install.
+    const anySiblingWorktreeConfig = dormantWorktreeConfigFiles(common)
+      .some((file) => file !== join(admin, 'config.worktree'));
+    if (!extensionWasOn && !anyActiveLocalHooks && !anySiblingWorktreeConfig) {
+      git(worktree, ['config', '--file', commonConfig, '--unset', 'extensions.worktreeConfig']);
+    }
   };
   const opens = roots.every((root) => git(root, ['rev-parse', '--show-toplevel']).ok && git(root, ['rev-parse', '--git-dir']).ok);
   if (!opens) {
@@ -871,8 +892,11 @@ export function installManagerPushGuard(request: ManagerPushGuardInstallRequest)
     return refuse('manager_push_guard_default_branch_changed',
       `this manager worktree is bound to default branch ${recordedDefault}, not ${defaultBranch}; do not rebind it silently. Recreate the manager worktree for the selected project, then rerun the supervised launch`, evidence);
   }
+  // Never expose an effective sibling hook until the complete local guard
+  // metadata and the generated hook are in place. Another manager observing
+  // its sibling's changed hooksPath can then prove it is the sibling's own B5.
   const writes: Array<[string, string]> = [
-    ['core.hooksPath', hooksDir], [KEY.installed, 'true'], [KEY.defaultBranch, defaultBranch],
+    [KEY.installed, 'true'], [KEY.defaultBranch, defaultBranch],
   ];
   const fetchUrl = git(worktree, ['remote', 'get-url', 'origin']);
   const pushUrl = git(worktree, ['remote', 'get-url', '--push', 'origin']);
@@ -902,6 +926,11 @@ export function installManagerPushGuard(request: ManagerPushGuardInstallRequest)
       return refuse('manager_push_guard_config_write_failed', 'repair the manager worktree config file, then rerun the supervised launch', evidence);
     }
   }
+  if (!git(worktree, ['config', '--worktree', 'core.hooksPath', hooksDir]).ok) {
+    rollbackExtension();
+    return refuse('manager_push_guard_config_write_failed',
+      'repair worktree-local core.hooksPath before activating the manager guard, then retry launch', evidence);
+  }
 
   // Observe the effective result; never claim protection from a file's presence alone.
   const origin = git(worktree, ['config', '--worktree', '--show-origin', '--get', 'core.hooksPath']);
@@ -912,7 +941,14 @@ export function installManagerPushGuard(request: ManagerPushGuardInstallRequest)
     args: ['--no-warnings', '--experimental-strip-types', fileURLToPath(import.meta.url), 'probe'],
   });
   const after = snapshotHooks(roots);
-  const othersUnchanged = [...before].every(([root, hooks]) => root === worktree || after.get(root) === hooks);
+  const siblingOwnGuard = (root: string): boolean => {
+    const adminResult = git(root, ['rev-parse', '--absolute-git-dir']);
+    if (!adminResult.ok || worktreeConfig(root, KEY.installed) !== 'true') return false;
+    const siblingHooks = safeReal(join(trimmed(adminResult.stdout), GUARD_DIR_NAME, 'hooks'));
+    return after.get(root) === siblingHooks && effectiveHooksDir(root) === siblingHooks;
+  };
+  const othersUnchanged = [...before].every(([root, hooks]) =>
+    root === worktree || after.get(root) === hooks || siblingOwnGuard(root));
   const effective = origin.ok && origin.stdout.includes('config.worktree') && observed === ownReal()
     && existsSync(prePush)
     && trimmed(probe.stdout) === 'manager-push-guard-ok' && othersUnchanged;
@@ -927,6 +963,67 @@ export function installManagerPushGuard(request: ManagerPushGuardInstallRequest)
 
 // ---------------------------------------------------------------------------
 // CLI (invoked only by the generated pre-push stub)
+
+/**
+ * Claude-family manager handoff: remove only this worktree's previously installed
+ * B5 binding and restore the recorded originally effective hook. Never change
+ * shared per-worktree configuration or another linked worktree's hooks.
+ */
+export function restoreManagerPushGuardForClaude(worktreePath: string): ManagerPushGuardInstallResult {
+  const worktree = safeReal(worktreePath);
+  const evidence = { worktreePath: worktree };
+  const top = git(worktree, ['rev-parse', '--show-toplevel']);
+  const adminDir = git(worktree, ['rev-parse', '--absolute-git-dir']);
+  const commonDir = git(worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  if (!top.ok || safeReal(trimmed(top.stdout)) !== worktree || !adminDir.ok || !commonDir.ok) {
+    return refuse('manager_push_guard_local_route_unobserved',
+      'inspect the exact linked worktree and its Git admin/config paths before retrying the Claude-family manager launch', evidence);
+  }
+  const admin = safeReal(trimmed(adminDir.stdout));
+  const common = safeReal(trimmed(commonDir.stdout));
+  const hooksDir = safeReal(join(admin, GUARD_DIR_NAME, 'hooks'));
+  const effective = effectiveHooksDir(worktree);
+  const selectedOwnGuard = effective === hooksDir;
+  const installed = worktreeConfig(worktree, KEY.installed);
+  const keys = Object.values(KEY).filter((key) => worktreeConfig(worktree, key) !== null);
+  if (installed !== 'true') {
+    if (selectedOwnGuard || keys.length) {
+      return refuse('manager_push_guard_local_route_ambiguous',
+        'a guard path or partial guard keys remain without verified installation; inspect config.worktree and restore the original hooks manually before retrying', evidence);
+    }
+    return { ok: true, evidence: { ...evidence, guard: 'absent' } };
+  }
+  if (!selectedOwnGuard) {
+    return refuse('manager_push_guard_local_route_ambiguous',
+      'recorded B5 guard is not the effective hook for this worktree; inspect core.hooksPath and originalHooksPath before retrying', evidence);
+  }
+  const original = worktreeConfig(worktree, KEY.originalHooksPath);
+  if (original !== null && (!isAbsolute(original) || safeReal(original) === hooksDir)) {
+    return refuse('manager_push_guard_original_hooks_ambiguous',
+      'the recorded original hooks path is relative or points to the guard itself; restore the exact original manually before retrying', evidence);
+  }
+  const restored = original === null
+    ? git(worktree, ['config', '--worktree', '--unset', 'core.hooksPath'])
+    : git(worktree, ['config', '--worktree', 'core.hooksPath', original]);
+  if (!restored.ok) {
+    return refuse('manager_push_guard_local_route_restore_failed',
+      'repair core.hooksPath in this exact worktree and retry the Claude-family manager launch', evidence);
+  }
+  const expected = safeReal(original ?? join(common, 'hooks'));
+  if (effectiveHooksDir(worktree) !== expected) {
+    return refuse('manager_push_guard_local_route_restore_unverified',
+      'inspect the worktree and inherited hook configuration; B5 removal cannot be verified, so no Claude-family start is authorized', evidence);
+  }
+  for (const key of Object.values(KEY)) {
+    if (worktreeConfig(worktree, key) !== null
+      && !git(worktree, ['config', '--worktree', '--unset', key]).ok) {
+      return refuse('manager_push_guard_local_route_cleanup_failed',
+        'repair the remaining B5 config keys in this worktree, preserve sibling hooks and retry before starting Claude', evidence);
+    }
+  }
+  return { ok: true, evidence: { ...evidence, guard: 'restored', originalHooksPath: original ?? 'unset' } };
+}
+
 // ---------------------------------------------------------------------------
 
 async function readStdin(): Promise<Buffer> {

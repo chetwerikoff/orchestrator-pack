@@ -573,6 +573,8 @@ export interface TurnRunOutcome {
   readonly ownedDeadLocalUrl?: string;
   readonly ownedDeadLocalConversationUrl?: string;
   readonly ownedDeadLocalTimeoutMs?: number;
+  /** #2780: last instant an author-effect Page may settle before its guarded close. */
+  readonly authorEffectSettleUntilMs?: number;
 }
 
 interface FreshComposerCleanupContext {
@@ -7103,7 +7105,8 @@ async function runTurnCore(
     // mutable Send-count/late-URL transition or new transcript acquisition.
     // #2718 AUTHOR EFFECT: the same bound OPEN PR/ref moved past the SEND SHA
     // while this invocation is in flight. Truthful `ok` without reply bytes;
-    // the original Page is preserved (no Stop/close; later guarded retire-owned).
+    // no Stop. #2780: the original Page settles, bounded by this turn's own
+    // deadline, then takes the guarded close or stays preserved.
     const prAuthorEffect = async (): Promise<TurnRunOutcome | null> => {
       if (!prAuthorBinding || !prAuthorSendHead || (!sendAttempted && sendCount === 0)) return null;
       if (Date.now() < prAuthorNextHeadPollAt) return null;
@@ -7121,6 +7124,7 @@ async function runTurnCore(
       incident('author_effect', 'author_effect_pr_head_changed', 'retain_page_no_stop_no_close');
       return {
         page, browser, cleanupAction: 'preserve',
+        authorEffectSettleUntilMs: Math.min(hardExhaustionDeadline, Date.now() + AUTHOR_EFFECT_SETTLE_CAP_MS),
         result: compactResult(
           'ok', 'none', 'author_effect_pr_head_changed',
           invocationId, profileKey, sendCount, pollCount, navigation, incidents,
@@ -9111,6 +9115,10 @@ const RETIREMENT_SETTLE_CAUSES: ReadonlySet<string> = new Set([
 ]);
 const RETIREMENT_SETTLE_RETRIES = 12;
 const RETIREMENT_SETTLE_DELAY_MS = 5_000;
+// #2780: GPT often pushes before its author reply finishes; settle that Page
+// for at most this long (and never past the turn deadline) before closing.
+const AUTHOR_EFFECT_SETTLE_CAP_MS = 10 * 60_000;
+const AUTHOR_EFFECT_SETTLE_RETRIES = Math.ceil(AUTHOR_EFFECT_SETTLE_CAP_MS / RETIREMENT_SETTLE_DELAY_MS);
 const SIGNAL_RETIREMENT_SETTLE_POLL_MS = 250;
 
 /** Diagnostic only: name up to three in-progress nodes; never a close input. */
@@ -9235,6 +9243,14 @@ async function guardedOriginalTargetRetirement(input: {
   // A pinned existing conversation already holds earlier user turns; an
   // unsent row there proves only that its own marker never landed.
   const existingConversationRoute = isSupportedChatGptConversationUrl(pin.initial_route);
+  // #2780: an author-effect Page has no harvested reply. Ownership rests on the
+  // exact owned prompt as last user row and one unchanged conversation route.
+  const authorEffect = outcome.result.state === 'ok'
+    && outcome.result.cause === 'author_effect_pr_head_changed'
+    && outcome.authorEffectSettleUntilMs !== undefined
+    && pin.created && targetInfo.created
+    && (observation.phase === 'sent_unbound' || observation.phase === 'sent_unharvested');
+  let authorRoute: string | undefined;
   const deadline = Date.now() + 18_000;
   const budget = () => Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, deadline - Date.now()));
   const currentUrl = (): string | null => {
@@ -9250,6 +9266,10 @@ async function guardedOriginalTargetRetirement(input: {
       return Boolean(observation.conversation_url && isSupportedChatGptConversationUrl(url)
         && normalizeConversationUrl(url) === normalizeConversationUrl(observation.conversation_url));
     }
+    if (authorEffect) {
+      return Boolean(authorRoute && isSupportedChatGptConversationUrl(url)
+        && normalizeConversationUrl(url) === authorRoute);
+    }
     if (observation.phase !== 'not_sent') return false;
     if (url === 'about:blank') return true;
     if (isBlankProjectSurfaceUrl(url, pin.initial_route)) return true;
@@ -9258,7 +9278,7 @@ async function guardedOriginalTargetRetirement(input: {
   };
 
   // Outcome evidence precedes (and is independent of) idle/marker evidence.
-  let row: 'not_sent' | 'harvested';
+  let row: 'not_sent' | 'harvested' | 'author_effect';
   if (observation.phase === 'not_sent'
     && observation.transition_reason === 'terminal_pre_send'
     && observation.send_count === 0 && observation.send_witness !== 'owned_marker'
@@ -9278,6 +9298,15 @@ async function guardedOriginalTargetRetirement(input: {
       if (!primary) return refuse('harvested_primary_unverified');
     } catch { return refuse('harvested_primary_unverified'); }
     row = 'harvested';
+  } else if (authorEffect) {
+    const url = currentUrl();
+    if (!url || !isSupportedChatGptConversationUrl(url)) return refuse('route_changed');
+    if (observation.conversation_url
+      && normalizeConversationUrl(url) !== normalizeConversationUrl(observation.conversation_url)) {
+      return refuse('route_changed');
+    }
+    authorRoute = normalizeConversationUrl(url);
+    row = 'author_effect';
   } else if (observation.phase === 'sent_unbound'
     || observation.phase === 'sent_unharvested') {
     // A brief responsive interval with a foreign edit and then a freeze is
@@ -9361,6 +9390,14 @@ async function guardedOriginalTargetRetirement(input: {
     if (row === 'not_sent') {
       if ((users.messages.length !== 0 && !existingConversationRoute)
         || cardinality.exactMarkerTokenCount !== 0) {
+        busyDetail = userDetail();
+        return 'foreign_user_message';
+      }
+    } else if (row === 'author_effect') {
+      // No committed reply to compare: the exact owned prompt must be the last
+      // user row, so no other writer has taken this conversation.
+      if (cardinality.matchingUserCarrierCount !== 1 || cardinality.exactMarkerTokenCount !== 1
+        || users.messages.length === 0 || !lastOwn) {
         busyDetail = userDetail();
         return 'foreign_user_message';
       }
@@ -9566,8 +9603,10 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
   // path below, which rechecks current owner, route and generation evidence.
   let pageAction: PageCleanupAction = (cleanupAuthorityProven || adoptedCleanupAuthority) && !pageLost
     && outcome.result.cause !== 'post_send_target_crashed'
-    // #2718: an author effect keeps the possibly streaming original Page (no Stop/close).
-    && outcome.result.cause !== 'author_effect_pr_head_changed'
+    // #2718: an author effect never Stops a possibly streaming original Page.
+    // #2780: only its bounded settle window admits the guarded close below.
+    && (outcome.result.cause !== 'author_effect_pr_head_changed'
+      || outcome.authorEffectSettleUntilMs !== undefined)
     && outcome.ownershipForfeited !== true && positivelyCreatedOriginal
     && outcomePageIsOriginal ? 'close' : 'skip';
   if (pageAction === 'close' && outcome.result.send_count === 0
@@ -9615,8 +9654,17 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
     const guard = () => guardedOriginalTargetRetirement({
       outcome, cdp, ...(adoptedPackTarget ? { adoptedPackTarget: true as const } : {}),
     });
+    // #2780: a still-generating author-effect Page waits through its own
+    // bounded window; every other settling refusal keeps the short budget.
+    const settleUntil = outcome.authorEffectSettleUntilMs;
     let retirement = await guard();
-    for (let attempt = 1; attempt <= RETIREMENT_SETTLE_RETRIES && retirement.settling; attempt++) {
+    let quietPasses = 0;
+    let busyPasses = 0;
+    while (retirement.settling) {
+      const busy = settleUntil !== undefined
+        && (retirement.cause === 'stop_visible' || retirement.cause === 'generation_in_progress');
+      if (busy ? ++busyPasses > AUTHOR_EFFECT_SETTLE_RETRIES || Date.now() >= settleUntil
+        : ++quietPasses > RETIREMENT_SETTLE_RETRIES) break;
       await sleep(outcome.page, RETIREMENT_SETTLE_DELAY_MS);
       retirement = await guard();
     }

@@ -408,6 +408,81 @@ describe('post-merge destructive teardown', () => {
     expect(state.invocations.some((item) => item.args.includes('--force'))).toBe(false);
   });
 
+  it('counts a denied cwd observation without treating it as a holder or as proof', async () => {
+    const paths = fixture();
+    const state = defaultState(paths);
+    const report = await runPostMergeTeardown(
+      { ...paths.args, apply: true },
+      {
+        ...dependencies(paths, state),
+        processCensus: () => [
+          { pid: 77, ppid: 1, starttime: '3', cwd: null, cwdDenied: true },
+          { pid: 78, ppid: 1, starttime: '4', cwd: null, cwdDenied: true, fdDenied: true },
+        ],
+      },
+    );
+
+    expect(report).toMatchObject({
+      outcome: 'cleanup_complete',
+      processes: { selected: 0, residual: 0, unreadableCwd: 2, unreadableFd: 1 },
+    });
+  });
+
+  it('blocks cleanup on a readable fd holder even when its cwd is elsewhere', async () => {
+    const paths = fixture();
+    const state = defaultState(paths);
+    const report = await runPostMergeTeardown(
+      { ...paths.args, apply: true },
+      {
+        ...dependencies(paths, state),
+        processCensus: () => [
+          { pid: 79, ppid: 1, starttime: '5', cwd: '/elsewhere', fd: `${paths.target}/held.log` },
+          { pid: 80, ppid: 1, starttime: '6', cwd: null, cwdDenied: true },
+        ],
+      },
+    );
+
+    expect(report).toMatchObject({
+      outcome: 'task_degraded',
+      processes: { residual: 1, unreadableCwd: 1 },
+    });
+    expect(state.gitPresent).toBe(true);
+  });
+
+  it('removes an identical launch copy with the tree and refuses removal when a copy differs', async () => {
+    const identical = fixture();
+    writeFileSync(join(identical.repo, '.env'), 'K=1\n');
+    writeFileSync(join(identical.target, '.env'), 'K=1\n');
+    const identicalState = defaultState(identical);
+    const withIgnoredGit = (state: State, paths: Fixture) => {
+      const inner = dependencies(paths, state);
+      return {
+        ...inner,
+        runner: (invocation: CommandInvocation) => {
+          if (invocation.args.includes('check-ignore')) return result();
+          if (invocation.args.includes('ls-files') && invocation.args.includes('--error-unmatch')) return result({ ok: false, exitCode: 1 });
+          return inner.runner(invocation);
+        },
+      };
+    };
+    const done = await runPostMergeTeardown({ ...identical.args, apply: true }, withIgnoredGit(identicalState, identical));
+    expect(done.outcome).toBe('cleanup_complete');
+    expect(existsSync(join(identical.target, '.env'))).toBe(false);
+
+    const differing = fixture();
+    writeFileSync(join(differing.repo, '.env'), 'K=1\n');
+    writeFileSync(join(differing.target, '.env'), 'K=local\n');
+    const differingState = defaultState(differing);
+    const refused = await runPostMergeTeardown({ ...differing.args, apply: true }, withIgnoredGit(differingState, differing));
+    expect(refused).toMatchObject({
+      outcome: 'quiesced_cleanup_deferred',
+      launchCopies: { preserved: [{ path: '.env', reason: 'differs_from_primary' }] },
+    });
+    expect(existsSync(join(differing.target, '.env'))).toBe(true);
+    expect(differingState.gitPresent).toBe(true);
+    expect(differingState.invocations.some((item) => item.args.includes('--force'))).toBe(false);
+  });
+
   it('uses Git force removal for exact-git-only while retaining dual read-back', async () => {
     const paths = fixture('exact_git_only');
     const state = defaultState(paths);

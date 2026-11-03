@@ -182,21 +182,19 @@ export function isBusyScreen(screen: string, busyRe: RegExp = DEFAULT_BUSY_RE): 
     .filter((line) => line.trim() !== '')
     .slice(-BUSY_MARKER_WINDOW_LINES)
     .join('\n');
-  // OpenCode's idle status bar still prints "esc interrupt" beside the model,
-  // context percentage and ctrl+p commands. That chrome is not a running turn.
+  // OpenCode prints "esc interrupt" in its status bar only while a turn runs;
+  // the idle status bar shows the worktree path there instead.
   // A native braille spinner is positive active work. An active command may
   // wrap once (for example, a long sleep/CI command followed by "description")
   // before the model/status chrome; do not require the spinner to be the
   // literal final content line. Older spinner scrollback with later content
-  // remains ineligible, and the idle status bar alone is never work evidence.
+  // remains ineligible.
   const activeContent = contentLines(statusRegion);
   const last = activeContent.at(-1);
   if (last?.running || (activeContent.at(-2)?.running && last
     && !/^(?:>|User:|Assistant:|Tool:|\$|[→⚙])/u.test(last.text))) return true;
-  const withoutIdleChrome = statusRegion.split(/\r?\n/u)
-    .filter((line) => !/\bctrl\+p\s+commands\b/iu.test(line)).join('\n');
   busyRe.lastIndex = 0;
-  return busyRe.test(withoutIdleChrome);
+  return busyRe.test(statusRegion);
 }
 
 export function hasPollingEvidence(screen: string): boolean {
@@ -511,13 +509,15 @@ function verifiedPrimaryBindings(
     const detailed = terminal.branch?.trim() ? terminal : diagnosticTerminalDetails(terminal, executor, true);
     if (!detailed.branch?.trim()) continue;
     const shown = read(['orchestration', 'worker-show', '--dispatch', row.dispatchId, '--json']);
+    // Native worker-show reports the Run as camelCase `runId`; `run_id` is the legacy spelling.
     const dispatch = shown?.dispatch as {
-      id?: unknown; taskId?: unknown; run_id?: unknown; status?: unknown;
+      id?: unknown; taskId?: unknown; runId?: unknown; run_id?: unknown; status?: unknown;
     } | undefined;
+    const dispatchRunId = dispatch?.runId ?? dispatch?.run_id;
     const observation = shown?.observation as { exactWorker?: unknown; status?: unknown } | undefined;
     const observed = shown?.terminal as Partial<FleetTerminal> | undefined;
     if (dispatch?.id !== row.dispatchId || dispatch.taskId !== row.taskId
-      || typeof dispatch.run_id !== 'string' || !dispatch.run_id.trim()
+      || typeof dispatchRunId !== 'string' || !dispatchRunId.trim()
       || observation?.exactWorker !== true || typeof observation.status !== 'string'
       || !observation.status.trim()
       || !observed || ![observed.handle, observed.incarnationId, observed.worktreePath, observed.branch]
@@ -526,12 +526,12 @@ function verifiedPrimaryBindings(
       || observed.worktreePath !== terminal.worktreePath || observed.branch !== detailed.branch
       || (typeof row.dispatchStatus === 'string' && typeof dispatch.status === 'string'
         && row.dispatchStatus !== dispatch.status)) continue;
-    const runResult = read(['orchestration', 'run-show', '--id', dispatch.run_id, '--json']);
+    const runResult = read(['orchestration', 'run-show', '--id', dispatchRunId, '--json']);
     const run = runResult?.run as { id?: unknown; coordinator_handle?: unknown } | undefined;
-    if (run?.id !== dispatch.run_id || run.coordinator_handle !== coordinatorHandle) continue;
+    if (run?.id !== dispatchRunId || run.coordinator_handle !== coordinatorHandle) continue;
     verified.set(terminal.handle, JSON.stringify([
       projectId, terminal.handle, terminal.incarnationId, terminal.worktreePath, detailed.branch,
-      row.taskId, row.dispatchId, dispatch.run_id,
+      row.taskId, row.dispatchId, dispatchRunId,
     ]));
   }
   return verified;

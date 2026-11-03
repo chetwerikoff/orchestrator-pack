@@ -78,6 +78,8 @@ interface PrimaryWorkerFixture {
   readonly observationStatus?: string;
   readonly shownTerminal?: FleetTerminal | null;
   readonly exactWorker?: boolean;
+  /** Emit the legacy snake_case `run_id` instead of the native camelCase `runId`. */
+  readonly legacyRunIdKey?: boolean;
 }
 
 function primaryTerminal(handle: string, title = 'OpenCode merge worker', status = 'running'): FleetTerminal {
@@ -112,7 +114,8 @@ function primaryOrcaExecutor(
       if (index < 0) return result('', false);
       const worker = workers[index]!;
       return result(JSON.stringify({ ok: true, result: {
-        dispatch: { id: dispatchId, taskId: 'task-' + index, run_id: worker.runId,
+        dispatch: { id: dispatchId, taskId: 'task-' + index, task_id: 'task-' + index,
+          [worker.legacyRunIdKey ? 'run_id' : 'runId']: worker.runId,
           status: worker.dispatchStatus ?? 'dispatched' },
         observation: { exactWorker: worker.exactWorker ?? true, status: worker.observationStatus ?? 'live' },
         ...(worker.shownTerminal === null ? {} : { terminal: worker.shownTerminal ?? worker.terminal }),
@@ -233,6 +236,30 @@ describe('fleet sweep on real OpenCode screens', () => {
   const fixture = (name: string): string =>
     readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
   // The captured screen shows `$ sleep 60 && …` as finished scrollback followed by newer work.
+  // Real idle OpenCode status bar: the worktree path replaces the running "esc interrupt" marker.
+  const idleStatusBar = fixture('opencode-idle-own-stop.screen.txt').trimEnd().split('\n').at(-1)!;
+
+  it('Issue #2773: real idle own stop line is STOPPED; the same pane with a final PARKED line is PARKED', () => {
+    const idle = fixture('opencode-idle-own-stop.screen.txt');
+    expect(isBusyScreen(idle)).toBe(false);
+    expect(classifyFleetPane(idle, 'p1', new MemoryPollingStore())).toBe('STOPPED');
+    const parked = idle.replace('     and remain parked awaiting the updated-head merge result.\n',
+      '     and remain parked awaiting the updated-head merge result.\n     PARKED on merge-2770\n');
+    expect(parked).not.toBe(idle);
+    expect(classifyFleetPane(parked, 'p1', new MemoryPollingStore())).toBe('PARKED');
+    // A final PARKED line wins even while the status bar still shows the running marker.
+    const working = fixture('opencode-working-no-spinner.screen.txt');
+    const parkedWhileFooterRuns = [parked.trimEnd().split('\n').slice(0, -1).join('\n'),
+      working.trimEnd().split('\n').at(-1)].join('\n');
+    expect(classifyFleetPane(parkedWhileFooterRuns, 'p1', new MemoryPollingStore())).toBe('PARKED');
+  });
+
+  it('Issue #2773: real working pane without a spinner is busy from its running status bar', () => {
+    const working = fixture('opencode-working-no-spinner.screen.txt');
+    expect(isBusyScreen(working)).toBe(true);
+    expect(classifyFleetPane(working, 'p1', new MemoryPollingStore())).toBe('busy');
+  });
+
   // Rebuild the same real screen as it looked while that command was still running: the command
   // line carries OpenCode's spinner and is directly followed by the model line and status bar.
   const runningSleepScreen = (): string => {
@@ -257,10 +284,11 @@ describe('fleet sweep on real OpenCode screens', () => {
     expect(classifyFleetPane(screen, 'p1', store)).toBe('POLLING');
   });
 
-  it('B9-5: later own content clears a stale wrapped spinner despite idle OpenCode chrome', () => {
+  it('B9-5: later own content clears a stale wrapped spinner under the idle OpenCode status bar', () => {
     const wrapped = runningSleepScreen();
     const completed = wrapped.replace('  ┃  description\n',
-      '  ┃  description\n  ┃  Assistant: completed and waiting\n');
+      '  ┃  description\n  ┃  Assistant: completed and waiting\n')
+      .replace(/^.*esc interrupt.*$/mu, idleStatusBar);
     expect(completed).not.toBe(wrapped);
     expect(isBusyScreen(completed)).toBe(false);
     const store = new MemoryPollingStore();
@@ -572,6 +600,30 @@ describe('Issue #2585 supervised primary-root admission', () => {
     expect(collectFleetDiagnostics(options).map((row) => row.handle)).toEqual(['bound-cursor']);
     expect(calls.filter((args) => args[1] === 'read').every((args) => args.includes('bound-cursor'))).toBe(true);
     expect(calls.filter((args) => args[1] === 'read')).toHaveLength(2);
+  });
+
+  it('primary-root native worker-show shape (camelCase runId): admits an exact exited merge agent, excludes operator panes (#1407)', () => {
+    const merge = primaryTerminal('merge', 'OpenCode merge agent', 'exited');
+    const legacy = primaryTerminal('legacy', 'OpenCode merge agent');
+    const operator = primaryTerminal('operator', 'Claude Code operator');
+    const foreign = primaryTerminal('foreign', 'OpenCode merge agent');
+    const inexact = primaryTerminal('inexact', 'OpenCode merge agent');
+    const terminals = [currentCoordinator, merge, legacy, operator, foreign, inexact];
+    const workers: PrimaryWorkerFixture[] = [
+      { terminal: merge, runId: 'run-main', coordinator: 'coordinator', dispatchStatus: 'failed',
+        observationStatus: 'exited' },
+      { terminal: legacy, runId: 'run-main', coordinator: 'coordinator', legacyRunIdKey: true },
+      { terminal: foreign, runId: 'run-foreign', coordinator: 'other-coordinator' },
+      { terminal: inexact, runId: 'run-main', coordinator: 'coordinator', exactWorker: false },
+    ];
+    const executor = primaryOrcaExecutor(terminals, { merge: 'done', legacy: 'done', operator: 'done',
+      foreign: 'done', inexact: 'done' }, workers);
+    const handles = runFleetSweep({ ...opts, terminals, executor }).map((row) => row.handle);
+    expect(handles).toContain('merge');
+    expect(handles).toContain('legacy');
+    expect(handles).not.toContain('operator');
+    expect(handles).not.toContain('foreign');
+    expect(handles).not.toContain('inexact');
   });
 
   it('primary-root exited and unreadable: native exact exit alarms without screen and does not hide stopped peer', () => {
@@ -993,14 +1045,14 @@ describe('Issue #2687 r04: own park-line observation without expanding r05 class
 });
 
 describe('Issue #2749 B9-5/B9-6: observed idle and primary Dispatch-only selection', () => {
-  it('B9-5: ignores idle OpenCode model/context/ctrl+p chrome but observes the running spinner', () => {
+  it('B9-5: ignores the idle OpenCode model/context/ctrl+p chrome but observes the running spinner', () => {
     const agent: FleetTerminal = { ...pane('idle', 'OpenCode worker'),
       agentIdentity: 'opencode', incarnationId: 'idle-inc', branch: 'refs/heads/idle', status: 'running' };
     const idle = [
       '┃  Completed earlier work',
       '┃  >',
       '▣  Pack-Opk-example · GPT-6 · medium',
-      '⬝⬝■■ esc interrupt 175K (64%) ctrl+p commands',
+      '   /home/user/orca/workspaces/project/worker          175K (64%)  ctrl+p commands',
     ].join('\n');
     const working = [
       '┃  Completed earlier work',
