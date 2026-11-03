@@ -126,6 +126,12 @@ type FinalizerCase = {
   readonly adoptedRevoked?: boolean;
   /** A peer invocation binds the same target while the guard settles. */
   readonly peerBindsDuringSettle?: boolean;
+  /** #2780: ok/author_effect_pr_head_changed with its bounded settle window. */
+  readonly authorEffect?: boolean;
+  /** #2780: the author-effect turn never bound its conversation URL. */
+  readonly authorEffectUnbound?: boolean;
+  /** Stop stays visible until this many settle waits have passed. */
+  readonly stopVisibleWaits?: number;
 };
 
 function makeTurnResult(overrides: Partial<Omit<CompactTurnResult, 'cleanup'>> = {}): Omit<CompactTurnResult, 'cleanup'> {
@@ -256,8 +262,8 @@ async function observeFinalizer(testCase: FinalizerCase) {
         if (selector === 'body') return { innerText: async () => '' };
         if (selector === RENDERED_STOP_BUTTON_SELECTOR) {
           return {
-            count: async () => testCase.stopVisible ? 1 : 0,
-            isVisible: async () => Boolean(testCase.stopVisible),
+            count: async () => testCase.stopVisible || settleWaits < (testCase.stopVisibleWaits ?? 0) ? 1 : 0,
+            isVisible: async () => Boolean(testCase.stopVisible || settleWaits < (testCase.stopVisibleWaits ?? 0)),
           };
         }
         if (selector === ASSISTANT_TURN_IN_PROGRESS_SELECTOR) {
@@ -366,11 +372,13 @@ async function observeFinalizer(testCase: FinalizerCase) {
     }
     transitionStateLightTurnObservation({
       profileKey, invocationId,
-      phase: testCase.sendCount === 0 ? 'prepared' : 'sent_unharvested',
+      phase: testCase.sendCount === 0 ? 'prepared'
+        : testCase.authorEffectUnbound ? 'sent_unbound' : 'sent_unharvested',
       reason: 'verified_1238_fixture',
       sendCount: testCase.sendCount,
       ...(testCase.sendCount > 0 ? {
-        sendWitness: 'numeric_send_count' as const, conversationUrl: chatUrl,
+        sendWitness: 'numeric_send_count' as const,
+        ...(testCase.authorEffectUnbound ? {} : { conversationUrl: chatUrl }),
       } : {}),
     });
     // A submitted marker on an idle page is not settlement. Close-positive
@@ -391,8 +399,14 @@ async function observeFinalizer(testCase: FinalizerCase) {
       result: makeTurnResult({
         invocation_id: invocationId, configured_profile_key: profileKey,
         send_count: testCase.sendCount,
+        ...(testCase.authorEffect ? {
+          cause: 'author_effect_pr_head_changed', send_attempted: true,
+        } : {}),
       }),
       page: recoverySuccessorPage ?? page, browser,
+      ...(testCase.authorEffect ? {
+        cleanupAction: 'preserve' as const, authorEffectSettleUntilMs: Date.now() + 600_000,
+      } : {}),
       ...(recoverySuccessorPage ? { originalCreatedPage: page } : {}),
       publicationState: testCase.publicationState,
     }, cdp);
@@ -657,6 +671,62 @@ describe('Issue #1238 page cleanup equivalence', () => {
     expect(observed.result.incidents).toContain(cause);
     expect(observed.pageCloseCalls).toBe(0);
     expect(observed.foreignTargetOpen).toBe(true);
+  });
+
+  describe('#2780 author-effect Page settles, then takes the guarded close', () => {
+    const authorEffect = {
+      sendCount: 1, pagePresent: true, pageLost: false, unsettledSend: true, authorEffect: true,
+    } as const;
+
+    it.each([
+      { name: 'bound sent_unharvested', options: {} },
+      { name: 'unbound sent_unbound', options: { authorEffectUnbound: true } },
+    ])('closes a quiet $name author-effect Page', async ({ options }) => {
+      const observed = await observeFinalizer({ ...authorEffect, ...options });
+      expect(observed.result.cause).toBe('author_effect_pr_head_changed');
+      expect(observed.result.state).toBe('ok');
+      expect(observed.pageCloseCalls).toBe(1);
+      expect(observed.result.cleanup).toBe('confirmed');
+      expect(observed.result.cleanup_status).toBeUndefined();
+    });
+
+    it('waits past the short settle budget while GPT still generates, then closes', async () => {
+      const observed = await observeFinalizer({ ...authorEffect, stopVisibleWaits: 30 });
+      expect(observed.settleWaits).toBe(30);
+      expect(observed.pageCloseCalls).toBe(1);
+      expect(observed.result.cleanup).toBe('confirmed');
+    });
+
+    it('keeps a Page whose Stop never clears after the bounded window', async () => {
+      const observed = await observeFinalizer({ ...authorEffect, stopVisible: true });
+      expect(observed.settleWaits).toBe(120);
+      expect(observed.pageCloseCalls).toBe(0);
+      expect(observed.result.cleanup_status).toBe('cleanup_unconfirmed');
+      expect(observed.result.incidents).toContain('stop_visible');
+    });
+
+    it.each([
+      { name: 'foreign last user', options: { foreignUser: true }, cause: 'foreign_user_message', waits: 12 },
+      { name: 'unrendered owned user row', options: { unrenderedOwnUser: true }, cause: 'foreign_user_message', waits: 12 },
+      { name: 'foreign draft', options: { foreignDraft: true }, cause: 'foreign_draft', waits: 0 },
+      { name: 'visible Continue generating', options: { continuationVisible: true }, cause: 'generation_in_progress', waits: 120 },
+      { name: 'changed conversation route', options: { routeChanged: true }, cause: 'route_changed', waits: 0 },
+    ] as const)('keeps an author-effect Page with $name', async ({ options, cause, waits }) => {
+      const observed = await observeFinalizer({ ...authorEffect, ...options });
+      expect(observed.pageCloseCalls).toBe(0);
+      expect(observed.settleWaits).toBe(waits);
+      expect(observed.result.cleanup_status).toBe('cleanup_unconfirmed');
+      expect(observed.result.incidents).toContain(cause);
+      expect(observed.result.cause).toBe('author_effect_pr_head_changed');
+    });
+
+    it('keeps an author-effect Page that carries no settle window', async () => {
+      const observed = await observeFinalizer({
+        sendCount: 1, pagePresent: true, pageLost: false, unsettledSend: true,
+      });
+      expect(observed.pageCloseCalls).toBe(0);
+      expect(observed.result.incidents).toContain('observation_route_only');
+    });
   });
 
   it.each(cleanupCases)('$id observes the production finalizer', async (testCase) => {
