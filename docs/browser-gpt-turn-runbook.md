@@ -91,8 +91,12 @@ selected project card repository. A second author of the same PR is refused
 with `conversation_busy` / `pr_author_occupied` and nothing is sent; retry only
 after that turn ends. When the PR head changes during the turn, the result is
 `ok` with `cause: author_effect_pr_head_changed` and no `--output` reply:
-inspect the PR. One project card per repository is assumed; a SEND by an
-orphaned child after its turn deadline is a named residual, not prevented.
+inspect the PR. The original tab is never Stopped; it settles for at most 10
+minutes (never past the turn deadline) and then takes the usual guarded close,
+or stays open with `cleanup_unconfirmed` if it is still busy or not provably
+its own. The result is published after that settle. One project card per
+repository is assumed; a SEND by an orphaned child after its turn deadline is
+a named residual, not prevented.
 
 A `conversation_busy` / `conversation_incident_active` record whose exact
 producer PID has exited releases only its conversation custody, and only when
