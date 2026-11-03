@@ -17,6 +17,7 @@ import {
   type WorkerAssignmentStoreTrustCause,
 } from '../lib/worker-assignment-store.ts';
 import { existsSync, readFileSync } from 'node:fs';
+import { isAbsolute, resolve } from 'node:path';
 import {
   admitCurrentWorkerAssignmentReplacement,
   resolveCurrentWorkerAssignmentTarget,
@@ -794,6 +795,157 @@ export async function runSupervisedWorkerStart(input: {
   return { ok: true, reason: 'ready_and_assignment_bound', receipt, assignment: published.assignment };
 }
 
+/** Read-only fresh-instance external-terminal stop admission (Issue #2754 AC6).
+ * This entrypoint deliberately has no stop effect without observed native
+ * generation-bound close AND same-Dispatch abandon capabilities. In particular,
+ * RuntimeAdapter.stopWorker is owned-instance/handle-only and is not AC6 proof.
+ */
+export interface ExternalTerminalStopInput {
+  readonly repository: string;
+  readonly projectId?: string;
+  readonly issueNumber: number;
+  readonly role: WorkerAssignmentRole;
+  readonly runId: string;
+  readonly taskId: string;
+  readonly dispatchId: string;
+  readonly assignmentId: string;
+  readonly assignmentGeneration: number;
+  readonly worktreeId: string;
+  readonly worktreePath: string;
+  readonly terminalHandle: string;
+  readonly terminalGeneration: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly cwd?: string;
+  readonly adapter?: RuntimeAdapter;
+  readonly inspect?: (args: readonly string[]) => Promise<ChildResult>;
+}
+
+export interface ExternalTerminalStopResult {
+  readonly ok: false;
+  readonly status: 'unsupported' | 'stop_unknown';
+  readonly reason: string;
+  readonly nextAction: string;
+}
+
+export async function inspectExternalTerminalStop(
+  input: ExternalTerminalStopInput,
+): Promise<ExternalTerminalStopResult> {
+  const recovery = 'inspect the exact orca orchestration run-show/task-list/dispatch-show/worker-show, worktree show and terminal show; use a supported generation-safe exact terminal close and same-Dispatch abandon only when installed native capabilities prove both, read back both states, then have the coordinator/operator reconcile and retry';
+  const unknown = (reason: string): ExternalTerminalStopResult => ({
+    ok: false, status: 'stop_unknown', reason, nextAction: recovery,
+  });
+  const expectedPath = input.worktreePath.trim();
+  if (!input.repository.trim() || !Number.isSafeInteger(input.issueNumber) || input.issueNumber <= 0
+    || !['worker', 'orchestrator'].includes(input.role)
+    || !input.runId.trim() || !input.taskId.trim() || !input.dispatchId.trim()
+    || !input.assignmentId.trim() || !Number.isSafeInteger(input.assignmentGeneration)
+    || input.assignmentGeneration <= 0 || !input.worktreeId.trim()
+    || !isAbsolute(expectedPath) || !input.terminalHandle.trim() || !input.terminalGeneration.trim()) {
+    return unknown('external_stop_input_invalid');
+  }
+  const file = resolveWorkerAssignmentStorePath(input.projectId, input.env ?? process.env);
+  if (existsSync(file)) {
+    let raw: string;
+    try { raw = readFileSync(file, 'utf8'); }
+    catch { return unknown('external_stop_assignment_store_unreadable'); }
+    if (!inspectWorkerAssignmentStore(raw).ok) return unknown('external_stop_assignment_store_untrusted');
+  }
+  const assigned = currentWorkerAssignment(file, input.issueNumber);
+  if (!assigned || assigned.repository !== input.repository.trim().toLowerCase()
+    || assigned.kind !== 'local' || assigned.provider !== 'orca'
+    || assigned.role !== input.role || assigned.taskId !== input.taskId
+    || assigned.bindingKey !== input.dispatchId || assigned.assignmentId !== input.assignmentId
+    || assigned.generation !== input.assignmentGeneration) return unknown('external_stop_assignment_stale');
+
+  const inspect = input.inspect ?? (async (args: readonly string[]) => {
+    const result = await runProcess({
+      command: 'orca', args: [...args], cwd: input.cwd ?? process.cwd(), env: input.env,
+      inheritParentEnv: true, allowEmptyStdout: false, timeoutMs: 15_000,
+    });
+    return { ok: result.ok, stdout: result.stdout, stderr: result.stderr || result.error };
+  });
+  const read = async (args: readonly string[]): Promise<Record<string, unknown> | null> =>
+    parsePlacementEnvelope(await inspect(args));
+
+  const run = await read(['orchestration', 'run-show', '--id', input.runId, '--json']);
+  if (!isRecord(run?.run) || providerText(run.run.id) !== input.runId) return unknown('external_stop_run_unproven');
+  const list = await read(['orchestration', 'task-list', '--run', input.runId, '--json']);
+  const listRun = isRecord(list?.run) ? providerText(list.run.id) : providerText(list?.runId);
+  const tasks = Array.isArray(list?.tasks) ? list.tasks : [];
+  if (!list || (listRun && listRun !== input.runId)
+    || tasks.filter((t) => isRecord(t) && providerText(t.id) === input.taskId).length !== 1) {
+    return unknown('external_stop_task_run_membership_unproven');
+  }
+  const selected = await read(['orchestration', 'dispatch-show', '--task', input.taskId, '--json']);
+  const dispatch = isRecord(selected?.dispatch) ? selected.dispatch : null;
+  if (!dispatch || providerText(dispatch.id) !== input.dispatchId
+    || (providerText(dispatch.taskId) && providerText(dispatch.taskId) !== input.taskId)
+    || (providerText(dispatch.run_id) && providerText(dispatch.run_id) !== input.runId)) {
+    return unknown('external_stop_dispatch_unproven');
+  }
+  const shown = await read(['orchestration', 'worker-show', '--dispatch', input.dispatchId, '--json']);
+  const worker = isRecord(shown?.worker) ? shown.worker : null;
+  const resource = isRecord(shown?.terminalResource) ? shown.terminalResource : null;
+  const terminal = isRecord(shown?.terminal) ? shown.terminal : null;
+  const observation = isRecord(shown?.observation) ? shown.observation : null;
+  const shownDispatch = isRecord(shown?.dispatch) ? shown.dispatch : null;
+  if (!worker || !resource || !terminal || observation?.exactWorker !== true
+    || (providerText(shownDispatch?.id) && providerText(shownDispatch?.id) !== input.dispatchId)
+    || providerText(worker.agent_terminal_handle) !== input.terminalHandle
+    || providerText(worker.worktree_id) !== input.worktreeId
+    || providerText(resource.terminalHandle) !== input.terminalHandle
+    || providerText(resource.worktreeId) !== input.worktreeId
+    || providerText(resource.originDispatchId) !== input.dispatchId
+    || providerText(resource.ownerDispatchId) !== input.dispatchId
+    || providerText(terminal.handle) !== input.terminalHandle) {
+    return unknown('external_stop_dispatch_terminal_binding_unproven');
+  }
+
+  const worktree = await read(['worktree', 'show', '--worktree', `id:${input.worktreeId}`, '--json']);
+  const selectedWorktree = isRecord(worktree?.worktree) ? worktree.worktree : null;
+  if (providerText(selectedWorktree?.id) !== input.worktreeId
+    || !isAbsolute(providerText(selectedWorktree?.path))
+    || resolve(providerText(selectedWorktree?.path)) !== resolve(expectedPath)) {
+    return unknown('external_stop_worktree_unproven');
+  }
+  const shownTerminal = await read(['terminal', 'show', '--terminal', input.terminalHandle, '--json']);
+  const liveTerminal = isRecord(shownTerminal?.terminal) ? shownTerminal.terminal : null;
+  const generation = providerText(liveTerminal?.incarnationId) || providerText(liveTerminal?.ptyId);
+  if (providerText(liveTerminal?.handle) !== input.terminalHandle
+    || generation !== input.terminalGeneration
+    || providerText(liveTerminal?.worktreePath) !== expectedPath
+    || (providerText(liveTerminal?.worktreeId) && providerText(liveTerminal?.worktreeId) !== input.worktreeId)) {
+    return unknown('external_stop_terminal_generation_or_workspace_unproven');
+  }
+
+  let adapter: RuntimeAdapter;
+  try {
+    const env = input.env ?? process.env;
+    adapter = input.adapter ?? await selectRuntimeAdapter(
+      { env }, { cwd: input.cwd ?? process.cwd(), transport: { env } },
+    );
+  } catch { return unknown('external_stop_registered_runtime_unavailable'); }
+  if (adapter.id !== 'orca') return unknown('external_stop_runtime_mismatch');
+  const current = adapter.findWorkerById(input.terminalHandle, {
+    ...(input.cwd ? { cwd: input.cwd } : {}),
+  });
+  if (current.status !== 'ok' || !current.value
+    || current.value.identity.runtime !== 'orca'
+    || current.value.identity.id !== input.terminalHandle
+    || current.value.identity.generation !== input.terminalGeneration
+    || resolve(current.value.workspacePath) !== resolve(expectedPath)) {
+    return unknown('external_stop_runtime_identity_changed');
+  }
+  // The bound handle is read-only evidence, NOT safe authority for a close.
+  // Neither a generation-qualified native close nor same-Dispatch abandon has
+  // been established on the installed producer/registered adapter boundary.
+  return {
+    ok: false, status: 'unsupported',
+    reason: 'external_stop_native_generation_bound_close_abandon_unproven',
+    nextAction: recovery,
+  };
+}
+
 export async function attachSupervisedWorkerIssue(input: {
   readonly repository: string;
   readonly issueNumber: number;
@@ -907,10 +1059,51 @@ function parseAttachCli(argv: readonly string[], env: NodeJS.ProcessEnv = proces
   };
 }
 
+function parseExternalStopCli(
+  argv: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): ExternalTerminalStopInput {
+  const fields = new Set([
+    '--project', '--repository', '--issue-number', '--role', '--run-id',
+    '--task-id', '--dispatch-id', '--assignment-id', '--assignment-generation',
+    '--worktree-id', '--worktree-path', '--terminal-handle', '--terminal-generation',
+  ]);
+  const values = new Map<string, string>();
+  if (argv.length % 2 !== 0) throw new Error('stop-external requires exact option/value pairs');
+  for (let i = 0; i < argv.length; i += 2) {
+    const name = argv[i] ?? '';
+    const value = argv[i + 1]?.trim() ?? '';
+    if (!fields.has(name) || values.has(name) || !value || value.startsWith('--')) {
+      throw new Error('stop-external has an unknown, duplicate or empty argument');
+    }
+    values.set(name, value);
+  }
+  const target = resolveTargetContext({ projectId: values.get('--project'), env });
+  const repository = values.get('--repository')?.toLowerCase() ?? target.repository;
+  if (repository !== target.repository) throw new Error('stop-external repository mismatches selected project card');
+  const role = parseWorkerAssignmentRole(values.get('--role'));
+  if (!role) throw new Error('stop-external role must be worker|orchestrator');
+  return {
+    repository, projectId: target.projectId,
+    issueNumber: Number(values.get('--issue-number')),
+    role, runId: values.get('--run-id') ?? '',
+    taskId: values.get('--task-id') ?? '', dispatchId: values.get('--dispatch-id') ?? '',
+    assignmentId: values.get('--assignment-id') ?? '',
+    assignmentGeneration: Number(values.get('--assignment-generation')),
+    worktreeId: values.get('--worktree-id') ?? '',
+    worktreePath: values.get('--worktree-path') ?? '',
+    terminalHandle: values.get('--terminal-handle') ?? '',
+    terminalGeneration: values.get('--terminal-generation') ?? '',
+    env,
+  };
+}
+
 async function main(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
   const result = argv[0] === 'attach-issue'
     ? await attachSupervisedWorkerIssue(parseAttachCli(argv.slice(1), process.env))
-    : await runSupervisedWorkerStart(parseStartCli(argv, process.env));
+    : argv[0] === 'stop-external'
+      ? await inspectExternalTerminalStop(parseExternalStopCli(argv.slice(1), process.env))
+      : await runSupervisedWorkerStart(parseStartCli(argv, process.env));
   process.stdout.write(`${JSON.stringify(result)}\n`);
   if (!result.ok) process.exitCode = 1;
 }

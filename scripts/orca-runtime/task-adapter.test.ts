@@ -283,6 +283,7 @@ describe('Orca task terminal ownership persistence', () => {
     const oldDispatch = 'ctx_2107_old';
     const terminals: Array<{ handle: string; incarnationId: string; worktreePath: string; title: string; status: 'running' }> = [];
     let creates = 0;
+    let absentTerminalCode = 'not_found';
     let selectedStatus = 'failed';
     let observedStatus = 'missing';
     let observedExact = false;
@@ -302,7 +303,7 @@ describe('Orca task terminal ownership persistence', () => {
         const handle = args[args.indexOf('--terminal') + 1];
         const terminal = terminals.find((item) => item.handle === handle);
         return terminal ? { ok: true, result: { terminal } }
-          : { ok: false, error: { code: 'not_found', message: 'terminal absent after reboot' } };
+          : { ok: false, error: { code: absentTerminalCode, message: 'terminal absent after reboot' } };
       }
       if (key === 'terminal list') return { ok: true,
         result: { terminals, totalCount: terminals.length, truncated: false } };
@@ -382,6 +383,9 @@ describe('Orca task terminal ownership persistence', () => {
       if (!restored.ok) throw new Error(restored.reason);
       const admittedRequest = { ...request,
         terminalGoneRecovery: { assignment: restored.assignment, worktreeId } };
+      // terminal_handle_stale proves absence of the old handle only; the exact
+      // terminal Dispatch, assignment and worktree checks above still apply.
+      absentTerminalCode = 'terminal_handle_stale';
       const admitted = next.spawnWorker(admittedRequest);
       expect(admitted).toMatchObject({ status: 'ok', value: {
         identity: { id: 'terminal-2', generation: 'incarnation-2' }, provenance: 'internal',

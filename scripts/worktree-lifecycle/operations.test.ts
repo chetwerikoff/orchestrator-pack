@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { ProcessResult } from '../kernel/subprocess.ts';
+import { runProcessSync, type ProcessResult } from '../kernel/subprocess.ts';
 import { WRAPPER_PATH } from '../lib/gh-resolve-real-binary.mjs';
 import {
   collectCensus,
@@ -263,6 +263,49 @@ function operations(
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe('Issue #2754 AC3 native vanished-registration pruning', () => {
+  it('prunes recent vanished only in its selected repository and preserves live dirty and locked registrations', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2754-native-prune-'));
+    roots.push(root);
+    const repo = join(root, 'selected');
+    const live = join(root, 'live-dirty');
+    const locked = join(root, 'locked-vanished');
+    const vanished = join(root, 'vanished-unlocked');
+    const foreign = join(root, 'foreign');
+    const run = (cwd: string, args: string[]): string => {
+      const result = runProcessSync({ command: 'git', args, cwd, env: {
+        ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
+        GIT_AUTHOR_NAME: 'synthetic', GIT_AUTHOR_EMAIL: 'synthetic@example.test',
+        GIT_COMMITTER_NAME: 'synthetic', GIT_COMMITTER_EMAIL: 'synthetic@example.test',
+      } });
+      if (!result.ok) throw new Error(`git ${args.join(' ')}: ${result.stderr}`);
+      return result.stdout;
+    };
+    run(root, ['init', '-q', '-b', 'main', repo]);
+    run(root, ['init', '-q', '-b', 'main', foreign]);
+    writeFileSync(join(repo, 'proof.txt'), 'original\n');
+    run(repo, ['add', 'proof.txt']);
+    run(repo, ['commit', '-q', '-m', 'synthetic seed']);
+    for (const [path, name] of [[live, 'live'], [locked, 'locked'], [vanished, 'vanished']] as const) {
+      run(repo, ['worktree', 'add', '-q', '-b', name, path, 'HEAD']);
+    }
+    writeFileSync(join(live, 'untracked.txt'), 'must survive\n');
+    writeFileSync(join(live, 'proof.txt'), 'dirty content\n');
+    run(repo, ['worktree', 'lock', '--reason', 'manual retention', locked]);
+    rmSync(locked, { recursive: true, force: true });
+    rmSync(vanished, { recursive: true, force: true });
+    const beforeForeign = run(foreign, ['worktree', 'list', '--porcelain']);
+    run(repo, ['worktree', 'prune', '--expire=now']);
+    const after = run(repo, ['worktree', 'list', '--porcelain']);
+    expect(after).toContain(`worktree ${live}`);
+    expect(after).toContain(`worktree ${locked}`);
+    expect(after).not.toContain(`worktree ${vanished}`);
+    expect(existsSync(join(live, 'untracked.txt'))).toBe(true);
+    expect(run(live, ['status', '--porcelain=v1', '--untracked-files=all'])).toContain('proof.txt');
+    expect(run(foreign, ['worktree', 'list', '--porcelain'])).toBe(beforeForeign);
+  });
 });
 
 describe('dual census authority', () => {

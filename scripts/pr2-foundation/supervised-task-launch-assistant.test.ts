@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
+import { Worker } from 'node:worker_threads';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,8 +12,8 @@ import { openCodeControlFromCommand } from '../orca-runtime/adapter.ts';
 import { lastFleetParkedLine, ownPaneOutcome } from '../fleet/fleet-sweep.ts';
 import type { OrcaJsonResponse } from '../orca-runtime/native.ts';
 import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
-import { runSupervisedWorkerStart, type SupervisedWorkerStartResult } from './supervised-worker-start.ts';
-import { installManagerPushGuard } from './manager-push-guard.ts';
+import { readTerminalGoneDispatch, runSupervisedWorkerStart, type SupervisedWorkerStartResult } from './supervised-worker-start.ts';
+import { installManagerPushGuard, restoreManagerPushGuardForClaude } from './manager-push-guard.ts';
 import {
   currentWorkerAssignment, publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath,
   type DelegatedIntegrationMarker, type WorkerAssignment,
@@ -31,6 +32,7 @@ import {
   runOpenCodePrimaryProbe,
   runExistingOpenCodeResume,
   runSupervisedTaskLaunchAssistant,
+  observeQuiescentRestoreCensus,
   LAUNCH_STARTUP_OBSERVATION_WINDOW_MS,
   CANONICAL_MERGE_LAUNCH_COMMAND,
   repoCanonicalKey,
@@ -54,10 +56,253 @@ import {
   EXECUTOR_FAMILY_DESCRIPTORS,
   profileNamesForTask,
   profileNamesForSmoke,
+  pinnedProbeCommand,
   resolveSemanticExecutorProfile,
   withMergeExecutorProfileDefaults,
 } from '../executor-profile-policy.ts';
 import { overlayExecutorProfileEnv, readExecutorProfileStore } from '../executor-profile-store.ts';
+
+describe('Issue #2754 AC5 serialized worktree restoration', () => {
+  it('requires complete native census and empty Linux process descendants; retained terminal fails even if exited', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2754-restore-'));
+    const foreign = join(root, 'foreign');
+    mkdirSync(foreign);
+    const base = runtimeAdapter();
+    const native = (workers: readonly RuntimeWorker[]): RuntimeAdapter => ({
+      ...base, listWorkersAsync: async () => ({ status: 'ok', value: workers }),
+    });
+    const foreignWorker: RuntimeWorker = { ...worker, workspacePath: foreign };
+    const atTarget: RuntimeWorker = { ...worker, workspacePath: root };
+    try {
+      const empty = await observeQuiescentRestoreCensus(native([]), root, () => [], 'linux');
+      expect(empty).toMatchObject({ status: 'ok', value: { terminalFingerprint: '' } });
+      const foreignOnly = await observeQuiescentRestoreCensus(native([foreignWorker]), root, () => [], 'linux');
+      expect(foreignOnly.status).toBe('ok');
+      const retained = await observeQuiescentRestoreCensus(native([atTarget]), root, () => [], 'linux');
+      expect(retained).toMatchObject({ status: 'continue', cause: 'worktree_restore_target_terminal_retained' });
+      const process = await observeQuiescentRestoreCensus(native([]), root,
+        () => [{ pid: 15, ppid: 1, starttime: '1', cwd: root }], 'linux');
+      expect(process).toMatchObject({ status: 'continue', cause: 'worktree_restore_target_process_retained' });
+      const unreadable = await observeQuiescentRestoreCensus(native([]), root,
+        () => { throw new Error('/proc unreadable'); }, 'linux');
+      expect(unreadable).toMatchObject({ status: 'continue', cause: 'worktree_restore_process_census_unavailable' });
+      const absent = await observeQuiescentRestoreCensus(base, root, () => [], 'linux');
+      expect(absent).toMatchObject({ status: 'continue', cause: 'worktree_restore_census_unsupported' });
+      const platform = await observeQuiescentRestoreCensus(native([]), root, () => [], 'win32');
+      expect(platform).toMatchObject({ status: 'continue', cause: 'worktree_restore_census_unsupported' });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it.each(['same-task', 'new-task'] as const)('admits only a twice-observed exact gone Dispatch and unchanged quiescence: %s', async (mode) => {
+    const oldTask = mode === 'same-task' ? 'task-1' : 'task-old';
+    const prior: WorkerAssignment = {
+      schema: 'orchestrator-pack/worker-assignment/v1',
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 2754, taskId: oldTask, assignmentId: 'prior-assignment',
+      generation: 1, kind: 'local', provider: 'orca', bindingKey: 'dispatch-old',
+      role: 'orchestrator', createdAtUtc: '2026-11-02T00:00:00.000Z',
+    };
+    const observations: DispatchObservation[] = mode === 'same-task'
+      ? [{ kind: 'present', dispatchId: 'dispatch-old', status: 'failed' },
+        { kind: 'present', dispatchId: 'dispatch-old', status: 'failed' }]
+      : [{ kind: 'absent' }, { kind: 'present', dispatchId: 'dispatch-old', status: 'failed' },
+        { kind: 'absent' }, { kind: 'present', dispatchId: 'dispatch-old', status: 'failed' }];
+    let started = 0;
+    let censuses = 0;
+    const result = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), issueNumber: 2754 }, {
+      ...deps({ currentAssignment: prior, dispatch: observations,
+        onSupervised: () => { started += 1; } }),
+      proveManagerTaskMembership: async (_runId, taskId) => ({ status: 'ok', value: { taskId } }),
+      proveTerminalGone: async (assignment) => ({
+        taskId: assignment.taskId, dispatchId: assignment.bindingKey,
+        dispatchState: 'failed', worktreeId: 'repo::exact-worktree', workerAbsent: true,
+      }),
+      resolveRestoreWorktree: async () => ({ status: 'ok', value: {
+        id: 'repo::exact-worktree', path: '/tmp/exact-worktree',
+      } }),
+      observeRestoreQuiescence: async () => {
+        censuses += 1;
+        return { status: 'ok', value: { terminalFingerprint: 'same foreign inventory' } };
+      },
+      prepareWorktree: async () => ({ status: 'ok', value: {
+        id: 'repo::exact-worktree', selector: 'id:manager-worktree',
+        path: '/tmp/exact-worktree', setupWitness: 'proven_reuse',
+      } }),
+    });
+    expect(result.outcome).toBe('ready');
+    expect(censuses).toBe(2);
+    expect(started).toBe(1);
+  });
+
+  it.each([
+    { mode: 'same-task', phase: 'early', state: 'done' },
+    { mode: 'same-task', phase: 'early', state: 'completed' },
+    { mode: 'same-task', phase: 'final', state: 'done' },
+    { mode: 'same-task', phase: 'final', state: 'completed' },
+    { mode: 'new-task', phase: 'early', state: 'done' },
+    { mode: 'new-task', phase: 'early', state: 'completed' },
+    { mode: 'new-task', phase: 'final', state: 'done' },
+    { mode: 'new-task', phase: 'final', state: 'completed' },
+  ] as const)(
+    'refuses AC5 $mode restoration when predecessor is $state at $phase admission', async ({ mode, phase, state }) => {
+      const oldTask = mode === 'same-task' ? 'task-1' : 'task-old';
+      const prior: WorkerAssignment = {
+        schema: 'orchestrator-pack/worker-assignment/v1',
+        projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+        issueNumber: 2754, taskId: oldTask, assignmentId: 'completed-predecessor',
+        generation: 1, kind: 'local', provider: 'orca', bindingKey: 'dispatch-old',
+        role: 'orchestrator', createdAtUtc: '2026-11-02T00:00:00.000Z',
+      };
+      const first = phase === 'early' ? state : 'failed';
+      const old = (status: string): DispatchObservation =>
+        ({ kind: 'present', dispatchId: 'dispatch-old', status });
+      const observations: DispatchObservation[] = mode === 'same-task'
+        ? [old(first), old(state)]
+        : [{ kind: 'absent' }, old(first), { kind: 'absent' }, old(state)];
+      let goneReads = 0;
+      let spawned = 0;
+      let started = 0;
+      const result = await runSupervisedTaskLaunchAssistant({
+        ...launchInput('manager'), issueNumber: 2754,
+      }, {
+        ...deps({
+          currentAssignment: prior, dispatch: observations,
+          adapter: runtimeAdapter({ onSpawn: () => { spawned += 1; } }),
+          onSupervised: () => { started += 1; },
+        }),
+        proveManagerTaskMembership: async (_runId, taskId) => ({
+          status: 'ok', value: { taskId },
+        }),
+        proveTerminalGone: async (assignment) => ({
+          taskId: assignment.taskId, dispatchId: assignment.bindingKey,
+          dispatchState: goneReads++ === 0 ? first : state,
+          worktreeId: 'repo::exact-worktree', workerAbsent: true,
+        }),
+        resolveRestoreWorktree: async () => ({ status: 'ok', value: {
+          id: 'repo::exact-worktree', path: '/tmp/exact-worktree',
+        } }),
+        observeRestoreQuiescence: async () => ({
+          status: 'ok', value: { terminalFingerprint: 'stable foreign inventory' },
+        }),
+        prepareWorktree: async () => ({ status: 'ok', value: {
+          id: 'repo::exact-worktree', selector: 'id:manager-worktree',
+          path: '/tmp/exact-worktree', setupWitness: 'proven_reuse',
+        } }),
+      });
+      expect(result).toMatchObject({
+        outcome: 'continue',
+        stage: phase === 'early' ? 'dispatch_admission_early' : 'dispatch_admission_final',
+        observedCause: phase === 'early'
+          ? 'worktree_restore_old_dispatch_unproven' : 'worktree_restore_final_identity_changed',
+      });
+      expect(spawned).toBe(0);
+      expect(started).toBe(0);
+    },
+  );
+
+  it('rejects changed all-workspace census after preparation without any terminal spawn', async () => {
+    const prior: WorkerAssignment = {
+      schema: 'orchestrator-pack/worker-assignment/v1',
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 2754, taskId: 'task-old', assignmentId: 'prior-assignment',
+      generation: 1, kind: 'local', provider: 'orca', bindingKey: 'dispatch-old',
+      role: 'orchestrator', createdAtUtc: '2026-11-02T00:00:00.000Z',
+    };
+    let census = 0;
+    let spawned = 0;
+    const result = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), issueNumber: 2754 }, {
+      ...deps({ currentAssignment: prior, adapter: runtimeAdapter({ onSpawn: () => { spawned += 1; } }),
+        dispatch: [{ kind: 'absent' }, { kind: 'present', dispatchId: 'dispatch-old', status: 'failed' },
+          { kind: 'absent' }, { kind: 'present', dispatchId: 'dispatch-old', status: 'failed' }] }),
+      proveManagerTaskMembership: async (_runId, taskId) => ({ status: 'ok', value: { taskId } }),
+      proveTerminalGone: async (assignment) => ({
+        taskId: assignment.taskId, dispatchId: assignment.bindingKey,
+        dispatchState: 'failed', worktreeId: 'repo::exact-worktree', workerAbsent: true,
+      }),
+      resolveRestoreWorktree: async () => ({ status: 'ok', value: {
+        id: 'repo::exact-worktree', path: '/tmp/exact-worktree',
+      } }),
+      observeRestoreQuiescence: async () => ({ status: 'ok', value: {
+        terminalFingerprint: ++census === 1 ? 'before' : 'changed',
+      } }),
+      prepareWorktree: async () => ({ status: 'ok', value: {
+        id: 'repo::exact-worktree', selector: 'id:manager-worktree',
+        path: '/tmp/exact-worktree', setupWitness: 'proven_reuse',
+      } }),
+    });
+    expect(result).toMatchObject({ outcome: 'continue',
+      stage: 'dispatch_admission_final', observedCause: 'worktree_restore_terminal_inventory_changed' });
+    expect(census).toBe(2);
+    expect(spawned).toBe(0);
+  });
+  it.each([
+    ['changed-final-census', false],
+    ['same-final-census', true],
+  ] as const)('retains B5 on refused Claude manager restore and retires it only before admitted spawn: %s', async (_case, stable) => {
+    const prior: WorkerAssignment = {
+      schema: 'orchestrator-pack/worker-assignment/v1',
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 2754, taskId: 'task-1', assignmentId: 'claude-prior-assignment',
+      generation: 1, kind: 'local', provider: 'orca', bindingKey: 'dispatch-old',
+      role: 'orchestrator', createdAtUtc: '2026-11-02T00:00:00.000Z',
+    };
+    const events: string[] = [];
+    let censuses = 0;
+    const result = await runSupervisedTaskLaunchAssistant({
+      ...launchInput('manager'), issueNumber: 2754,
+      env: profileEnv({
+        PACK_EXECUTOR_MANAGER_AGENT: 'claude',
+        PACK_EXECUTOR_MANAGER_MODEL: 'claude-opus-5-5',
+        PACK_EXECUTOR_MANAGER_EFFORT: 'medium',
+      }),
+    }, {
+      ...deps({
+        currentAssignment: prior,
+        dispatch: [
+          { kind: 'present', dispatchId: 'dispatch-old', status: 'failed' },
+          { kind: 'present', dispatchId: 'dispatch-old', status: 'failed' },
+        ],
+        adapter: runtimeAdapter({ onSpawn: () => { events.push('native-spawn'); } }),
+        onSupervised: () => { events.push('native-start'); },
+      }),
+      proveTerminalGone: async (assignment) => ({
+        taskId: assignment.taskId, dispatchId: assignment.bindingKey,
+        dispatchState: 'failed', worktreeId: 'repo::exact-worktree', workerAbsent: true,
+      }),
+      resolveRestoreWorktree: async () => ({ status: 'ok', value: {
+        id: 'repo::exact-worktree', path: '/tmp/exact-worktree',
+      } }),
+      observeRestoreQuiescence: async () => {
+        censuses += 1;
+        return { status: 'ok', value: {
+          terminalFingerprint: stable || censuses === 1 ? 'same inventory' : 'changed inventory',
+        } };
+      },
+      prepareWorktree: async () => ({ status: 'ok', value: {
+        id: 'repo::exact-worktree', selector: 'id:manager-worktree',
+        path: '/tmp/exact-worktree', setupWitness: 'proven_reuse',
+      } }),
+      restoreClaudeManagerGuard: () => {
+        events.push('guard-retired');
+        return { status: 'ok', value: true };
+      },
+    });
+    expect(censuses).toBe(2);
+    if (!stable) {
+      expect(result).toMatchObject({
+        outcome: 'continue', stage: 'dispatch_admission_final',
+        observedCause: 'worktree_restore_terminal_inventory_changed',
+      });
+      expect(events).toEqual([]);
+    } else {
+      // Claude's actual pane model/effort observation is separate from this
+      // test; the fixture proves guard-retirement ordering, not native readiness.
+      expect(events).toContain('guard-retired');
+      expect(events.indexOf('guard-retired')).toBeLessThan(events.indexOf('native-spawn'));
+    }
+  });
+
+});
 
 describe('production manager Run observation command seam', () => {
   it.each([
@@ -261,8 +506,26 @@ function runtimeAdapter(input: {
   };
 }
 
+const FIXTURE_OPENCODE_BIN = '/opt/opencode/1.18.35/bin/opencode';
+const FIXTURE_FORBIDDEN_OPEN_CODE_BASH = [
+  ...[
+    'bsk', '/bsk', '/*/bsk', '~?bsk', '~?*/bsk', 'env bsk',
+    'codex', '/codex', '/*/codex', '~?codex', '~?*/codex', 'env codex',
+    'agent-launch', '/agent-launch', '/*/agent-launch', '~?agent-launch', '~?*/agent-launch', 'env agent-launch',
+  ].flatMap((pattern) => [pattern, `${pattern} *`]),
+  '*codex*', '*agent-launch*', '*/bsk*',
+];
+const FIXTURE_FORBIDDEN_OPEN_CODE_PERMISSIONS = {
+  bash: Object.fromEntries(FIXTURE_FORBIDDEN_OPEN_CODE_BASH.map((pattern) => [pattern, 'deny'])),
+  codex: { '*': 'deny' },
+  'agent-launch': { '*': 'deny' },
+  skill: { 'browser-skill': 'deny' },
+  read: { '*.env': 'deny', '*.env.*': 'deny' },
+};
+
 function profileEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
+    PACK_EXECUTOR_OPENCODE_BIN: FIXTURE_OPENCODE_BIN,
     PACK_EXECUTOR_MANAGER_AGENT: 'cursor-agent', PACK_EXECUTOR_MANAGER_MODEL: 'model', PACK_EXECUTOR_MANAGER_EFFORT: 'medium',
     PACK_EXECUTOR_T1_AGENT: 'cursor-agent', PACK_EXECUTOR_T1_MODEL: 'model', PACK_EXECUTOR_T1_EFFORT: 'medium',
     PACK_EXECUTOR_T2_AGENT: 'cursor-agent', PACK_EXECUTOR_T2_MODEL: 'model', PACK_EXECUTOR_T2_EFFORT: 'medium',
@@ -325,6 +588,8 @@ function deps(input: {
     adapter: input.adapter ?? runtimeAdapter(),
     commandPreflight: () => ({ status: 'ok', value: true }),
     repositoryPreflight: async () => ({ status: 'ok', value: true }),
+    installManagerPushGuard: () => ({ status: 'ok', value: true }),
+    restoreClaudeManagerGuard: () => ({ status: 'ok', value: true }),
     resolveProfile: (workClass, env, startMode) => resolveExecutorProfile(workClass, env, startMode),
     observeManagerRun: async () => input.managerRun ?? ({ status: 'ok', value: { runId: 'run-1' } }),
     proveManagerTaskMembership: async () => input.managerMembership ?? ({ status: 'ok', value: { taskId: 'task-1' } }),
@@ -351,7 +616,7 @@ function launchInput(workClass: LaunchInput['workClass'] = 't2'): LaunchInput {
   return {
     repository: 'chetwerikoff/orchestrator-pack', workClass, issueNumber: 1479,
     taskId: 'task-1', env: profileEnv(), startMode: 'exact_terminal_worktree',
-    ...(workClass === 'manager' ? { runId: 'run-1', worktreeSelector: 'id:manager-worktree' } : { worktreeName: 'issue-1479' }),
+    ...(workClass === 'manager' ? { runId: 'run-1', defaultBranch: 'main', worktreeSelector: 'id:manager-worktree' } : { worktreeName: 'issue-1479' }),
   };
 }
 
@@ -379,6 +644,11 @@ function freshRepoFixture(input: {
   rootByPath?: Readonly<Record<string, string>>;
   failRoot?: boolean;
   failOrigin?: boolean;
+  pruneOk?: boolean;
+  gitInventory?: string;
+  gitInventoryOk?: boolean;
+  prunePreview?: string;
+  prunePreviewOk?: boolean;
   setupState?: 'not_configured' | 'running' | 'absent';
   waitExitCode?: number;
   freshStatus?: string;
@@ -405,6 +675,20 @@ function freshRepoFixture(input: {
         stderr: '',
       };
     }
+    if (command === 'git worktree list --porcelain') return {
+      ok: input.gitInventoryOk !== false,
+      stdout: input.gitInventory ?? [
+        `worktree ${REGISTERED_ORCA_ROOT}`, `HEAD ${'1'.repeat(40)}`,
+        'branch refs/heads/main', '',
+      ].join('\n'),
+      stderr: input.gitInventoryOk === false ? 'fixture: inventory unavailable' : '',
+    };
+    if (command === 'git worktree prune --dry-run --verbose --expire=now') return {
+      ok: input.prunePreviewOk !== false, stdout: input.prunePreview ?? '', stderr: '',
+    };
+    if (command === 'git worktree prune --expire=now') return {
+      ok: input.pruneOk !== false, stdout: '', stderr: input.pruneOk === false ? 'fixture: native prune failed' : '',
+    };
     if (command === 'git status --porcelain=v1 --untracked-files=all') {
       return { ok: true, stdout: input.freshStatus ?? '', stderr: '' };
     }
@@ -582,6 +866,7 @@ function managerReuseFixture(input: {
 }
 
 function opencodeProbeResult(args: readonly string[], variant = true): { ok: boolean; stdout: string; stderr: string } {
+  if (args[0] === FIXTURE_OPENCODE_BIN) return opencodeProbeResult(['opencode', ...args.slice(1)], variant);
   if (args[0] === 'opencode' && args[1] === 'models' && args.includes('--verbose')) {
     return {
       ok: true,
@@ -701,6 +986,7 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
 
 
   function lunaMergeProbe(args: readonly string[]): { ok: boolean; stdout: string; stderr: string } {
+    if (args[0] === FIXTURE_OPENCODE_BIN) return lunaMergeProbe(['opencode', ...args.slice(1)]);
     if (args[0] === 'opencode' && args[1] === 'models') {
       return { ok: true, stdout: args.includes('--verbose')
         ? 'openai/gpt-6-luna\n{"variants":{"medium":{"reasoningEffort":"medium"},"high":{"reasoningEffort":"high"}}}\n'
@@ -794,7 +1080,7 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
       }),
       finalizeProfile: async (profile) => {
         const overlay = buildOpenCodeAgentOverlay({
-          agentName: 'pack-opk-merge-2646',
+          executable: FIXTURE_OPENCODE_BIN, agentName: 'pack-opk-merge-2646',
           baseline: {
             name: 'build', mode: 'primary',
             permission: [
@@ -832,7 +1118,7 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
     // spawn command must contain exactly one full OPENCODE_CONFIG_CONTENT.
     const command = spawned[0]!.command;
     expect(command.match(/OPENCODE_CONFIG_CONTENT=/gu)).toHaveLength(1);
-    const inline = /^OPENCODE_CONFIG_CONTENT='([^']+)' XDG_STATE_HOME='[^']+' opencode --hostname 127\.0\.0\.1 --port \d+ --agent '([^']+)'$/u.exec(command);
+    const inline = /^OPENCODE_CONFIG_CONTENT='([^']+)' XDG_STATE_HOME='[^']+' \/opt\/opencode\/1\.18\.35\/bin\/opencode --hostname 127\.0\.0\.1 --port \d+ --agent '([^']+)'$/u.exec(command);
     expect(inline).not.toBeNull();
     const config = JSON.parse(inline![1]!) as {
       permission: { bash: Record<string, string>; skill: Record<string, string> };
@@ -1541,7 +1827,7 @@ describe('supervised Task launch assistant', () => {
     const resolved = resolveSemanticExecutorProfile({
       surface,
       names,
-      env: { [names[0]]: 'opencode', [names[1]]: 'fixture/provider-model', [names[2]]: 'high' },
+      env: { [names[0]]: 'opencode', [names[1]]: 'fixture/provider-model', [names[2]]: 'high', PACK_EXECUTOR_OPENCODE_BIN: FIXTURE_OPENCODE_BIN },
     });
     if (!resolved.ok) throw new Error('synthetic OpenCode profile should resolve');
     const invocation = buildExecutorCommand(resolved.profile);
@@ -1551,14 +1837,10 @@ describe('supervised Task launch assistant', () => {
       agent?: Record<string, Record<string, unknown>>;
     };
     const agent = config.agent?.[agentName];
-    const bashDenies = {
-      bsk: 'deny', 'bsk *': 'deny', '/bsk': 'deny', '/bsk *': 'deny',
-      '/*/bsk': 'deny', '/*/bsk *': 'deny', '~?bsk': 'deny', '~?bsk *': 'deny',
-      '~?*/bsk': 'deny', '~?*/bsk *': 'deny', 'env bsk': 'deny', 'env bsk *': 'deny',
-    };
+    const bashDenies = FIXTURE_FORBIDDEN_OPEN_CODE_PERMISSIONS.bash;
     expect(agentName).toMatch(/^pack-opk-[a-f0-9]{32}$/u);
     expect(config.agent).not.toHaveProperty('pack');
-    expect(config.permission).toEqual({ bash: bashDenies, skill: { 'browser-skill': 'deny' }, read: { '*.env': 'deny', '*.env.*': 'deny' } });
+    expect(config.permission).toEqual({ ...FIXTURE_FORBIDDEN_OPEN_CODE_PERMISSIONS, bash: bashDenies });
     expect(agent).toMatchObject({
       model: 'fixture/provider-model',
       variant: 'high',
@@ -1642,10 +1924,10 @@ describe('supervised Task launch assistant', () => {
     });
     expect(launchConfig.permission).toMatchObject({ skill: { 'browser-skill': 'deny' } });
     expect(launchConfig.permission?.bash).toHaveProperty('bsk *', 'deny');
-    expect(admittedCalls[0]).toEqual(['opencode', 'models']);
-    expect(admittedCalls).toContainEqual(['opencode', '--help']);
-    expect(admittedCalls).toContainEqual(['opencode', 'models', '--verbose']);
-    expect(admittedCalls.some((args) => args[0] === 'opencode' && args[1] === 'debug')).toBe(false);
+    expect(admittedCalls[0]).toEqual([FIXTURE_OPENCODE_BIN, 'models']);
+    expect(admittedCalls).toContainEqual([FIXTURE_OPENCODE_BIN, '--help']);
+    expect(admittedCalls).toContainEqual([FIXTURE_OPENCODE_BIN, 'models', '--verbose']);
+    expect(admittedCalls.some((args) => args[0] === FIXTURE_OPENCODE_BIN && args[1] === 'debug')).toBe(false);
     expect(admittedCalls.some((args) => args[0] === 'orca')).toBe(false);
 
     const unsupportedEffort = await resolveLiveExecutorProfile('t2', {
@@ -1759,6 +2041,20 @@ describe('supervised Task launch assistant', () => {
         ...remaining.slice(lastReadIndex + 1),
       ];
     };
+    // Preserve captured Bash rules and append only literal launcher denies. This
+    // synthetic path does not claim to cover shell quoting/encoding obfuscation.
+    const newBash = FIXTURE_FORBIDDEN_OPEN_CODE_BASH
+      .map((pattern) => ({ permission: 'bash', pattern, action: 'deny' }));
+    const newTools = ['codex', 'agent-launch'].map((permission) => ({ permission, pattern: '*', action: 'deny' }));
+    const withCurrentSafetyDenies = (rules: FixtureRule[]): FixtureRule[] => {
+      const base = withSyntheticReadDenies(rules);
+      const lastBash = base.findLastIndex((rule) => rule.permission === 'bash');
+      const insertAt = lastBash < 0 ? base.length : lastBash + 1;
+      const insert = [...base.slice(0, insertAt), ...newBash, ...base.slice(insertAt)];
+      // Keep inherited Bash grants and all other captured rules in order;
+      // the containment denies follow the last inherited Bash rule.
+      return [...insert.slice(0, -1), ...newTools, insert[insert.length - 1]!];
+    };
     const selectedDataRoot = join(tmpdir(), 'opk2447-synthetic-xdg-data');
     const runtimePattern = pathKind === 'tilde' ? '~/.local/share/opencode/tool-output/*'
       : pathKind === 'data' || pathKind === 'foreign-data'
@@ -1789,17 +2085,24 @@ describe('supervised Task launch assistant', () => {
         : typeof rules === 'object' && rules !== null
           ? Object.entries(rules).map(([pattern, action]) => ({ permission, pattern, action: String(action) }))
           : []);
-    expect(legacyRules).toHaveLength(97);
     expect(legacyRules[3]).toEqual(toolOutput);
-    const withoutToolOutput = legacyRules.filter((rule) =>
-      !(rule.permission === toolOutput.permission && rule.pattern === toolOutput.pattern && rule.action === toolOutput.action));
-    // Only the two new read overrides may differ from the captured 1.18.35 ordering.
+    for (const newRule of [...newBash, ...newTools]) expect(legacyRules).toContainEqual(newRule);
+    expect(legacyRules.filter((rule) => rule.permission === 'bash')).toEqual(newBash);
+    // This synthetic fixture projects only the new Bash policy; all other
+    // captured OpenCode 1.18.35 semantics remain unchanged.
     const contextualWithReadDenies = withSyntheticReadDenies(fixture.contextual.permission);
-    expect(withoutToolOutput).toEqual(contextualWithReadDenies.slice(0, -1));
+    const historicalNonShell = legacyRules.filter((rule) => rule.permission !== 'bash'
+      && !(rule.permission === toolOutput.permission && rule.pattern === toolOutput.pattern && rule.action === toolOutput.action)
+      && !newTools.some((newRule) => newRule.permission === rule.permission
+        && newRule.pattern === rule.pattern && newRule.action === rule.action));
+    const contextualNonShell = contextualWithReadDenies.filter((rule) => rule.permission !== 'bash');
+    expect(historicalNonShell).toEqual(contextualNonShell.slice(0, -1));
     expect(openCodeAgentSemantics({ ...fixture.baseline, permission: legacyExpected }))
       .not.toBe(openCodeAgentSemantics(fixture.contextual));
-    expect(openCodeAgentSemantics({ ...fixture.baseline, permission: [...withoutToolOutput, toolOutput] }))
-      .toBe(openCodeAgentSemantics({ ...fixture.contextual, permission: contextualWithReadDenies }));
+    const projected = withCurrentSafetyDenies(fixture.contextual.permission);
+    expect(openCodeAgentSemantics({ ...fixture.baseline, permission: [...legacyRules.filter((rule) =>
+      !(rule.permission === toolOutput.permission && rule.pattern === toolOutput.pattern && rule.action === toolOutput.action)), toolOutput] }))
+      .toBe(openCodeAgentSemantics({ ...fixture.contextual, permission: projected }));
     if (drift === 'inherited-allow') {
       const inherited = { permission: 'external_directory', pattern: '~/already-allowed/*', action: 'allow' };
       const baselineIndex = fixture.baseline.permission.findIndex((rule) => rule.permission === 'question');
@@ -1839,7 +2142,7 @@ describe('supervised Task launch assistant', () => {
             const name = args[3] ?? '';
             const resolved = JSON.parse(JSON.stringify(fixture.contextual)) as FixtureAgent;
             resolved.name = name;
-            resolved.permission = withSyntheticReadDenies(resolved.permission);
+            resolved.permission = withCurrentSafetyDenies(resolved.permission);
             if (name !== 'general' && name !== 'explore') {
               if (drift === 'other-order') {
                 const question = resolved.permission.findIndex((rule) => rule.permission === 'question');
@@ -1882,7 +2185,7 @@ describe('supervised Task launch assistant', () => {
         : { status: 'continue', cause: 'executor_effort_channel_unavailable' });
       if (pathKind === 'data' && accepted) {
         if (result.status !== 'ok') throw new Error('selected XDG data-home semantics must resolve');
-        expect(result.value.launchCommand).toContain(` XDG_DATA_HOME='${selectedDataRoot}' opencode --hostname`);
+        expect(result.value.launchCommand).toContain(` XDG_DATA_HOME='${selectedDataRoot}' ${FIXTURE_OPENCODE_BIN} --hostname`);
       }
     } finally {
       vi.unstubAllEnvs();
@@ -1941,11 +2244,11 @@ describe('supervised Task launch assistant', () => {
       return { ok: false, stdout: '', stderr: '' };
     }, () => true);
     expect(result).toMatchObject({ status: 'ok', evidence: { exactContext: true } });
-    expect(calls).toContainEqual(['opencode', 'debug', 'config']);
+    expect(calls).toContainEqual([FIXTURE_OPENCODE_BIN, 'debug', 'config']);
     expect(calls.filter((args) => args[1] === 'debug' && args[2] === 'agent')).toHaveLength(4);
-    expect(calls).toContainEqual(['opencode', 'debug', 'agent', 'general']);
-    expect(calls).toContainEqual(['opencode', 'debug', 'agent', 'explore']);
-    expect(calls).toContainEqual(['opencode', 'debug', 'paths']);
+    expect(calls).toContainEqual([FIXTURE_OPENCODE_BIN, 'debug', 'agent', 'general']);
+    expect(calls).toContainEqual([FIXTURE_OPENCODE_BIN, 'debug', 'agent', 'explore']);
+    expect(calls).toContainEqual([FIXTURE_OPENCODE_BIN, 'debug', 'paths']);
   });
   it('probe surface equals spawn surface', async () => {
     const profile = resolveSemanticExecutorProfile({ surface: 'task', names: profileNamesForTask('t2'), env: opencodeProfileEnv('t2') });
@@ -1972,7 +2275,7 @@ describe('supervised Task launch assistant', () => {
 
   it('projects resolved Agent.Info into a config-valid baseline overlay with terminal browser denies', () => {
     const invocation = buildOpenCodeAgentOverlay({
-      agentName: 'pack-opk-fixture',
+      executable: FIXTURE_OPENCODE_BIN, agentName: 'pack-opk-fixture',
       baseline: {
         name: 'build', native: true, mode: 'primary', topP: 0.8,
         prompt: 'fixture prompt', options: { temperature: 0.2 },
@@ -1988,15 +2291,7 @@ describe('supervised Task launch assistant', () => {
       agent?: Record<string, Record<string, unknown>>;
     };
     const agent = config.agent?.['pack-opk-fixture'];
-    expect(config.permission).toEqual({
-      bash: {
-        bsk: 'deny', 'bsk *': 'deny', '/bsk': 'deny', '/bsk *': 'deny',
-        '/*/bsk': 'deny', '/*/bsk *': 'deny', '~?bsk': 'deny', '~?bsk *': 'deny',
-        '~?*/bsk': 'deny', '~?*/bsk *': 'deny', 'env bsk': 'deny', 'env bsk *': 'deny',
-      },
-      skill: { 'browser-skill': 'deny' },
-      read: { '*.env': 'deny', '*.env.*': 'deny' },
-    });
+    expect(config.permission).toEqual(FIXTURE_FORBIDDEN_OPEN_CODE_PERMISSIONS);
     expect(config.agent?.general?.permission).toEqual(config.permission);
     expect(config.agent?.explore?.permission).toEqual(config.permission);
     expect(agent).toMatchObject({
@@ -2005,12 +2300,8 @@ describe('supervised Task launch assistant', () => {
     });
     expect(agent?.permission).toMatchObject({
       edit: 'allow',
-      bash: {
-        '*': 'ask',
-        bsk: 'deny', 'bsk *': 'deny', '/bsk': 'deny', '/bsk *': 'deny',
-        '/*/bsk': 'deny', '/*/bsk *': 'deny', '~?bsk': 'deny', '~?bsk *': 'deny',
-        '~?*/bsk': 'deny', '~?*/bsk *': 'deny', 'env bsk': 'deny', 'env bsk *': 'deny',
-      },
+      bash: FIXTURE_FORBIDDEN_OPEN_CODE_PERMISSIONS.bash,
+      codex: { '*': 'deny' }, 'agent-launch': { '*': 'deny' },
       skill: { 'browser-skill': 'deny' },
       read: { '*.env': 'deny', '*.env.*': 'deny' },
     });
@@ -2022,9 +2313,9 @@ describe('supervised Task launch assistant', () => {
   });
 
 
-  it('appends precise browser denies after inherited allows without changing other permissions', () => {
+  it('retains inherited Bash grants and denies common launcher-containing commands while preserving non-shell permissions', () => {
     const invocation = buildOpenCodeAgentOverlay({
-      agentName: 'pack-opk-fixture',
+      executable: FIXTURE_OPENCODE_BIN, agentName: 'pack-opk-fixture',
       baseline: {
         name: 'build', prompt: 'original prompt', mode: 'primary',
         permission: [
@@ -2052,15 +2343,22 @@ describe('supervised Task launch assistant', () => {
       }>
     };
     const agent = parsed.agent['pack-opk-fixture']!;
-    const deniedBash = [
-      'bsk', 'bsk *', '/bsk', '/bsk *', '/*/bsk', '/*/bsk *',
-      '~?bsk', '~?bsk *', '~?*/bsk', '~?*/bsk *', 'env bsk', 'env bsk *',
-    ];
+    const deniedBash = FIXTURE_FORBIDDEN_OPEN_CODE_BASH;
     expect(agent.model).toBe('fixture/provider-model');
     expect(agent.variant).toBe('high');
     expect(agent.prompt).toBe('original prompt');
-    expect(Object.entries(agent.permission.bash).slice(-12)).toEqual(deniedBash.map((pattern) => [pattern, 'deny']));
-    expect(agent.permission.bash).toMatchObject({ 'bsk*': 'allow', 'git *': 'allow', '*': 'allow' });
+    expect(Object.entries(agent.permission.bash).slice(-deniedBash.length))
+      .toEqual(deniedBash.map((pattern) => [pattern, 'deny']));
+    expect(agent.permission.bash['*']).toBe('allow');
+    expect(agent.permission.bash['git *']).toBe('allow');
+    const bashAction = (command: string) => Object.entries(agent.permission.bash)
+      .filter(([pattern]) => new RegExp('^' + pattern.replaceAll('.', '\\.').replaceAll('*', '.*')
+        .replaceAll('?', '.') + '$', 'u').test(command)).at(-1)?.[1];
+    expect(bashAction('git status')).toBe('allow');
+    for (const wrapped of [
+      'env -i codex exec', "sh -c 'codex exec dangerous'", '/usr/local/bin/codex exec',
+      'env -i agent-launch --help', "sh -c 'agent-launch dangerous'", '/usr/local/bin/agent-launch dangerous',
+    ]) expect(bashAction(wrapped), wrapped).toBe('deny');
     expect(agent.permission.skill).toEqual({ 'fixture-safe': 'allow', '*': 'allow', 'browser-skill': 'deny' });
     expect(agent.permission.edit).toBe('allow');
     const readRules = Object.entries(agent.permission.read);
@@ -2077,11 +2375,7 @@ describe('supervised Task launch assistant', () => {
       expect(matchingReadRule(path)?.[1]).toBe('deny');
     }
     expect(matchingReadRule('README.md')).toEqual(['README.md', 'allow']);
-    expect(parsed.permission).toEqual({
-      bash: Object.fromEntries(deniedBash.map((pattern) => [pattern, 'deny'])),
-      skill: { 'browser-skill': 'deny' },
-      read: { '*.env': 'deny', '*.env.*': 'deny' },
-    });
+    expect(parsed.permission).toEqual(FIXTURE_FORBIDDEN_OPEN_CODE_PERMISSIONS);
     expect(openCodeFleetBrowserDenyRulesAreTerminal(agent.permission)).toBe(true);
   });
 
@@ -2144,12 +2438,8 @@ describe('supervised Task launch assistant', () => {
             const globalRules = flatten(inline.permission);
             const agentRules = flatten(inline.agent?.[name]?.permission);
             if (drift === 'bash-order' && !isChild) {
-              const denyIndex = agentRules.findIndex((rule) => rule.permission === 'bash' && rule.pattern === 'bsk *');
-              const wildcardIndex = agentRules.findIndex((rule) => rule.permission === 'bash' && rule.pattern === '*' && rule.action !== 'deny');
-              if (denyIndex >= 0 && wildcardIndex >= 0 && denyIndex > wildcardIndex) {
-                const [deny] = agentRules.splice(denyIndex, 1);
-                agentRules.splice(wildcardIndex, 0, deny!);
-              }
+              // A later wildcard allow must never overrule fail-closed Bash.
+              agentRules.push({ permission: 'bash', pattern: '*', action: 'allow' });
             }
             const removeOne = (source: SyntheticRule[], scope: string, pattern: string) => {
               const index = source.findIndex((rule) => rule.permission === scope && rule.pattern === pattern);
@@ -2182,7 +2472,11 @@ describe('supervised Task launch assistant', () => {
               removeOne(globalRules, 'skill', 'browser-skill');
               removeOne(agentRules, 'skill', 'browser-skill');
             }
-            const rules = [...baselineRules, ...globalRules, ...agentRules];
+            // A new explicit Bash ruleset replaces the inherited Bash scope:
+            // the native contextual projection must not resurrect broad Bash
+            // allows removed by the fail-closed overlay.
+            const rules = [...baselineRules.filter((rule) => rule.permission !== 'bash'),
+              ...globalRules, ...agentRules];
             if (drift === 'edit' && !isChild) {
               const edit = [...rules].reverse().find((rule) => rule.permission === 'edit');
               if (edit) edit.action = 'deny';
@@ -2267,7 +2561,7 @@ describe('supervised Task launch assistant', () => {
         env,
         startMode,
         async (args) => {
-          if (args[0] === 'opencode' && args.length === 2 && args[1] === '--help') {
+          if (args[0] === FIXTURE_OPENCODE_BIN && args.length === 2 && args[1] === '--help') {
             return { ok: true, stdout: 'Usage: opencode --variant NAME\n' };
           }
           return opencodeProbeResult(args, true);
@@ -3103,7 +3397,7 @@ The words Firefighter universal appear here only as prose.`;
       status: 'ok', value: { selector: 'new-top-level', repositorySelector: 'id:legacy-repo' },
     });
     expect(fixture.calls.slice(1).map((call) => call.cwd)).toEqual([
-      REGISTERED_ORCA_ROOT, REGISTERED_ORCA_ROOT,
+      REGISTERED_ORCA_ROOT, REGISTERED_ORCA_ROOT, REGISTERED_ORCA_ROOT,
     ]);
   });
 
@@ -3163,8 +3457,75 @@ The words Firefighter universal appear here only as prose.`;
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', issueNumber: 1479,
     }, fixture.execute);
     expect(result).toMatchObject({ status: 'ok', value: { id: 'repo::wt', setupWitness: 'same_invocation_complete' } });
-    expect(fixture.calls.map((call) => call.argv[0])).toEqual(['orca', 'git', 'git', 'orca', 'git']);
+    expect(fixture.calls.map((call) => call.argv[0])).toEqual(['orca', 'git', 'git', 'git', 'orca', 'git']);
   });
+
+  it('skips native repository-wide prune on an ordinary fresh worktree launch', async () => {
+    const fixture = freshRepoFixture();
+    const result = await prepareWorktreeWithOrca({
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt',
+    }, fixture.execute);
+    expect(result.status).toBe('ok');
+    expect(fixture.calls[3]).toEqual({ argv: ['git', 'worktree', 'list', '--porcelain'], cwd: REGISTERED_ORCA_ROOT });
+    expect(fixture.calls[4]?.argv.slice(0, 3)).toEqual(['orca', 'worktree', 'create']);
+    expect(fixture.calls.some((call) => call.argv.includes('prune'))).toBe(false);
+  });
+
+  it('prunes an exact selected-name stale registration only when the native dry-run proves an isolated effect', async () => {
+    const temp = mkdtempSync(join(tmpdir(), 'opk-2754-prune-'));
+    const vanished = join(temp, 'wt');
+    const foreign = join(temp, 'retained-on-unmounted-volume');
+    const main = [`worktree ${REGISTERED_ORCA_ROOT}`, `HEAD ${'1'.repeat(40)}`, 'branch refs/heads/main', ''];
+    const entry = (path: string) => [`worktree ${path}`, `HEAD ${'2'.repeat(40)}`,
+      'branch refs/heads/recover', 'prunable gitdir file points to non-existent location', ''];
+    const invocation = {
+      repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt',
+    };
+    try {
+      const inventory = [...main, ...entry(vanished)].join('\n');
+      const fixture = freshRepoFixture({
+        gitInventory: inventory,
+        prunePreview: 'Removing worktrees/wt: gitdir file points to non-existent location\n',
+      });
+      const result = await prepareWorktreeWithOrca(invocation, fixture.execute);
+      expect(result.status).toBe('ok');
+      expect(fixture.calls.filter((call) => call.argv[2] === 'prune')).toEqual([
+        { argv: ['git', 'worktree', 'prune', '--dry-run', '--verbose', '--expire=now'], cwd: REGISTERED_ORCA_ROOT },
+        { argv: ['git', 'worktree', 'prune', '--expire=now'], cwd: REGISTERED_ORCA_ROOT },
+      ]);
+
+      const unrelated = freshRepoFixture({ gitInventory: [...main, ...entry(foreign)].join('\n') });
+      const unrelatedResult = await prepareWorktreeWithOrca(invocation, unrelated.execute);
+      expect(unrelatedResult.status).toBe('ok');
+      expect(unrelated.calls.some((call) => call.argv[2] === 'prune')).toBe(false);
+      expect(unrelated.calls.some((call) => call.argv[0] === 'orca'
+        && call.argv[1] === 'worktree' && call.argv[2] === 'create')).toBe(true);
+
+      for (const [label, options] of [
+        ['more than one prunable record', { gitInventory: [...main, ...entry(vanished), ...entry(foreign)].join('\n') }],
+        ['dry-run effect not tied to selected name', { gitInventory: inventory, prunePreview: 'Removing worktrees/foreign: unavailable\n' }],
+        ['native dry-run unavailable', { gitInventory: inventory, prunePreviewOk: false }],
+      ] as const) {
+        const ambiguous = freshRepoFixture(options);
+        const refused = await prepareWorktreeWithOrca(invocation, ambiguous.execute);
+        expect(refused, label).toMatchObject({ status: 'continue', cause: 'worktree_registry_prune_ambiguous',
+          nextAction: { note: expect.stringContaining('git worktree list --porcelain') } });
+        expect(ambiguous.calls.some((call) => call.argv.includes('create') || (
+          call.argv[2] === 'prune' && !call.argv.includes('--dry-run')))).toBe(false);
+      }
+
+      const failed = freshRepoFixture({
+        gitInventory: inventory,
+        prunePreview: 'Removing worktrees/wt: gitdir file points to non-existent location\n',
+        pruneOk: false,
+      });
+      const refused = await prepareWorktreeWithOrca(invocation, failed.execute);
+      expect(refused).toMatchObject({ status: 'continue', cause: 'worktree_registry_prune_failed' });
+      expect(failed.calls.some((call) => call.argv[2] === 'create')).toBe(false);
+    } finally { rmSync(temp, { recursive: true, force: true }); }
+  });
+
+
 
   it('accepts a fresh worktree with no setup receipt', async () => {
     const fixture = freshRepoFixture({ setupState: 'absent' });
@@ -3175,7 +3536,7 @@ The words Firefighter universal appear here only as prose.`;
       status: 'ok', value: { id: 'repo::wt', setupWitness: 'same_invocation_complete' },
       evidence: { setupState: 'not_configured' },
     });
-    expect(fixture.calls[3]?.argv).toEqual([
+    expect(fixture.calls[4]?.argv).toEqual([
       'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'wt',
       '--issue', '1479', '--setup', 'run', '--json',
     ]);
@@ -3200,11 +3561,11 @@ The words Firefighter universal appear here only as prose.`;
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', baseBranch: 'main',
     }, fixture.execute);
     expect(result).toMatchObject({ status: 'ok', value: { setupWitness: 'same_invocation_complete' } });
-    expect(fixture.calls[3]?.argv).toEqual([
+    expect(fixture.calls[4]?.argv).toEqual([
       'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'wt',
       '--base-branch', 'main', '--no-parent', '--setup', 'run', '--json',
     ]);
-    expect(fixture.calls[4]?.argv).toEqual([
+    expect(fixture.calls[5]?.argv).toEqual([
       'orca', 'terminal', 'wait', '--terminal', 'setup-term', '--for', 'exit', '--timeout-ms', '120000', '--json',
     ]);
   });
@@ -3526,6 +3887,11 @@ The words Firefighter universal appear here only as prose.`;
       if (cwd === '/tmp/primary' && args.join(' ') === 'git remote get-url origin') {
         return { ok: true, stdout: 'git@github.com:chetwerikoff/orchestrator-pack.git\n', stderr: '' };
       }
+      if (cwd === '/tmp/primary' && args.join(' ') === 'git worktree list --porcelain') {
+        return { ok: true, stdout: [
+          'worktree /tmp/primary', `HEAD ${'2'.repeat(40)}`, 'branch refs/heads/main', '',
+        ].join('\n'), stderr: '' };
+      }
       if (cwd !== path) return { ok: false, stdout: '', stderr: 'wrong cwd' };
       const command = args.join(' ');
       if (command === 'git rev-parse --show-toplevel') return { ok: true, stdout: `${path}\n`, stderr: '' };
@@ -3558,7 +3924,9 @@ The words Firefighter universal appear here only as prose.`;
       value: { id: 'repo::manager-2024', setupWitness: 'same_invocation_complete' },
       evidence: { branch: 'manager-2024' },
     });
-    expect(calls[3]).toEqual([
+    expect(calls[3]).toEqual(['git', 'worktree', 'list', '--porcelain']);
+    expect(calls.filter((argv) => argv[2] === 'prune')).toEqual([]);
+    expect(calls[4]).toEqual([
       'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'manager-2024',
       '--base-branch', 'origin/main', '--issue', '2024', '--setup', 'run', '--json',
     ]);
@@ -4120,6 +4488,9 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
         return { ok: true, stdout: (cwd ?? '') + '\n' };
       if (joined === 'git remote get-url origin')
         return { ok: true, stdout: 'git@github.com:chetwerikoff/orchestrator-pack.git\n' };
+      if (joined === 'git worktree prune --expire=now' && cwd === '/tmp/primary') {
+        return { ok: true, stdout: '' };
+      }
       if (joined.startsWith('orca worktree create '))
         return { ok: true, stdout: okEnvelope({ worktree: { id: 'repo::fresh-manager', path: root } }) };
       if (joined === 'git worktree list --porcelain')
@@ -4132,11 +4503,37 @@ describe('Issue #2655 terminal same-Task start and lossless dirty reuse', () => 
       return { ok: false, stdout: '', stderr: 'unexpected ' + joined };
     });
     expect(outcome).toMatchObject({ status: 'continue', cause: 'manager_worktree_dirty' });
+    expect(commands.filter((argv) => argv.join(' ') === 'git worktree prune --expire=now')).toHaveLength(0);
     expect(commands.some((argv) => argv[0] === 'git' && ['merge', 'reset', 'rebase', 'stash'].includes(argv[1]!))).toBe(false);
     expect(commands.some((argv) => argv.join(' ') === 'git status --porcelain=v1 --untracked-files=all')).toBe(true);
   });
 
 });
+
+function exactEmptyWorkerRestoreCensusFixture(expectedPath: string) {
+  let terminalLists = 0;
+  let processScans = 0;
+  const censusAdapter = new OrcaTaskRuntimeAdapter({
+    runJson: <T>(args: readonly string[]): OrcaJsonResponse<T> => {
+      if (args.join(' ') !== 'terminal list') {
+        throw new Error('unexpected synthetic terminal census operation: ' + args.join(' '));
+      }
+      terminalLists += 1;
+      return { ok: true, result: { terminals: [], totalCount: 0, truncated: false } as T };
+    },
+  });
+  return {
+    observe: (path: string) => {
+      expect(path).toBe(expectedPath);
+      return observeQuiescentRestoreCensus(censusAdapter, path, (canonicalPath) => {
+        expect(canonicalPath).toBe(realpathSync(expectedPath));
+        processScans += 1;
+        return [];
+      }, 'linux');
+    },
+    counts: () => ({ terminalLists, processScans }),
+  };
+}
 
 describe('Issue #2655 worker existing-worktree relaunch', () => {
   const bound = (): WorkerAssignment => ({
@@ -4170,33 +4567,46 @@ describe('Issue #2655 worker existing-worktree relaunch', () => {
           }
           if (argv[2] === 'worker-show') {
             return { ok: true, stdout: okEnvelope({
-              dispatch: { status: 'failed' },
-              worker: { worktree_id: 'repo::existing', state: 'abandoned', stage: 'terminal_missing' },
+              dispatch: { id: 'ctx_3761867313e2', status: 'failed' },
+              worker: { agent_terminal_handle: 'term-old', worktree_id: 'repo::existing', state: 'abandoned', stage: 'terminal_missing' },
               terminal: null, observation: { exactWorker: false, status: 'missing' },
             }) };
           }
         }
         return fixture.execute(argv, timeout, env, cwd);
       };
+      const previous = bound();
+      const census = exactEmptyWorkerRestoreCensusFixture(root);
+      const previousTerminal: DispatchObservation = { kind: 'present', dispatchId: previous.bindingKey, status: 'failed' };
       let started = 0;
       const outcome = await runSupervisedTaskLaunchAssistant({
         ...launchInput('t2'),
         taskId: 'task_6af384b00044', worktreeName: undefined, worktreeSelector: 'id:repo::existing',
       }, {
         ...deps({
-          currentAssignment: bound(),
+          currentAssignment: previous,
+          dispatch: [{ kind: 'absent' }, previousTerminal, { kind: 'absent' }, previousTerminal],
           adapter: runtimeAdapter({ worker: { ...worker, workspacePath: root } }),
           onSupervised: () => { started += 1; },
         }),
+        proveTerminalGone: (assignment) => readTerminalGoneDispatch(assignment,
+          (args) => execute(['orca', ...args])),
+        resolveRestoreWorktree: async (selector) => {
+          expect(selector).toBe('id:repo::existing');
+          return { status: 'ok', value: { id: 'repo::existing', path: root } };
+        },
+        observeRestoreQuiescence: census.observe,
         prepareWorktree: (request) => prepareWorktreeWithOrca(request, execute),
       });
       expect(outcome).toMatchObject({
         outcome: 'ready', resources: { taskId: 'task_6af384b00044', worktreePath: root },
       });
       expect(started).toBe(1);
-      expect(inspected.map((call) => call.slice(0, 3))).toEqual([
-        ['orca', 'orchestration', 'dispatch-show'], ['orca', 'orchestration', 'worker-show'],
-      ]);
+      expect(inspected.filter((call) => call[2] === 'dispatch-show')).toHaveLength(3);
+      expect(inspected.filter((call) => call[2] === 'worker-show')).toHaveLength(3);
+      expect(inspected.every((call) => call.includes(call[2] === 'dispatch-show'
+        ? previous.taskId : previous.bindingKey))).toBe(true);
+      expect(census.counts()).toEqual({ terminalLists: 2, processScans: 2 });
       expect(readFileSync(testFile)).toEqual(before);
       expect(readFileSync(untracked)).toEqual(beforeUntracked);
       expect(fixture.mergeTransitions()).toBe(0);
@@ -4293,8 +4703,8 @@ describe('Issue #2655 real parsed Cursor reboot route', () => {
       });
       const nativeCalls: string[][] = [];
       const oldShow = {
-        dispatch: { status: 'failed', last_heartbeat_at: null },
-        worker: { state: 'abandoned', stage: 'terminal_missing', worktree_id: 'repo::existing' },
+        dispatch: { id: 'ctx_3761867313e2', status: 'failed', last_heartbeat_at: null },
+        worker: { agent_terminal_handle: 'term-old', state: 'abandoned', stage: 'terminal_missing', worktree_id: 'repo::existing' },
         terminal: null, observation: { exactWorker: false, status: 'missing' },
       };
       const inspect = async (argv: readonly string[]) => {
@@ -4331,16 +4741,25 @@ describe('Issue #2655 real parsed Cursor reboot route', () => {
           status: 'failed', operation: 'resolve_assignment_worker', reason: 'assignment_target_unresolved',
         })),
       });
+      const census = exactEmptyWorkerRestoreCensusFixture(root);
+      const oldDispatch: DispatchObservation = { kind: 'present', dispatchId: prev.assignment.bindingKey, status: 'failed' };
       const selectedModes: string[] = [];
       let realStarts = 0;
       const outcome = await runSupervisedTaskLaunchAssistant(input, {
-        ...deps({ adapter, currentAssignment: prev.assignment }),
+        ...deps({ adapter, currentAssignment: prev.assignment,
+          dispatch: [{ kind: 'absent' }, oldDispatch, { kind: 'absent' }, oldDispatch] }),
         resolveProfile: (workClass, inherited, mode) => {
           selectedModes.push(mode ?? 'default');
           return resolveLiveExecutorProfile(workClass, inherited, mode, async (argv) => ({
             ok: true, stdout: argv[0] === 'cursor-agent' ? 'model-medium\n' : '',
           }));
         },
+        proveTerminalGone: (assignment) => readTerminalGoneDispatch(assignment, inspect),
+        resolveRestoreWorktree: async (selector) => {
+          expect(selector).toBe('id:repo::existing');
+          return { status: 'ok', value: { id: 'repo::existing', path: root } };
+        },
+        observeRestoreQuiescence: census.observe,
         prepareWorktree: (request) => prepareWorktreeWithOrca(request, execute),
         runSupervisedStart: (start) => runSupervisedWorkerStart({
           ...start, inspect, execute: async () => {
@@ -4362,6 +4781,7 @@ describe('Issue #2655 real parsed Cursor reboot route', () => {
       } });
       expect(selectedModes).toEqual(['exact_terminal_worktree']);
       expect(realStarts).toBe(1);
+      expect(census.counts()).toEqual({ terminalLists: 2, processScans: 2 });
       expect(currentWorkerAssignment(file, 2655)).toMatchObject({
         bindingKey: 'dispatch-new', generation: prev.assignment.generation + 1,
       });
@@ -4494,6 +4914,9 @@ describe('Issue #2655 r02 fresh PR remote head', () => {
       if (cmd === 'git remote get-url origin') return {
         ok: true, stdout: 'git@github.com:chetwerikoff/orchestrator-pack.git\n',
       };
+      if (cmd === 'git worktree prune --expire=now' && cwd === root) {
+        return { ok: true, stdout: '' };
+      }
       if (cmd.startsWith('gh pr list ')) return {
         ok: true, stdout: JSON.stringify(options.noPr ? [] :
           options.duplicate ? [{ number: 2656 }, { number: 2657 }] : [{ number: 2656 }]),
@@ -4564,6 +4987,9 @@ describe('Issue #2655 r02 fresh PR remote head', () => {
         setupWitness: 'same_invocation_complete',
       }, evidence: { branch: 'fresh-local-2655' },
     });
+    expect(f.calls.filter((c) => c.argv.join(' ') === 'git worktree prune --expire=now')).toEqual([]);
+    expect(f.calls.some((c) => c.argv.join(' ') === 'git worktree list --porcelain'
+      && c.cwd === '/tmp/primary')).toBe(true);
     const created = f.calls.find((c) => c.argv.slice(0, 3).join(' ') === 'orca worktree create');
     expect(created?.argv).toContain('origin/' + branch);
     expect(created?.argv).toContain('--issue');
@@ -4954,7 +5380,7 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
           throw new Error('synthetic fixture has no admitted selected model/variant');
         }
         const overlay = buildOpenCodeAgentOverlay({
-          agentName: 'pack-opk-b5-selected', model: admittedAgent.model, effort: admittedAgent.variant,
+          executable: FIXTURE_OPENCODE_BIN, agentName: 'pack-opk-b5-selected', model: admittedAgent.model, effort: admittedAgent.variant,
           baseline: { name: 'build', mode: 'primary', prompt: 'synthetic benign task', permission: [] },
           stateRoot: '/tmp/opk-2661-disposable-state',
           ...(dataRoot !== undefined ? { dataRoot } : {}), resumeSession: requestedSession,
@@ -5017,7 +5443,7 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
       expect(permission?.read?.['*.env.*']).toBe('deny');
     }
     expect(openCodeLaunchHasFleetBrowserDenies({
-      command, agentName: 'pack-opk-b5-selected',
+      command, agentName: 'pack-opk-b5-selected', executable: FIXTURE_OPENCODE_BIN,
       inlineConfigJson: JSON.stringify(inline),
     })).toBe(true);
     expect(f.nativePanes).toHaveLength(1);
@@ -5049,7 +5475,7 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
         model: 'fixture-opencode-model', variant: 'fixture-opencode-effort',
       });
       expect(openCodeLaunchHasFleetBrowserDenies({
-        command, agentName: 'pack-opk-b5-selected', inlineConfigJson,
+        command, agentName: 'pack-opk-b5-selected', inlineConfigJson, executable: FIXTURE_OPENCODE_BIN,
       })).toBe(true);
       const binding = openCodeControlFromCommand(command);
       expect(binding).toMatchObject({ agent: 'pack-opk-b5-selected', session });
@@ -5060,14 +5486,14 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
       ]);
       if (explicit) {
         const quotedData = "'" + dataRoot.replaceAll("'", "'\\''") + "'";
-        expect(command).toContain(` XDG_DATA_HOME=${quotedData} opencode --hostname 127.0.0.1`);
+        expect(command).toContain(` XDG_DATA_HOME=${quotedData} ${FIXTURE_OPENCODE_BIN} --hostname 127.0.0.1`);
         expect(openCodeLaunchHasFleetBrowserDenies({
           command: command.replace(`XDG_DATA_HOME=${quotedData}`, `XDG_DATA_HOME=${dataRoot}`),
-          agentName: 'pack-opk-b5-selected', inlineConfigJson,
+          agentName: 'pack-opk-b5-selected', inlineConfigJson, executable: FIXTURE_OPENCODE_BIN,
         })).toBe(false);
       } else {
         expect(command).not.toContain('XDG_DATA_HOME=');
-        expect(command).toContain("XDG_STATE_HOME='/tmp/opk-2661-disposable-state' opencode --hostname");
+        expect(command).toContain(`XDG_STATE_HOME='/tmp/opk-2661-disposable-state' ${FIXTURE_OPENCODE_BIN} --hostname`);
       }
     }
   });
@@ -5881,6 +6307,271 @@ function withWorld(options: Parameters<typeof pushWorld>[0], body: (world: PushW
   };
 }
 
+describe('Issue #2754 AC5 production dirty manager restore (read-only Git)', () => {
+  it.each([
+    { label: 'same manager Task', taskKind: 'manager', mode: 'same-task' },
+    { label: 'new manager Task', taskKind: 'manager', mode: 'new-task' },
+    { label: 'same worker Task', taskKind: 'worker', mode: 'same-task' },
+    { label: 'new worker Task', taskKind: 'worker', mode: 'new-task' },
+  ] as const)(
+    'preserves branch, HEAD, tracked and untracked bytes for $label',
+    (scenario) => withWorld({ install: false }, async (world) => {
+      const tracked = join(world.manager, 'src', 'app.ts');
+      const untracked = join(world.manager, 'operator-recovery.diff');
+      writeFileSync(tracked, TS_BEFORE + '// preserved operator edit\n');
+      writeFileSync(untracked, 'operator-only untracked bytes\n');
+      const before = {
+        head: git(world.manager, 'rev-parse', 'HEAD'),
+        branch: git(world.manager, 'symbolic-ref', '--quiet', '--short', 'HEAD'),
+        status: git(world.manager, 'status', '--porcelain=v1', '--untracked-files=all'),
+        tracked: readFileSync(tracked),
+        untracked: readFileSync(untracked),
+      };
+      const prior: WorkerAssignment = {
+        schema: 'orchestrator-pack/worker-assignment/v1',
+        projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+        issueNumber: 2754, taskId: 'task-old', assignmentId: 'prior-2754',
+        generation: 1, kind: 'local', provider: 'orca', bindingKey: 'dispatch-old',
+        role: scenario.taskKind === 'manager' ? 'orchestrator' : 'worker',
+        createdAtUtc: '2026-11-02T00:00:00.000Z',
+      };
+      const currentTask = scenario.mode === 'same-task' ? 'task-old' : 'task-new';
+      const worktreeId = 'repo::manager';
+      const calls: string[][] = [];
+      const execute = async (
+        args: readonly string[], _timeoutMs?: number, _env?: Readonly<NodeJS.ProcessEnv>, cwd?: string,
+      ) => {
+        calls.push([...args]);
+        if (args[0] === 'orca') {
+          const operation = args.slice(1, 3).join(' ');
+          let result: Record<string, unknown>;
+          if (operation === 'worktree show') {
+            result = { worktree: { id: worktreeId, path: world.manager } };
+          } else if (operation === 'orchestration task-list') {
+            result = { runId: 'run-1', tasks: [{ id: currentTask }] };
+          } else if (operation === 'orchestration dispatch-show') {
+            result = { dispatch: { id: 'dispatch-old', status: 'failed' } };
+          } else if (operation === 'orchestration worker-show') {
+            result = {
+              dispatch: { id: 'dispatch-old', status: 'failed' },
+              worker: { agent_terminal_handle: 'old-handle', worktree_id: worktreeId },
+              observation: { exactWorker: false, status: 'missing' }, terminal: null,
+              terminalResource: {
+                terminalHandle: 'old-handle', worktreeId,
+                originDispatchId: 'dispatch-old', ownerDispatchId: 'dispatch-old',
+              },
+            };
+          } else {
+            return { ok: false, stdout: '', stderr: 'unexpected synthetic Orca call: ' + operation };
+          }
+          return { ok: true, stdout: okEnvelope(result), stderr: '' };
+        }
+        if (args[0] === 'git' && args[1] === 'remote' && args[2] === 'get-url') {
+          return { ok: true, stdout: 'git@github.com:chetwerikoff/orchestrator-pack.git\n', stderr: '' };
+        }
+        const result = runProcessSync({
+          command: args[0]!, args: args.slice(1), cwd: cwd ?? world.manager, env: GIT_ENV,
+        });
+        return { ok: result.ok, stdout: result.stdout, stderr: result.stderr };
+      };
+      const prepared = await prepareWorktreeWithOrca({
+        repository: 'chetwerikoff/orchestrator-pack', issueNumber: 2754,
+        taskId: currentTask, managerRefresh: scenario.taskKind === 'manager',
+        ...(scenario.taskKind === 'manager' ? { managerTaskRunId: 'run-1', defaultBranch: 'trunk' } : {}),
+        worktreeSelector: 'id:' + worktreeId, reuseAssignment: prior,
+      }, execute);
+      expect(prepared).toMatchObject({
+        status: 'ok',
+        value: { id: worktreeId, path: world.manager, setupWitness: 'proven_reuse' },
+        evidence: { previousDispatchId: 'dispatch-old', reuse: 'dirty_preserved' },
+      });
+      expect(git(world.manager, 'rev-parse', 'HEAD')).toBe(before.head);
+      expect(git(world.manager, 'symbolic-ref', '--quiet', '--short', 'HEAD')).toBe(before.branch);
+      expect(git(world.manager, 'status', '--porcelain=v1', '--untracked-files=all')).toBe(before.status);
+      expect(readFileSync(tracked)).toEqual(before.tracked);
+      expect(readFileSync(untracked)).toEqual(before.untracked);
+      expect(calls.some((args) => args[0] === 'git' &&
+        (['checkout', 'fetch', 'merge', 'reset', 'stash', 'clean'].includes(args[1]!)
+          || (args[1] === 'worktree' && args[2] !== 'list')))).toBe(false);
+      expect(calls.some((args) => args[0] === 'orca' &&
+        ['worker-start', 'terminal', 'dispatch-start'].includes(args[2]!))).toBe(false);
+    })(),
+  );
+});
+
+describe('Issue #2754 AC11-AC12 pinned OpenCode task and smoke policy', () => {
+  it('uses the same selected binary for task/smoke probes and actual spawn overlay', () => {
+    const binary = FIXTURE_OPENCODE_BIN;
+    const descriptor = EXECUTOR_FAMILY_DESCRIPTORS.opencode;
+    for (const selected of [
+      { surface: 'task' as const, names: profileNamesForTask('t2') },
+      { surface: 'smoke' as const, names: profileNamesForSmoke('routine') },
+      { surface: 'smoke' as const, names: profileNamesForSmoke('complex') },
+    ]) {
+      const resolved = resolveSemanticExecutorProfile({
+        surface: selected.surface, names: selected.names,
+        env: {
+          [selected.names[0]]: 'opencode', [selected.names[1]]: 'fixture-opencode-model',
+          [selected.names[2]]: 'fixture-opencode-effort', PACK_EXECUTOR_OPENCODE_BIN: binary,
+        },
+      });
+      expect(resolved.ok).toBe(true);
+      if (!resolved.ok) continue;
+      expect(resolved.profile.opencodeExecutable).toBe(binary);
+      expect(pinnedProbeCommand(resolved.profile, descriptor.catalogCommand)).toEqual([binary, 'models']);
+      const probes = selected.surface === 'task'
+        ? descriptor.capabilityProbeCommands : descriptor.smokeCapabilityProbeCommands;
+      for (const argv of probes) expect(pinnedProbeCommand(resolved.profile, argv)[0]).toBe(binary);
+      const invocation = buildExecutorCommand(resolved.profile);
+      expect(invocation.executable).toBe(binary);
+      expect(invocation.command).toContain(' ' + binary + ' --hostname 127.0.0.1');
+      expect(openCodeLaunchHasFleetBrowserDenies(invocation)).toBe(true);
+      expect(openCodeLaunchHasFleetBrowserDenies({
+        ...invocation, executable: '/tmp/other/opencode',
+      })).toBe(false);
+    }
+  });
+
+  it('retains inherited Bash grants and denies common launcher-containing commands', () => {
+    const inherited = {
+      bash: { '*': 'allow', 'git *': 'allow', codex: 'allow', 'codex *': 'allow',
+        'agent-launch': 'allow', 'agent-launch *': 'allow' },
+      codex: 'allow', 'agent-launch': 'allow', skill: 'allow', read: 'allow',
+    };
+    const overlay = buildOpenCodeAgentOverlay({
+      executable: FIXTURE_OPENCODE_BIN, agentName: 'pack-opk-2754',
+      model: 'fixture-opencode-model', effort: 'fixture-opencode-effort',
+      baseline: { name: 'build', mode: 'primary', permission: inherited },
+    });
+    const config = JSON.parse(overlay.inlineConfigJson ?? '{}') as {
+      permission: unknown; agent: Record<string, { permission: unknown }>;
+    };
+    expect(openCodeLaunchHasFleetBrowserDenies(overlay)).toBe(true);
+    for (const permission of [
+      config.permission, config.agent['pack-opk-2754']?.permission,
+      config.agent.general?.permission, config.agent.explore?.permission,
+    ]) {
+      expect(openCodeFleetBrowserDenyRulesAreTerminal(permission)).toBe(true);
+    }
+    const selected = config.agent['pack-opk-2754']!.permission as {
+      bash: Record<string, string>; codex: Record<string, string>;
+      'agent-launch': Record<string, string>; skill: Record<string, string>;
+    };
+    expect(selected.bash['*']).toBe('allow');
+    expect(selected.bash['git *']).toBe('allow');
+    expect(selected.bash.codex).toBe('deny');
+    expect(selected.bash['codex *']).toBe('deny');
+    expect(selected.bash['agent-launch']).toBe('deny');
+    expect(selected.bash['agent-launch *']).toBe('deny');
+    expect(selected.bash['*codex*']).toBe('deny');
+    expect(selected.bash['*agent-launch*']).toBe('deny');
+    expect(selected.bash['*/bsk*']).toBe('deny');
+    const bashAction = (command: string) => Object.entries(selected.bash)
+      .filter(([pattern]) => new RegExp('^' + pattern.replaceAll('.', '\\.').replaceAll('*', '.*')
+        .replaceAll('?', '.') + '$', 'u').test(command)).at(-1)?.[1];
+    expect(bashAction('git status')).toBe('allow');
+    for (const command of [
+      'env -i codex exec', "sh -c 'codex exec dangerous'", '/usr/local/bin/codex exec',
+      'env -i agent-launch --help', "sh -c 'agent-launch dangerous'", '/usr/local/bin/agent-launch dangerous',
+    ]) expect(bashAction(command), command).toBe('deny');
+    expect(selected.codex['*']).toBe('deny');
+    expect(selected['agent-launch']['*']).toBe('deny');
+    expect(selected.skill['browser-skill']).toBe('deny');
+  });
+});
+
+describe('Issue #2754 AC7 same-second distinct-worktree B5 snapshot race', () => {
+  it('both managers observe pre-install siblings before either writes; retain each own hook', withWorld({
+    install: false, prePush: '#!/bin/sh\necho original-hook >&2\nexit 0\n',
+    preCommit: '#!/bin/sh\necho original-precommit >&2\nexit 0\n',
+  }, async (world) => {
+    const second = join(world.base, 'manager-second');
+    git(world.primary, 'worktree', 'add', '-q', '-b', 'manager-second', second, 'origin/trunk');
+    // Start with the shared extension OFF: both installers must tolerate
+    // independently activated sibling config.worktree and keep original hooks.
+    expect(gitTry(world.primary, 'config', '--get', 'extensions.worktreeConfig').status).not.toBe(0);
+    const signal = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
+    const view = new Int32Array(signal);
+    const moduleUrl = new URL('./manager-push-guard.ts', import.meta.url).href;
+    const script = `
+      const { parentPort, workerData } = require('node:worker_threads');
+      (async () => {
+        const { installManagerPushGuard } = await import(workerData.moduleUrl);
+        const shared = new Int32Array(workerData.signal);
+        const value = installManagerPushGuard({
+          worktreePath: workerData.path, defaultBranch: 'trunk',
+          placementSeedOid: workerData.seed, endpointMatchesRepository: () => true,
+          afterSiblingSnapshot: () => {
+            Atomics.add(shared, 0, 1);
+            parentPort.postMessage({ type: 'snapshot' });
+            const deadline = Date.now() + 15000;
+            while (Atomics.load(shared, 1) === 0 && Date.now() < deadline) {
+              Atomics.wait(shared, 1, 0, 200);
+            }
+            if (Atomics.load(shared, 1) === 0) throw new Error('sibling snapshot barrier expired');
+          },
+        });
+        parentPort.postMessage({ type: 'result', value });
+      })().catch((error) => parentPort.postMessage({ type: 'error', message: String(error) }));
+    `;
+    const workers = [world.manager, second].map((path) => new Worker(script, {
+      eval: true, execArgv: ['--experimental-strip-types'],
+      workerData: { path, seed: world.seed, signal, moduleUrl },
+    }));
+    try {
+      const results = await Promise.all(workers.map((target) => new Promise<{
+        readonly ok: boolean; readonly cause?: string;
+      }>((resolveResult, reject) => {
+        target.on('message', (message: { type: string; value?: { ok: boolean; cause?: string }; message?: string }) => {
+          if (message.type === 'snapshot') {
+            if (Atomics.load(view, 0) === 2) {
+              Atomics.store(view, 1, 1);
+              Atomics.notify(view, 1, 2);
+            }
+          } else if (message.type === 'result' && message.value) resolveResult(message.value);
+          else if (message.type === 'error') reject(new Error(message.message ?? 'worker error'));
+        });
+        target.on('error', reject);
+        target.on('exit', (code) => {
+          if (code !== 0) reject(new Error('B5 snapshot worker exited: ' + code));
+        });
+      })));
+      expect(Atomics.load(view, 0)).toBe(2);
+      expect(results).toEqual([{ ok: true, evidence: expect.any(Object) },
+        { ok: true, evidence: expect.any(Object) }]);
+      const firstHooks = git(world.manager, 'config', '--worktree', '--get', 'core.hooksPath');
+      const secondHooks = git(second, 'config', '--worktree', '--get', 'core.hooksPath');
+      expect(firstHooks).not.toBe(secondHooks);
+      expect(firstHooks).toBe(join(git(world.manager, 'rev-parse', '--absolute-git-dir'), 'opk-manager-push-guard', 'hooks'));
+      expect(secondHooks).toBe(join(git(second, 'rev-parse', '--absolute-git-dir'), 'opk-manager-push-guard', 'hooks'));
+      expect(existsSync(join(firstHooks, 'pre-push'))).toBe(true);
+      expect(existsSync(join(secondHooks, 'pre-push'))).toBe(true);
+      expect(git(world.primary, 'config', '--get', 'extensions.worktreeConfig')).toBe('true');
+      expect(gitTry(world.primary, 'config', '--get', 'core.hooksPath').status).not.toBe(0);
+      const firstCommit = gitTry(world.manager, 'commit', '--allow-empty', '-m', 'manager-one-hook');
+      const secondCommit = gitTry(second, 'commit', '--allow-empty', '-m', 'manager-two-hook');
+      expect(firstCommit.status, firstCommit.out).toBe(0);
+      expect(secondCommit.status, secondCommit.out).toBe(0);
+      expect(firstCommit.out).toContain('original-precommit');
+      expect(secondCommit.out).toContain('original-precommit');
+      // A failed reinstall must roll back this worktree alone, not deactivate
+      // the sibling or its shared extensions.worktreeConfig.
+      const rollback = installManagerPushGuard({
+        worktreePath: world.manager, defaultBranch: 'wrong-default',
+        endpointMatchesRepository: () => true,
+      });
+      expect(rollback).toMatchObject({ ok: false, cause: 'manager_push_guard_default_branch_changed' });
+      expect(git(world.manager, 'config', '--worktree', '--get', 'core.hooksPath')).toBe(firstHooks);
+      expect(git(second, 'config', '--worktree', '--get', 'core.hooksPath')).toBe(secondHooks);
+      expect(git(world.primary, 'config', '--get', 'extensions.worktreeConfig')).toBe('true');
+    } finally {
+      Atomics.store(view, 1, 1);
+      Atomics.notify(view, 1, 2);
+      await Promise.all(workers.map((worker) => worker.terminate()));
+    }
+  }), 45_000);
+});
+
 describe('Issue #2732 manager-only pre-push guard installation', () => {
   it('selects the guard for the manager worktree only and keeps primary/worker hooks and pushes', withWorld({
     prePush: '#!/bin/sh\necho "$@" > "$(dirname "$0")/../hook-ran"\nexit 0\n',
@@ -6396,6 +7087,33 @@ describe('Issue #2732 r04 AC2 verified published patch.diff application', () => 
     expect(remoteRef(world, 'refs/heads/altered')).toBe('');
     expect(remoteRef(world, 'refs/heads/wrong-endpoint')).toBe('');
   }));
+  it('restores only the Claude-family worktree original hooks and keeps sibling B5 selected', withWorld({
+    prePush: '#!/bin/sh\nexit 0\n',
+  }, (world) => {
+    const sibling = join(world.base, 'manager-sibling');
+    git(world.primary, 'worktree', 'add', '-q', '--no-track', '-b', 'manager-sibling', sibling, 'origin/trunk');
+    const siblingInstalled = installManagerPushGuard({
+      worktreePath: sibling, defaultBranch: 'trunk', endpointMatchesRepository: () => true,
+      placementSeedOid: world.seed,
+    });
+    expect(siblingInstalled.ok).toBe(true);
+    const siblingHooks = git(sibling, 'config', '--worktree', '--get', 'core.hooksPath');
+    const original = git(world.manager, 'config', '--worktree', '--get', 'core.hooksPath');
+    expect(original).toContain('opk-manager-push-guard');
+    const failedOriginal = git(world.manager, 'config', '--worktree', 'opkManagerPushGuard.originalHooksPath', original);
+    expect(failedOriginal).toBe('');
+    const refused = restoreManagerPushGuardForClaude(world.manager);
+    expect(refused.ok).toBe(false);
+    expect(git(world.manager, 'config', '--worktree', '--get', 'core.hooksPath')).toBe(original);
+    git(world.manager, 'config', '--worktree', '--unset', 'opkManagerPushGuard.originalHooksPath');
+    expect(restoreManagerPushGuardForClaude(world.manager)).toMatchObject({ ok: true });
+    expect(gitTry(world.manager, 'config', '--worktree', '--get', 'core.hooksPath').status).not.toBe(0);
+    expect(gitTry(world.manager, 'config', '--worktree', '--get', 'opkManagerPushGuard.installed').status).not.toBe(0);
+    expect(git(sibling, 'config', '--worktree', '--get', 'core.hooksPath')).toBe(siblingHooks);
+    expect(gitTry(world.primary, 'config', '--get', 'extensions.worktreeConfig').out.trim()).toBe('true');
+    expect(restoreManagerPushGuardForClaude(world.manager)).toMatchObject({ ok: true });
+  }));
+
 });
 
 describe('Issue #2732 r04 AC2 parent-pinned Python Ruff reproduction', () => {
@@ -6518,7 +7236,7 @@ describe('Issue #2732 r04 review fixes: endpoint provenance, default binding, ho
     expect(git(world.manager, 'config', '--worktree', '--get', 'opkManagerPushGuard.defaultBranch')).toBe('trunk');
     const installs: string[] = [];
     const prBase = await runSupervisedTaskLaunchAssistant({
-      ...launchInput('manager'), issueNumber: undefined, baseBranch: 'origin/feature',
+      ...launchInput('manager'), issueNumber: undefined, baseBranch: 'origin/feature', defaultBranch: undefined,
     }, {
       ...deps(),
       installManagerPushGuard: (request) => { installs.push(request.defaultBranch); return { status: 'ok', value: true }; },
