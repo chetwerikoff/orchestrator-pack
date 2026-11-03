@@ -1,0 +1,9 @@
+     + Thought: Inspecting project directory · 2.9s
+     → Read ~/.config/orchestrator-pack/projects
+     ▣  Pack-Opk-66897d7793ca4bf2a9133e906c1ac09b · GPT-6 Luna
+  ┃
+  ┃
+  ┃
+  ┃  Pack-Opk-66897d7793ca4bf2a9133e906c1ac09b · GPT-6 Luna OpenAI · medium
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   ⬝⬝⬝⬝⬝⬝⬝⬝  esc interrupt                                                               34.1K (13%)  ctrl+p commands
