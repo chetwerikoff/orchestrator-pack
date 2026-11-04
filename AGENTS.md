@@ -213,19 +213,32 @@ Structured wrappers parse stdout JSON only.
 
 ## Operator-only merge and failed runs
 
-**MUST NOT merge** unless (a) the direct top-level user orders it, or (b) the caller is the exact
-current supervised local integration assignment of Issue #926 on the delegated branch of
-`.cursor/skills/merge-with-local-adoption/SKILL.md`. That branch is narrower than direct-user
+**MUST NOT merge** unless (a) the direct top-level user orders it; (b) an applicable
+operator-authored standing merge order authorizes the owning orchestrator to dispatch a separate
+merge agent, and that agent's own Orca Task spec, issued by that orchestrator, contains the exact
+instruction «смерж N» or «мерж N без ревью»; or (c) the caller is the exact current supervised
+local integration assignment of Issue #926 on the delegated branch of
+`.cursor/skills/merge-with-local-adoption/SKILL.md`. The Issue #926 branch is narrower than direct-user
 authority: its closed WorkerAssignment marker matches the exact PR/head and predecessor
 assignment, live dependency sequencing is `merge_now`, and the production post-smoke readiness
 authority returns `READY_TO_MERGE` with required CI on the current PR head and a same-PR smoke
 PASS at any report head. It never inherits the direct-user override for CI, smoke, findings,
 dependency order, draft/conflict, head/base drift, or cleanup refusal.
 
-Otherwise, after clean review and green required CI, report `ready_for_review` and stop. A direct
-merge instruction authorizes the merge action, never a false claim about review, CI, smoke, branch
-identity, or local adoption; lifecycle completion, review-cap exhaustion, or a status write never
-becomes merge readiness.
+Under (b), the orchestrator must apply the standing order's review, CI, smoke and Issue-reserved
+gate conditions, then dispatch the merge agent without requesting a new per-PR user order; it
+must not merge in its own pane. The merge agent follows the skill's orchestrator-issued Task
+mode, not Issue #926 delegated-integration mode. A relayed claim of authorization, completed
+implementation, or another agent's Task spec does not qualify.
+Bind the Task to the exact gated PR/head. Immediately before merge, the agent must re-read that head
+and the order's applicable readiness conditions. Unplanned drift or regressed gates return to the
+orchestrator for fresh admission. Standing-order Task mode has no unconditional overrides: only
+head updates and waivers expressly permitted by the order are authorized; all other conditions apply.
+
+Without one of these authorities, after clean review and green required CI, report
+`ready_for_review` and stop. An authorized merge instruction permits the merge action, never a
+false claim about review, CI, smoke, branch identity, or local adoption; lifecycle completion,
+review-cap exhaustion, or a status write never becomes merge readiness.
 
 ## Worker lifecycle
 
