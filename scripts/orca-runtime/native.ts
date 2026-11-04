@@ -212,7 +212,7 @@ export function resolveOrcaOperation(args: readonly string[]): OrcaOperationName
  * Orca 1.4.247 prints concise JSON by default for every `orchestration`
  * subcommand that accepts `--full`; pack consumers parse the full record.
  */
-export const ORCA_ORCHESTRATION_FULL_SUBCOMMANDS: ReadonlySet<string> = new Set([
+export const FULL_RECORD_ORCHESTRATION_SUBCOMMANDS: ReadonlySet<string> = new Set([
   'coordinator-start', 'coordinator-stop', 'dispatch-show', 'gate-create', 'gate-list',
   'gate-resolve', 'request-show', 'run-create', 'run-current', 'run-list', 'run-show', 'run-use',
   'task-create', 'task-list', 'task-update', 'worker-abandon', 'worker-keep-open', 'worker-list',
@@ -221,7 +221,7 @@ export const ORCA_ORCHESTRATION_FULL_SUBCOMMANDS: ReadonlySet<string> = new Set(
 
 /** Final argv for a JSON-parsed Orca call: appends `--full` where supported, then `--json`. */
 export function orcaJsonArgv(args: readonly string[]): string[] {
-  const full = args[0] === 'orchestration' && ORCA_ORCHESTRATION_FULL_SUBCOMMANDS.has(args[1] ?? '')
+  const full = args[0] === 'orchestration' && FULL_RECORD_ORCHESTRATION_SUBCOMMANDS.has(args[1] ?? '')
     && !args.includes('--full');
   return [...args, ...(full ? ['--full'] : []), '--json'];
 }

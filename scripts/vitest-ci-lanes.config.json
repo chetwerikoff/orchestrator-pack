@@ -94,6 +94,7 @@
     "scripts/merge-triage-evidence.test.ts": "light",
     "scripts/operator-primary-binding.test.ts": "light",
     "scripts/orca-runtime/dispatch-terminal-mail.test.ts": "light",
+    "scripts/orca-runtime/native.test.ts": "light",
     "scripts/orca-runtime/task-adapter.test.ts": "light",
     "scripts/orchestrator-escalation-router.test.ts": "parked",
     "scripts/orchestrator-escalation.test.ts": "light",

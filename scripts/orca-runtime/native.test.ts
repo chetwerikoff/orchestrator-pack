@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ORCA_ORCHESTRATION_FULL_SUBCOMMANDS,
+  FULL_RECORD_ORCHESTRATION_SUBCOMMANDS,
   orcaJsonArgv,
   runOrcaJson,
 } from './native.ts';
@@ -15,7 +15,7 @@ const supported = [
 
 describe('Issue #2784 Orca orchestration --full argv', () => {
   it('lists exactly the supported subcommands', () => {
-    expect([...ORCA_ORCHESTRATION_FULL_SUBCOMMANDS].sort()).toEqual([...supported].sort());
+    expect([...FULL_RECORD_ORCHESTRATION_SUBCOMMANDS].sort()).toEqual([...supported].sort());
   });
 
   it.each(supported)('orcaJsonArgv appends --full before --json for %s', (subcommand) => {

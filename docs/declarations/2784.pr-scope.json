@@ -14,7 +14,8 @@
     "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
     "scripts/pr2-foundation/supervised-worker-start.test.ts",
-    "scripts/pr2-foundation/supervised-worker-start.ts"
+    "scripts/pr2-foundation/supervised-worker-start.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
     ".env",
@@ -29,5 +30,5 @@
     "docs/",
     "scripts/"
   ],
-  "source_revision": "d4c1768f1a6d1df23909a5a0af36844f58e7f4fb"
+  "source_revision": "3880ed4968c1078f0654f24c5966ef5c98adc52c"
 }
