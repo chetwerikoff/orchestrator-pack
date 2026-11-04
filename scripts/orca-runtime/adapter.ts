@@ -32,6 +32,7 @@ import {
 import {
   parseOrcaJsonOutput,
   runOrcaJson,
+  orcaJsonArgv,
   resolveOrcaExecutable,
   resolveOrcaOperation,
   type OrcaJsonResponse,
@@ -166,7 +167,7 @@ async function runOrcaJsonAsync<T>(
   const operation = resolveOrcaOperation(args);
   let result: { stdout: string | Buffer; stderr: string | Buffer };
   try {
-    result = await execFileAsync(executable, [...args, '--json'], {
+    result = await execFileAsync(executable, orcaJsonArgv(args), {
       cwd: options.cwd ?? process.cwd(),
       env: options.inheritParentEnv === false ? { ...options.env } : { ...process.env, ...options.env },
       encoding: 'utf8',

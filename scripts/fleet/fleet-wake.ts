@@ -1161,7 +1161,7 @@ function boundIssueManager(
     && Number.isSafeInteger(row.generation) && row.generation > 0);
   if (matches.length !== 1) return undefined;
   const assignment = matches[0]!;
-  const witness = orcaReceipt(executor, ['orchestration', 'worker-show', '--dispatch', assignment.bindingKey, '--json']);
+  const witness = orcaReceipt(executor, ['orchestration', 'worker-show', '--dispatch', assignment.bindingKey, '--full', '--json']);
   const dispatch = witness?.dispatch as { id?: unknown; taskId?: unknown; status?: unknown } | undefined;
   const native = witness?.terminal as {
     handle?: unknown; worktreePath?: unknown; branch?: unknown; incarnationId?: unknown;
@@ -1482,7 +1482,7 @@ function nativeReceiptLaunchingOwner(
     && row.taskId === receipt.owner_task_id && row.bindingKey === receipt.owner_dispatch_id
     && row.assignmentId && Number.isSafeInteger(row.generation) && row.generation > 0);
   if (candidates.length !== 1) return undefined;
-  const witness = orcaReceipt(executor, ['orchestration', 'worker-show', '--dispatch', receipt.owner_dispatch_id, '--json']);
+  const witness = orcaReceipt(executor, ['orchestration', 'worker-show', '--dispatch', receipt.owner_dispatch_id, '--full', '--json']);
   const dispatch = witness?.dispatch as { id?: unknown; taskId?: unknown; status?: unknown } | undefined;
   const native = witness?.terminal as {
     handle?: unknown; incarnationId?: unknown; worktreePath?: unknown; branch?: unknown;
@@ -1961,12 +1961,12 @@ async function alarmGoneIssueOwners(
     if (githubIssue?.number !== assignment.issueNumber || githubIssue.state !== 'open') continue;
     // Same #2655 evidence as readTerminalGoneDispatch: terminally failed
     // exact selected Dispatch plus missing/terminal_missing retained worker.
-    const selected = orcaReceipt(executor, ['orchestration', 'dispatch-show', '--task', assignment.taskId, '--json']);
+    const selected = orcaReceipt(executor, ['orchestration', 'dispatch-show', '--task', assignment.taskId, '--full', '--json']);
     const selectedDispatch = selected?.dispatch as { id?: unknown; status?: unknown } | undefined;
     const state = typeof selectedDispatch?.status === 'string' ? selectedDispatch.status.trim().toLowerCase() : '';
     if (selectedDispatch?.id !== assignment.bindingKey
       || !['failed', 'abandoned', 'cancelled', 'done', 'completed'].includes(state)) continue;
-    const witness = orcaReceipt(executor, ['orchestration', 'worker-show', '--dispatch', assignment.bindingKey, '--json']);
+    const witness = orcaReceipt(executor, ['orchestration', 'worker-show', '--dispatch', assignment.bindingKey, '--full', '--json']);
     const dispatch = witness?.dispatch as { id?: unknown; taskId?: unknown; status?: unknown } | undefined;
     const observed = witness?.observation as { status?: unknown; exactWorker?: unknown } | undefined;
     const worker = witness?.worker as { agent_terminal_handle?: unknown; worktree_id?: unknown } | null | undefined;

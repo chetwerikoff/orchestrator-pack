@@ -1,0 +1,34 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2784,
+  "declared_paths": [
+    "docs/declarations/2784.pr-scope.json",
+    "scripts/fleet/fleet-sweep.test.ts",
+    "scripts/fleet/fleet-sweep.ts",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/native.test.ts",
+    "scripts/orca-runtime/native.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
+    "scripts/pr2-foundation/supervised-worker-start.test.ts",
+    "scripts/pr2-foundation/supervised-worker-start.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "denylist": [
+    ".env",
+    "credentials/",
+    "node_modules/",
+    "packages/core/",
+    "runtime-state/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/",
+    "scripts/"
+  ],
+  "source_revision": "3880ed4968c1078f0654f24c5966ef5c98adc52c"
+}

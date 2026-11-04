@@ -362,7 +362,7 @@ export async function readTerminalGoneDispatch(
 ): Promise<TerminalGoneAssignmentEvidence | null> {
   if (expected.kind !== 'local' || expected.provider !== 'orca') return null;
   const selected = parsePlacementEnvelope(await inspect([
-    'orchestration', 'dispatch-show', '--task', expected.taskId, '--json',
+    'orchestration', 'dispatch-show', '--task', expected.taskId, '--full', '--json',
   ]));
   const nativeDispatch = isRecord(selected?.dispatch) ? selected.dispatch : null;
   const status = providerText(nativeDispatch?.status).toLowerCase();
@@ -370,7 +370,7 @@ export async function readTerminalGoneDispatch(
     || !['failed', 'abandoned', 'cancelled', 'done', 'completed'].includes(status)) return null;
 
   const shown = parsePlacementEnvelope(await inspect([
-    'orchestration', 'worker-show', '--dispatch', expected.bindingKey, '--json',
+    'orchestration', 'worker-show', '--dispatch', expected.bindingKey, '--full', '--json',
   ]));
   const dispatch = isRecord(shown?.dispatch) ? shown.dispatch : null;
   const worker = isRecord(shown?.worker) ? shown.worker : null;
@@ -700,6 +700,7 @@ export async function runSupervisedWorkerStart(input: {
     return { ok: false, reason: 'supervised_start_terminal_witness_changed' };
   }
 
+  if (!args.includes('--full')) args.push('--full');
   if (!args.includes('--json')) args.push('--json');
   const execute = input.execute ?? (async (workerArgs) => {
     const result = await runProcess({
@@ -867,23 +868,23 @@ export async function inspectExternalTerminalStop(
   const read = async (args: readonly string[]): Promise<Record<string, unknown> | null> =>
     parsePlacementEnvelope(await inspect(args));
 
-  const run = await read(['orchestration', 'run-show', '--id', input.runId, '--json']);
+  const run = await read(['orchestration', 'run-show', '--id', input.runId, '--full', '--json']);
   if (!isRecord(run?.run) || providerText(run.run.id) !== input.runId) return unknown('external_stop_run_unproven');
-  const list = await read(['orchestration', 'task-list', '--run', input.runId, '--json']);
+  const list = await read(['orchestration', 'task-list', '--run', input.runId, '--full', '--json']);
   const listRun = isRecord(list?.run) ? providerText(list.run.id) : providerText(list?.runId);
   const tasks = Array.isArray(list?.tasks) ? list.tasks : [];
   if (!list || (listRun && listRun !== input.runId)
     || tasks.filter((t) => isRecord(t) && providerText(t.id) === input.taskId).length !== 1) {
     return unknown('external_stop_task_run_membership_unproven');
   }
-  const selected = await read(['orchestration', 'dispatch-show', '--task', input.taskId, '--json']);
+  const selected = await read(['orchestration', 'dispatch-show', '--task', input.taskId, '--full', '--json']);
   const dispatch = isRecord(selected?.dispatch) ? selected.dispatch : null;
   if (!dispatch || providerText(dispatch.id) !== input.dispatchId
     || (providerText(dispatch.taskId) && providerText(dispatch.taskId) !== input.taskId)
     || (providerText(dispatch.run_id) && providerText(dispatch.run_id) !== input.runId)) {
     return unknown('external_stop_dispatch_unproven');
   }
-  const shown = await read(['orchestration', 'worker-show', '--dispatch', input.dispatchId, '--json']);
+  const shown = await read(['orchestration', 'worker-show', '--dispatch', input.dispatchId, '--full', '--json']);
   const worker = isRecord(shown?.worker) ? shown.worker : null;
   const resource = isRecord(shown?.terminalResource) ? shown.terminalResource : null;
   const terminal = isRecord(shown?.terminal) ? shown.terminal : null;

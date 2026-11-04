@@ -1761,7 +1761,7 @@ export async function createManagerTaskWithOrca(
   execute: ChildExecutor,
 ): Promise<EdgeResult<{ readonly taskId: string; readonly status: string }>> {
   const value = envelope(await execute([
-    'orca', 'orchestration', 'task-create', '--spec', brief, '--run', runId, '--json',
+    'orca', 'orchestration', 'task-create', '--spec', brief, '--run', runId, '--full', '--json',
   ]));
   const result = resultRecord(value);
   const task = result && record(result.task) ? result.task : null;
@@ -2073,7 +2073,7 @@ async function resumeManagerAtOpenPrHead(
   if (!request.issueNumber || !request.managerTaskRunId) return refused('manager_worktree_non_ancestor');
   // The caller has already proven membership. Reobserve the exact Run/Task before PR-based reuse.
   const membership = resultRecord(envelope(await execute([
-    'orca', 'orchestration', 'task-list', '--run', request.managerTaskRunId, '--json',
+    'orca', 'orchestration', 'task-list', '--run', request.managerTaskRunId, '--full', '--json',
   ], undefined, undefined, path)));
   const observedRun = membership && record(membership.run) ? text(membership.run.id) : text(membership?.runId);
   const matches = Array.isArray(membership?.tasks)
@@ -2295,7 +2295,7 @@ async function reuseTerminalOwnedWorktree(
   if (request.managerRefresh) {
     if (!request.managerTaskRunId) return refusal('manager_pr_resume_task_unproven');
     const member = resultRecord(envelope(await execute([
-      'orca', 'orchestration', 'task-list', '--run', request.managerTaskRunId, '--json',
+      'orca', 'orchestration', 'task-list', '--run', request.managerTaskRunId, '--full', '--json',
     ], undefined, undefined, path)));
     const selectedRun = member && record(member.run) ? text(member.run.id) : text(member?.runId);
     const tasks = Array.isArray(member?.tasks) ? member.tasks : [];
@@ -2668,8 +2668,8 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
     ),
     observeManagerRun: async (runId) => {
       const args = runId
-        ? ['orca', 'orchestration', 'run-show', '--id', runId, '--json']
-        : ['orca', 'orchestration', 'run-current', '--json'];
+        ? ['orca', 'orchestration', 'run-show', '--id', runId, '--full', '--json']
+        : ['orca', 'orchestration', 'run-current', '--full', '--json'];
       const execution = await child(args, cwd, env);
       const result = execution.ok ? resultRecord(envelope(execution)) : null;
       const run = result && record(result.run) ? result.run : null;
@@ -2683,7 +2683,7 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
     },
     proveManagerTaskMembership: async (runId, taskId) => {
       const result = resultRecord(envelope(await child([
-        'orca', 'orchestration', 'task-list', '--run', runId, '--json',
+        'orca', 'orchestration', 'task-list', '--run', runId, '--full', '--json',
       ], cwd, env)));
       if (!result) return {
         status: 'continue', cause: 'manager_task_membership_unavailable', actor: 'provider', evidence: {},
@@ -2759,7 +2759,7 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
     proveTerminalGone: (assignment) => readTerminalGoneDispatch(assignment,
       (args) => child(['orca', ...args], cwd, env)),
     observeDispatch: async (taskId) => dispatchEdge(envelope(await child([
-      'orca', 'orchestration', 'dispatch-show', '--task', taskId, '--json',
+      'orca', 'orchestration', 'dispatch-show', '--task', taskId, '--full', '--json',
     ], cwd, env))),
     installManagerPushGuard: (request) => {
       const installed = installManagerPushGuard({
@@ -3291,7 +3291,7 @@ export async function runProductionExistingOpenCodeResume(
     finalizeProfile: base.finalizeProfile!,
     listAssignments: () => listCurrentWorkerAssignmentRecords(resolveWorkerAssignmentStorePath(target.projectId, selectedEnv)),
     assignmentWorkspace: async (assignment) => {
-      const read = await child(['orca', 'orchestration', 'worker-show', '--dispatch', assignment.bindingKey, '--json'], target.primaryRoot, selectedEnv);
+      const read = await child(['orca', 'orchestration', 'worker-show', '--dispatch', assignment.bindingKey, '--full', '--json'], target.primaryRoot, selectedEnv);
       const observation = resultRecord(envelope(read));
       const dispatch = observation && record(observation.dispatch) ? observation.dispatch : null;
       const terminal = observation && record(observation.terminal) ? observation.terminal : null;

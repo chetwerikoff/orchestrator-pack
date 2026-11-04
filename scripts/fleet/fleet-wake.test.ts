@@ -4503,7 +4503,7 @@ describe('Issue #2689 r03 exact native terminal -> canonical Issue assignment ->
           execute: async (argv) => {
             startCalls += 1;
             expect(argv).toEqual(['--task', taskId, '--terminal', handle,
-              '--worktree', 'path:' + worktreePath, '--json']);
+              '--worktree', 'path:' + worktreePath, '--full', '--json']);
             return { ok: true, stdout: JSON.stringify({ ok: true, result: {
               taskId, dispatchId, state: 'ready', effects,
             } }) };
