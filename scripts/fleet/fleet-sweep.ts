@@ -3,6 +3,7 @@ import '../toolchain/native-entrypoint-preflight.ts';
 
 import { createHash } from 'node:crypto';
 import { runProcessSync } from '../kernel/subprocess.ts';
+import { resolveOrcaExecutable } from '../orca-runtime/native.ts';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -334,7 +335,7 @@ export class FileFleetStateStore implements FleetPollingStore {
 
 export function defaultOrcaExecutor(args: readonly string[]): OrcaCommandResult {
   const result = runProcessSync({
-    command: 'orca',
+    command: resolveOrcaExecutable(),
     args,
     timeoutMs: 15_000,
     inheritParentEnv: true,
@@ -484,7 +485,7 @@ function verifiedPrimaryBindings(
   const cursors = new Set<string>();
   let cursor: string | undefined;
   do {
-    const census = read(['orchestration', 'worker-list', ...(cursor ? ['--cursor', cursor] : []), '--json']);
+    const census = read(['orchestration', 'worker-list', ...(cursor ? ['--cursor', cursor] : []), '--full', '--json']);
     const page = census?.page as { hasMore?: unknown; nextCursor?: unknown } | undefined;
     const workers = census?.workers;
     if (!Array.isArray(workers) || typeof page?.hasMore !== 'boolean'
@@ -508,7 +509,7 @@ function verifiedPrimaryBindings(
     // when its handle, incarnation and worktree still match the same census.
     const detailed = terminal.branch?.trim() ? terminal : diagnosticTerminalDetails(terminal, executor, true);
     if (!detailed.branch?.trim()) continue;
-    const shown = read(['orchestration', 'worker-show', '--dispatch', row.dispatchId, '--json']);
+    const shown = read(['orchestration', 'worker-show', '--dispatch', row.dispatchId, '--full', '--json']);
     // Native worker-show reports the Run as camelCase `runId`; `run_id` is the legacy spelling.
     const dispatch = shown?.dispatch as {
       id?: unknown; taskId?: unknown; runId?: unknown; run_id?: unknown; status?: unknown;
@@ -526,7 +527,7 @@ function verifiedPrimaryBindings(
       || observed.worktreePath !== terminal.worktreePath || observed.branch !== detailed.branch
       || (typeof row.dispatchStatus === 'string' && typeof dispatch.status === 'string'
         && row.dispatchStatus !== dispatch.status)) continue;
-    const runResult = read(['orchestration', 'run-show', '--id', dispatchRunId, '--json']);
+    const runResult = read(['orchestration', 'run-show', '--id', dispatchRunId, '--full', '--json']);
     const run = runResult?.run as { id?: unknown; coordinator_handle?: unknown } | undefined;
     if (run?.id !== dispatchRunId || run.coordinator_handle !== coordinatorHandle) continue;
     verified.set(terminal.handle, JSON.stringify([
@@ -608,7 +609,7 @@ function liveTaskBinding(terminal: FleetTerminal, projectId: string, executor: O
   const cursors = new Set<string>();
   let cursor: string | undefined;
   do {
-    const census = read(['orchestration', 'worker-list', ...(cursor ? ['--cursor', cursor] : []), '--json']);
+    const census = read(['orchestration', 'worker-list', ...(cursor ? ['--cursor', cursor] : []), '--full', '--json']);
     const page = census?.page as { hasMore?: boolean; nextCursor?: string } | undefined;
     if (!Array.isArray(census?.workers) || typeof page?.hasMore !== 'boolean') return undefined;
     rows.push(...census.workers.filter((value): value is Record<string, unknown> => Boolean(value) && typeof value === 'object'));
@@ -622,7 +623,7 @@ function liveTaskBinding(terminal: FleetTerminal, projectId: string, executor: O
   if (matches.length !== 1) return undefined;
   const row = matches[0] as { dispatchId?: string; taskId?: string };
   if (!row.dispatchId || !row.taskId) return undefined;
-  const worker = read(['orchestration', 'worker-show', '--dispatch', row.dispatchId, '--json']);
+  const worker = read(['orchestration', 'worker-show', '--dispatch', row.dispatchId, '--full', '--json']);
   const dispatch = worker?.dispatch as { id?: string; taskId?: string; status?: string } | undefined;
   const observed = worker?.terminal as FleetTerminal | undefined;
   const observation = worker?.observation as { status?: string; exactWorker?: boolean } | undefined;

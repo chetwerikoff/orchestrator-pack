@@ -1838,7 +1838,7 @@ export type OwnerDispatchWitness = (dispatchId: string) => Promise<Record<string
 export async function defaultOwnerDispatchWitness(dispatchId: string): Promise<Record<string, unknown> | undefined> {
   try {
     const result = await runProcess({
-      command: 'orca', args: ['orchestration', 'worker-show', '--dispatch', dispatchId, '--json'],
+      command: 'orca', args: ['orchestration', 'worker-show', '--dispatch', dispatchId, '--full', '--json'],
       timeoutMs: 15_000, inheritParentEnv: true,
     });
     if (!result.ok) return undefined;

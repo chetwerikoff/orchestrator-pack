@@ -11,6 +11,7 @@ import {
   lastFleetParkedLine,
   visibleOpenCodePermission,
   collectFleetDiagnostics,
+  defaultOrcaExecutor,
   parseSweepCli,
   FileFleetStateStore,
   formatFleetDiagnostics,
@@ -468,6 +469,36 @@ describe('Issue #2585 supervised primary-root admission', () => {
     expect(calls.every((args) =>
       (args[0] === 'terminal' && ['list', 'read', 'show'].includes(args[1]!))
       || (args[0] === 'orchestration' && ['worker-list', 'worker-show', 'run-show'].includes(args[1]!)))).toBe(true);
+  });
+
+  it('Issue #2784: every worker-list/worker-show/run-show read requests --full and parses the full record', () => {
+    const merge = primaryTerminal('merge');
+    const terminals = [currentCoordinator, merge];
+    const calls: string[][] = [];
+    const executor = primaryOrcaExecutor(terminals, { merge: 'done' },
+      [{ terminal: merge, runId: 'run-main', coordinator: 'coordinator' }], calls);
+    const observed = runFleetSweep({ ...opts, terminals, executor });
+    expect(observed[0]?.taskBinding).toContain('run-main');
+    const orchestration = calls.filter((args) => args[0] === 'orchestration');
+    expect(new Set(orchestration.map((args) => args[1]))).toEqual(new Set(['worker-list', 'worker-show', 'run-show']));
+    for (const args of orchestration) expect(args).toContain('--full');
+  });
+
+  it('Issue #2784: default executor launches the natively resolved Orca executable, not a hardcoded orca', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'fleet-sweep-orca-'));
+    const previous = process.env.OPK_RUNTIME_CLI_COMMAND;
+    try {
+      const fake = join(dir, 'fake-orca');
+      writeFileSync(fake, '#!/bin/sh\nprintf \'{"argv":"%s"}\' "$*"\n', { mode: 0o755 });
+      process.env.OPK_RUNTIME_CLI_COMMAND = fake;
+      const out = defaultOrcaExecutor(['orchestration', 'worker-list', '--full', '--json']);
+      expect(out.ok).toBe(true);
+      expect(JSON.parse(out.stdout)).toEqual({ argv: 'orchestration worker-list --full --json' });
+    } finally {
+      if (previous === undefined) delete process.env.OPK_RUNTIME_CLI_COMMAND;
+      else process.env.OPK_RUNTIME_CLI_COMMAND = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('primary-root branchless native census: uses same-generation show branch for STOPPED, POLLING and diagnostics', () => {

@@ -344,8 +344,8 @@ describe('production manager Run observation command seam', () => {
       if (ok) expect(result).toMatchObject({ status: 'ok', value: { runId: 'run-1' } });
       else expect(result).toMatchObject({ status: 'continue', cause: 'manager_run_observation_unavailable', nextAction: { kind: 'reconcile_manager_run', note: expect.any(String) } });
       expect(commands).toEqual([runId
-        ? ['orca', 'orchestration', 'run-show', '--id', runId, '--json']
-        : ['orca', 'orchestration', 'run-current', '--json']]);
+        ? ['orca', 'orchestration', 'run-show', '--id', runId, '--full', '--json']
+        : ['orca', 'orchestration', 'run-current', '--full', '--json']]);
       if (runId) {
         commands.length = 0;
         let artifacts = 0;
@@ -358,8 +358,8 @@ describe('production manager Run observation command seam', () => {
         expect(artifacts).toBe(ok ? 2 : 0);
         if (!ok) expect(result).toMatchObject({ observedCause: 'manager_run_observation_unavailable', nextAction: { kind: 'reconcile_manager_run' } });
         expect(commands).toEqual([
-          ['orca', 'orchestration', 'run-show', '--id', runId, '--json'],
-          ...(ok ? [['orca', 'orchestration', 'task-list', '--run', runId, '--json']] : []),
+          ['orca', 'orchestration', 'run-show', '--id', runId, '--full', '--json'],
+          ...(ok ? [['orca', 'orchestration', 'task-list', '--run', runId, '--full', '--json']] : []),
         ]);
       }
     } finally { execute.mockRestore(); rmSync(config, { recursive: true, force: true }); }
@@ -2961,7 +2961,7 @@ The words Firefighter universal appear here only as prose.`;
       } }) };
     });
     expect(calls).toEqual([[
-      'orca', 'orchestration', 'task-create', '--spec', 'private brief payload', '--run', 'run-1', '--json',
+      'orca', 'orchestration', 'task-create', '--spec', 'private brief payload', '--run', 'run-1', '--full', '--json',
     ]]);
     expect(result).toMatchObject({
       status: 'continue', cause: 'manager_task_create_outcome_unknown', evidence: { requestId: 'req-1' },

@@ -1174,11 +1174,11 @@ describe('Issue #2655 reboot terminal retirement at supervised start', () => {
       const standardInspect = inspectPlacement({ terminal: 'term-fresh' });
       const inspect = async (argv: readonly string[]) => {
         if (argv[0] === 'orchestration' && argv[1] === 'dispatch-show') {
-          expect(argv).toEqual(['orchestration', 'dispatch-show', '--task', 'task_6af384b00044', '--json']);
+          expect(argv).toEqual(['orchestration', 'dispatch-show', '--task', 'task_6af384b00044', '--full', '--json']);
           return { ok: true, stdout: envelope({ dispatch: { id: 'ctx_3761867313e2', status: state } }) };
         }
         if (argv[0] === 'orchestration' && argv[1] === 'worker-show') {
-          expect(argv).toEqual(['orchestration', 'worker-show', '--dispatch', 'ctx_3761867313e2', '--json']);
+          expect(argv).toEqual(['orchestration', 'worker-show', '--dispatch', 'ctx_3761867313e2', '--full', '--json']);
           return { ok: true, stdout: envelope(shown) };
         }
         return standardInspect(argv);
@@ -1273,11 +1273,11 @@ describe('Issue #2696 exact native exited orphaned terminal proof', () => {
     const placement = inspectPlacement({ terminal: 'term-fresh' });
     return async (argv: readonly string[]) => {
       if (argv[0] === 'orchestration' && argv[1] === 'dispatch-show') {
-        expect(argv).toEqual(['orchestration', 'dispatch-show', '--task', taskId, '--json']);
+        expect(argv).toEqual(['orchestration', 'dispatch-show', '--task', taskId, '--full', '--json']);
         return { ok: true, stdout: envelope({ dispatch: { id: selectedId, status: selectedStatus } }) };
       }
       if (argv[0] === 'orchestration' && argv[1] === 'worker-show') {
-        expect(argv).toEqual(['orchestration', 'worker-show', '--dispatch', dispatchId, '--json']);
+        expect(argv).toEqual(['orchestration', 'worker-show', '--dispatch', dispatchId, '--full', '--json']);
         return { ok: true, stdout: envelope(shown) };
       }
       return placement(argv);
