@@ -1,0 +1,20 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2787,
+  "declared_paths": [
+    "AGENTS.md"
+  ],
+  "denylist": [
+    ".env",
+    ".env.*",
+    "credentials/",
+    "packages/core/",
+    "private/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "AGENTS.md"
+  ],
+  "source_revision": "39e47e48a18e22a064509ca61ceb928cb5a0ae31"
+}
