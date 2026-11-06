@@ -15,8 +15,8 @@ import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
 import { readTerminalGoneDispatch, runSupervisedWorkerStart, type SupervisedWorkerStartResult } from './supervised-worker-start.ts';
 import { installManagerPushGuard, restoreManagerPushGuardForClaude } from './manager-push-guard.ts';
 import {
-  currentWorkerAssignment, publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath,
-  type DelegatedIntegrationMarker, type WorkerAssignment,
+  currentWorkerAssignment, currentWorkerAssignmentByDeliverable, publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath,
+  type BriefWorkerAssignment, type DelegatedIntegrationMarker, type WorkerAssignment,
 } from '../lib/worker-assignment-store.ts';
 import {
   createManagerTaskWithOrca,
@@ -1076,6 +1076,248 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
       'ORCH_HANDLE=orch-project', 'orca terminal send --terminal', 'merge-2794 done: <state>, primary at <sha>']) {
       expect(seen.specs[0]).toContain(required);
     }
+  });
+
+
+  it.each(['failed', 'abandoned'] as const)(
+    '#2794 --pr ready -> terminal closed -> retained %s Dispatch -> same --task starts a fresh terminal', async (state) => {
+      const taskId = 'task-2794-relaunch';
+      const oldDispatch = 'dispatch-1';
+      const scratch = mkdtempSync(join(tmpdir(), 'opk-2794-relaunch-'));
+      const file = join(scratch, 'assignments.json');
+      const oldTerminal: RuntimeWorker = { ...worker, identity: {
+        runtime: 'orca', id: 'terminal-old', generation: 'pty-old',
+      }, workspacePath: primary };
+      const freshTerminal: RuntimeWorker = { ...worker, identity: {
+        runtime: 'orca', id: 'terminal-new', generation: 'pty-new',
+      }, workspacePath: primary };
+      const spawns: Array<{ title: string; workspace: string | undefined; recovery: unknown }> = [];
+      const nativeReads: string[][] = [];
+      const lookups: string[] = [];
+      let creates = 0;
+      let starts = 0;
+      const adapter: RuntimeAdapter = {
+        ...runtimeAdapter({ worker: oldTerminal }),
+        spawnWorker: (request) => {
+          const recovery = (request as typeof request & { readonly terminalGoneRecovery?: unknown }).terminalGoneRecovery;
+          spawns.push({ title: request.title, workspace: request.workspace, recovery });
+          return { status: 'ok', value: spawns.length === 1 ? oldTerminal : freshTerminal };
+        },
+        liveness: ({ worker: identity }) => ({ status: 'idle', worker: identity }),
+      };
+      const inspect = async (argv: readonly string[]) => {
+        nativeReads.push([...argv]);
+        if (argv[0] === 'orchestration' && argv[1] === 'dispatch-show') return {
+          ok: true, stdout: okEnvelope({ dispatch: { id: oldDispatch, status: state } }), stderr: '',
+        };
+        if (argv[0] === 'orchestration' && argv[1] === 'worker-show') return {
+          ok: true, stdout: okEnvelope({
+            dispatch: { id: oldDispatch, status: state },
+            worker: { agent_terminal_handle: oldTerminal.identity.id, worktree_id: 'repo::primary' },
+            terminal: null, observation: { exactWorker: false, status: 'missing' },
+          }), stderr: '',
+        };
+        return { ok: false, stdout: '', stderr: 'unexpected native observation' };
+      };
+      const selected = mergeInput({
+        prNumber: 2794, taskId: undefined, issueNumber: undefined,
+        delegatedIntegration: undefined, projectId: 'orchestrator-pack',
+        packRoot: '/opt/orchestrator-pack', defaultBranch: 'main', env: profileEnv(),
+      });
+      const observations: DispatchObservation[] = [
+        { kind: 'absent' }, { kind: 'absent' },
+        { kind: 'present', dispatchId: oldDispatch, status: state },
+        { kind: 'present', dispatchId: oldDispatch, status: state },
+      ];
+      const launchDeps: LaunchDependencies = {
+        ...deps({ adapter, dispatch: observations,
+          managerRun: { status: 'ok', value: { runId: 'run-current', coordinatorHandle: 'orch-project' } } }),
+        readMergePr: async (repository, number) => ({ status: 'ok', value: {
+          number, state: 'open', baseRepository: repository, baseRef: 'main', headSha: 'c'.repeat(40),
+        } }),
+        createManagerTask: async () => {
+          creates += 1;
+          return { status: 'ok', value: { taskId, status: 'ready' } };
+        },
+        readUnnumberedAssignment: (task, dispatch) => {
+          lookups.push([task, dispatch].join(':'));
+          return currentWorkerAssignmentByDeliverable(file, task, dispatch);
+        },
+        proveTerminalGone: (assignment) => readTerminalGoneDispatch(assignment, inspect),
+        resolveProfile: (workClass, env, mode) =>
+          resolveLiveExecutorProfile(workClass, env, mode, async (args) => lunaMergeProbe(args)),
+        prepareWorktree: async () => ({ status: 'ok', value: {
+          id: 'repo::primary', selector: 'id:repo::primary',
+          path: primary, setupWitness: 'proven_reuse',
+        } }),
+        runSupervisedStart: async () => {
+          starts += 1;
+          const ready = readyStart(taskId);
+          if (!ready.receipt || !ready.assignment) throw new Error('missing synthetic receipt');
+          const dispatchId = starts === 1 ? oldDispatch : 'dispatch-new';
+          return { ...ready,
+            receipt: { ...ready.receipt, dispatchId },
+            assignment: { ...ready.assignment, bindingKey: dispatchId },
+          };
+        },
+      };
+      try {
+        const first = await runSupervisedTaskLaunchAssistant(selected, launchDeps);
+        expect(first).toMatchObject({ outcome: 'ready', resources: {
+          taskId, dispatchId: oldDispatch, terminal: oldTerminal.identity,
+        } });
+        const published = await publishCurrentWorkerAssignment({
+          file, projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+          taskId, kind: 'local', provider: 'orca', bindingKey: oldDispatch, role: 'worker',
+        });
+        if (!published.ok) throw new Error(published.reason);
+        expect(published.assignment.issueNumber).toBeUndefined();
+        const resume = parseLaunchAssistantCli([
+          '--project', 'orchestrator-pack', '--repository', 'chetwerikoff/orchestrator-pack',
+          '--work-class', 'merge', '--task', taskId, '--worktree', 'path:' + primary,
+        ], profileEnv(), () => ({
+          projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+          primaryRoot: primary, defaultBranch: 'main',
+        } as ReturnType<typeof import('../lib/target-context.ts').resolveTargetContext>));
+        const second = await runSupervisedTaskLaunchAssistant({ ...resume, env: profileEnv() }, launchDeps);
+        expect(second).toMatchObject({ outcome: 'ready', resources: {
+          taskId, dispatchId: 'dispatch-new', terminal: freshTerminal.identity,
+        } });
+        expect(creates).toBe(1);
+        expect(starts).toBe(2);
+        expect(spawns).toHaveLength(2);
+        expect(spawns[0]!.recovery).toBeUndefined();
+        expect(spawns[1]).toMatchObject({ title: 'opk-t2-merge-' + taskId, workspace: primary,
+          recovery: { assignment: { taskId, bindingKey: oldDispatch }, worktreeId: 'repo::primary' },
+        });
+        expect(lookups).toEqual([taskId + ':' + oldDispatch, taskId + ':' + oldDispatch]);
+        expect(nativeReads.map((args) => args[1])).toEqual([
+          'dispatch-show', 'worker-show', 'dispatch-show', 'worker-show',
+        ]);
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    ['live Dispatch', 'dispatched', 'correct', false],
+    ['completed Dispatch', 'completed', 'correct', false],
+    ['foreign Dispatch', 'failed', 'foreign', false],
+    ['unknown native witness', 'failed', 'correct', false],
+    ['gone witness withdrawn at final admission', 'failed', 'correct', true],
+  ] as const)('#2794 refuses %s on issue-less --task without spawning', async (label, status, owner, withdrawAtFinal) => {
+    const taskId = 'task-2794-existing';
+    const assignment: BriefWorkerAssignment = {
+      schema: 'orchestrator-pack/worker-assignment/v1', projectId: 'orchestrator-pack',
+      repository: 'chetwerikoff/orchestrator-pack', taskId,
+      assignmentId: 'assignment-old', generation: 1, kind: 'local',
+      provider: 'orca', bindingKey: owner === 'foreign' ? 'dispatch-foreign' : 'dispatch-old',
+      role: 'worker', createdAtUtc: '2026-11-06T00:00:00.000Z',
+    };
+    const dispatch: DispatchObservation = { kind: 'present', dispatchId: 'dispatch-old', status };
+    let goneReads = 0;
+    let spawns = 0;
+    const adapter: RuntimeAdapter = {
+      ...runtimeAdapter(), spawnWorker: () => {
+        spawns += 1;
+        return { status: 'ok', value: worker };
+      },
+    };
+    const result = await runSupervisedTaskLaunchAssistant(mergeInput({
+      taskId, issueNumber: undefined, delegatedIntegration: undefined,
+      projectId: 'orchestrator-pack', env: profileEnv(),
+    }), {
+      ...deps({ adapter, dispatch: [dispatch, dispatch] }),
+      readUnnumberedAssignment: () => assignment,
+      proveTerminalGone: async () => {
+        goneReads += 1;
+        return label === 'unknown native witness' || (withdrawAtFinal && goneReads === 2)
+          ? null : {
+            taskId, dispatchId: 'dispatch-old', dispatchState: 'failed',
+            worktreeId: 'repo::primary', workerAbsent: true,
+          };
+      },
+      resolveProfile: (workClass, env, mode) =>
+        resolveLiveExecutorProfile(workClass, env, mode, async (args) => lunaMergeProbe(args)),
+      prepareWorktree: async () => ({ status: 'ok', value: {
+        id: 'repo::primary', selector: 'id:repo::primary',
+        path: primary, setupWitness: 'proven_reuse',
+      } }),
+    });
+    expect(result).toMatchObject({
+      outcome: 'continue',
+      stage: withdrawAtFinal ? 'dispatch_admission_final' : 'dispatch_admission_early',
+      observedCause: 'fresh_dispatch_not_absent',
+    });
+    expect(spawns).toBe(0);
+    expect(goneReads).toBe(withdrawAtFinal ? 2 : label === 'unknown native witness' ? 1 : 0);
+  });
+
+  it.each([
+    ['worktree preparation', 'prepare', 'worktree_prepare', 'reconcile_worktree_setup'],
+    ['OpenCode finalization', 'finalize', 'worktree_prepare', 'reconcile_worktree_setup'],
+    ['terminal spawn', 'spawn', 'terminal_prepare', 'remediate_terminal'],
+    ['non-busy liveness', 'liveness', 'terminal_prepare', 'remediate_terminal'],
+    ['uncertain supervised start', 'start', 'supervised_start', 'reconcile_supervised_start'],
+  ] as const)('#2794 post-create %s returns same-Task --task continuation, not --pr', async (_label, mode, stage, action) => {
+    const taskId = 'task-2794-postcreate';
+    let creates = 0;
+    const ownWorker: RuntimeWorker = { ...worker, workspacePath: primary };
+    const adapter: RuntimeAdapter = {
+      ...runtimeAdapter({ worker: ownWorker, liveness: mode === 'liveness' ? 'unknown' : 'idle' }),
+      spawnWorker: () => mode === 'spawn'
+        ? { status: 'failed', operation: 'spawn_worker', reason: 'native_unavailable' }
+        : { status: 'ok', value: ownWorker },
+    };
+    const selected = mergeInput({
+      prNumber: 2794, taskId: undefined, issueNumber: undefined,
+      delegatedIntegration: undefined, projectId: 'orchestrator-pack',
+      packRoot: '/opt/orchestrator-pack', defaultBranch: 'main', env: profileEnv(),
+    });
+    const result = await runSupervisedTaskLaunchAssistant(selected, {
+      ...deps({ adapter }),
+      observeManagerRun: async () => ({
+        status: 'ok', value: { runId: 'run-current', coordinatorHandle: 'orch-project' },
+      }),
+      readMergePr: async (repository, number) => ({ status: 'ok', value: {
+        number, state: 'open', baseRepository: repository,
+        baseRef: 'main', headSha: 'b'.repeat(40),
+      } }),
+      createManagerTask: async () => {
+        creates += 1;
+        return { status: 'ok', value: { taskId, status: 'ready' } };
+      },
+      resolveProfile: (workClass, env, selectedMode) =>
+        resolveLiveExecutorProfile(workClass, env, selectedMode, async (args) => lunaMergeProbe(args)),
+      prepareWorktree: async () => mode === 'prepare'
+        ? { status: 'continue', cause: 'fixture_worktree_unavailable', actor: 'provider',
+          nextAction: { kind: 'reconcile_worktree_setup', note: 'reconcile selected primary worktree' } }
+        : { status: 'ok', value: {
+          id: 'repo::primary', selector: 'id:repo::primary', path: primary, setupWitness: 'proven_reuse',
+        } },
+      finalizeProfile: async (profile) => mode === 'finalize'
+        ? { status: 'continue', cause: 'fixture_opencode_finalize_unavailable', actor: 'provider',
+          nextAction: { kind: 'reconcile_worktree_setup', note: 'reconcile OpenCode finalization' } }
+        : { status: 'ok', value: profile },
+      runSupervisedStart: async () => mode === 'start'
+        ? { ok: false, reason: 'provider_outcome_unknown' } as SupervisedWorkerStartResult
+        : readyStart(taskId),
+    });
+    expect(creates).toBe(1);
+    expect(result).toMatchObject({ outcome: 'continue', stage, resources: { taskId },
+      nextAction: { kind: action } });
+    if (result.outcome !== 'continue') throw new Error('expected a post-create refusal');
+    const command = [
+      'node --experimental-strip-types scripts/pr2-foundation/supervised-task-launch-assistant.ts',
+      "--project 'orchestrator-pack' --repository 'chetwerikoff/orchestrator-pack'",
+      "--work-class merge --task 'task-2794-postcreate'",
+      "--worktree 'path:" + primary + "'",
+    ].join(' ');
+    expect(result.nextAction.command).toBe(command);
+    expect(result.nextAction.note).toContain(command);
+    expect(result.nextAction.note).toContain('never rerun --pr');
+    if (mode === 'start') expect(result.nextAction.note).toContain('reconcile the non-ready start');
   });
 
   it('#2794 refuses a mismatched PR/base before creating any Orca Task or terminal', async () => {

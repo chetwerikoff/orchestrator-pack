@@ -14,7 +14,7 @@ import { selectRuntimeAdapter } from '../runtime/registry.ts';
 import type { RuntimeAdapter, RuntimeWorker, RuntimeWorkerIdentity } from '../runtime/contracts.ts';
 import { overlayExecutorProfileEnv } from '../executor-profile-store.ts';
 import {
-  currentWorkerAssignment, listCurrentWorkerAssignmentRecords, parseDelegatedIntegrationMarker, resolveWorkerAssignmentStorePath,
+  currentWorkerAssignment, currentWorkerAssignmentByDeliverable, listCurrentWorkerAssignmentRecords, parseDelegatedIntegrationMarker, resolveWorkerAssignmentStorePath,
   sameDelegatedIntegrationMarker, type DelegatedIntegrationMarker, type WorkerAssignment, type WorkerAssignmentRecord,
 } from '../lib/worker-assignment-store.ts';
 import {
@@ -188,7 +188,7 @@ export type DispatchObservation = { readonly kind: 'absent' }
 /** A terminal Dispatch is reusable only for its exact current Issue/Task assignment. */
 function sameTaskTerminalDispatch(
   observed: DispatchObservation,
-  assignment: WorkerAssignment | null,
+  assignment: WorkerAssignmentRecord | null,
   taskId: string,
   adapterId: string,
 ): boolean {
@@ -217,6 +217,10 @@ function newTaskStartCommand(input: LaunchInput): string {
   return `${FIRST_START_COMMAND} --project ${project}${issue} ${route} --worktree-name "$NEW_WORKTREE_NAME"`;
 }
 
+function mergeSameTaskCommand(input: LaunchInput, taskId: string, repository: string): string {
+  return `${FIRST_START_COMMAND} --project ${quote(input.projectId!)} --repository ${quote(repository)} --work-class merge --task ${quote(taskId)} --worktree ${quote(`path:${input.primaryRoot}`)}`;
+}
+
 /**
  * A present Dispatch with no current assignment for this Task is never resumed by
  * a same-Task successor. The lawful next step is a coordinator-authorized new
@@ -226,7 +230,7 @@ function freshDispatchNotAbsent(
   input: LaunchInput,
   taskId: string,
   observed: Extract<DispatchObservation, { kind: 'present' }>,
-  current: WorkerAssignment | null,
+  current: WorkerAssignmentRecord | null,
   reconcileNote: string,
 ): Omit<Extract<EdgeResult<never>, { status: 'continue' }>, 'status'> {
   const evidence = {
@@ -321,12 +325,14 @@ export interface LaunchDependencies {
   readonly createManagerTask: (runId: string, brief: string) => Promise<EdgeResult<{ readonly taskId: string; readonly status: string }>>;
   readonly observeDispatch: (taskId: string) => Promise<EdgeResult<DispatchObservation>>;
   readonly readCurrentAssignment: (issueNumber: number) => WorkerAssignment | null;
+  /** Existing issue-less assignment, selected only by the exact Task/Dispatch deliverable. */
+  readonly readUnnumberedAssignment?: (taskId: string, dispatchId: string) => WorkerAssignmentRecord | null;
   /** Read-only Orca worktree-show; never infer identity from --worktree text alone. */
   readonly resolveRestoreWorktree?: (selector: string) => Promise<EdgeResult<RestoreWorktreeIdentity>>;
   /** Complete all-workspace native terminal list and Linux CWD/descendant census. */
   readonly observeRestoreQuiescence?: (path: string) => Promise<EdgeResult<RestoreQuiescenceWitness>>;
   /** Native exact-Dispatch/worker-absent witness, not an assignment/store guess. */
-  readonly proveTerminalGone?: (assignment: WorkerAssignment) => Promise<TerminalGoneAssignmentEvidence | null>;
+  readonly proveTerminalGone?: (assignment: WorkerAssignmentRecord) => Promise<TerminalGoneAssignmentEvidence | null>;
   readonly prepareWorktree: (input: WorktreePreparationRequest) => Promise<EdgeResult<PreparedWorktree>>;
   /** Non-Claude manager push guard; a resolved Claude-family manager is the local route. */
   readonly installManagerPushGuard?: (input: ManagerPushGuardRequest) => Promise<EdgeResult<true>> | EdgeResult<true>;
@@ -737,6 +743,21 @@ function continued(
     });
   }
   const finishedAtMs = now();
+  // After --pr has created a Task, every refusal must retain the same Task
+  // continuation. Keep a stage-specific retry/start command when one exists;
+  // uncertain Dispatch/start outcomes must still be reconciled before a retry.
+  const sameTaskCommand = input.workClass === 'merge' && input.prNumber !== undefined
+    && !input.taskId && resources.taskId && input.projectId && input.primaryRoot
+    ? mergeSameTaskCommand(input, resources.taskId, resources.repository) : null;
+  const nextAction: NextAction = sameTaskCommand ? {
+    ...edge.nextAction,
+    ...(edge.nextAction.command ? {} : { command: sameTaskCommand }),
+    note: [
+      edge.nextAction.note,
+      `After resolving ${stage}${stage.startsWith('dispatch_admission') || stage === 'supervised_start'
+        ? ' and reconciling the exact Dispatch/start outcome' : ''}, continue the existing Task with ${sameTaskCommand}; never rerun --pr, which creates another Task.`,
+    ].filter(Boolean).join(' '),
+  } : edge.nextAction;
   return {
     schema: LAUNCH_ASSISTANT_SCHEMA,
     outcome: 'continue',
@@ -746,7 +767,7 @@ function continued(
     resources,
     responsibleActor: edge.actor,
     evidence: edge.evidence ?? {},
-    nextAction: edge.nextAction,
+    nextAction,
     startedAtMs,
     finishedAtMs,
     elapsedMs: Math.max(0, finishedAtMs - startedAtMs),
@@ -1070,6 +1091,18 @@ export async function runSupervisedTaskLaunchAssistant(
     }, resources, startedAtMs, timings, deps.now);
   }
   resources = { ...resources, taskId };
+  const issueLessMergeTask = input.workClass === 'merge' && !input.issueNumber
+    && input.prNumber === undefined && Boolean(input.projectId);
+  const assignmentForDispatch = (observed: DispatchObservation): WorkerAssignmentRecord | null => {
+    if (input.issueNumber) return deps.readCurrentAssignment(input.issueNumber);
+    if (!issueLessMergeTask || observed.kind !== 'present' || !observed.dispatchId) return null;
+    const candidate = deps.readUnnumberedAssignment?.(taskId, observed.dispatchId);
+    return candidate && candidate.issueNumber === undefined
+      && candidate.projectId === input.projectId && candidate.repository === resources.repository
+      && candidate.taskId === taskId && candidate.bindingKey === observed.dispatchId
+      && candidate.role === 'worker' && candidate.kind === 'local'
+      && candidate.provider === deps.adapter.id ? candidate : null;
+  };
   const predecessor = delegatedIntegration ? deps.readCurrentAssignment(input.issueNumber!) : null;
   if (delegatedIntegration && !matchesMergePredecessor(predecessor, input, taskId, delegatedIntegration)) {
     return continued(input, 'dispatch_admission_early', mergePredecessorMismatch(), resources, startedAtMs, timings, deps.now);
@@ -1077,9 +1110,11 @@ export async function runSupervisedTaskLaunchAssistant(
 
   const early = await checkpoint('dispatch_admission_early', timings, deps.now, () => deps.observeDispatch(taskId));
   if (early.status !== 'ok') return continued(input, 'dispatch_admission_early', early, resources, startedAtMs, timings, deps.now);
-  const earlyCurrent = input.issueNumber ? deps.readCurrentAssignment(input.issueNumber) : null;
+  const earlyCurrent = assignmentForDispatch(early.value);
   const earlyCandidate = sameTaskTerminalDispatch(early.value, earlyCurrent, taskId, deps.adapter.id)
-    && earlyCurrent?.role === (input.workClass === 'manager' ? 'orchestrator' : 'worker');
+    && earlyCurrent?.role === (input.workClass === 'manager' ? 'orchestrator' : 'worker')
+    && (!issueLessMergeTask || (early.value.kind === 'present'
+      && ['failed', 'abandoned', 'cancelled'].includes(early.value.status ?? '')));
   const earlyGone = earlyCandidate && earlyCurrent && deps.proveTerminalGone
     ? await deps.proveTerminalGone(earlyCurrent) : null;
   const earlyTerminal = early.value.kind === 'present' && Boolean(earlyGone && earlyCurrent
@@ -1175,7 +1210,7 @@ export async function runSupervisedTaskLaunchAssistant(
     ...(input.workClass === 'manager' ? { managerRefresh: true } : {}),
     ...(input.workClass === 'merge' ? { primaryReuseRoot: input.primaryRoot } : {}),
     ...(input.workClass === 'manager' && input.runId?.trim() ? { managerTaskRunId: input.runId.trim() } : {}),
-    ...(input.workClass !== 'merge' && input.worktreeSelector && earlyCurrent
+    ...(input.workClass !== 'merge' && input.worktreeSelector && earlyCurrent && earlyCurrent.issueNumber !== undefined
       ? { reuseAssignment: earlyCurrent } : {}),
     });
   };
@@ -1247,11 +1282,20 @@ export async function runSupervisedTaskLaunchAssistant(
   }
   const final = await checkpoint('dispatch_admission_final', timings, deps.now, () => deps.observeDispatch(taskId));
   if (final.status !== 'ok') return continued(input, 'dispatch_admission_final', final, resources, startedAtMs, timings, deps.now);
-  const finalCurrent = input.issueNumber ? deps.readCurrentAssignment(input.issueNumber) : null;
+  const finalCurrent = assignmentForDispatch(final.value);
+  const finalGone = issueLessMergeTask && earlyTerminal && finalCurrent && deps.proveTerminalGone
+    ? await deps.proveTerminalGone(finalCurrent) : null;
   const finalTerminal = earlyTerminal
     && sameTaskTerminalDispatch(final.value, finalCurrent, taskId, deps.adapter.id)
     && earlyCurrent?.assignmentId === finalCurrent?.assignmentId
-    && earlyCurrent?.generation === finalCurrent?.generation;
+    && earlyCurrent?.generation === finalCurrent?.generation
+    && (!issueLessMergeTask || Boolean(final.value.kind === 'present' && finalGone && finalCurrent
+      && finalGone.workerAbsent && finalGone.taskId === taskId
+      && finalGone.dispatchId === finalCurrent.bindingKey
+      && finalGone.dispatchState === final.value.status
+      && final.value.status === (early.value.kind === 'present' ? early.value.status : undefined)
+      && finalGone.worktreeId === earlyGone?.worktreeId
+      && finalGone.worktreeId === prepared.value.id));
   if (final.value.kind === 'present'
     && !finalTerminal
     && (!delegatedIntegration || final.value.dispatchId !== finalPredecessor?.bindingKey)) {
@@ -1393,14 +1437,16 @@ export async function runSupervisedTaskLaunchAssistant(
           note: 'read the exact Claude Code pane footer and native command; restore the selected model/effort on this Task-owned terminal before supervised start, or select another admitted profile' }
         : terminalCause === 'terminal_liveness_busy'
           ? { kind: 'remediate_terminal',
-            ...(input.prNumber ? { command: `${FIRST_START_COMMAND} --project ${quote(input.projectId!)} --repository ${quote(resources.repository)} --work-class merge --task ${quote(taskId)} --worktree ${quote(`path:${input.primaryRoot}`)}` } : {}),
+            ...(input.prNumber ? { command: mergeSameTaskCommand(input, taskId, resources.repository) } : {}),
             note: input.prNumber
               ? 'Rerun the returned --task launch command for this same Task and terminal; do not close the terminal or rerun --pr, which would create a new Task'
               : 'Rerun the same command with unchanged arguments: #2107 reuses this exact Task-owned terminal. Do not close the terminal' }
           : spawn.status !== 'ok' && spawn.reason === 'launch_task_terminal_identity_unproven'
             ? { kind: 'remediate_terminal',
-              note: input.workClass === 'merge'
-                ? 'Native terminal show could not prove the old owner gone or retitled. Rerun the same command; alternatively launch a fresh merge Task with --project P --repository R --work-class merge --pr N. Never send to the unproven terminal'
+              note: input.prNumber
+                ? 'Native terminal show could not prove the old owner gone or retitled. Reconcile native terminal show, then retry the existing --task route; never repeat --pr or send to an unproven terminal'
+                : input.workClass === 'merge'
+                  ? 'Native terminal show could not prove the old owner gone or retitled. Rerun the same command; alternatively launch a fresh merge Task with --project P --repository R --work-class merge --pr N. Never send to the unproven terminal'
                 : 'Native terminal show did not prove the old owner gone or retitled. Rerun the same command after restoring terminal show; never send to the unproven terminal' }
             : { kind: 'remediate_terminal',
               note: 'reuse only the exact owned terminal identity after a bounded startup refusal; never reuse a foreign, replaced, or mismatched target' },
@@ -2856,6 +2902,8 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
     ),
     readCurrentAssignment: (issueNumber) =>
       currentWorkerAssignment(resolveWorkerAssignmentStorePath(target.projectId, env), issueNumber),
+    readUnnumberedAssignment: (taskId, dispatchId) =>
+      currentWorkerAssignmentByDeliverable(resolveWorkerAssignmentStorePath(target.projectId, env), taskId, dispatchId),
     resolveRestoreWorktree: async (selector) => {
       const result = resultRecord(envelope(await child([
         'orca', 'worktree', 'show', '--worktree', selector, '--json',
