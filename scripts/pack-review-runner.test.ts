@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mapGptReplyToReviewPayload } from './lib/pack-gpt-reviewer.ts';
+import { authorizeTargetGhInvocation, TargetGhAuthorizationError } from './lib/gh-target-authorization.ts';
+import { resolveTargetContext } from './lib/target-context.ts';
 import { PACK_GPT_REVIEW_RESULT_SCHEMA, runPackGptReviewCommand } from './pack-gpt-review.ts';
 import { classifyExecuteIssueManagerRecord } from './lib/execute-issue-manager-boundary.ts';
 
@@ -2837,8 +2839,10 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       summary: 'DEFER: _quality_summary_v2 sets per-month and aggregate complete_response_windows to eligible-parent count minus ambiguous_response_parents. Trigger: 120 already-admitted parents, one legal complete direct SB-call/BB-raise or SB-first-aggression prefix. It reports 119 complete windows and zero incomplete_eligible_windows even though all 120 #180 direct windows passed response_window_outcome; ambiguity is the unobserved later continuation, not a missing/invalid direct window. This makes operator source-completeness diagnostics misleading, but the count-qualified ambiguous cell already refuses before frequencies or EV, so it need not block merge. Cheap correction: retain structural complete-window count N and report the ambiguous-parent count separately, as /1 does for structurally valid unsupported prefixes; no new state or gate.', source: 'gpt-browser' },
   ] };
 
-  function fixture(settings: { scopeType?: string; scopePath?: string; allowedRoot?: string; denylist?: string[]; summary?: string; details?: string; dispositionSignature?: string; frozenBodyOverride?: string; reviewedHeadSha?: string; sourceRepoRoot?: string } = {}) {
+  function fixture(settings: { scopeType?: string; scopePath?: string; allowedRoot?: string; denylist?: string[]; summary?: string; details?: string; dispositionSignature?: string; frozenBodyOverride?: string; reviewedHeadSha?: string; sourceRepoRoot?: string; projectId?: string; repositorySlug?: string } = {}) {
     const selectedHead = settings.reviewedHeadSha ?? reviewedHead;
+    const selectedRepository = settings.repositorySlug ?? repository;
+    const selectedProjectId = settings.projectId ?? 'orchestrator-pack';
     const scopePath = settings.scopePath ?? witnessSource.findings[0]!.path;
     const allowedRoot = settings.allowedRoot ?? scopePath;
     const liveBody = `<!-- source-revision: r12 -->\n\`\`\`allowed-roots\nsrc/**\n${allowedRoot}\n\`\`\`\n\`\`\`denylist\n${(settings.denylist ?? ['vendor/**', 'packages/core/**']).join('\n')}\n\`\`\`\n` + syntheticCriteria;
@@ -2846,7 +2850,14 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     roots.push(root);
     const storeRoot = join(root, 'store');
     setupHarness(storeRoot);
-    const options = { projectId: 'orchestrator-pack', storeRoot };
+    const options = { projectId: selectedProjectId, storeRoot };
+    if (settings.projectId) {
+      const cardPath = join(process.env.XDG_CONFIG_HOME!, 'orchestrator-pack',
+        'projects', selectedProjectId + '.json');
+      writeFileSync(cardPath, JSON.stringify({
+        projectId: selectedProjectId, repository: selectedRepository,
+        primaryRoot: settings.sourceRepoRoot ?? process.cwd(), defaultBranch: 'main',
+        orcaWorkspacePattern: '^synthetic-only
     const frozenBody = settings.frozenBodyOverride ?? '<!-- source-revision: r12 -->\n```allowed-roots\nsrc/**\n```\n```denylist\nvendor/**\npackages/core/**\n```\n' + syntheticCriteria;
     captureBoundIssueSnapshot({ ...options, prNumber, prHeadSha: selectedHead, issueNumber, issueBody: frozenBody });
     let authority = initializePackReviewAuthority({
@@ -2868,20 +2879,20 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     if (!blocker || !deferred) throw new Error('observed source payload lost its two findings');
     const sourceSignature = settings.dispositionSignature ?? blocker.fingerprint;
     const run = createPackReviewRun({ ...options, prNumber, headSha: selectedHead, trustedPackRoot: process.cwd(),
-      sourceRepoRoot: settings.sourceRepoRoot ?? process.cwd(), canonicalRepository: repository, resolvedReviewer: 'gpt',
+      sourceRepoRoot: settings.sourceRepoRoot ?? process.cwd(), canonicalRepository: selectedRepository, resolvedReviewer: 'gpt',
       accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, reviewCycleId: authority.cycle!.cycleId,
       logicalRoundOrdinal: 2, logicalRoundCap: 2, now: new Date(terminalAt),
     }).run;
     const sourceProofs = [1, 2, 3].map((ordinal) => {
       const slotId = `source-${String(ordinal).padStart(2, '0')}`;
       const invocationId = `24280000-0000-4000-8000-${String(ordinal).padStart(12, '0')}`;
-      const identity = { repository, prNumber, headSha: selectedHead, runId: run.id, slotId, invocationId };
+      const identity = { selectedRepository, prNumber, headSha: selectedHead, runId: run.id, slotId, invocationId };
       const body = formatPackGptSourceCommentEnvelope(identity, ordinal === 1 ? sourcePayload : 'NO_FINDINGS');
       const comment: PackGptSourceGithubComment = {
         id: 6068301800 + ordinal, body, actorLogin: 'chetwerikoff',
         createdAt: terminalAt, updatedAt: terminalAt,
-        url: `https://github.com/${repository}/pull/${prNumber}#issuecomment-${6068301800 + ordinal}`,
-        issueUrl: `https://api.github.com/repos/${repository}/issues/${prNumber}`,
+        url: `https://github.com/${selectedRepository}/pull/${prNumber}#issuecomment-${6068301800 + ordinal}`,
+        issueUrl: `https://api.github.com/repos/${selectedRepository}/issues/${prNumber}`,
       };
       return { identity, comment, receipt: {
         ...identity, commentId: comment.id, commentUrl: comment.url, actorLogin: comment.actorLogin,
@@ -2924,7 +2935,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     const review: GithubReviewSummary = {
       id: reviewId, state: 'COMMENTED', userLogin: 'chetwerikoff',
       submittedAt: '2026-10-08T20:45:00Z', commitId: selectedHead,
-      url: `https://github.com/${repository}/pull/${prNumber}#pullrequestreview-${reviewId}`,
+      url: `https://github.com/${selectedRepository}/pull/${prNumber}#pullrequestreview-${reviewId}`,
       body: `## Pack review — findings\n\nRun: \`${run.id}\`\nHead: \`${selectedHead}\`\n\n### scope finding\n${blocker.body}\n`,
     };
     const reviewTransport: GithubReviewTransport = {
@@ -2934,23 +2945,23 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       dismissReview: async () => { throw new Error('offline review dismissal forbidden'); },
     };
     // Captured witness R2 ordinary bullet shape; earlier R1 FIXED text must not authorize R2.
-    const comment = { id: 6068301792, issue_url: `https://api.github.com/repos/${repository}/issues/${prNumber}`,
-      html_url: `https://github.com/${repository}/pull/${prNumber}#issuecomment-6068301792`,
+    const comment = { id: 6068301792, issue_url: `https://api.github.com/repos/${selectedRepository}/issues/${prNumber}`,
+      html_url: `https://github.com/${selectedRepository}/pull/${prNumber}#issuecomment-6068301792`,
       user: { login: 'chetwerikoff' }, author_association: 'OWNER',
       created_at: '2026-10-08T20:50:00Z', updated_at: '2026-10-08T20:51:48Z',
       body: `R1 FIXED in code.\n\n## R2 dispositions — run \`${run.id}\`, head \`${selectedHead}\`\n\nTerminal REVIEW: \`${reviewId}\`\nReviewed Issue digest: \`${computeBoundIssueSnapshotHash(frozenBody)}\`\nCorrected Issue revision: \`r12\`\n\n- **FIXED — blocking scope finding \`${code}\`** (source signature \`${sourceSignature}\`). The live r12 Issue now includes \`${allowedRoot}\` in \`allowed-roots\`, under the operator amendment note.${allowedRoot === scopePath ? '' : ` This root covers \`${scopePath}\`.`} No code or behavior change was made for this disposition.\n- **DEFER — non-blocking \`field:ambiguous-complete-window-undercount\`**.`,
     };
-    const issue = { node_id: 'fixture-issue-node', number: issueNumber, html_url: `https://github.com/${repository}/issues/${issueNumber}`,
-      repository_url: `https://api.github.com/repos/${repository}`, body: liveBody };
+    const issue = { node_id: 'fixture-issue-node', number: issueNumber, html_url: `https://github.com/${selectedRepository}/issues/${issueNumber}`,
+      repository_url: `https://api.github.com/repos/${selectedRepository}`, body: liveBody };
     const statuses: Array<{ state: string; context: string }> = [];
     const transports = { issue, comment, review, sourceProofs,
-      pr: { number: prNumber, url: `https://api.github.com/repos/${repository}/pulls/${prNumber}`,
+      pr: { number: prNumber, url: `https://api.github.com/repos/${selectedRepository}/pulls/${prNumber}`,
         head: { sha: selectedHead }, base: { ref: 'main' }, state: 'open', body: `Closes #${issueNumber}` } };
     const read = vi.fn(async (request: Parameters<typeof runProcess>[0]) => {
       const args = request.args ?? [];
       const endpoint = args.find((arg) => String(arg).startsWith('repos/')) ?? (args.includes('user') ? 'user' : undefined);
-      const response = endpoint === `repos/${repository}/pulls/${prNumber}` ? transports.pr
-        : endpoint === `repos/${repository}/issues/${issueNumber}` ? transports.issue
+      const response = endpoint === `repos/${selectedRepository}/pulls/${prNumber}` ? transports.pr
+        : endpoint === `repos/${selectedRepository}/issues/${issueNumber}` ? transports.issue
         : endpoint?.endsWith('/comments') ? [[transports.comment]]
         : endpoint?.includes('/issues/comments/') ? transports.comment
         : endpoint === 'user' ? { login: 'chetwerikoff' } : undefined;
@@ -2958,7 +2969,266 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       return { ok: true, outcome: 'exit' as const, exitCode: 0, stdout: endpoint === 'user' ? 'chetwerikoff' : JSON.stringify(response), stderr: '',
         timedOut: false, cancelled: false, signal: null, durationMs: 1 };
     });
-    const input = { ...options, sourceRepoRoot: settings.sourceRepoRoot ?? process.cwd(), repoSlug: repository, prNumber, immediate: true,
+    const input = { ...options, sourceRepoRoot: settings.sourceRepoRoot ?? process.cwd(), repoSlug: selectedRepository, prNumber, immediate: true,
+      fixtureCurrentPrHeadSha: selectedHead, fixtureReviewCompareStatus: 'identical',
+      fixturePrState: 'OPEN', fixturePrBody: `Closes #${issueNumber}`,
+      fixtureIssueNumber: issueNumber, fixtureIssueTitle: '[T3] Synthetic scope-only resolution',
+      fixtureIssueBody: liveBody,
+      fixtureGptSourceCommentTransport: sourceTransport,
+      fixtureGithubReviewTransport: reviewTransport,
+      fixtureSameHeadIssueResolutionRunner: read as typeof runProcess,
+      fixtureRequiredCiPolicy: { contexts: ['CI', 'orchestrator-pack/pack-review'] },
+      fixtureRequiredCiChecks: [{ name: 'CI', state: 'SUCCESS' }, { name: 'orchestrator-pack/pack-review', state: 'FAILURE' }],
+      fixtureRequiredStatusWriter: async (request: { state: string; context: string }) => { statuses.push(request); },
+      fixtureRequiredStatusReader: async (_headSha: string) => statuses.at(-1)?.state,
+    };
+    return { input, options, authority, run, transports, read, statuses, frozenBody };
+  }
+
+, orchestratorTitlePattern: '^synthetic-only
+    const frozenBody = settings.frozenBodyOverride ?? '<!-- source-revision: r12 -->\n```allowed-roots\nsrc/**\n```\n```denylist\nvendor/**\npackages/core/**\n```\n' + syntheticCriteria;
+    captureBoundIssueSnapshot({ ...options, prNumber, prHeadSha: selectedHead, issueNumber, issueBody: frozenBody });
+    let authority = initializePackReviewAuthority({
+      prNumber, headSha: selectedHead, tier: 'T3', capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options,
+    });
+    authority = commitPackReviewTerminal({
+      prNumber, expectedTransitionSeq: authority.transitionSeq, status: 'clean', findingCount: 0, options,
+      terminal: { schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal', runId: 'fixture-r1',
+        targetSha: selectedHead, reviewVerdict: 'clean', findingCount: 0, findingsDigest: fingerprint([]),
+        automaticBudgetDisposition: 'consume', logicalRoundOrdinal: 1 },
+    });
+    const sourcePayload = JSON.stringify({ findings: [
+      { ...witnessSource.findings[0], type: settings.scopeType ?? 'scope', path: scopePath,
+        summary: settings.summary ?? witnessSource.findings[0]!.summary,
+        ...(settings.details ? { details: settings.details } : {}) }, witnessSource.findings[1],
+    ] });
+    const mapped = mapGptReplyToReviewPayload(sourcePayload);
+    const [blocker, deferred] = mapped.findings;
+    if (!blocker || !deferred) throw new Error('observed source payload lost its two findings');
+    const sourceSignature = settings.dispositionSignature ?? blocker.fingerprint;
+    const run = createPackReviewRun({ ...options, prNumber, headSha: selectedHead, trustedPackRoot: process.cwd(),
+      sourceRepoRoot: settings.sourceRepoRoot ?? process.cwd(), canonicalRepository: selectedRepository, resolvedReviewer: 'gpt',
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, reviewCycleId: authority.cycle!.cycleId,
+      logicalRoundOrdinal: 2, logicalRoundCap: 2, now: new Date(terminalAt),
+    }).run;
+    const sourceProofs = [1, 2, 3].map((ordinal) => {
+      const slotId = `source-${String(ordinal).padStart(2, '0')}`;
+      const invocationId = `24280000-0000-4000-8000-${String(ordinal).padStart(12, '0')}`;
+      const identity = { selectedRepository, prNumber, headSha: selectedHead, runId: run.id, slotId, invocationId };
+      const body = formatPackGptSourceCommentEnvelope(identity, ordinal === 1 ? sourcePayload : 'NO_FINDINGS');
+      const comment: PackGptSourceGithubComment = {
+        id: 6068301800 + ordinal, body, actorLogin: 'chetwerikoff',
+        createdAt: terminalAt, updatedAt: terminalAt,
+        url: `https://github.com/${selectedRepository}/pull/${prNumber}#issuecomment-${6068301800 + ordinal}`,
+        issueUrl: `https://api.github.com/repos/${selectedRepository}/issues/${prNumber}`,
+      };
+      return { identity, comment, receipt: {
+        ...identity, commentId: comment.id, commentUrl: comment.url, actorLogin: comment.actorLogin,
+        createdAt: comment.createdAt, updatedAt: comment.updatedAt,
+        bodySha256: createHash('sha256').update(body, 'utf8').digest('hex'),
+      } };
+    });
+    const sourceTransport: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => 'chetwerikoff',
+      listComments: async () => sourceProofs.map((item) => item.comment),
+      getComment: async (id) => {
+        const match = sourceProofs.find((item) => item.comment.id === id);
+        if (!match) throw new Error('original exact source comment missing');
+        return match.comment;
+      },
+    };
+    const findings = [{ ...blocker, sourceSlotId: 'source-01' }, { ...deferred, sourceSlotId: 'source-01' }];
+    updatePackReviewRun(run.id, { reviewRound: {
+      schema: 'pack-review-gpt-round/v1', reviewer: 'gpt', tier: 'T3', accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      roundOrdinal: 2, cardinality: 3, issueNumber, boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(frozenBody),
+      sourceSlots: [1, 2, 3].map((ordinal) => {
+        const slotId = `source-${String(ordinal).padStart(2, '0')}`;
+        const invocationId = sourceProofs[ordinal - 1]!.identity.invocationId;
+        return { slotId, ordinal, lifecycle: 'terminal' as const, invocationId, attemptOrdinal: 1,
+          terminalClass: ordinal === 1 ? 'complete_findings' : 'complete_clean',
+          payload: ordinal === 1 ? { verdict: 'findings', findingCount: 2, findings: [blocker, deferred] } : { verdict: 'clean', findingCount: 0, findings: [] },
+          terminalResult: { schema: 'turn-result/v1', state: 'ok', cause: 'github_source_comment_credentialed', scope: 'none', send_count: 1, invocation_id: invocationId, source_comment_authority: 'credentialed_github',
+            source_comment_receipt: sourceProofs[ordinal - 1]!.receipt } };
+      }),
+    } }, options);
+    setPackReviewRunTerminal(run.id, 'changes_requested', { reviewVerdict: 'findings', findingCount: 2, findings }, { ...options, now: new Date('2026-10-08T20:46:00Z') });
+    authority = commitPackReviewTerminal({
+      prNumber, expectedTransitionSeq: authority.transitionSeq, status: 'changes_requested', findingCount: 2, options,
+      terminal: { schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal', runId: run.id,
+        targetSha: selectedHead, reviewVerdict: 'findings', findingCount: 2, findingsDigest: fingerprint(findings),
+        automaticBudgetDisposition: 'consume', logicalRoundOrdinal: 2 },
+    });
+    const reviewId = 6068701800;
+    updatePackReviewRun(run.id, { githubReviewId: reviewId, githubReviewEvent: 'COMMENT' }, options);
+    const review: GithubReviewSummary = {
+      id: reviewId, state: 'COMMENTED', userLogin: 'chetwerikoff',
+      submittedAt: '2026-10-08T20:45:00Z', commitId: selectedHead,
+      url: `https://github.com/${selectedRepository}/pull/${prNumber}#pullrequestreview-${reviewId}`,
+      body: `## Pack review — findings\n\nRun: \`${run.id}\`\nHead: \`${selectedHead}\`\n\n### scope finding\n${blocker.body}\n`,
+    };
+    const reviewTransport: GithubReviewTransport = {
+      resolveActorLogin: async () => 'chetwerikoff',
+      listReviews: async () => [review],
+      postReview: async () => { throw new Error('offline review POST forbidden'); },
+      dismissReview: async () => { throw new Error('offline review dismissal forbidden'); },
+    };
+    // Captured witness R2 ordinary bullet shape; earlier R1 FIXED text must not authorize R2.
+    const comment = { id: 6068301792, issue_url: `https://api.github.com/repos/${selectedRepository}/issues/${prNumber}`,
+      html_url: `https://github.com/${selectedRepository}/pull/${prNumber}#issuecomment-6068301792`,
+      user: { login: 'chetwerikoff' }, author_association: 'OWNER',
+      created_at: '2026-10-08T20:50:00Z', updated_at: '2026-10-08T20:51:48Z',
+      body: `R1 FIXED in code.\n\n## R2 dispositions — run \`${run.id}\`, head \`${selectedHead}\`\n\nTerminal REVIEW: \`${reviewId}\`\nReviewed Issue digest: \`${computeBoundIssueSnapshotHash(frozenBody)}\`\nCorrected Issue revision: \`r12\`\n\n- **FIXED — blocking scope finding \`${code}\`** (source signature \`${sourceSignature}\`). The live r12 Issue now includes \`${allowedRoot}\` in \`allowed-roots\`, under the operator amendment note.${allowedRoot === scopePath ? '' : ` This root covers \`${scopePath}\`.`} No code or behavior change was made for this disposition.\n- **DEFER — non-blocking \`field:ambiguous-complete-window-undercount\`**.`,
+    };
+    const issue = { node_id: 'fixture-issue-node', number: issueNumber, html_url: `https://github.com/${selectedRepository}/issues/${issueNumber}`,
+      repository_url: `https://api.github.com/repos/${selectedRepository}`, body: liveBody };
+    const statuses: Array<{ state: string; context: string }> = [];
+    const transports = { issue, comment, review, sourceProofs,
+      pr: { number: prNumber, url: `https://api.github.com/repos/${selectedRepository}/pulls/${prNumber}`,
+        head: { sha: selectedHead }, base: { ref: 'main' }, state: 'open', body: `Closes #${issueNumber}` } };
+    const read = vi.fn(async (request: Parameters<typeof runProcess>[0]) => {
+      const args = request.args ?? [];
+      const endpoint = args.find((arg) => String(arg).startsWith('repos/')) ?? (args.includes('user') ? 'user' : undefined);
+      const response = endpoint === `repos/${selectedRepository}/pulls/${prNumber}` ? transports.pr
+        : endpoint === `repos/${selectedRepository}/issues/${issueNumber}` ? transports.issue
+        : endpoint?.endsWith('/comments') ? [[transports.comment]]
+        : endpoint?.includes('/issues/comments/') ? transports.comment
+        : endpoint === 'user' ? { login: 'chetwerikoff' } : undefined;
+      if (!response) throw new Error(`unexpected offline transport: ${args.join(' ')}`);
+      return { ok: true, outcome: 'exit' as const, exitCode: 0, stdout: endpoint === 'user' ? 'chetwerikoff' : JSON.stringify(response), stderr: '',
+        timedOut: false, cancelled: false, signal: null, durationMs: 1 };
+    });
+    const input = { ...options, sourceRepoRoot: settings.sourceRepoRoot ?? process.cwd(), repoSlug: selectedRepository, prNumber, immediate: true,
+      fixtureCurrentPrHeadSha: selectedHead, fixtureReviewCompareStatus: 'identical',
+      fixturePrState: 'OPEN', fixturePrBody: `Closes #${issueNumber}`,
+      fixtureIssueNumber: issueNumber, fixtureIssueTitle: '[T3] Synthetic scope-only resolution',
+      fixtureIssueBody: liveBody,
+      fixtureGptSourceCommentTransport: sourceTransport,
+      fixtureGithubReviewTransport: reviewTransport,
+      fixtureSameHeadIssueResolutionRunner: read as typeof runProcess,
+      fixtureRequiredCiPolicy: { contexts: ['CI', 'orchestrator-pack/pack-review'] },
+      fixtureRequiredCiChecks: [{ name: 'CI', state: 'SUCCESS' }, { name: 'orchestrator-pack/pack-review', state: 'FAILURE' }],
+      fixtureRequiredStatusWriter: async (request: { state: string; context: string }) => { statuses.push(request); },
+      fixtureRequiredStatusReader: async (_headSha: string) => statuses.at(-1)?.state,
+    };
+    return { input, options, authority, run, transports, read, statuses, frozenBody };
+  }
+
+,
+        browserGpt: { projectUrl: 'https://example.invalid/synthetic-only' },
+      }));
+    }
+    const frozenBody = settings.frozenBodyOverride ?? '<!-- source-revision: r12 -->\n```allowed-roots\nsrc/**\n```\n```denylist\nvendor/**\npackages/core/**\n```\n' + syntheticCriteria;
+    captureBoundIssueSnapshot({ ...options, prNumber, prHeadSha: selectedHead, issueNumber, issueBody: frozenBody });
+    let authority = initializePackReviewAuthority({
+      prNumber, headSha: selectedHead, tier: 'T3', capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options,
+    });
+    authority = commitPackReviewTerminal({
+      prNumber, expectedTransitionSeq: authority.transitionSeq, status: 'clean', findingCount: 0, options,
+      terminal: { schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal', runId: 'fixture-r1',
+        targetSha: selectedHead, reviewVerdict: 'clean', findingCount: 0, findingsDigest: fingerprint([]),
+        automaticBudgetDisposition: 'consume', logicalRoundOrdinal: 1 },
+    });
+    const sourcePayload = JSON.stringify({ findings: [
+      { ...witnessSource.findings[0], type: settings.scopeType ?? 'scope', path: scopePath,
+        summary: settings.summary ?? witnessSource.findings[0]!.summary,
+        ...(settings.details ? { details: settings.details } : {}) }, witnessSource.findings[1],
+    ] });
+    const mapped = mapGptReplyToReviewPayload(sourcePayload);
+    const [blocker, deferred] = mapped.findings;
+    if (!blocker || !deferred) throw new Error('observed source payload lost its two findings');
+    const sourceSignature = settings.dispositionSignature ?? blocker.fingerprint;
+    const run = createPackReviewRun({ ...options, prNumber, headSha: selectedHead, trustedPackRoot: process.cwd(),
+      sourceRepoRoot: settings.sourceRepoRoot ?? process.cwd(), canonicalRepository: selectedRepository, resolvedReviewer: 'gpt',
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, reviewCycleId: authority.cycle!.cycleId,
+      logicalRoundOrdinal: 2, logicalRoundCap: 2, now: new Date(terminalAt),
+    }).run;
+    const sourceProofs = [1, 2, 3].map((ordinal) => {
+      const slotId = `source-${String(ordinal).padStart(2, '0')}`;
+      const invocationId = `24280000-0000-4000-8000-${String(ordinal).padStart(12, '0')}`;
+      const identity = { selectedRepository, prNumber, headSha: selectedHead, runId: run.id, slotId, invocationId };
+      const body = formatPackGptSourceCommentEnvelope(identity, ordinal === 1 ? sourcePayload : 'NO_FINDINGS');
+      const comment: PackGptSourceGithubComment = {
+        id: 6068301800 + ordinal, body, actorLogin: 'chetwerikoff',
+        createdAt: terminalAt, updatedAt: terminalAt,
+        url: `https://github.com/${selectedRepository}/pull/${prNumber}#issuecomment-${6068301800 + ordinal}`,
+        issueUrl: `https://api.github.com/repos/${selectedRepository}/issues/${prNumber}`,
+      };
+      return { identity, comment, receipt: {
+        ...identity, commentId: comment.id, commentUrl: comment.url, actorLogin: comment.actorLogin,
+        createdAt: comment.createdAt, updatedAt: comment.updatedAt,
+        bodySha256: createHash('sha256').update(body, 'utf8').digest('hex'),
+      } };
+    });
+    const sourceTransport: PackGptSourceCommentTransport = {
+      resolveActorLogin: async () => 'chetwerikoff',
+      listComments: async () => sourceProofs.map((item) => item.comment),
+      getComment: async (id) => {
+        const match = sourceProofs.find((item) => item.comment.id === id);
+        if (!match) throw new Error('original exact source comment missing');
+        return match.comment;
+      },
+    };
+    const findings = [{ ...blocker, sourceSlotId: 'source-01' }, { ...deferred, sourceSlotId: 'source-01' }];
+    updatePackReviewRun(run.id, { reviewRound: {
+      schema: 'pack-review-gpt-round/v1', reviewer: 'gpt', tier: 'T3', accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      roundOrdinal: 2, cardinality: 3, issueNumber, boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(frozenBody),
+      sourceSlots: [1, 2, 3].map((ordinal) => {
+        const slotId = `source-${String(ordinal).padStart(2, '0')}`;
+        const invocationId = sourceProofs[ordinal - 1]!.identity.invocationId;
+        return { slotId, ordinal, lifecycle: 'terminal' as const, invocationId, attemptOrdinal: 1,
+          terminalClass: ordinal === 1 ? 'complete_findings' : 'complete_clean',
+          payload: ordinal === 1 ? { verdict: 'findings', findingCount: 2, findings: [blocker, deferred] } : { verdict: 'clean', findingCount: 0, findings: [] },
+          terminalResult: { schema: 'turn-result/v1', state: 'ok', cause: 'github_source_comment_credentialed', scope: 'none', send_count: 1, invocation_id: invocationId, source_comment_authority: 'credentialed_github',
+            source_comment_receipt: sourceProofs[ordinal - 1]!.receipt } };
+      }),
+    } }, options);
+    setPackReviewRunTerminal(run.id, 'changes_requested', { reviewVerdict: 'findings', findingCount: 2, findings }, { ...options, now: new Date('2026-10-08T20:46:00Z') });
+    authority = commitPackReviewTerminal({
+      prNumber, expectedTransitionSeq: authority.transitionSeq, status: 'changes_requested', findingCount: 2, options,
+      terminal: { schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal', runId: run.id,
+        targetSha: selectedHead, reviewVerdict: 'findings', findingCount: 2, findingsDigest: fingerprint(findings),
+        automaticBudgetDisposition: 'consume', logicalRoundOrdinal: 2 },
+    });
+    const reviewId = 6068701800;
+    updatePackReviewRun(run.id, { githubReviewId: reviewId, githubReviewEvent: 'COMMENT' }, options);
+    const review: GithubReviewSummary = {
+      id: reviewId, state: 'COMMENTED', userLogin: 'chetwerikoff',
+      submittedAt: '2026-10-08T20:45:00Z', commitId: selectedHead,
+      url: `https://github.com/${selectedRepository}/pull/${prNumber}#pullrequestreview-${reviewId}`,
+      body: `## Pack review — findings\n\nRun: \`${run.id}\`\nHead: \`${selectedHead}\`\n\n### scope finding\n${blocker.body}\n`,
+    };
+    const reviewTransport: GithubReviewTransport = {
+      resolveActorLogin: async () => 'chetwerikoff',
+      listReviews: async () => [review],
+      postReview: async () => { throw new Error('offline review POST forbidden'); },
+      dismissReview: async () => { throw new Error('offline review dismissal forbidden'); },
+    };
+    // Captured witness R2 ordinary bullet shape; earlier R1 FIXED text must not authorize R2.
+    const comment = { id: 6068301792, issue_url: `https://api.github.com/repos/${selectedRepository}/issues/${prNumber}`,
+      html_url: `https://github.com/${selectedRepository}/pull/${prNumber}#issuecomment-6068301792`,
+      user: { login: 'chetwerikoff' }, author_association: 'OWNER',
+      created_at: '2026-10-08T20:50:00Z', updated_at: '2026-10-08T20:51:48Z',
+      body: `R1 FIXED in code.\n\n## R2 dispositions — run \`${run.id}\`, head \`${selectedHead}\`\n\nTerminal REVIEW: \`${reviewId}\`\nReviewed Issue digest: \`${computeBoundIssueSnapshotHash(frozenBody)}\`\nCorrected Issue revision: \`r12\`\n\n- **FIXED — blocking scope finding \`${code}\`** (source signature \`${sourceSignature}\`). The live r12 Issue now includes \`${allowedRoot}\` in \`allowed-roots\`, under the operator amendment note.${allowedRoot === scopePath ? '' : ` This root covers \`${scopePath}\`.`} No code or behavior change was made for this disposition.\n- **DEFER — non-blocking \`field:ambiguous-complete-window-undercount\`**.`,
+    };
+    const issue = { node_id: 'fixture-issue-node', number: issueNumber, html_url: `https://github.com/${selectedRepository}/issues/${issueNumber}`,
+      repository_url: `https://api.github.com/repos/${selectedRepository}`, body: liveBody };
+    const statuses: Array<{ state: string; context: string }> = [];
+    const transports = { issue, comment, review, sourceProofs,
+      pr: { number: prNumber, url: `https://api.github.com/repos/${selectedRepository}/pulls/${prNumber}`,
+        head: { sha: selectedHead }, base: { ref: 'main' }, state: 'open', body: `Closes #${issueNumber}` } };
+    const read = vi.fn(async (request: Parameters<typeof runProcess>[0]) => {
+      const args = request.args ?? [];
+      const endpoint = args.find((arg) => String(arg).startsWith('repos/')) ?? (args.includes('user') ? 'user' : undefined);
+      const response = endpoint === `repos/${selectedRepository}/pulls/${prNumber}` ? transports.pr
+        : endpoint === `repos/${selectedRepository}/issues/${issueNumber}` ? transports.issue
+        : endpoint?.endsWith('/comments') ? [[transports.comment]]
+        : endpoint?.includes('/issues/comments/') ? transports.comment
+        : endpoint === 'user' ? { login: 'chetwerikoff' } : undefined;
+      if (!response) throw new Error(`unexpected offline transport: ${args.join(' ')}`);
+      return { ok: true, outcome: 'exit' as const, exitCode: 0, stdout: endpoint === 'user' ? 'chetwerikoff' : JSON.stringify(response), stderr: '',
+        timedOut: false, cancelled: false, signal: null, durationMs: 1 };
+    });
+    const input = { ...options, sourceRepoRoot: settings.sourceRepoRoot ?? process.cwd(), repoSlug: selectedRepository, prNumber, immediate: true,
       fixtureCurrentPrHeadSha: selectedHead, fixtureReviewCompareStatus: 'identical',
       fixturePrState: 'OPEN', fixturePrBody: `Closes #${issueNumber}`,
       fixtureIssueNumber: issueNumber, fixtureIssueTitle: '[T3] Synthetic scope-only resolution',
@@ -2986,6 +3256,94 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     });
     return f;
   }
+
+
+  it('Issue #2790: one registered non-pack target-mode corrected-scope final-cap fixture authorizes each observed REST/COMMENT or registered GraphQL call', async () => {
+    const projectId = 'synthetic-2790';
+    const targetRepository = 'chetwerikoff/synthetic-2790';
+    const f = fixture({ projectId, repositorySlug: targetRepository });
+    const selected = resolveTargetContext({ projectId, env: process.env });
+    expect(selected.repository).toBe(targetRepository);
+    expect(selected.projectId).toBe(projectId);
+    expect(targetRepository).not.toBe(repository);
+    expect(f.authority.terminal?.targetSha).toBe(reviewedHead);
+    expect(f.authority.cycle).toMatchObject({
+      state: 'at_cap_open_findings', consumedRoundOrdinals: [1, 2], frozenCap: 2,
+    });
+    const originalRun = getPackReviewRun(f.run.id, f.options);
+    expect(originalRun?.reviewRound?.sourceSlots).toHaveLength(3);
+    expect(originalRun?.githubReviewId).toBe(f.transports.review.id);
+    expect(f.transports.comment.body).toContain(
+      'Reviewed Issue digest: ' + computeBoundIssueSnapshotHash(f.frozenBody),
+    );
+    expect(f.transports.comment.body).toContain('source signature');
+    const observedArgv: string[][] = [];
+    const refusals: string[] = [];
+    const targetRunner = vi.fn(async (request: Parameters<typeof runProcess>[0]) => {
+      const args = (request.args ?? []).map(String);
+      observedArgv.push(args);
+      try {
+        authorizeTargetGhInvocation({
+          context: selected,
+          argv: args,
+          env: { ...process.env, GH_REPO: targetRepository, GH_HOST: 'github.com' },
+        });
+      } catch (error) {
+        if (error instanceof TargetGhAuthorizationError) refusals.push(error.code);
+        throw error;
+      }
+      return f.read(request);
+    });
+    const result = await reconcileStalePackReviewRuns({
+      ...f.input,
+      fixtureSameHeadIssueResolutionRunner: targetRunner,
+    });
+    const graphql = observedArgv.filter((args) => args[0] === 'api' && args[1] === 'graphql');
+    if (graphql.length > 0) {
+      // Only an ACTUALLY observed registered history call can justify this
+      // target-mode refusal. The normal r10 REST-only route never enters it.
+      const inventory = JSON.parse(readFileSync(join(process.cwd(),
+        'scripts/lib/graphql-quota-github-read-inventory.json'), 'utf8')) as {
+          rows: Array<{ id: string; query: string }>;
+        };
+      const registered = inventory.rows.filter((row) => row.id === 'issue-body-edit-evidence');
+      expect(registered).toHaveLength(1);
+      expect(graphql).toEqual([[
+        'api', 'graphql', '-f', 'query=' + registered[0]!.query,
+        '-f', 'owner=chetwerikoff', '-f', 'name=synthetic-2790',
+        '-F', 'number=' + issueNumber,
+      ]]);
+      expect(refusals).toContain('target-gh-graphql-unsupported');
+      expect(result.results).toContainEqual(expect.objectContaining({
+        settled: false, reason: 'same_head_resolution_unproven',
+      }));
+      expect(f.statuses.some((item) => item.state === 'success')).toBe(false);
+    } else {
+      expect(refusals).toEqual([]);
+      expect(result.results).toContainEqual(expect.objectContaining({
+        prNumber, headSha: reviewedHead, settled: true,
+        reason: 'final_cap_same_head_issue_resolution_settled',
+        statusPublished: true,
+      }));
+      expect(observedArgv.filter((args) =>
+        args.join(' ') === 'api repos/' + targetRepository + '/issues/' + issueNumber,
+      )).toHaveLength(2);
+      expect(observedArgv.some((args) =>
+        args.includes('repos/' + targetRepository + '/issues/' + prNumber + '/comments'),
+      )).toBe(true);
+      expect(f.statuses).toContainEqual(expect.objectContaining({
+        state: 'success', context: 'orchestrator-pack/pack-review',
+      }));
+      expect(readPackReviewAuthority(prNumber, f.options)?.terminal).toEqual(f.authority.terminal);
+      expect(readPackReviewAuthority(prNumber, f.options)?.cycle).toMatchObject({
+        state: 'closed', reviewStageComplete: true, settlementKind: 'same_head_issue_resolution',
+      });
+    }
+    expect(observedArgv.length).toBeGreaterThanOrEqual(3);
+    expect(targetRunner).toHaveBeenCalledTimes(observedArgv.length);
+    expect(observedArgv.some((args) => args.some((arg) =>
+      arg.startsWith('repos/' + repository + '/')))).toBe(false);
+  });
 
   it('Issue #2748: transient 409 on exact-head status read retries observation without another round', async () => {
     const f = fixture();
