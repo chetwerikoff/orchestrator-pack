@@ -1,7 +1,7 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
 import { fileURLToPath } from 'node:url';
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -177,6 +177,17 @@ describe('current substantive Issue floor', () => {
         copyFileSync(join(packRoot, producerDir, filename), join(targetRoot, producerDir, filename));
       }
       copyFileSync(join(packRoot, producerDir, 'emit-reverify-status.mjs'), join(targetRoot, 'scripts', 'verify-boundary.mjs'));
+      // Both trusted scripts read checkout-local input; only W's read-only
+      // input is modified, not the P/W executable/dependency closure.
+      const observedProducer = [
+        "import { readFileSync } from 'node:fs';",
+        "process.stdout.write(readFileSync('inputs/proof.json', 'utf8'));",
+        '',
+      ].join('\n');
+      writeFileSync(join(targetRoot, 'scripts', 'verify-boundary.mjs'), observedProducer);
+      writeFileSync(join(targetRoot, producerDir, 'emit-reverify-status.mjs'), observedProducer);
+      mkdirSync(join(targetRoot, 'inputs'), { recursive: true });
+      writeFileSync(join(targetRoot, 'inputs', 'proof.json'), JSON.stringify({ 'reverify-status': 'primary-only' }));
       const manifestPath = 'tests/external-output-references/capture-manifest.json';
       mkdirSync(dirname(join(targetRoot, manifestPath)), { recursive: true });
       writeFileSync(join(targetRoot, manifestPath), JSON.stringify({
@@ -190,9 +201,29 @@ describe('current substantive Issue floor', () => {
         command: 'git', args: ['rev-parse', 'HEAD'], cwd: targetRoot, inheritParentEnv: true,
       });
       expect(prHeadResult.ok).toBe(true);
-      const prHeadSha = prHeadResult.stdout.trim();
+      const primaryHeadSha = prHeadResult.stdout.trim();
       const reviewRoot = join(temp, 'review-target');
-      runGit('worktree', 'add', '--detach', reviewRoot, prHeadSha);
+      runGit('worktree', 'add', '--detach', reviewRoot, primaryHeadSha);
+      const gitW = (...args: string[]) => {
+        const result = runProcessSync({ command: 'git', args, cwd: reviewRoot, inheritParentEnv: true });
+        if (!result.ok) throw new Error('PR worktree Git failed: ' + String(result.stderr || result.error));
+      };
+      const headW = () => {
+        const result = runProcessSync({
+          command: 'git', args: ['rev-parse', 'HEAD'], cwd: reviewRoot, inheritParentEnv: true,
+        });
+        if (!result.ok) throw new Error('PR HEAD unreadable');
+        return result.stdout.trim();
+      };
+      writeFileSync(join(reviewRoot, 'inputs', 'proof.json'), JSON.stringify({ 'reverify-status': 'verified' }));
+      gitW('add', 'inputs/proof.json');
+      gitW('-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.test', 'commit', '-m', 'PR input only');
+      const prHeadSha = headW();
+      expect(prHeadSha).not.toBe(primaryHeadSha);
+      expect(readFileSync(join(targetRoot, 'inputs', 'proof.json'), 'utf8')).toContain('primary-only');
+      expect(readFileSync(join(reviewRoot, 'inputs', 'proof.json'), 'utf8')).toContain('verified');
+      expect(readFileSync(join(targetRoot, 'scripts', 'verify-boundary.mjs')))
+        .toEqual(readFileSync(join(reviewRoot, 'scripts', 'verify-boundary.mjs')));
       mkdirSync(dirname(cardPath), { recursive: true });
       const card = {
         projectId, repository, primaryRoot: targetRoot, defaultBranch: 'main',
@@ -236,12 +267,12 @@ describe('current substantive Issue floor', () => {
       expect(cli.stdout).toContain('tier-gate guard: PASS T2');
 
       const reverify = (body: string, extra: {
-        forceProducerUnreachable?: boolean; prHeadSha?: string | null;
+        forceProducerUnreachable?: boolean; prHeadSha?: string | null; prModifiedPaths?: string[];
       } = {}) =>
         runContractEvidenceReverify({
           repoRoot: packRoot, trustedBaseRoot: targetRoot, reviewTargetRoot: reviewRoot,
           manifestPath, boundSnapshotBody: body, explicitIssueNumber: 2751,
-          prHeadSha, projectId, env, ...extra,
+          prHeadSha, projectId, env, prModifiedPaths: ['inputs/proof.json'], ...extra,
         });
       const verified = reverify(targetIssue);
       expect(verified).toMatchObject({ candidateOnly: true, neverBlocks: true, runOutcome: 'rows-evaluated' });
@@ -265,16 +296,18 @@ describe('current substantive Issue floor', () => {
       writeFileSync(changedPathsFile, '', 'utf8');
       const cliEnv: NodeJS.ProcessEnv = { ...env, OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR: snapshotStore };
       delete cliEnv.OPK_PROJECT_ID;
-      const cliReverify = runProcessSync({
+      const invokeCli = (sha: string | null = prHeadSha) => runProcessSync({
         command: process.execPath,
         args: ['--experimental-strip-types', join(packRoot, 'scripts', 'invoke-contract-evidence-reverify.ts'),
           '--repo-root', packRoot, '--trusted-base-root', targetRoot, '--review-target-root', reviewRoot,
           '--manifest-path', manifestPath, '--snapshot-file', captured.snapshotPath,
           '--bound-snapshot-pr-number', '2769', '--bound-snapshot-issue-number', '2751',
-          '--project-id', projectId, '--explicit-issue', '2751', '--pr-head-sha', prHeadSha,
+          '--project-id', projectId, '--explicit-issue', '2751',
+          ...(sha === null ? [] : ['--pr-head-sha', sha]),
           '--changed-paths-file', changedPathsFile],
         env: cliEnv, inheritParentEnv: false,
       });
+      const cliReverify = invokeCli();
       expect(cliReverify.exitCode, cliReverify.stderr).toBe(0);
       const cliResult = JSON.parse(cliReverify.stdout);
       expect(cliResult).toMatchObject({ candidateOnly: true, neverBlocks: true, runOutcome: 'rows-evaluated' });
@@ -285,6 +318,72 @@ describe('current substantive Issue floor', () => {
       } else {
         expect(cliResult.rows[0]).toMatchObject({ status: 'unverified', reason: 'producer-unreachable' });
       }
+      // Distinct exact-SHA W is required for both the library and the CLI.
+      const assertUnverified = (row: ReturnType<typeof reverify>['rows'][number]) => {
+        expect(row?.status).toBe('unverified');
+        expect(row?.producerVerified).not.toBe(true);
+      };
+      assertUnverified(reverify(targetIssue, { prModifiedPaths: ['scripts/verify-boundary.mjs'] }).rows[0]);
+      writeFileSync(changedPathsFile, 'scripts/verify-boundary.mjs\n');
+      const modifiedCli = invokeCli();
+      expect(modifiedCli.exitCode, modifiedCli.stderr).toBe(0);
+      assertUnverified(JSON.parse(modifiedCli.stdout).rows[0]);
+      writeFileSync(changedPathsFile, 'inputs/proof.json\n');
+
+      gitW('checkout', '--detach', primaryHeadSha);
+      assertUnverified(reverify(targetIssue).rows[0]);
+      const wrongHeadCli = invokeCli();
+      expect(wrongHeadCli.exitCode, wrongHeadCli.stderr).toBe(0);
+      expect(JSON.parse(wrongHeadCli.stdout)).toMatchObject({ candidateOnly: true, neverBlocks: true });
+      assertUnverified(JSON.parse(wrongHeadCli.stdout).rows[0]);
+      gitW('checkout', '--detach', prHeadSha);
+
+      expect(invokeCli(null).exitCode).toBe(2);
+      expect(invokeCli('f'.repeat(40)).exitCode).toBe(2);
+      expect(reverify(targetIssue, { prHeadSha: 'invalid' }).rows[0])
+        .toMatchObject({ status: 'unverified', reason: 'producer-unreachable' });
+
+      writeFileSync(join(reviewRoot, 'scripts', 'verify-boundary.mjs'), 'process.exit(77);\n');
+      assertUnverified(reverify(targetIssue).rows[0]);
+      const dirtyCli = invokeCli();
+      expect(dirtyCli.exitCode, dirtyCli.stderr).toBe(0);
+      assertUnverified(JSON.parse(dirtyCli.stdout).rows[0]);
+      gitW('checkout', '--', 'scripts/verify-boundary.mjs');
+
+      gitW('remote', 'set-url', 'origin', 'https://github.com/example/wrong-origin.git');
+      assertUnverified(reverify(targetIssue).rows[0]);
+      const wrongOriginCli = invokeCli();
+      expect(wrongOriginCli.exitCode, wrongOriginCli.stderr).toBe(0);
+      assertUnverified(JSON.parse(wrongOriginCli.stdout).rows[0]);
+      gitW('remote', 'set-url', 'origin', 'https://github.com/' + repository + '.git');
+
+      rmSync(join(targetRoot, 'scripts', 'verify-boundary.mjs'));
+      assertUnverified(reverify(targetIssue).rows[0]);
+      const noPrimaryCli = invokeCli();
+      expect(noPrimaryCli.exitCode, noPrimaryCli.stderr).toBe(0);
+      assertUnverified(JSON.parse(noPrimaryCli.stdout).rows[0]);
+      writeFileSync(join(targetRoot, 'scripts', 'verify-boundary.mjs'), observedProducer);
+
+      const outside = join(temp, 'outside-producer.mjs');
+      writeFileSync(outside, observedProducer);
+      rmSync(join(reviewRoot, 'scripts', 'verify-boundary.mjs'));
+      symlinkSync(outside, join(reviewRoot, 'scripts', 'verify-boundary.mjs'));
+      gitW('add', 'scripts/verify-boundary.mjs');
+      gitW('-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.test', 'commit', '-m', 'unsafe link');
+      assertUnverified(reverify(targetIssue, { prHeadSha: headW() }).rows[0]);
+      gitW('checkout', '--detach', prHeadSha);
+
+      writeFileSync(join(reviewRoot, 'scripts', 'w-only.mjs'), observedProducer);
+      gitW('add', 'scripts/w-only.mjs');
+      gitW('-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.test', 'commit', '-m', 'W-only script');
+      putCard({ ...card, contractEvidenceProducer: {
+        name: 'target-status', boundaryCommand: 'node scripts/w-only.mjs',
+      } });
+      assertUnverified(reverify(makeIssue('target-status', 'node scripts/w-only.mjs'),
+        { prHeadSha: headW() }).rows[0]);
+      gitW('checkout', '--detach', prHeadSha);
+      putCard(card);
+
       putCard({ ...card, contractEvidenceProducer: undefined });
       expect(checkTierGateGuard(targetIssue, floorOptions).errors.join('\n')).toContain('not declared by the selected project card');
       expect(checkContractEvidence(targetIssue, floorOptions).errors.join('\n'))
