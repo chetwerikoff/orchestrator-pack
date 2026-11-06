@@ -7351,3 +7351,429 @@ describe('Issue #2732 r02 review fixes: repoint, dormant sibling config, redacti
     expect(existsSync(join(custom, 'ran'))).toBe(true);
   }));
 });
+
+
+// Issue #2791 r09: the only new tests live in the established B5 real-Git light fixture.
+function exactTreeFromFixturePatch(world: PushWorld, parent: string, bytes: Buffer): string {
+  const env = { ...GIT_ENV, GIT_INDEX_FILE: join(world.base, 'proof-index-' + randomUUID()) };
+  const invoke = (args: string[], input?: Buffer): string => {
+    const result = runProcessSync({ command: 'git', args, cwd: world.manager, env,
+      ...(input ? { input } : {}) });
+    expect(result.ok, 'exact patch oracle git ' + args.join(' ') + ': ' + result.stderr).toBe(true);
+    return result.stdout.trim();
+  };
+  invoke(['read-tree', parent]);
+  invoke(['-c', 'core.autocrlf=false', '-c', 'core.safecrlf=false',
+    'apply', '--cached', '--whitespace=nowarn'], bytes);
+  return invoke(['write-tree']);
+}
+
+const B5_ROUTE_SENTENCE = 'for an architect-approved local route, the owner pushes this SHA from the primary checkout per orchestrator PROMPT section 5; a manager route takes the patch class through GPT.';
+
+function assertB5SpecialRefusal(world: PushWorld, refusal: ReturnType<typeof runHook>, candidate?: string): void {
+  expect(refusal.status).not.toBe(0);
+  expect(refusal.stderr).toContain('AC2 denied');
+  expect(refusal.stderr).toContain('send the hand fix to GPT as author');
+  expect(refusal.stderr).toContain('never push the same unproved substantive commit again');
+  const lines = refusal.stderr.trimEnd().split('\n');
+  expect(lines.at(-1)).toBe(B5_ROUTE_SENTENCE);
+  expect(lines.at(-2)).toBe(candidate
+    ? 'git show --no-patch --format=fuller ' + candidate
+    : "git for-each-ref --format='%(refname) %(objectname)' refs/heads refs/remotes");
+  expect(lines.filter((line) => /^git (?:show|for-each-ref)\b/u.test(line))).toHaveLength(1);
+  expect(refusal.stderr).not.toContain('git push ');
+  expect(refusal.stderr).not.toContain('--no-verify');
+  expect(refusal.stderr).not.toContain('--force');
+  expect(remoteRef(world, 'refs/heads/unproved')).toBe('');
+}
+
+describe('manager push guard proof classes', () => {
+  describe('published patch trees', () => {
+    it('admits unchanged docs-only tip and first-parent ancestor patches with exact P/applied/C trees', withWorld({}, (world) => {
+      const other = otherClone(world);
+      git(other, 'checkout', '-q', '-b', 'gpt-docs', 'origin/trunk');
+      const docs = [
+        ['AGENTS.md', '# docs-only policy\n'],
+        ['CLAUDE.md', '# docs-only pointer\n'],
+      ] as const;
+      for (const [path, value] of docs) write(other, path, value);
+      git(other, 'add', '-N', 'AGENTS.md', 'CLAUDE.md');
+      git(other, 'diff', '--binary', '--output=patch.diff');
+      const bytes = readFileSync(join(other, 'patch.diff'));
+      git(other, 'reset', '--hard', '-q', 'HEAD');
+      for (const [path] of docs) rmSync(join(other, path));
+      const publishedTip = commit(other, 'published docs patch.diff');
+      git(other, 'push', '-q', 'origin', 'gpt-docs');
+      git(world.manager, 'fetch', '-q', 'origin');
+      expect(git(world.manager, 'rev-parse', 'origin/gpt-docs')).toBe(publishedTip);
+
+      const applyCandidate = (branch: string): void => {
+        managerOn(world, branch, world.seed);
+        const parent = git(world.manager, 'rev-parse', 'HEAD');
+        for (const [path, value] of docs) write(world.manager, path, value);
+        const candidate = commit(world.manager, 'apply unchanged docs patch');
+        expect(exactTreeFromFixturePatch(world, parent, bytes))
+          .toBe(git(world.manager, 'rev-parse', candidate + '^{tree}'));
+        const ref = 'refs/heads/' + branch;
+        expect(remoteRef(world, ref)).toBe('');
+        const result = gitTry(world.manager, 'push', 'origin', 'HEAD:' + ref);
+        expect(result.status, result.out).toBe(0);
+        expect(remoteRef(world, ref)).toBe(candidate);
+      };
+      applyCandidate('docs-tip');
+      rmSync(join(other, 'patch.diff'));
+      commit(other, 'scratch tip removes patch; only same-ref ancestor retains it');
+      git(other, 'push', '-q', 'origin', 'gpt-docs');
+      git(world.manager, 'fetch', '-q', 'origin');
+      expect(gitTry(world.manager, 'cat-file', '-e', 'origin/gpt-docs:patch.diff').status).not.toBe(0);
+      applyCandidate('docs-ancestor');
+    }));
+
+    it('admits genuine binary, executable-mode-only, and deletion patches but refuses bytes and mode drift', withWorld({}, (world) => {
+      const binary = Buffer.from([0, 1, 2, 3, 10, 255, 80, 0, 5]);
+      const modifications: Array<{ name: string; change: (root: string) => void }> = [
+        { name: 'binary', change: (root) => writeFileSync(join(root, 'README.md'), binary) },
+        { name: 'mode', change: (root) => chmodSync(join(root, 'README.md'), 0o755) },
+        { name: 'deletion', change: (root) => rmSync(join(root, 'tool.py')) },
+      ];
+      for (const item of modifications) {
+        const other = otherClone(world);
+        git(other, 'checkout', '-q', '-b', 'gpt-' + item.name, 'origin/trunk');
+        git(other, 'config', 'core.filemode', 'true');
+        item.change(other);
+        git(other, 'diff', '--binary', '--output=patch.diff');
+        const bytes = readFileSync(join(other, 'patch.diff'));
+        expect(bytes.length).toBeGreaterThan(0);
+        if (item.name === 'binary') expect(bytes.toString('utf8')).toContain('GIT binary patch');
+        if (item.name === 'mode') expect(bytes.toString('utf8')).toContain('new mode 100755');
+        if (item.name === 'deletion') expect(bytes.toString('utf8')).toContain('deleted file mode');
+        git(other, 'reset', '--hard', '-q', 'HEAD');
+        commit(other, 'published ' + item.name + ' patch');
+        git(other, 'push', '-q', 'origin', 'gpt-' + item.name);
+        git(world.manager, 'fetch', '-q', 'origin');
+
+        managerOn(world, 'candidate-' + item.name, world.seed);
+        git(world.manager, 'config', 'core.filemode', 'true');
+        const parent = git(world.manager, 'rev-parse', 'HEAD');
+        item.change(world.manager);
+        const candidate = commit(world.manager, 'ordinary ' + item.name + ' patch');
+        expect(exactTreeFromFixturePatch(world, parent, bytes))
+          .toBe(git(world.manager, 'rev-parse', candidate + '^{tree}'));
+        const ref = 'refs/heads/actual-' + item.name;
+        expect(remoteRef(world, ref)).toBe('');
+        const result = gitTry(world.manager, 'push', 'origin', 'HEAD:' + ref);
+        expect(result.status, result.out).toBe(0);
+        expect(remoteRef(world, ref)).toBe(candidate);
+      }
+      managerOn(world, 'binary-drift', world.seed);
+      writeFileSync(join(world.manager, 'README.md'), Buffer.from([0, 1, 2, 3, 10, 255, 80, 0, 6]));
+      commit(world.manager, 'one-byte binary difference');
+      const drift = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/binary-drift');
+      expect(drift.status).not.toBe(0);
+      expect(drift.out).toContain('AC2');
+      expect(remoteRef(world, 'refs/heads/binary-drift')).toBe('');
+
+      managerOn(world, 'mode-drift', world.seed);
+      chmodSync(join(world.manager, 'README.md'), 0o755);
+      chmodSync(join(world.manager, 'tool.py'), 0o755);
+      commit(world.manager, 'patch mode plus an unproved mode change');
+      const modeDrift = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/mode-drift');
+      expect(modeDrift.status).not.toBe(0);
+      expect(modeDrift.out).toContain('AC2');
+      expect(remoteRef(world, 'refs/heads/mode-drift')).toBe('');
+    }));
+
+    it('uses actual P even when author base Q differs and exposes locally forged mapped tracking as a trust limit', withWorld({}, (world) => {
+      const other = otherClone(world);
+      git(other, 'checkout', '-q', '-b', 'gpt-q', 'origin/trunk');
+      write(other, 'README.md', 'patch from historical Q\n');
+      git(other, 'diff', '--binary', '--output=patch.diff');
+      const bytes = readFileSync(join(other, 'patch.diff'));
+      git(other, 'reset', '--hard', '-q', 'HEAD');
+      commit(other, 'published authored-on-Q patch');
+      git(other, 'push', '-q', 'origin', 'gpt-q');
+      git(world.manager, 'fetch', '-q', 'origin');
+
+      managerOn(world, 'actual-p', world.seed);
+      write(world.manager, 'src/app.ts', TS_AFTER);
+      const parent = commit(world.manager, 'independently provable formatter P');
+      write(world.manager, 'README.md', 'patch from historical Q\n');
+      const candidate = commit(world.manager, 'unchanged patch on a different actual P');
+      expect(parent).not.toBe(world.seed);
+      expect(exactTreeFromFixturePatch(world, parent, bytes))
+        .toBe(git(world.manager, 'rev-parse', candidate + '^{tree}'));
+      const differentP = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/actual-p');
+      expect(differentP.status, differentP.out).toBe(0);
+      expect(remoteRef(world, 'refs/heads/actual-p')).toBe(candidate);
+
+      // This is a stated B5 local-tracking trust limit, not remote publication authentication.
+      managerOn(world, 'local-author', world.seed);
+      write(world.manager, 'README.md', 'locally forged tracked patch\n');
+      git(world.manager, 'diff', '--binary', '--output=patch.diff');
+      const forgedBytes = readFileSync(join(world.manager, 'patch.diff'));
+      git(world.manager, 'checkout', '--', 'README.md');
+      const localOnly = commit(world.manager, 'local patch not actually published');
+      git(world.manager, 'update-ref', 'refs/remotes/origin/forged', localOnly);
+      expect(remoteRef(world, 'refs/heads/forged')).toBe('');
+      managerOn(world, 'forged-candidate', world.seed);
+      write(world.manager, 'README.md', 'locally forged tracked patch\n');
+      const forgedCandidate = commit(world.manager, 'matching locally forged tracking evidence');
+      expect(exactTreeFromFixturePatch(world, world.seed, forgedBytes))
+        .toBe(git(world.manager, 'rev-parse', forgedCandidate + '^{tree}'));
+      const forged = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/forged-candidate');
+      expect(forged.status, forged.out).toBe(0);
+      expect(remoteRef(world, 'refs/heads/forged-candidate')).toBe(forgedCandidate);
+    }));
+
+    it('caps a 500-blob multi-outgoing proof, refuses atomically on exhaustion, and admits exact tip republication',
+      withWorld({}, (world) => {
+        const other = otherClone(world);
+        git(other, 'checkout', '-q', '-b', 'gpt-history', 'origin/trunk');
+        const near = [499, 498, 497];
+        const late = [149, 148, 147];
+        const special = new Map<number, { path: string; value: string; bytes: Buffer }>();
+        const indexFor = new Set<number>([...near, ...late]);
+        for (let index = 0; index < 500; index += 1) {
+          if (indexFor.has(index)) {
+            const path = 'out/patch-' + index + '.txt';
+            const value = 'exact patch ' + index + '\n';
+            write(other, path, value);
+            git(other, 'add', '-N', path);
+          } else {
+            write(other, 'README.md', 'distinct scratch patch ' + index + '\n');
+          }
+          git(other, 'diff', '--binary', '--output=patch.diff');
+          const bytes = readFileSync(join(other, 'patch.diff'));
+          if (indexFor.has(index)) {
+            const path = 'out/patch-' + index + '.txt';
+            special.set(index, { path, value: 'exact patch ' + index + '\n', bytes });
+            git(other, 'reset', '-q', 'HEAD', '--', path);
+            rmSync(join(other, path));
+          } else {
+            git(other, 'checkout', '--', 'README.md');
+          }
+          commit(other, 'published patch source ' + index);
+        }
+        git(other, 'push', '-q', 'origin', 'gpt-history');
+        git(world.manager, 'fetch', '-q', 'origin');
+        expect(git(world.manager, 'rev-list', '--first-parent', '--count', 'origin/gpt-history')).toBeTruthy();
+        const ref = 'refs/heads/many';
+
+        const construct = (branchName: string, indexes: number[]): string => {
+          managerOn(world, branchName, world.seed);
+          for (const index of indexes) {
+            const entry = special.get(index)!;
+            const parent = git(world.manager, 'rev-parse', 'HEAD');
+            write(world.manager, entry.path, entry.value);
+            const candidate = commit(world.manager, 'apply patch ' + index);
+            expect(exactTreeFromFixturePatch(world, parent, entry.bytes))
+              .toBe(git(world.manager, 'rev-parse', candidate + '^{tree}'));
+          }
+          return git(world.manager, 'rev-parse', 'HEAD');
+        };
+
+        // A scoped PATH shim counts actual child-process attempts and batch-path stdin, not projected loops.
+        const traceDir = join(world.base, 'trace-git');
+        mkdirSync(traceDir);
+        const trialsPath = join(traceDir, 'apply-trials');
+        const probesPath = join(traceDir, 'path-probes');
+        const resolvedGit = runProcessSync({ command: '/bin/sh', args: ['-c', 'command -v git'], env: GIT_ENV });
+        expect(resolvedGit.ok).toBe(true);
+        const shellLiteral = (v: string): string => "'" + v.replaceAll("'", "'\\''") + "'";
+        const realGit = shellLiteral(resolvedGit.stdout.trim());
+        const applyLog = shellLiteral(trialsPath);
+        const pathLog = shellLiteral(probesPath);
+        writeFileSync(join(traceDir, 'git'), [
+          '#!/bin/sh',
+          'case " $* " in',
+          '  *" cat-file --batch-check="*)',
+          '    tee -a ' + pathLog + ' | ' + realGit + ' "$@"',
+          '    exit $?',
+          '    ;;',
+          '  *" apply --cached "*)',
+          "    printf '1\\n' >> " + applyLog,
+          '    ;;',
+          'esac',
+          'exec ' + realGit + ' "$@"',
+          '',
+        ].join('\n'));
+        chmodSync(join(traceDir, 'git'), 0o755);
+        const tracedPush = (target: string): { status: number; out: string; trials: number; probes: number } => {
+          writeFileSync(trialsPath, '');
+          writeFileSync(probesPath, '');
+          const previous = toolPath;
+          toolPath = traceDir;
+          let result: ReturnType<typeof gitTry>;
+          try {
+            result = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/' + target);
+          } finally {
+            toolPath = previous;
+          }
+          const count = (path: string): number => readFileSync(path, 'utf8').split('\n').filter(Boolean).length;
+          return { ...result, trials: count(trialsPath), probes: count(probesPath) };
+        };
+
+        const nearHead = construct('near-source-candidates', near);
+        const admitted = tracedPush('near-proven');
+        expect(admitted.status, admitted.out).toBe(0);
+        expect(remoteRef(world, 'refs/heads/near-proven')).toBe(nearHead);
+        expect(admitted.probes).toBeGreaterThanOrEqual(500);
+        expect(admitted.probes).toBeLessThanOrEqual(2_048);
+        expect(admitted.trials).toBeGreaterThanOrEqual(3);
+        expect(admitted.trials).toBeLessThanOrEqual(1_024);
+
+        construct('late-source-candidates', late);
+        expect(remoteRef(world, ref)).toBe('');
+        const refused = tracedPush('many');
+        expect(refused.status).not.toBe(0);
+        expect(refused.out).toContain('AC2');
+        expect(refused.out).toContain('exact-patch proof work exhausted');
+        expect(refused.out).toContain('may still exist within the 500-commit source window');
+        expect(refused.out).toMatch(/source probes \d+\/2048; apply trials \d+\/1024; elapsed \d+\/20000 ms/u);
+        expect(refused.probes).toBeLessThanOrEqual(2_048);
+        expect(refused.trials).toBeLessThanOrEqual(1_024);
+        expect(remoteRef(world, ref)).toBe('');
+
+        // Re-publish the identical byte blobs at eligible mapped tips; no owner bypass or truncated patch.
+        for (const index of late) {
+          const patch = special.get(index)!;
+          const publisher = otherClone(world);
+          const name = 'republished-' + index;
+          git(publisher, 'checkout', '-q', '-b', name, 'origin/trunk');
+          writeFileSync(join(publisher, 'patch.diff'), patch.bytes);
+          commit(publisher, 'republish unchanged late patch ' + index);
+          git(publisher, 'push', '-q', 'origin', name);
+        }
+        git(world.manager, 'fetch', '-q', 'origin');
+        const recoveredHead = construct('recovered-late-candidates', late);
+        const recovered = tracedPush('many');
+        expect(recovered.status, recovered.out).toBe(0);
+        expect(recovered.probes).toBeLessThanOrEqual(2_048);
+        expect(recovered.trials).toBeLessThanOrEqual(1_024);
+        expect(remoteRef(world, ref)).toBe(recoveredHead);
+      }), 180_000);
+  });
+
+  describe('actionable refusals', () => {
+    it('preserves original AC2 next steps before exactly one full 40-hex read-only command and final sentence',
+      withWorld({}, (world) => {
+        write(world.manager, 'README.md', 'unproved manager edit\n');
+        const head = commit(world.manager, 'unproved');
+        const refusal = runHook(world, world.bare, 'HEAD ' + head + ' refs/heads/unproved ' + ZERO);
+        expect(refusal.stderr).toContain('patch.diff proof:');
+        assertB5SpecialRefusal(world, refusal, head);
+      }));
+
+    it('keeps placement-seed and non-commit AC2 diagnostics separate with the exact candidate object OID',
+      withWorld({ install: 'unseeded' }, (world) => {
+        write(world.manager, 'src/app.ts', TS_AFTER);
+        const candidate = commit(world.manager, 'otherwise provable formatter');
+        const placement = runHook(world, world.bare, 'HEAD ' + candidate + ' refs/heads/unproved ' + ZERO);
+        expect(placement.stderr).toContain('known-clean manager placement');
+        assertB5SpecialRefusal(world, placement, candidate);
+
+        git(world.manager, 'tag', '-a', 'annotated', '-m', 'a tag');
+        const tag = git(world.manager, 'rev-parse', 'refs/tags/annotated');
+        const tagRefusal = runHook(world, world.bare, 'refs/tags/annotated ' + tag + ' refs/tags/unproved ' + ZERO);
+        expect(tagRefusal.stderr).toContain('not a plain commit');
+        assertB5SpecialRefusal(world, tagRefusal, tag);
+      }));
+
+    it('does not echo invalid, zero, or unresolved objects as an inspected candidate',
+      withWorld({}, (world) => {
+        for (const oid of ['not-an-oid', 'f'.repeat(40)]) {
+          const refusal = runHook(world, world.bare, 'HEAD ' + oid + ' refs/heads/unproved ' + ZERO);
+          expect(refusal.stderr).toContain('unavailable candidate-OID evidence');
+          expect(refusal.stderr).not.toContain('git show');
+          expect(refusal.stderr).not.toContain(oid);
+          assertB5SpecialRefusal(world, refusal);
+        }
+      }));
+
+    it('keeps AC3 selected/new-default and missing-default refusal ahead of AC2 without route text',
+      withWorld({}, (world) => {
+        write(world.manager, 'README.md', 'unproved manager edit\n');
+        const candidate = commit(world.manager, 'unproved');
+        const existing = runHook(world, world.bare,
+          'HEAD ' + candidate + ' refs/heads/trunk ' + remoteRef(world, 'refs/heads/trunk'));
+        expect(existing.stderr).toContain('AC3');
+        expect(existing.stderr).toContain('nondefault branch and PR');
+        expect(existing.stderr).not.toContain(B5_ROUTE_SENTENCE);
+        expect(existing.stderr).not.toContain('git show --no-patch');
+
+        git(world.bare, 'update-ref', '-d', 'refs/heads/trunk');
+        const createdDefault = runHook(world, world.bare, 'HEAD ' + candidate + ' refs/heads/trunk ' + ZERO);
+        expect(createdDefault.stderr).toContain('AC3');
+        expect(createdDefault.stderr).not.toContain(B5_ROUTE_SENTENCE);
+        expect(remoteRef(world, 'refs/heads/trunk')).toBe('');
+
+        git(world.manager, 'config', '--worktree', '--unset', 'opkManagerPushGuard.defaultBranch');
+        const missing = runHook(world, world.bare, 'HEAD ' + candidate + ' refs/heads/unproved ' + ZERO);
+        expect(missing.stderr).toContain('AC3');
+        expect(missing.stderr).toContain('reinstall the manager push guard');
+        expect(missing.stderr).not.toContain('AC2');
+        expect(missing.stderr).not.toContain(B5_ROUTE_SENTENCE);
+        expect(missing.stderr).not.toContain('PROMPT section 5');
+      }));
+
+    it('keeps existing AC4 safe-refspec freshness prose without the special AC2 sentence',
+      withWorld({}, (world) => {
+        const candidate = commit(world.manager, 'empty legal commit', ['--allow-empty']);
+        const stale = runHook(world, world.bare,
+          'HEAD ' + candidate + ' refs/heads/trunk ' + 'f'.repeat(40));
+        // Selected default takes precedence even for stale advertised tuples.
+        expect(stale.stderr).toContain('AC3');
+        expect(stale.stderr).not.toContain(B5_ROUTE_SENTENCE);
+        const branch = runHook(world, world.bare,
+          'HEAD ' + candidate + ' refs/heads/stale ' + 'f'.repeat(40));
+        expect(branch.stderr).toContain('AC4');
+        expect(branch.stderr).toContain('fetch');
+        expect(branch.stderr).not.toContain(B5_ROUTE_SENTENCE);
+        expect(branch.stderr).not.toContain('git show --no-patch');
+      }));
+
+    const sha256Git = (() => {
+      const base = mkdtempSync(join(tmpdir(), 'opk-b5-sha256-probe-'));
+      const version = gitTry(base, '--version').out.trim();
+      try {
+        const root = join(base, 'repo');
+        if (gitTry(base, 'init', '-q', '-b', 'trunk', '--object-format=sha256', root).status !== 0) {
+          return { usable: false, version };
+        }
+        write(root, 'probe', 'sha256\n');
+        const oid = commit(root, 'sha256 object capability');
+        return { usable: oid.length === 64, version };
+      } catch {
+        return { usable: false, version };
+      } finally {
+        rmSync(base, { recursive: true, force: true });
+      }
+    })();
+    it.skipIf(!sha256Git.usable)('prints the complete 64-hex SHA-256 candidate; unsupported is SKIPPED (' + sha256Git.version + ')', () => {
+      const base = mkdtempSync(join(tmpdir(), 'opk-b5-sha256-'));
+      try {
+        const bare = join(base, 'remote.git');
+        const primary = join(base, 'primary');
+        const manager = join(base, 'manager');
+        git(base, 'init', '-q', '--bare', '-b', 'trunk', '--object-format=sha256', bare);
+        git(base, 'init', '-q', '-b', 'trunk', '--object-format=sha256', primary);
+        write(primary, 'README.md', 'initial\n');
+        git(primary, 'remote', 'add', 'origin', bare);
+        commit(primary, 'SHA-256 initial');
+        git(primary, 'push', '-q', 'origin', 'trunk');
+        git(primary, 'fetch', '-q', 'origin');
+        git(primary, 'worktree', 'add', '-q', '--no-track', '-b', 'manager', manager, 'origin/trunk');
+        const world: PushWorld = { base, bare, primary, manager, seed: git(primary, 'rev-parse', 'origin/trunk') };
+        expect(installGuard(world, world.seed).ok).toBe(true);
+        write(manager, 'README.md', 'unproved\n');
+        const candidate = commit(manager, 'SHA-256 unproved manager edit');
+        expect(candidate).toMatch(/^[0-9a-f]{64}$/u);
+        const refusal = runHook(world, bare,
+          'HEAD ' + candidate + ' refs/heads/unproved ' + '0'.repeat(64));
+        assertB5SpecialRefusal(world, refusal, candidate);
+      } finally {
+        rmSync(base, { recursive: true, force: true });
+      }
+    });
+  });
+});
