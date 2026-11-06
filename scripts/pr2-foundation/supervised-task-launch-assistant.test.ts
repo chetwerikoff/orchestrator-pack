@@ -13,7 +13,7 @@ import { lastFleetParkedLine, ownPaneOutcome } from '../fleet/fleet-sweep.ts';
 import type { OrcaJsonResponse } from '../orca-runtime/native.ts';
 import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
 import { readTerminalGoneDispatch, runSupervisedWorkerStart, type SupervisedWorkerStartResult } from './supervised-worker-start.ts';
-import { installManagerPushGuard, restoreManagerPushGuardForClaude } from './manager-push-guard.ts';
+import { installManagerPushGuard, restoreManagerPushGuardForClaude, runPrePush } from './manager-push-guard.ts';
 import {
   currentWorkerAssignment, publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath,
   type DelegatedIntegrationMarker, type WorkerAssignment,
@@ -7389,6 +7389,118 @@ function assertB5SpecialRefusal(world: PushWorld, refusal: ReturnType<typeof run
 
 describe('manager push guard proof classes', () => {
   describe('published patch trees', () => {
+    it('bounds many mapped tracking refs inside source discovery and the same proof-work deadline',
+      withWorld({}, async (world) => {
+        const publisher = otherClone(world);
+        git(publisher, 'checkout', '-q', '-b', 'gpt-mapped', 'origin/trunk');
+        write(publisher, 'README.md', 'unchanged many-tracking-ref proof\n');
+        git(publisher, 'diff', '--binary', '--output=patch.diff');
+        const patchBytes = readFileSync(join(publisher, 'patch.diff'));
+        git(publisher, 'checkout', '--', 'README.md');
+        commit(publisher, 'publish eligible exact patch');
+        git(publisher, 'push', '-q', 'origin', 'gpt-mapped');
+        git(world.manager, 'fetch', '-q', 'origin');
+
+        // All of these are real local tracking refs mapped by origin's positive
+        // refspec. Shared tip OIDs must not cause one config subprocess per ref.
+        const updates = Array.from({ length: 400 }, (_, index) =>
+          'update refs/remotes/origin/mapped-' + String(index).padStart(4, '0') + ' ' + world.seed + '\n').join('');
+        const wrote = runProcessSync({ command: 'git', args: ['update-ref', '--stdin'],
+          cwd: world.manager, env: GIT_ENV, input: updates });
+        expect(wrote.ok, wrote.stderr).toBe(true);
+        expect(git(world.manager, 'for-each-ref', '--format=%(refname)', 'refs/remotes/origin')
+          .split('\n').length).toBeGreaterThan(400);
+
+        managerOn(world, 'mapped-candidate', world.seed);
+        const parent = git(world.manager, 'rev-parse', 'HEAD');
+        write(world.manager, 'README.md', 'unchanged many-tracking-ref proof\n');
+        const candidate = commit(world.manager, 'exact published patch');
+        expect(exactTreeFromFixturePatch(world, parent, patchBytes))
+          .toBe(git(world.manager, 'rev-parse', candidate + '^{tree}'));
+        const ref = 'refs/heads/mapped-budget';
+        const tuple = Buffer.from('HEAD ' + candidate + ' ' + ref + ' ' + ZERO + '\n');
+
+        // Invoke the actual guard against disposable Git, intercepting only one
+        // source-discovery child to deterministically simulate a timeout. This
+        // avoids a flaky 20-second wall-clock pass/fail threshold.
+        const direct = async (timeoutDuringTracking: boolean): Promise<{
+          status: number; stderr: string; children: Array<{
+            args: readonly string[]; timeoutMs: number; input?: string | Uint8Array;
+          }>;
+        }> => {
+          const realSync = subprocess.runProcessSync;
+          const children: Array<{ args: readonly string[]; timeoutMs: number; input?: string | Uint8Array }> = [];
+          let stderr = '';
+          const childSpy = vi.spyOn(subprocess, 'runProcessSync').mockImplementation((options) => {
+            const args = options.args ?? [];
+            if (options.command === 'git' && options.timeoutMs !== undefined) {
+              children.push({ args: [...args], timeoutMs: options.timeoutMs,
+                ...(options.input === undefined ? {} : { input: options.input }) });
+            }
+            if (timeoutDuringTracking && options.command === 'git' && args[0] === 'for-each-ref'
+              && args.some((arg) => arg.startsWith('refs/remotes/origin'))) {
+              return { ok: false, outcome: 'timeout', exitCode: null, signal: null, stdout: '', stderr: '',
+                timedOut: true, cancelled: false };
+            }
+            return realSync(options);
+          });
+          const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+            stderr += String(chunk);
+            return true;
+          });
+          let status: number;
+          try {
+            status = await runPrePush(['origin', world.bare], tuple, world.manager);
+          } finally {
+            stderrSpy.mockRestore();
+            childSpy.mockRestore();
+          }
+          return { status, stderr, children };
+        };
+
+        const timedOut = await direct(true);
+        expect(timedOut.status).toBe(1);
+        expect(timedOut.stderr).toContain('AC2 denied ' + ref);
+        expect(timedOut.stderr).toContain('exact-patch proof work exhausted');
+        expect(timedOut.stderr).toContain('eligible tracking ref enumeration elapsed/child timeout');
+        expect(timedOut.stderr).toMatch(/source probes 0\/2048; apply trials 0\/1024; elapsed \d+\/20000 ms/u);
+        expect(timedOut.stderr).toContain('may still exist within the 500-commit source window');
+        expect(timedOut.stderr.trimEnd().split('\n').slice(-2)).toEqual([
+          'git show --no-patch --format=fuller ' + candidate, B5_ROUTE_SENTENCE,
+        ]);
+        expect(timedOut.children.some((child) => child.args[0] === 'for-each-ref'
+          && child.timeoutMs > 0 && child.timeoutMs <= 20_000)).toBe(true);
+        expect(remoteRef(world, ref)).toBe('');
+
+        const proven = await direct(false);
+        expect(proven.status, proven.stderr).toBe(0);
+        const configReads = proven.children.filter((child) =>
+          child.args[0] === 'config' && child.args.includes('remote.origin.fetch'));
+        expect(configReads).toHaveLength(1);
+        const refScans = proven.children.filter((child) => child.args[0] === 'for-each-ref'
+          && child.args.some((arg) => arg.startsWith('refs/remotes/origin')));
+        expect(refScans).toHaveLength(1);
+        const batched = proven.children.filter((child) => child.args.includes('--batch-check'));
+        expect(batched).toHaveLength(1);
+        const pathProbes = String(batched[0]!.input).trim().split('\n').length;
+        expect(pathProbes).toBeLessThan(400); // 400 refs share one real commit ID.
+        expect(pathProbes).toBeLessThanOrEqual(2_048);
+        const firstApply = proven.children.findIndex((child) =>
+          child.args.includes('apply') && child.args.includes('--cached'));
+        expect(firstApply).toBeGreaterThan(0);
+        expect(proven.children.findIndex((child) => child.args[0] === 'for-each-ref'))
+          .toBeLessThan(firstApply);
+        for (const child of proven.children) {
+          expect(child.timeoutMs).toBeGreaterThan(0);
+          expect(child.timeoutMs).toBeLessThanOrEqual(20_000);
+        }
+        expect(proven.children.at(-1)!.timeoutMs).toBeLessThanOrEqual(proven.children[0]!.timeoutMs);
+        expect(remoteRef(world, ref)).toBe('');
+        const pushed = gitTry(world.manager, 'push', 'origin', 'HEAD:' + ref);
+        expect(pushed.status, pushed.out).toBe(0);
+        expect(remoteRef(world, ref)).toBe(candidate);
+      }), 60_000);
+
     it('admits unchanged docs-only tip and first-parent ancestor patches with exact P/applied/C trees', withWorld({}, (world) => {
       const other = otherClone(world);
       git(other, 'checkout', '-q', '-b', 'gpt-docs', 'origin/trunk');
