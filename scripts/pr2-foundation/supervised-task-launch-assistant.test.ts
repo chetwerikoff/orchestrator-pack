@@ -25,6 +25,7 @@ import {
   readManagerBriefTemplateFromDisk,
   parseLaunchAssistantCli,
   prepareWorktreeWithOrca,
+  observeFreshManagerBaseWithOrca,
   resolveExecutorProfile,
   resolveLiveExecutorProfile,
   finalizeOpenCodeExecutorProfile,
@@ -601,6 +602,7 @@ function deps(input: {
       input.onManagerCreate?.(brief);
       return input.managerCreate ?? ({ status: 'ok', value: { taskId: 'task-created', status: 'ready' } });
     },
+    observeFreshManagerBase: async () => ({ status: 'ok', value: null }),
     observeDispatch: async () => { input.onDispatch?.(); return { status: 'ok', value: dispatch.shift() ?? { kind: 'absent' } }; },
     readCurrentAssignment: () => input.currentAssignment ?? null,
     ...(input.proveTerminalGone ? { proveTerminalGone: input.proveTerminalGone } : {}),
@@ -3200,6 +3202,83 @@ The words Firefighter universal appear here only as prose.`;
     expect(started.outcome).toBe('ready');
     expect(starts).toBe(1);
   });
+
+  it('#2788 rejects a live Issue holder before fresh manager Task/worktree/terminal effects', async () => {
+    const effects: string[] = [];
+    const current = { ...readyStart('task-old').assignment!, issueNumber: 1479, role: 'orchestrator' } as unknown as WorkerAssignment;
+    const input = { ...launchInput('manager'), taskId: undefined, worktreeSelector: undefined,
+      managerBrief: 'new manager', worktreeName: 'fresh-manager', baseBranch: 'origin/main' };
+    const result = await runSupervisedTaskLaunchAssistant(input, deps({ currentAssignment: current,
+      onManagerCreate: () => { effects.push('task-create'); },
+      onWorktree: () => { effects.push('worktree-create'); },
+      adapter: runtimeAdapter({ onSpawn: () => { effects.push('terminal-create'); } }),
+      onSupervised: () => { effects.push('worker-start'); },
+    }));
+    expect(result).toMatchObject({ outcome: 'continue', observedCause: 'fresh_manager_issue_assignment_present' });
+    expect(effects).toEqual([]);
+  });
+
+  it.each(['missing-pr', 'ambiguous-pr', 'wrong-base', 'changed-before-task', 'changed-before-spawn',
+    'holder-during-read', 'holder-before-spawn', 'valid'] as const)(
+    '#2788 observes the current holder and exact PR before fresh manager effects: %s', async (change) => {
+      const effects: string[] = [];
+      const input = { ...launchInput('manager'), taskId: undefined, worktreeSelector: undefined,
+        managerBrief: 'new manager', worktreeName: 'fresh-manager', baseBranch: 'origin/recovery' };
+      const holder = { ...readyStart('task-old').assignment!, issueNumber: 1479, role: 'orchestrator' } as unknown as WorkerAssignment;
+      let current: WorkerAssignment | null = null;
+      let observations = 0;
+      let views = 0;
+      const native: Parameters<typeof observeFreshManagerBaseWithOrca>[2] = async (args) => {
+        if (args[0] === 'gh' && args[2] === 'list') {
+          return { ok: true, stdout: JSON.stringify(change === 'missing-pr' ? []
+            : change === 'ambiguous-pr' ? [{ number: 1 }, { number: 2 }] : [{ number: 1 }]), stderr: '' };
+        }
+        const head = change === 'changed-before-spawn' && observations > 1 ? '2'.repeat(40) : '1'.repeat(40);
+        if (args[0] === 'gh') {
+          views += 1;
+          return { ok: true, stdout: JSON.stringify({ number: Number(args[3]), state: 'OPEN',
+            body: 'Closes #1479', baseRefName: change === 'wrong-base' ? 'other' : 'main',
+            headRefName: 'recovery', headRefOid: change === 'changed-before-task' && views > 1 ? '2'.repeat(40) : head,
+            headRepository: { nameWithOwner: input.repository },
+          }), stderr: '' };
+        }
+        if (args[1] === 'fetch') return { ok: true, stdout: '', stderr: '' };
+        if (args[1] === 'rev-parse') return { ok: true, stdout: head, stderr: '' };
+        throw new Error('unexpected admission command: ' + args.join(' '));
+      };
+      const result = await runSupervisedTaskLaunchAssistant(input, {
+        ...deps({ onManagerCreate: () => { effects.push('task-create'); },
+          onWorktree: () => {
+            effects.push('worktree-create');
+            if (change === 'holder-before-spawn') current = holder;
+          },
+          adapter: runtimeAdapter({ onSpawn: () => { effects.push('terminal-create'); } }),
+          onSupervised: () => { effects.push('worker-start'); },
+        }),
+        readCurrentAssignment: () => current,
+        observeFreshManagerBase: async () => {
+          observations += 1;
+          const base = await observeFreshManagerBaseWithOrca({ repository: input.repository, taskId: '',
+            issueNumber: 1479, managerRefresh: true, defaultBranch: 'main', baseBranch: input.baseBranch,
+          }, '/tmp/selected-primary', native);
+          if (change === 'holder-during-read') current = holder;
+          return base;
+        },
+      });
+      if (change === 'valid') {
+        expect(result.outcome).toBe('ready');
+        expect(observations).toBe(2);
+        expect(effects).toEqual(['task-create', 'worktree-create', 'terminal-create', 'worker-start']);
+      } else {
+        const cause = change.startsWith('holder-') ? 'fresh_manager_issue_assignment_present'
+          : change.startsWith('changed-') ? 'fresh_pr_head_changed'
+            : change === 'wrong-base' ? 'fresh_pr_head_mismatch' : 'fresh_pr_link_ambiguous';
+        expect(result).toMatchObject({ outcome: 'continue', observedCause: cause });
+        expect(effects).toEqual(change === 'changed-before-spawn' || change === 'holder-before-spawn'
+          ? ['task-create', 'worktree-create'] : []);
+      }
+    },
+  );
 
   it('#2788 coordinator supplies an independent fresh worker Task and worktree', async () => {
     let spawns = 0; let starts = 0;

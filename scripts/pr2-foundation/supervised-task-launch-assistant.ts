@@ -289,6 +289,8 @@ export interface LaunchDependencies {
   readonly readManagerBriefTemplate: (name: ManagerBriefTemplateName) => Promise<EdgeResult<string>> | EdgeResult<string>;
   readonly readIssueTitle: (repository: string, issueNumber: number) => Promise<EdgeResult<string>>;
   readonly createManagerTask: (runId: string, brief: string) => Promise<EdgeResult<{ readonly taskId: string; readonly status: string }>>;
+  /** Existing selected-base/PR-head observation, before Task creation and again before spawn. */
+  readonly observeFreshManagerBase?: () => Promise<EdgeResult<FreshPrHead | null>>;
   readonly observeDispatch: (taskId: string) => Promise<EdgeResult<DispatchObservation>>;
   readonly readCurrentAssignment: (issueNumber: number) => WorkerAssignment | null;
   /** Read-only Orca worktree-show; never infer identity from --worktree text alone. */
@@ -925,6 +927,25 @@ export async function runSupervisedTaskLaunchAssistant(
   }
 
   let taskId = input.taskId?.trim() ?? '';
+  let freshManagerBase: FreshPrHead | null | undefined;
+  const holderRefusal = (current: WorkerAssignment): Extract<EdgeResult<never>, { status: 'continue' }> => ({
+    status: 'continue', cause: 'fresh_manager_issue_assignment_present', actor: 'orchestrator',
+    evidence: { taskId: current.taskId, dispatchId: current.bindingKey },
+    nextAction: { kind: 'reconcile_dispatch',
+      note: 'inspect the exact current Issue holder through dispatch-show / worker-show; do not create another manager Task, worktree or terminal while that assignment remains current. Preserve its checkout; use only the separately proven same-worktree restoration route or wait for lawful retirement before a separately authorized fresh start' },
+  });
+  const observeFreshManagerAdmission = async (): Promise<EdgeResult<FreshPrHead | null>> => {
+    const current = input.issueNumber ? deps.readCurrentAssignment(input.issueNumber) : null;
+    if (current) return holderRefusal(current);
+    if (!deps.observeFreshManagerBase) return {
+      status: 'continue', cause: 'fresh_manager_base_unobserved', actor: 'operator',
+      nextAction: { kind: 'reconcile_worktree_setup', note: 'restore the selected-default / exact PR-head observation before creating a fresh manager Task' },
+    };
+    const base = await deps.observeFreshManagerBase();
+    if (base.status !== 'ok') return base;
+    const after = input.issueNumber ? deps.readCurrentAssignment(input.issueNumber) : null;
+    return after ? holderRefusal(after) : base;
+  };
   if (input.workClass === 'manager') {
     const runId = input.runId?.trim() ?? '';
     if (!runId) return continued(input, 'manager_run', {
@@ -968,6 +989,9 @@ export async function runSupervisedTaskLaunchAssistant(
       if (preparedBrief.status !== 'ok') {
         return continued(input, 'manager_task', preparedBrief, resources, startedAtMs, timings, deps.now);
       }
+      const admission = await observeFreshManagerAdmission();
+      if (admission.status !== 'ok') return continued(input, 'manager_task', admission, resources, startedAtMs, timings, deps.now);
+      freshManagerBase = admission.value;
       const created = await checkpoint('manager_task', timings, deps.now, () => deps.createManagerTask(runId, preparedBrief.value));
       if (created.status !== 'ok') return continued(input, 'manager_task', created, resources, startedAtMs, timings, deps.now);
       taskId = created.value.taskId.trim();
@@ -992,6 +1016,8 @@ export async function runSupervisedTaskLaunchAssistant(
   const early = await checkpoint('dispatch_admission_early', timings, deps.now, () => deps.observeDispatch(taskId));
   if (early.status !== 'ok') return continued(input, 'dispatch_admission_early', early, resources, startedAtMs, timings, deps.now);
   const earlyCurrent = input.issueNumber ? deps.readCurrentAssignment(input.issueNumber) : null;
+  if (freshManagerBase !== undefined && earlyCurrent) return continued(input, 'dispatch_admission_early',
+    holderRefusal(earlyCurrent), resources, startedAtMs, timings, deps.now);
   const earlyCandidate = sameTaskTerminalDispatch(early.value, earlyCurrent, taskId, deps.adapter.id)
     && earlyCurrent?.role === (input.workClass === 'manager' ? 'orchestrator' : 'worker');
   const earlyGone = earlyCandidate && earlyCurrent && deps.proveTerminalGone
@@ -1262,6 +1288,18 @@ export async function runSupervisedTaskLaunchAssistant(
     const restored = await deps.restoreClaudeManagerGuard(prepared.value.path);
     if (restored.status !== 'ok') return continued(input, 'dispatch_admission_final', restored,
       resources, startedAtMs, timings, deps.now);
+  }
+
+  if (freshManagerBase !== undefined) {
+    const admission = await observeFreshManagerAdmission();
+    if (admission.status !== 'ok') return continued(input, 'dispatch_admission_final', admission, resources, startedAtMs, timings, deps.now);
+    if (admission.value?.prNumber !== freshManagerBase?.prNumber
+      || admission.value?.branch !== freshManagerBase?.branch || admission.value?.head !== freshManagerBase?.head) {
+      return continued(input, 'dispatch_admission_final', {
+        cause: 'fresh_pr_head_changed', actor: 'orchestrator', evidence: {},
+        nextAction: { kind: 'reconcile_worktree_setup', note: 'reconcile the changed exact Issue-closing PR/head; preserve the created Task/worktree and do not spawn a terminal on the stale placement' },
+      }, resources, startedAtMs, timings, deps.now);
+    }
   }
 
   let terminal: RuntimeWorker | undefined;
@@ -2018,6 +2056,36 @@ interface FreshPrHead {
   readonly head: string;
 }
 
+function freshWorktreeRemoteBranch(request: WorktreePreparationRequest): EdgeResult<string> {
+  const selectedDefaultBranch = managerDefaultBranch(request);
+  const remotePrBranch = request.baseBranch?.startsWith('origin/')
+    && request.baseBranch !== `origin/${selectedDefaultBranch}`
+    ? request.baseBranch.slice('origin/'.length) : '';
+  if (request.managerRefresh && (!selectedDefaultBranch || (!remotePrBranch
+    && request.baseBranch !== `origin/${selectedDefaultBranch}`))) {
+    return worktreeContinue('manager_worktree_selected_base_required',
+      { requestedBaseBranch: request.baseBranch ?? 'missing', defaultBranch: selectedDefaultBranch || 'missing' },
+      'fresh manager worktrees require the selected default branch or the exact verified open Issue-closing PR remote branch');
+  }
+  if (remotePrBranch && (!request.issueNumber || request.providerTopLevel
+    || !selectedDefaultBranch || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(remotePrBranch)
+    || remotePrBranch.includes('..') || remotePrBranch.includes('//')
+    || remotePrBranch.endsWith('/') || remotePrBranch.endsWith('.lock'))) {
+    return worktreeContinue('fresh_pr_remote_branch_invalid', {},
+      'select a valid remote branch of the exact unique open same-repository Issue-closing PR');
+  }
+  return { status: 'ok', value: remotePrBranch };
+}
+
+export async function observeFreshManagerBaseWithOrca(
+  request: WorktreePreparationRequest, registeredRoot: string, execute: ChildExecutor,
+): Promise<EdgeResult<FreshPrHead | null>> {
+  const branch = freshWorktreeRemoteBranch(request);
+  if (branch.status !== 'ok') return branch;
+  return branch.value ? resolveFreshPrRemoteHead(request, branch.value, registeredRoot, execute)
+    : { status: 'ok', value: null };
+}
+
 function matchesFreshPrHead(
   value: unknown,
   request: WorktreePreparationRequest,
@@ -2431,24 +2499,9 @@ export async function prepareWorktreeWithOrca(
   }
 
   const selectedDefaultBranch = managerDefaultBranch(request);
-  const remotePrBranch = request.baseBranch?.startsWith('origin/')
-    && request.baseBranch !== `origin/${selectedDefaultBranch}`
-    ? request.baseBranch.slice('origin/'.length) : '';
-  if (request.managerRefresh && (!selectedDefaultBranch || (!remotePrBranch
-    && request.baseBranch !== `origin/${selectedDefaultBranch}`))) {
-    return worktreeContinue(
-      'manager_worktree_selected_base_required',
-      { requestedBaseBranch: request.baseBranch ?? 'missing', defaultBranch: selectedDefaultBranch || 'missing' },
-      'fresh manager worktrees require the selected default branch or the exact verified open Issue-closing PR remote branch',
-    );
-  }
-  if (remotePrBranch && (!request.issueNumber || request.providerTopLevel
-    || !selectedDefaultBranch || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(remotePrBranch)
-    || remotePrBranch.includes('..') || remotePrBranch.includes('//')
-    || remotePrBranch.endsWith('/') || remotePrBranch.endsWith('.lock'))) {
-    return worktreeContinue('fresh_pr_remote_branch_invalid', {},
-      'select a valid remote branch of the exact unique open same-repository Issue-closing PR');
-  }
+  const branch = freshWorktreeRemoteBranch(request);
+  if (branch.status !== 'ok') return branch;
+  const remotePrBranch = branch.value;
 
   const repository = request.repository.trim().toLowerCase();
   const listed = resultRecord(envelope(await execute([
@@ -2794,6 +2847,13 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
     observeRestoreQuiescence: (path) => observeQuiescentRestoreCensus(adapter, path),
     proveTerminalGone: (assignment) => readTerminalGoneDispatch(assignment,
       (args) => child(['orca', ...args], cwd, env)),
+    observeFreshManagerBase: () => observeFreshManagerBaseWithOrca({
+      repository: input.repository, taskId: input.taskId ?? '', managerRefresh: true,
+      ...(input.issueNumber ? { issueNumber: input.issueNumber } : {}),
+      ...(input.baseBranch ? { baseBranch: input.baseBranch } : {}),
+      defaultBranch: input.defaultBranch ?? target.defaultBranch,
+    }, target.primaryRoot,
+    (args, timeoutMs, envOverride, childCwd) => child(args, childCwd ?? target.primaryRoot, envOverride ?? env, timeoutMs)),
     observeDispatch: async (taskId) => dispatchEdge(envelope(await child([
       'orca', 'orchestration', 'dispatch-show', '--task', taskId, '--full', '--json',
     ], cwd, env))),
