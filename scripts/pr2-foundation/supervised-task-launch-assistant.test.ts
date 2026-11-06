@@ -671,6 +671,77 @@ describe('Issue #2788 explicit selected-project native command', () => {
     expect(result).toMatchObject({ outcome: 'continue', observedCause: 'existing_terminal_project_unverified' });
     expect(start).not.toHaveBeenCalled();
   });
+
+  it.each(['unchanged', 'model', 'baseline', 'missing-state', 'missing-agent', 'two-agents', 'late-command-drift'] as const)(
+    'reproduces the first OpenCode terminal across fresh profile nonces: %s', async (change) => {
+      let nativeCommand = '';
+      let baselinePrompt = 'original baseline';
+      let selectedModel = 'fixture-opencode-model';
+      const selectedAgents: string[] = [];
+      const spawn = vi.fn();
+      const start = vi.fn();
+      let observations = 0;
+      const adapter: RuntimeAdapter = { ...runtimeAdapter(),
+        spawnWorker: (input) => { nativeCommand = input.command; spawn(); return { status: 'ok', value: worker }; },
+        observeComposerFamily: () => ({ status: 'known', family: 'opencode', provenance: 'orca-terminal-show',
+          command: change === 'late-command-drift' && ++observations > 1 ? nativeCommand + ' --foreign' : nativeCommand }),
+      };
+      const execute: Parameters<typeof finalizeOpenCodeExecutorProfile>[2] = async (args, _timeout, env) => {
+        if (args[2] === 'config') return { ok: true, stdout: '{"default_agent":"build"}', stderr: '' };
+        if (args[2] === 'paths') return { ok: true, stdout: env?.XDG_STATE_HOME ?? '', stderr: '' };
+        const baseline = { name: 'build', mode: 'primary', prompt: baselinePrompt, permission: [] };
+        if (!env?.OPENCODE_CONFIG_CONTENT) return { ok: true, stdout: JSON.stringify(baseline), stderr: '' };
+        const overlay = JSON.parse(env.OPENCODE_CONFIG_CONTENT);
+        const agent = overlay.agent[args[3]!];
+        return { ok: true, stdout: JSON.stringify({ ...baseline, ...agent,
+          model: { providerID: 'opencode', modelID: agent.model ?? selectedModel },
+        }), stderr: '' };
+      };
+      const ready = readyStart('task-1');
+      const dependencies: LaunchDependencies = { ...deps({ adapter, onSupervised: start,
+        supervised: { ...ready, assignment: { ...ready.assignment!, issueNumber: 1479, role: 'orchestrator' },
+          receipt: { ...ready.receipt!, effects: [{ kind: 'worktree', action: 'reused', id: 'repo::exact-worktree' }] },
+        },
+      }),
+        resolveProfile: async (_workClass, _env, mode) => {
+          const resolved = await resolveLiveExecutorProfile('manager', { ...opencodeProfileEnv('manager'),
+            PACK_EXECUTOR_MANAGER_MODEL: selectedModel,
+          }, mode, async (args) => {
+            const probe = opencodeProbeResult(args);
+            return { ...probe, stdout: probe.stdout.replaceAll('fixture-opencode-model', selectedModel) };
+          });
+          if (resolved.status === 'ok') selectedAgents.push(resolved.value.agentName!);
+          return resolved;
+        },
+        finalizeProfile: (profile, path, session, dataRoot, ids) => finalizeOpenCodeExecutorProfile(
+          profile, path, execute, () => true, session, dataRoot, ids),
+      };
+      const input = { ...launchInput('manager'), env: opencodeProfileEnv('manager') };
+      expect((await runSupervisedTaskLaunchAssistant(input, dependencies)).outcome).toBe('ready');
+      const originalCommand = nativeCommand;
+      expect(originalCommand).toMatch(/XDG_STATE_HOME='[^']*\/opk-opencode-state-[a-f0-9-]{36}'/u);
+      const oldAgent = openCodeControlFromCommand(originalCommand)?.agent;
+      expect(oldAgent).toMatch(/^pack-opk-[a-f0-9]{32}$/u);
+      if (change === 'model') selectedModel = 'changed-model';
+      if (change === 'baseline') baselinePrompt = 'changed baseline';
+      if (change === 'missing-state') nativeCommand = nativeCommand.replace(/ XDG_STATE_HOME='[^']*'/u, '');
+      if (change === 'missing-agent') nativeCommand = nativeCommand.replaceAll(oldAgent!, 'unrecognized-agent');
+      if (change === 'two-agents') nativeCommand = nativeCommand.replace(`--agent '${oldAgent}'`, `--agent 'pack-opk-${'a'.repeat(32)}'`);
+      start.mockClear();
+      const result = await runSupervisedTaskLaunchAssistant({ ...input, existingTerminal: worker.identity.id }, dependencies);
+      expect(selectedAgents).toHaveLength(2);
+      expect(selectedAgents[0]).not.toBe(selectedAgents[1]);
+      expect(spawn).toHaveBeenCalledTimes(1);
+      if (change === 'unchanged') {
+        expect(result.outcome, JSON.stringify(result)).toBe('ready');
+        expect(start).toHaveBeenCalledTimes(1);
+        expect(nativeCommand).toBe(originalCommand);
+      } else {
+        expect(result).toMatchObject({ outcome: 'continue', observedCause: 'existing_terminal_generation_changed' });
+        expect(start).not.toHaveBeenCalled();
+      }
+    },
+  );
 });
 
 function okEnvelope(result: Record<string, unknown>): string {
@@ -3104,7 +3175,8 @@ The words Firefighter universal appear here only as prose.`;
     });
     expect(spawns).toBe(0); expect(starts).toBe(0);
     if (result.outcome !== 'continue') throw new Error('expected refusal');
-    expect(result.nextAction.note).toMatch(/coordinator must supply.*original Run.*unique worktree name/u);
+    expect(result.nextAction.note).toMatch(/coordinator must supply.*separately authorized new --task.*unique worktree name/u);
+    expect(result.nextAction.note).not.toContain('original Run');
     expect(result.nextAction.note).toMatch(/one open same-repository Issue-closing PR/u);
     expect(result.nextAction.command).toBeUndefined();
   });

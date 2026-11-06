@@ -4482,7 +4482,10 @@ describe('Issue #2689 r03 exact native terminal -> canonical Issue assignment ->
           const profile = await resolveLiveExecutorProfile(
             workClass, profileEnv, startMode, async (args) => opencodeProbeResult(args));
           if (profile.status === 'ok') {
-            nativeCommand = "OPK_PROJECT_ID='orchestrator-pack' " + profile.value.launchCommand;
+            const launchCommand = profile.value.launchCommand.replace(` ${opencodeExecutable} `,
+              ` XDG_STATE_HOME='/tmp/opk-opencode-state-11111111-1111-4111-8111-111111111111' ${opencodeExecutable} `);
+            nativeCommand = "OPK_PROJECT_ID='orchestrator-pack' " + launchCommand;
+            return { ...profile, value: { ...profile.value, launchCommand } };
           }
           return profile;
         },

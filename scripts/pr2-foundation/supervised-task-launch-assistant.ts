@@ -231,7 +231,7 @@ function freshDispatchNotAbsent(
     evidence: { ...evidence, assignment: 'absent' },
     nextAction: {
       kind: 'start_new_task',
-      note: `no current assignment owns Task ${taskId}; inspect the exact Dispatch read-only and preserve the old checkout, including dirty bytes. The coordinator must supply the selected project, original Run, new Task/manager brief and unique worktree name. If one open same-repository Issue-closing PR has a verified default base and fetched head, use a fresh named worktree on origin/<verified PR branch>; otherwise separately authorize a clean default-branch first start. No executable retry is resolved here.`,
+      note: `no current assignment owns Task ${taskId}; inspect the exact Dispatch read-only and preserve the old checkout, including dirty bytes. The coordinator must supply the selected project, ${input.workClass === 'manager' ? 'original Run, fresh manager brief' : 'separately authorized new --task (without manager-only --run/--manager-brief)'} and unique worktree name. If one open same-repository Issue-closing PR has a verified default base and fetched head, use a fresh named worktree on origin/<verified PR branch>; otherwise separately authorize a clean default-branch first start. No executable retry is resolved here.`,
     },
   };
 }
@@ -302,7 +302,7 @@ export interface LaunchDependencies {
   readonly installManagerPushGuard?: (input: ManagerPushGuardRequest) => Promise<EdgeResult<true>> | EdgeResult<true>;
   /** Restore recorded B5 hooks only on an existing Claude-family manager worktree. */
   readonly restoreClaudeManagerGuard?: (worktreePath: string) => Promise<EdgeResult<true>> | EdgeResult<true>;
-  readonly finalizeProfile?: (profile: ExecutorProfile, worktreePath: string, resumeSession?: string, dataRoot?: string) => Promise<EdgeResult<ExecutorProfile>>;
+  readonly finalizeProfile?: (profile: ExecutorProfile, worktreePath: string, resumeSession?: string, dataRoot?: string, launchIds?: OpenCodeLaunchIds) => Promise<EdgeResult<ExecutorProfile>>;
   readonly adapter: RuntimeAdapter;
   readonly runSupervisedStart: typeof runSupervisedWorkerStart;
   readonly now: () => number;
@@ -1057,6 +1057,8 @@ export async function runSupervisedTaskLaunchAssistant(
 
   const providerMode = profile.route === 'provider_new_top_level';
   let reusedIdentity: RuntimeWorkerIdentity | undefined;
+  let reusedCommand: string | undefined;
+  let reusedOpenCodeIds: OpenCodeLaunchIds | undefined;
   const prepareStep = (): Promise<EdgeResult<PreparedWorktree>> => {
     if (input.existingTerminal) {
       const observed = deps.adapter.findWorkerById(input.existingTerminal);
@@ -1078,6 +1080,20 @@ export async function runSupervisedTaskLaunchAssistant(
           cause: 'existing_terminal_project_unverified', actor: 'orchestrator' as const,
           nextAction: { kind: 'remediate_terminal' as const,
             note: 'inspect the exact native command; an existing process cannot acquire a new project selection through terminal reuse' } });
+      }
+      reusedCommand = selection.command;
+      if (profile.family === 'opencode') {
+        // Recover only the producer's two nonce forms. Everything else must be
+        // reproduced byte-for-byte from the selected profile and current baseline.
+        const stateIds = new Set([...reusedCommand.matchAll(/(?:^| )XDG_STATE_HOME='[^']*\/opk-opencode-state-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'(?= |$)/gu)].map((match) => match[1]!));
+        const agentIds = new Set([...reusedCommand.matchAll(/(?:^|["'])pack-opk-([0-9a-f]{32})(?=["']|$)/gu)].map((match) => match[1]!));
+        if (stateIds.size !== 1 || agentIds.size !== 1) {
+          return Promise.resolve({ status: 'continue' as const,
+            cause: 'existing_terminal_generation_changed', actor: 'orchestrator' as const,
+            nextAction: { kind: 'remediate_terminal' as const,
+              note: 'inspect the exact native command: require one distinct original OpenCode state ID and agent ID before reproducing its launch' } });
+        }
+        reusedOpenCodeIds = { stateId: [...stateIds][0]!, agentId: [...agentIds][0]! };
       }
       // Read-only worktree reuse. Supervised start re-proves the native
       // terminal/worktree placement and publishes only after a ready receipt.
@@ -1149,13 +1165,21 @@ export async function runSupervisedTaskLaunchAssistant(
     if (!deps.finalizeProfile) {
       return continued(input, 'worktree_prepare', contextualRefusalDetails(profile, 'executor_effort_channel_unavailable'), resources, startedAtMs, timings, deps.now);
     }
-    const finalized = await checkpoint('worktree_prepare', timings, deps.now, () => deps.finalizeProfile!(profile, prepared.value.path!));
+    const finalized = await checkpoint('worktree_prepare', timings, deps.now, () => deps.finalizeProfile!(profile, prepared.value.path!, undefined, undefined, reusedOpenCodeIds));
     if (finalized.status !== 'ok') return continued(input, 'worktree_prepare', finalized, resources, startedAtMs, timings, deps.now);
     resources = { ...resources };
     profile = finalized.value;
   }
   const projectPrefix = `OPK_PROJECT_ID=${quote(projectId)} `;
   profile = { ...profile, launchCommand: projectPrefix + profile.launchCommand };
+  if (input.existingTerminal) {
+    if (profile.launchCommand !== reusedCommand) return continued(input, 'dispatch_admission_final', {
+      cause: 'existing_terminal_generation_changed', actor: 'orchestrator', evidence: {},
+      nextAction: { kind: 'remediate_terminal',
+        note: 'the original native command does not reproduce the selected profile and current baseline; inspect read-only rather than replacing its process environment' },
+    }, resources, startedAtMs, timings, deps.now);
+    profile = { ...profile, launchCommand: reusedCommand };
+  }
   // The post-probe command is the actual spawn command; never trust the pre-probe
   // profile if a finalized OpenCode command silently dropped its deny overlay.
   if (profile.family === 'opencode' && (!profile.launchCommand.startsWith(projectPrefix) || !openCodeLaunchHasFleetBrowserDenies({ command: profile.launchCommand.slice(projectPrefix.length), agentName: profile.agentName, inlineConfigJson: profile.inlineConfigJson, ...(profile.executable ? { executable: profile.executable } : {}) }))) {
@@ -1559,6 +1583,11 @@ function contextualRefusal(profile: ExecutorProfile, cause: 'executor_effort_cha
   return { status: 'continue', ...contextualRefusalDetails(profile, cause) };
 }
 
+export interface OpenCodeLaunchIds {
+  readonly stateId: string;
+  readonly agentId: string;
+}
+
 export async function finalizeOpenCodeExecutorProfile(
   profile: ExecutorProfile,
   worktreePath: string,
@@ -1566,6 +1595,7 @@ export async function finalizeOpenCodeExecutorProfile(
   proveNoWrite?: OpenCodeNoWriteProof,
   resumeSession?: string,
   dataRoot?: string,
+  launchIds?: OpenCodeLaunchIds,
 ): Promise<EdgeResult<ExecutorProfile>> {
   if (profile.family !== 'opencode' || profile.route === 'provider_new_top_level') return { status: 'ok', value: profile };
   if (!worktreePath.trim()) return contextualRefusal(profile, 'executor_route_unavailable');
@@ -1574,7 +1604,7 @@ export async function finalizeOpenCodeExecutorProfile(
   if (!proveNoWrite || !(await proveNoWrite(worktreePath))) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
   const before = configState(worktreePath);
   const executable = profile.executable ?? 'opencode';
-  const stateRoot = join(tmpdir(), `opk-opencode-state-${randomUUID()}`);
+  const stateRoot = join(tmpdir(), `opk-opencode-state-${launchIds?.stateId ?? randomUUID()}`);
   const isolatedEnv = { XDG_STATE_HOME: stateRoot };
   const config = await execute([executable, 'debug', 'config'], 15_000, isolatedEnv, worktreePath);
   if (!config.ok || before !== configState(worktreePath)) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
@@ -1587,7 +1617,7 @@ export async function finalizeOpenCodeExecutorProfile(
   const modelMatch = profile.launchCommand.match(/"model":"([^"]+)"/u);
   const effortMatch = profile.launchCommand.match(/"variant":"([^"]+)"/u);
   if (!modelMatch?.[1] || !effortMatch?.[1]) return contextualRefusal(profile, 'executor_effort_channel_unavailable');
-  const agentName = `pack-opk-${randomUUID().replaceAll('-', '')}`;
+  const agentName = `pack-opk-${(launchIds?.agentId ?? randomUUID()).replaceAll('-', '')}`;
   const overlay = buildOpenCodeAgentOverlay({ ...(profile.executable ? { executable: profile.executable } : {}), agentName, baseline: baselineValue, model: modelMatch[1], effort: effortMatch[1], stateRoot,
     ...(dataRoot !== undefined ? { dataRoot } : {}), ...(resumeSession ? { resumeSession } : {}) });
   // OpenCode 1.18.35 appends its runtime tool-output allow after the overlay rules.
@@ -2790,9 +2820,9 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       input.workClass === 'merge' ? { ...request, primaryReuseRoot: target.primaryRoot } : request,
       (args, timeoutMs, envOverride, childCwd) => child(args, childCwd ?? cwd, envOverride ?? env, timeoutMs),
     ),
-    finalizeProfile: (profile, worktreePath, resumeSession, dataRoot) => finalizeOpenCodeExecutorProfile(profile, worktreePath,
+    finalizeProfile: (profile, worktreePath, resumeSession, dataRoot, launchIds) => finalizeOpenCodeExecutorProfile(profile, worktreePath,
       (args, timeoutMs, envOverride, childCwd) => child(args, childCwd ?? cwd, envOverride ?? env, timeoutMs),
-      proveOpenCodeNoWrite, resumeSession, dataRoot !== undefined ? dataRoot : env.XDG_DATA_HOME),
+      proveOpenCodeNoWrite, resumeSession, dataRoot !== undefined ? dataRoot : env.XDG_DATA_HOME, launchIds),
   };
 }
 
