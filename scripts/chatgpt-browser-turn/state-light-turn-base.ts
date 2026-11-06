@@ -72,7 +72,7 @@ import {
   waitForConversationUrlAfterSend,
 } from './state-light-fresh-conversation.ts';
 import {
-  absoluteProfilePathError, atomicJson, boundTargetReadFirstNextAction, configuredProfileKey, profileDirs, profileStoreRoot,
+  absoluteProfilePathError, atomicJson, boundTargetReadFirstNextAction, configuredProfileKey, githubFirstOwnerRecoveryNextAction, profileDirs, profileStoreRoot,
   PROFILE_ABSOLUTE_NEXT_STEP, PROFILE_ABSOLUTE_REQUIRED_CODE, type BoundGithubTarget,
 } from './storage-common.ts';
 import {
@@ -6871,7 +6871,8 @@ async function runTurnCore(
             result: compactResult(
               'observation_uncertain', 'invocation', cause,
               invocationId, profileKey, sendCount, pollCount, navigation, incidents,
-              { send_attempted: true, next_action: freshLocalPossiblyDeliveredNextAction(boundGithubTarget()) },
+              { send_attempted: true, next_action: githubFirstOwnerRecoveryNextAction(boundGithubTarget())
+                + ' POSSIBLY_DELIVERED: preserve the original Page; no resend or replacement of a possibly delivered request; page-probe is diagnostic, not physical Send proof.' },
               journalWriteFailed,
             ),
           };
@@ -7096,7 +7097,8 @@ async function runTurnCore(
           'observation_uncertain', 'invocation', 'fresh_conversation_owner_unproven',
           invocationId, profileKey, sendCount, pollCount, navigation, incidents,
           { ...(sendAttempted ? { send_attempted: true } : {}),
-            next_action: freshLocalPossiblyDeliveredNextAction(boundGithubTarget()) },
+            next_action: githubFirstOwnerRecoveryNextAction(boundGithubTarget())
+              + ' POSSIBLY_DELIVERED: preserve the original Page; no resend or replacement of a possibly delivered request; page-probe is diagnostic, not physical Send proof.' },
           journalWriteFailed,
         ),
       };
@@ -7152,8 +7154,8 @@ async function runTurnCore(
             'invocation', cause, invocationId, profileKey,
             sendCount, pollCount, navigation, incidents,
             { ...(sendAttempted ? { send_attempted: true } : {}),
-              ...(config.newChat && !ownedConversationUrl
-                ? { next_action: freshLocalPossiblyDeliveredNextAction(boundGithubTarget()) } : {}) },
+              ...(sendCount > 0 || sendAttempted
+                ? { next_action: githubFirstOwnerRecoveryNextAction(boundGithubTarget()) } : {}) },
             journalWriteFailed,
           ),
         };
@@ -8725,8 +8727,10 @@ async function runTurnCore(
             ...(cancelledBeforeDispatch ? {
               next_action: 'Cancelled before dispatch by the exact owner; nothing was sent. Start a fresh invocation id if still needed.',
             } : {}),
-            ...(!afterSend && !sendAttempted && sendCount === 0 && cause.startsWith('predecessor_handoff_unproven:')
-              ? { next_action: PREDECESSOR_HANDOFF_UNPROVEN_NEXT_ACTION } : {}),
+            ...(!afterSend && !sendAttempted && sendCount === 0 && (cause.startsWith('predecessor_handoff_unproven:')
+              || cause === 'input_invalid:exact_predecessor_selector_required')
+              ? { next_action: 'nothing was sent by this invocation. ' + githubFirstOwnerRecoveryNextAction(boundGithubTarget())
+                + ' Reconcile the exact predecessor invocation read-only only as an optional supported diagnostic, never as a prerequisite or a repeat of refused proof.' } : {}),
             ...(page && pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
             ...(holderTimeout ? {
               send_slot_holder_invocation_id: holderTimeout.send_slot_holder_invocation_id,
@@ -8768,12 +8772,6 @@ export const PREDECESSOR_NONBLOCKING_CLEANUP_CAUSES: ReadonlySet<string> = new S
 export function predecessorCleanupCauseNonblocking(cause: string | undefined): boolean {
   return cause !== undefined && PREDECESSOR_NONBLOCKING_CLEANUP_CAUSES.has(cause);
 }
-
-/** Read-only original-invocation recovery for a refused predecessor proof; never a Send or cleanup. */
-export const PREDECESSOR_HANDOFF_UNPROVEN_NEXT_ACTION = 'predecessor proof failed; nothing was sent by this invocation. '
-  + 'Reconcile the exact predecessor invocation read-only through its own locator/terminal (wait --invocation-id <old> '
-  + 'with its original Run/attempt and Task+Dispatch owner); do not retry with this pair while it is unresolved. '
-  + 'Genuinely independent, separately admitted work may omit the predecessor pair.';
 
 async function retireExplicitPredecessor(input: {
   readonly previousInvocationId: string;
