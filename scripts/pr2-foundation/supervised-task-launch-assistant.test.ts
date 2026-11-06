@@ -568,7 +568,7 @@ function deps(input: {
   dispatch?: DispatchObservation[];
   onDispatch?: () => void;
   onWorktree?: () => void;
-  managerRun?: EdgeResult<{ readonly runId: string }>;
+  managerRun?: EdgeResult<{ readonly runId: string; readonly coordinatorHandle?: string }>;
   managerMembership?: EdgeResult<{ readonly taskId: string }>;
   managerTemplate?: EdgeResult<string>;
   firefighterTemplate?: EdgeResult<string>;
@@ -999,6 +999,112 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
     }
     return opencodeProbeResult(args);
   }
+
+  it('#2794 one-command --pr reads OPEN REST head, creates one Task in the current Run and launches it on primary', async () => {
+    const prNumber = 2794;
+    const headSha = 'c'.repeat(40);
+    const packRoot = '/opt/orchestrator-pack';
+    const selected = mergeInput({
+      prNumber, taskId: undefined, delegatedIntegration: undefined, issueNumber: undefined,
+      projectId: 'orchestrator-pack', packRoot, env: profileEnv(),
+    });
+    const seen: { readonly specs: string[]; readonly tasks: string[]; readonly spawns: string[]; readonly starts: string[] } = {
+      specs: [], tasks: [], spawns: [], starts: [],
+    };
+    const ownWorker: RuntimeWorker = { ...worker, workspacePath: primary };
+    const adapter: RuntimeAdapter = {
+      ...runtimeAdapter({ worker: ownWorker }),
+      spawnWorker: ({ title, workspace }) => {
+        seen.spawns.push(`${title}:${workspace}`);
+        return { status: 'ok', value: ownWorker };
+      },
+    };
+    const readMergePr = vi.fn(async (repository: string, number: number) => {
+      expect(repository).toBe('chetwerikoff/orchestrator-pack');
+      expect(number).toBe(prNumber);
+      return { status: 'ok' as const, value: {
+        number: prNumber, state: 'open' as const,
+        baseRepository: repository, baseRef: 'main', headSha,
+      } };
+    });
+    const result = await runSupervisedTaskLaunchAssistant(selected, {
+      ...deps({ adapter, managerRun: { status: 'ok', value: { runId: 'run-current', coordinatorHandle: 'orch-project' } } }),
+      readMergePr,
+      createManagerTask: async (runId, spec) => {
+        seen.tasks.push(runId);
+        seen.specs.push(spec);
+        return { status: 'ok', value: { taskId: 'task-2794', status: 'ready' } };
+      },
+      resolveProfile: (workClass, env, startMode) => resolveLiveExecutorProfile(
+        workClass, env, startMode, async (args) => lunaMergeProbe(args),
+      ),
+      prepareWorktree: async (request) => {
+        expect(request).toMatchObject({
+          repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-2794',
+          primaryReuseRoot: primary, worktreeSelector: `path:${primary}`,
+        });
+        return { status: 'ok', value: {
+          id: 'repo::primary', selector: 'id:repo::primary', path: primary, setupWitness: 'proven_reuse',
+        } };
+      },
+      runSupervisedStart: async (start) => {
+        seen.starts.push(String(start.orcaArgs[1]));
+        expect(start.orcaArgs).toEqual([
+          '--task', 'task-2794', '--terminal', 'terminal-fresh', '--worktree', 'id:repo::primary',
+        ]);
+        return readyStart('task-2794');
+      },
+    });
+    expect(result).toMatchObject({
+      outcome: 'ready', resources: { taskId: 'task-2794', runId: 'run-current',
+        dispatchId: 'dispatch-1', worktreePath: primary },
+    });
+    expect(readMergePr).toHaveBeenCalledTimes(1);
+    expect(seen.tasks).toEqual(['run-current']);
+    expect(seen.spawns).toEqual([`opk-t2-merge-task-2794:${primary}`]);
+    expect(seen.starts).toEqual(['task-2794']);
+    expect(seen.specs).toHaveLength(1);
+    const lines = seen.specs[0]!.split('\n');
+    expect(lines[0]).toBe(
+      'Read and execute /opt/orchestrator-pack/.cursor/skills/merge-with-local-adoption/SKILL.md for PR 2794: «смерж 2794», orchestrator-issued Task mode',
+    );
+    expect(lines[1]).toContain('OPK_PROJECT_ID=orchestrator-pack; --project orchestrator-pack');
+    expect(lines[1]).toContain(`primary checkout ${primary}`);
+    expect(lines[1]).toContain('put /opt/orchestrator-pack/scripts first on PATH; repository chetwerikoff/orchestrator-pack');
+    for (const required of [headSha, 'Merge only this head; on drift, report to the coordinator',
+      'No Chrome', 'No bsk', 'GNU timeout accepts seconds', 'ADOPTION_STARTED_AT_UTC',
+      'ORCH_HANDLE=orch-project', 'orca terminal send --terminal', 'merge-2794 done: <state>, primary at <sha>']) {
+      expect(seen.specs[0]).toContain(required);
+    }
+  });
+
+  it('#2794 refuses a mismatched PR/base before creating any Orca Task or terminal', async () => {
+    let creates = 0;
+    let spawns = 0;
+    const selected = mergeInput({
+      prNumber: 2794, taskId: undefined, issueNumber: undefined,
+      delegatedIntegration: undefined, projectId: 'orchestrator-pack',
+      packRoot: '/opt/orchestrator-pack', env: profileEnv(),
+    });
+    const result = await runSupervisedTaskLaunchAssistant(selected, {
+      ...deps({ managerRun: { status: 'ok', value: { runId: 'run-current', coordinatorHandle: 'orch-project' } } }),
+      readMergePr: async () => ({ status: 'ok', value: {
+        number: 2794, state: 'open', baseRepository: 'other/repo',
+        baseRef: 'main', headSha: 'a'.repeat(40),
+      } }),
+      createManagerTask: async () => { creates += 1; throw new Error('must not create'); },
+      resolveProfile: (workClass, env, mode) => resolveLiveExecutorProfile(
+        workClass, env, mode, async (args) => lunaMergeProbe(args),
+      ),
+      adapter: { ...runtimeAdapter(), spawnWorker: () => {
+        spawns += 1; throw new Error('must not spawn');
+      } },
+    });
+    expect(result).toMatchObject({ outcome: 'continue', stage: 'manager_task',
+      observedCause: 'merge_pr_binding_mismatch' });
+    expect(creates).toBe(0);
+    expect(spawns).toBe(0);
+  });
 
   it.each([undefined, 2739])('#2739 launches Task-mode merge on primary with default Luna medium, optional Issue %s', async (issueNumber) => {
     const input = mergeInput({ issueNumber, delegatedIntegration: undefined, env: profileEnv() });
@@ -1577,6 +1683,41 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
     expect(() => parseLaunchAssistantCli(base.filter((_, index) => index !== 6 && index !== 7), process.env, select)).toThrow();
     expect(() => parseLaunchAssistantCli([...base.slice(0, -1), '{}'], process.env, select)).toThrow();
     expect(() => parseLaunchAssistantCli([...base.slice(0, -1), 'not-json'], process.env, select)).toThrow();
+  });
+
+  it('#2794 accepts the exact four-input --pr route without changing --task merge mode', () => {
+    const select = () => ({
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      primaryRoot: primary, defaultBranch: 'main', packRoot: '/opt/orchestrator-pack',
+    } as ReturnType<typeof import('../lib/target-context.ts').resolveTargetContext>);
+    const args = [
+      '--project', 'orchestrator-pack', '--repository', 'chetwerikoff/orchestrator-pack',
+      '--work-class', 'merge', '--pr', '2794',
+    ];
+    expect(parseLaunchAssistantCli(args, process.env, select)).toMatchObject({
+      prNumber: 2794, workClass: 'merge', projectId: 'orchestrator-pack',
+      packRoot: '/opt/orchestrator-pack', primaryRoot: primary,
+      repository: 'chetwerikoff/orchestrator-pack', worktreeSelector: `path:${primary}`,
+      startMode: 'exact_terminal_worktree',
+    });
+    const forbidden = [['--task', 'task-1'], ['--worktree', `path:${primary}`],
+      ['--run', 'run-1'], ['--worktree-name', 'new'], ['--issue-number', '2794'],
+      ['--delegated-integration', JSON.stringify(delegated)]];
+    for (const extra of forbidden) expect(() => parseLaunchAssistantCli([...args, ...extra], process.env, select)).toThrow();
+    expect(() => parseLaunchAssistantCli(args.slice(2), process.env, select)).toThrow(/merge --pr/u);
+    expect(() => parseLaunchAssistantCli([...args.slice(0, -1), '0'], process.env, select)).toThrow(/--pr/u);
+    expect(() => parseLaunchAssistantCli([...args.slice(0, -1), '1.5'], process.env, select)).toThrow(/--pr/u);
+    expect(() => parseLaunchAssistantCli([...args.slice(0, -1), '999999999999999999999'], process.env, select)).toThrow(/--pr/u);
+    expect(() => parseLaunchAssistantCli([...args.slice(0, -1), '2794', '--work-class', 'merge'], process.env, select)).toThrow();
+    expect(() => parseLaunchAssistantCli(args.map((arg) => arg === 'merge' ? 't2' : arg), process.env, select)).toThrow(/--pr is merge-only/u);
+
+    const old = [
+      '--project', 'orchestrator-pack', '--work-class', 'merge',
+      '--task', 'task-existing', '--worktree', `path:${primary}`,
+    ];
+    expect(parseLaunchAssistantCli(old, process.env, select)).toMatchObject({
+      workClass: 'merge', taskId: 'task-existing', worktreeSelector: `path:${primary}`,
+    });
   });
 
   it('#2739 requires an explicit primary path selector only for Task-mode merge', () => {
@@ -3100,6 +3241,43 @@ The words Firefighter universal appear here only as prose.`;
     });
   });
 
+  it.each(['t2', 'merge'] as const)(
+    '#2794 returns an actionable retry on unknown terminal-show for %s', async (workClass) => {
+      let starts = 0;
+      const badAdapter: RuntimeAdapter = {
+        ...runtimeAdapter({ worker: { ...worker, workspacePath: workClass === 'merge' ? '/tmp/issue-2794-primary' : '/tmp/exact-worktree' } }),
+        spawnWorker: () => ({
+          status: 'failed', operation: 'spawn_worker', reason: 'launch_task_terminal_identity_unproven',
+        }),
+      };
+      const input = workClass === 'merge'
+        ? { ...launchInput('t2'), workClass, worktreeName: undefined,
+          worktreeSelector: 'path:/tmp/issue-2794-primary', primaryRoot: '/tmp/issue-2794-primary',
+          env: profileEnv() }
+        : launchInput('t2');
+      const result = await runSupervisedTaskLaunchAssistant(input, {
+        ...deps({ adapter: badAdapter, onSupervised: () => { starts += 1; } }),
+        ...(workClass === 'merge' ? {
+          resolveProfile: (role: LaunchInput['workClass'], env: Readonly<NodeJS.ProcessEnv>, mode?: import('./supervised-worker-start.ts').WorkerStartMode) =>
+            resolveLiveExecutorProfile(role, env, mode, async (args) => opencodeProbeResult(args)),
+          prepareWorktree: async () => ({ status: 'ok' as const, value: {
+            id: 'repo::primary', selector: 'id:repo::primary',
+            path: '/tmp/issue-2794-primary', setupWitness: 'proven_reuse' as const,
+          } }),
+        } : {}),
+      });
+      expect(result).toMatchObject({
+        outcome: 'continue', stage: 'terminal_prepare', observedCause: 'terminal_spawn_failed',
+        evidence: { spawnReason: 'launch_task_terminal_identity_unproven' },
+        nextAction: { note: expect.stringContaining('Rerun the same command') },
+      });
+      if (workClass === 'merge' && result.outcome === 'continue') {
+        expect(result.nextAction.note).toContain('--pr N');
+      }
+      expect(starts).toBe(0);
+    },
+  );
+
   it('preserves bounded scrubbed native Orca terminal-create detail in terminal_prepare evidence', async () => {
     const stateRoot = mkdtempSync(join(tmpdir(), 'opk-2387-spawn-detail-'));
     const operations: string[] = [];
@@ -3202,6 +3380,7 @@ The words Firefighter universal appear here only as prose.`;
     expect(continuation).toMatchObject({
       outcome: 'continue', stage: 'terminal_prepare', observedCause: 'terminal_liveness_busy',
       resources: { terminal: worker.identity },
+      nextAction: { note: expect.stringContaining('Rerun the same command') },
     });
     expect(spawnAttempts).toEqual(['opk-t2-task-1', 'opk-t2-task-1']);
     expect(paneCreations).toBe(1);
