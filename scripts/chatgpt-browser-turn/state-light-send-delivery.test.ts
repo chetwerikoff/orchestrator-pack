@@ -347,7 +347,7 @@ describe('Issue #2596 production recovery caller boundaries', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it.each(['local-empty', 'local-incomplete', 'known-successor'] as const)(
+  it.each(['local-empty', 'local-incomplete', 'local-unproven', 'known-successor'] as const)(
     'production caller preserves Send, locator and cleanup boundaries: %s', async (mode) => {
       const project = 'https://chatgpt.com/g/g-p-11111111111111111111111111111111-test/project';
       const url = 'https://chatgpt.com/g/g-p-11111111111111111111111111111111-test/c/11111111-1111-4111-8111-111111111111';
@@ -368,7 +368,7 @@ describe('Issue #2596 production recovery caller boundaries', () => {
         isClosed: vi.fn(() => kind === 'original' && known && sent),
         goto: vi.fn(async () => undefined), close: vi.fn(async () => undefined),
         waitForTimeout: vi.fn(async (ms: number) => { clock += ms; }),
-        getByText: vi.fn((text: string) => scalarLocator({ count: async () => sent && text === 'Failed to fetch' ? 1 : 0 })),
+        getByText: vi.fn((text: string) => scalarLocator({ count: async () => sent && mode !== 'local-unproven' && text === 'Failed to fetch' ? 1 : 0 })),
         getByRole: vi.fn(() => scalarLocator({ count: async () => sent ? 1 : 0, click: retry })),
         locator: vi.fn((selector: string) => {
           if (kind === 'foreign') return scalarLocator({ count: async () => { throw new Error('foreign unreadable'); } });
@@ -410,7 +410,7 @@ describe('Issue #2596 production recovery caller boundaries', () => {
       const foreign = makePage('foreign');
       const successor = makePage('successor');
       const harness = enqueueBrowserForTurn(mocks, original);
-      const pages = [original, ...(mode === 'local-empty' ? [] : [foreign])];
+      const pages = [original, ...(['local-empty', 'local-unproven'].includes(mode) ? [] : [foreign])];
       Object.assign(harness.context, { pages: vi.fn(() => pages) });
       harness.context.newPage.mockImplementation(async () => { pages.push(successor); return successor; });
       if (!known) harness.context.newPage.mockImplementation(async () => original);
@@ -419,7 +419,7 @@ describe('Issue #2596 production recovery caller boundaries', () => {
         expect(await input.adapter.enumeratePages(input.browser)).toEqual([original]);
         return await actualRecover(input);
       });
-      vi.spyOn(Date, 'now').mockImplementation(() => clock);
+      const clockSpy = vi.spyOn(Date, 'now').mockImplementation(() => clock);
       const invocationId = randomUUID();
       const output = join(root, invocationId + '.txt');
       const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
@@ -443,12 +443,32 @@ describe('Issue #2596 production recovery caller boundaries', () => {
       } else {
         expect(selection).not.toHaveBeenCalled();
         expect(result).toMatchObject({ state: 'observation_uncertain', send_count: 1, send_attempted: true,
-          cause: mode === 'local-empty' ? 'fresh_send_fetch_failed' : 'owned_conversation_recovery_census_failed' });
+          cause: mode === 'local-empty' ? 'fresh_send_fetch_failed'
+            : mode === 'local-unproven' ? 'fresh_conversation_owner_unproven' : 'owned_conversation_recovery_census_failed' });
         expect(result.conversation_id).toBeUndefined();
         expect(readStateLightTurnObservation(configuredProfileKey(join(root, 'profile'), 'http://127.0.0.1:9222'), invocationId).conversation_url).toBeNull();
         expect(successor.close).not.toHaveBeenCalled();
         expect(existsSync(output)).toBe(false);
         if (mode === 'local-incomplete') expect(foreign.locator).toHaveBeenCalled();
+        clockSpy.mockRestore();
+        const envelopePath = join(root, `${invocationId}-terminal.json`);
+        await runLaunch({
+          runIdentity: `run-${invocationId}`, attemptIdentity: invocationId, cwd: root,
+          handoffReceiptPath: join(root, `${invocationId}-handoff.json`), terminalEnvelopePath: envelopePath,
+          terminalEnvelopeRoot: root, browserOutputPath: join(root, `${invocationId}-output.txt`),
+          childCommand: process.execPath, childArgs: ['-e', `process.stdout.write(${JSON.stringify(JSON.stringify(result) + '\n')})`],
+        });
+        const envelope = readTerminalEnvelope(envelopePath)!;
+        expect(envelope).toMatchObject({ delivery: 'POSSIBLY_DELIVERED', send_count: 1,
+          turn_result_state: result.state, turn_result_cause: result.cause, next_action: result.next_action });
+        for (const emitted of [result, envelope]) {
+          expect(emitted.next_action).toContain('Only if owner confirms relevant effect');
+          expect(emitted.next_action).toContain('original reported Send time with at least 20 minutes elapsed');
+          expect(emitted.next_action).toContain('current Task+Dispatch/send admission');
+          expect(emitted.next_action).toContain('neither --predecessor-invocation-id nor --predecessor-attempt-identity');
+          expect(emitted.next_action).toContain('POSSIBLY_DELIVERED: preserve the original Page; page-probe is diagnostic');
+          expect(emitted.next_action).not.toContain('must reconcile the original locator/receipt/Page');
+        }
       }
     },
   );
