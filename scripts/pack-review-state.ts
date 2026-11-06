@@ -1379,15 +1379,19 @@ export function settleLogicalPackReviewFindingsByStrictDescendant(input: {
   reviewedHeadSha: string;
   currentHeadSha: string;
   reviewedHeadIsAncestor: boolean;
+  /** Transient Git-proven ancestry anchor C; original terminal/review H1 remains reviewedHeadSha. */
+  ancestryAnchorSha?: string;
   /** Validated by scoped reconcile from live Issue/disposition/source/CI evidence. */
   sameHeadIssueResolution?: { runId: string; cycleId: string; logicalRoundOrdinal: number };
   options: PackReviewAuthorityOptions;
 }): PackReviewAuthorityDocument {
   const reviewedHeadSha = normalizeSha(input.reviewedHeadSha, 'reviewedHeadSha');
   const currentHeadSha = normalizeSha(input.currentHeadSha, 'currentHeadSha');
+  const ancestryAnchorSha = input.ancestryAnchorSha === undefined
+    ? reviewedHeadSha : normalizeSha(input.ancestryAnchorSha, 'ancestryAnchorSha');
   const sameHead = input.sameHeadIssueResolution;
   if (!(sameHead && reviewedHeadSha === currentHeadSha) && !packReviewFindingsSatisfiedByStrictDescendant({
-    reviewedHeadSha,
+    reviewedHeadSha: ancestryAnchorSha,
     currentHeadSha,
     reviewedHeadIsAncestor: input.reviewedHeadIsAncestor,
   })) {
