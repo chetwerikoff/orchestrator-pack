@@ -6657,10 +6657,10 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
   // GPT T1 source-final path uses the same strict-descendant proof as T2/T3.
   const sourceBoundT1 = priorRun.resolvedReviewer === 'gpt'
     && frozenLogicalGptSourceIdentity(priorRun);
-  // A non-descendant cannot settle an eligible final-cap GPT source review.
+  // The unique-C proof precedes the H1-only ancestry veto on both entries.
+  let rebasedC: VerifiedRebasedC | undefined;
   if (logicalFinalFindings && (authority.cycle.frozenTier !== 'T1' || sourceBoundT1)
-      && authority.terminal
-      && currentHead !== authority.terminal.targetSha) {
+      && authority.terminal && currentHead !== authority.terminal.targetSha) {
     const strict = await resolvePackReviewStrictDescendant({
       repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
       reviewedHeadSha: authority.terminal.targetSha,
@@ -6668,9 +6668,19 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
     });
     if (!strict) {
-      return { prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
-        settled: false, reason: 'final_cap_strict_descendant_required',
-        nextAction: 'advance the same PR from the final findings head with a verified strict descendant, then reconcile' };
+      try {
+        rebasedC = await proveUniqueRebasedC(input, options, prNumber,
+          authority.terminal.targetSha, currentHead);
+      } catch (error) {
+        const detail = describeError(error);
+        return { prNumber, headSha: currentHead, finalCapSettlement: true,
+          settled: false, reason: 'final_cap_strict_descendant_required', detail,
+          nextAction: detail.includes('ls-remote unavailable')
+            ? 'rerun when the remote is reachable'
+            : detail.includes('base tip moved') || detail.includes('stale local')
+              ? 'git fetch origin BASEREF, then rerun the same reconcile'
+              : 'restore the selected protected base/PR identity and unique changed-tree C proof, then rerun scoped reconcile or seek architect/operator decision' };
+      }
     }
   }
 
@@ -7104,7 +7114,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         currentHeadSha: authority.currentHeadSha,
         fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
       });
-      if (!strictDescendant) {
+      if (!strictDescendant && !rebasedC) {
         return {
           prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
           settled: false, reason: 'final_cap_strict_descendant_required',
@@ -7112,21 +7122,30 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         };
       }
       try {
+        // The incumbent head observation is permitted before this recheck.
+        // Failed identity/B validation makes no durable stage-close mutation.
+        if (rebasedC) await rebasedC.recheck();
         authority = settleLogicalPackReviewFindingsByStrictDescendant({
           prNumber, expectedTransitionSeq: authority.transitionSeq,
           reviewedHeadSha, currentHeadSha: authority.currentHeadSha,
+          ...(rebasedC ? { ancestryAnchorSha: rebasedC.anchorSha } : {}),
           reviewedHeadIsAncestor: true, options: { storeRoot: options.storeRoot },
         });
       } catch (error) {
         return {
           prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
           settled: false, reason: `final_cap_settlement_incomplete:${describeError(error)}`,
-          nextAction: 'rerun scoped reconcile after confirming the current PR head',
+          nextAction: rebasedC
+            ? 'revalidate selected PR and authoritative live/local base tip; fetch origin BASEREF and rerun, or rerun when remote is reachable'
+            : 'rerun scoped reconcile after confirming the current PR head',
         };
       }
     }
     return publishFinalCapStatus(
-      'Required pack-review stage completed; strict descendant of reviewed findings.',
+      rebasedC
+        ? 'Review settled on H1 ' + reviewedHeadSha.slice(0, 8)
+          + '; rebased descendant H2 ' + authority.currentHeadSha.slice(0, 8) + '.'
+        : 'Required pack-review stage completed; strict descendant of reviewed findings.',
       sameHeadPublicationDigest ?? sha256Bytes(stableJson({
         runId: priorRun.id, reviewedHeadSha, publicationHead: authority.currentHeadSha,
         settlementKind: 'strict_descendant',
@@ -9638,6 +9657,10 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         fixtureIssueNumber: input.fixtureIssueNumber,
         fixtureIssueBody: input.fixtureIssueBody, fixtureIssueTitle: input.fixtureIssueTitle,
         fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
+        fixtureRebaseProtectionRunner: input.fixtureRebaseProtectionRunner,
+        fixtureRebasePrReader: input.fixtureRebasePrReader,
+        fixtureRebaseOriginRepository: input.fixtureRebaseOriginRepository,
+        fixtureBeforeRebaseSettlementRecheck: input.fixtureBeforeRebaseSettlementRecheck,
         fixtureSameHeadIssueResolutionRunner: input.fixtureSameHeadIssueResolutionRunner,
         fixtureGptSourceCommentTransport: input.fixtureGptSourceCommentTransport,
         fixtureGithubReviewTransport: input.fixtureGithubReviewTransport,
