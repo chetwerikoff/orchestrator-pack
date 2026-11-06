@@ -1814,6 +1814,7 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     reviewer: 'codex' | 'gpt' = 'codex', reviewedBody = originalBody, credentialed = false,
     legacyBody?: string, terminalVerdict: 'findings' | 'clean' = 'findings',
     incident?: { prNumber: number; issueNumber: number; settledSourceCount: 2 },
+    history?: { reviewed: string; current: string; sourceRepoRoot: string },
   ) {
     const root = mkdtempSync(join(tmpdir(), 'pack-review-2565-'));
     roots.push(root);
@@ -1822,8 +1823,8 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     const projectId = 'orchestrator-pack';
     const prNumber = incident?.prNumber ?? 25651;
     const issueNumber = incident?.issueNumber ?? 2565;
-    const reviewed = '4'.repeat(40);
-    const current = '5'.repeat(40);
+    const reviewed = history?.reviewed ?? '4'.repeat(40);
+    const current = history?.current ?? '5'.repeat(40);
     const options = { projectId, storeRoot };
     captureBoundIssueSnapshot({
       projectId, prNumber, issueNumber, prHeadSha: reviewed,
@@ -1839,7 +1840,7 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     });
     const run = createPackReviewRun({
       ...options, prNumber, headSha: reviewed,
-      trustedPackRoot: process.cwd(), sourceRepoRoot: process.cwd(),
+      trustedPackRoot: process.cwd(), sourceRepoRoot: history?.sourceRepoRoot ?? process.cwd(),
       canonicalRepository: repository, resolvedReviewer: reviewer,
       accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
       reviewCycleId: authority.cycle!.cycleId, logicalRoundOrdinal: 1, logicalRoundCap: 1,
@@ -1917,7 +1918,7 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     const statusWrites: string[] = [];
     const request = (body: string) => ({
       ...options, repoSlug: repository, fixtureRepoSlug: repository,
-      sourceRepoRoot: process.cwd(), prNumber,
+      sourceRepoRoot: history?.sourceRepoRoot ?? process.cwd(), prNumber,
       immediate: true, fixtureCurrentPrHeadSha: current,
       fixturePrState: 'OPEN', fixturePrBody: `Closes #${issueNumber}`,
       fixtureIssueNumber: issueNumber, fixtureIssueTitle: '[T2] Final findings Issue',
