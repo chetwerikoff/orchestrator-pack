@@ -466,7 +466,9 @@ describe('Issue #2596 production recovery caller boundaries', () => {
           expect(emitted.next_action).toContain('original reported Send time with at least 20 minutes elapsed');
           expect(emitted.next_action).toContain('current Task+Dispatch/send admission');
           expect(emitted.next_action).toContain('neither --predecessor-invocation-id nor --predecessor-attempt-identity');
-          expect(emitted.next_action).toContain('POSSIBLY_DELIVERED: preserve the original Page; page-probe is diagnostic');
+          expect(emitted.next_action).toContain('POSSIBLY_DELIVERED: preserve the original Page');
+          expect(emitted.next_action).toContain('no resend or replacement of a possibly delivered request');
+          expect(emitted.next_action).toContain('page-probe is diagnostic, not physical Send proof');
           expect(emitted.next_action).not.toContain('must reconcile the original locator/receipt/Page');
         }
       }

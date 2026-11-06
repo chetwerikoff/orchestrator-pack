@@ -6872,7 +6872,7 @@ async function runTurnCore(
               'observation_uncertain', 'invocation', cause,
               invocationId, profileKey, sendCount, pollCount, navigation, incidents,
               { send_attempted: true, next_action: githubFirstOwnerRecoveryNextAction(boundGithubTarget())
-                + ' POSSIBLY_DELIVERED: preserve the original Page; page-probe is diagnostic, not physical Send proof.' },
+                + ' POSSIBLY_DELIVERED: preserve the original Page; no resend or replacement of a possibly delivered request; page-probe is diagnostic, not physical Send proof.' },
               journalWriteFailed,
             ),
           };
@@ -7098,7 +7098,7 @@ async function runTurnCore(
           invocationId, profileKey, sendCount, pollCount, navigation, incidents,
           { ...(sendAttempted ? { send_attempted: true } : {}),
             next_action: githubFirstOwnerRecoveryNextAction(boundGithubTarget())
-              + ' POSSIBLY_DELIVERED: preserve the original Page; page-probe is diagnostic, not physical Send proof.' },
+              + ' POSSIBLY_DELIVERED: preserve the original Page; no resend or replacement of a possibly delivered request; page-probe is diagnostic, not physical Send proof.' },
           journalWriteFailed,
         ),
       };
