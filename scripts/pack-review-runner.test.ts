@@ -3005,7 +3005,16 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
   it('Issue #2790: one registered non-pack target-mode corrected-scope final-cap fixture authorizes each observed REST/COMMENT or registered GraphQL call', async () => {
     const projectId = 'synthetic-2790';
     const targetRepository = 'chetwerikoff/synthetic-2790';
-    const f = fixture({ projectId, repositorySlug: targetRepository });
+    const primaryRoot = mkdtempSync(join(tmpdir(), 'pack-review-2790-target-'));
+    roots.push(primaryRoot);
+    expect(runProcessSync({
+      command: 'git', args: ['init', '-q', primaryRoot], cwd: process.cwd(), inheritParentEnv: false,
+    }).ok).toBe(true);
+    expect(runProcessSync({
+      command: 'git', args: ['-C', primaryRoot, 'remote', 'add', 'origin',
+        `https://github.com/${targetRepository}.git`], cwd: process.cwd(), inheritParentEnv: false,
+    }).ok).toBe(true);
+    const f = fixture({ projectId, repositorySlug: targetRepository, sourceRepoRoot: primaryRoot });
     const selected = resolveTargetContext({ projectId, env: process.env });
     expect(selected.repository).toBe(targetRepository);
     expect(selected.projectId).toBe(projectId);
