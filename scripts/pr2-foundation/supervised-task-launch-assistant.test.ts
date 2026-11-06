@@ -1006,7 +1006,7 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
     const packRoot = '/opt/orchestrator-pack';
     const selected = mergeInput({
       prNumber, taskId: undefined, delegatedIntegration: undefined, issueNumber: undefined,
-      projectId: 'orchestrator-pack', packRoot, env: profileEnv(),
+      projectId: 'orchestrator-pack', packRoot, defaultBranch: 'main', env: profileEnv(),
     });
     const seen: { readonly specs: string[]; readonly tasks: string[]; readonly spawns: string[]; readonly starts: string[] } = {
       specs: [], tasks: [], spawns: [], starts: [],
@@ -1084,7 +1084,7 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
     const selected = mergeInput({
       prNumber: 2794, taskId: undefined, issueNumber: undefined,
       delegatedIntegration: undefined, projectId: 'orchestrator-pack',
-      packRoot: '/opt/orchestrator-pack', env: profileEnv(),
+      packRoot: '/opt/orchestrator-pack', defaultBranch: 'main', env: profileEnv(),
     });
     const result = await runSupervisedTaskLaunchAssistant(selected, {
       ...deps({ managerRun: { status: 'ok', value: { runId: 'run-current', coordinatorHandle: 'orch-project' } } }),
@@ -3253,7 +3253,7 @@ The words Firefighter universal appear here only as prose.`;
       const input = workClass === 'merge'
         ? { ...launchInput('t2'), workClass, worktreeName: undefined,
           worktreeSelector: 'path:/tmp/issue-2794-primary', primaryRoot: '/tmp/issue-2794-primary',
-          env: profileEnv() }
+          env: opencodeProfileEnv('merge') }
         : launchInput('t2');
       const result = await runSupervisedTaskLaunchAssistant(input, {
         ...deps({ adapter: badAdapter, onSupervised: () => { starts += 1; } }),
