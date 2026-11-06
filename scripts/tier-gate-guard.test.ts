@@ -186,6 +186,13 @@ describe('current substantive Issue floor', () => {
       runGit('remote', 'add', 'origin', 'https://github.com/' + repository + '.git');
       runGit('add', '.');
       runGit('-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.test', 'commit', '-m', 'synthetic');
+      const prHeadResult = runProcessSync({
+        command: 'git', args: ['rev-parse', 'HEAD'], cwd: targetRoot, inheritParentEnv: true,
+      });
+      expect(prHeadResult.ok).toBe(true);
+      const prHeadSha = prHeadResult.stdout.trim();
+      const reviewRoot = join(temp, 'review-target');
+      runGit('worktree', 'add', '--detach', reviewRoot, prHeadSha);
       mkdirSync(dirname(cardPath), { recursive: true });
       const card = {
         projectId, repository, primaryRoot: targetRoot, defaultBranch: 'main',
@@ -228,14 +235,20 @@ describe('current substantive Issue floor', () => {
       expect(cli.exitCode, cli.stderr).toBe(0);
       expect(cli.stdout).toContain('tier-gate guard: PASS T2');
 
-      const reverify = (body: string, extra: { forceProducerUnreachable?: boolean } = {}) =>
+      const reverify = (body: string, extra: {
+        forceProducerUnreachable?: boolean; prHeadSha?: string | null;
+      } = {}) =>
         runContractEvidenceReverify({
-          repoRoot: packRoot, trustedBaseRoot: targetRoot, reviewTargetRoot: targetRoot,
+          repoRoot: packRoot, trustedBaseRoot: targetRoot, reviewTargetRoot: reviewRoot,
           manifestPath, boundSnapshotBody: body, explicitIssueNumber: 2751,
-          projectId, env, ...extra,
+          prHeadSha, projectId, env, ...extra,
         });
       const verified = reverify(targetIssue);
       expect(verified).toMatchObject({ candidateOnly: true, neverBlocks: true, runOutcome: 'rows-evaluated' });
+      expect(reverify(targetIssue, { prHeadSha: 'a'.repeat(40) }).rows[0])
+        .toMatchObject({ status: 'unverified', reason: 'producer-unreachable', producerVerified: false });
+      expect(reverify(targetIssue, { prHeadSha: null }).rows[0])
+        .toMatchObject({ status: 'unverified', reason: 'producer-unreachable', producerVerified: false });
       if (isPrHeadNetworkSandboxAvailable()) {
         expect(verified.rows[0]).toMatchObject({ status: 'verified', verificationMode: 'live', producerVerified: true });
       } else {
@@ -244,7 +257,6 @@ describe('current substantive Issue floor', () => {
 
       // Exercise the production CLI selector independently of OPK_PROJECT_ID; a library-only call misses this handoff.
       const snapshotStore = join(temp, 'bound-snapshots');
-      const prHeadSha = 'a'.repeat(40);
       const captured = captureBoundIssueSnapshot({
         projectId, prNumber: 2769, prHeadSha, issueNumber: 2751,
         issueBody: targetIssue, storeDirOverride: snapshotStore,
@@ -256,7 +268,7 @@ describe('current substantive Issue floor', () => {
       const cliReverify = runProcessSync({
         command: process.execPath,
         args: ['--experimental-strip-types', join(packRoot, 'scripts', 'invoke-contract-evidence-reverify.ts'),
-          '--repo-root', packRoot, '--trusted-base-root', targetRoot, '--review-target-root', targetRoot,
+          '--repo-root', packRoot, '--trusted-base-root', targetRoot, '--review-target-root', reviewRoot,
           '--manifest-path', manifestPath, '--snapshot-file', captured.snapshotPath,
           '--bound-snapshot-pr-number', '2769', '--bound-snapshot-issue-number', '2751',
           '--project-id', projectId, '--explicit-issue', '2751', '--pr-head-sha', prHeadSha,
