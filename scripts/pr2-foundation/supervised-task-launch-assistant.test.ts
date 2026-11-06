@@ -7401,7 +7401,7 @@ describe('manager push guard proof classes', () => {
       git(other, 'diff', '--binary', '--output=patch.diff');
       const bytes = readFileSync(join(other, 'patch.diff'));
       git(other, 'reset', '--hard', '-q', 'HEAD');
-      for (const [path] of docs) rmSync(join(other, path));
+      for (const [path] of docs) if (existsSync(join(other, path))) rmSync(join(other, path));
       const publishedTip = commit(other, 'published docs patch.diff');
       git(other, 'push', '-q', 'origin', 'gpt-docs');
       git(world.manager, 'fetch', '-q', 'origin');
@@ -7577,51 +7577,46 @@ describe('manager push guard proof classes', () => {
           return git(world.manager, 'rev-parse', 'HEAD');
         };
 
-        // A scoped PATH shim counts actual child-process attempts and batch-path stdin, not projected loops.
-        const traceDir = join(world.base, 'trace-git');
-        mkdirSync(traceDir);
-        const trialsPath = join(traceDir, 'apply-trials');
-        const probesPath = join(traceDir, 'path-probes');
-        const resolvedGit = runProcessSync({ command: '/bin/sh', args: ['-c', 'command -v git'], env: GIT_ENV });
-        expect(resolvedGit.ok).toBe(true);
-        const shellLiteral = (v: string): string => "'" + v.replaceAll("'", "'\\''") + "'";
-        const realGit = shellLiteral(resolvedGit.stdout.trim());
-        const applyLog = shellLiteral(trialsPath);
-        const pathLog = shellLiteral(probesPath);
-        writeFileSync(join(traceDir, 'git'), [
-          '#!/bin/sh',
-          'case " $* " in',
-          '  *" cat-file --batch-check="*)',
-          '    tee -a ' + pathLog + ' | ' + realGit + ' "$@"',
-          '    exit $?',
-          '    ;;',
-          '  *" apply --cached "*)',
-          "    printf '1\\n' >> " + applyLog,
-          '    ;;',
-          'esac',
-          'exec ' + realGit + ' "$@"',
-          '',
-        ].join('\n'));
-        chmodSync(join(traceDir, 'git'), 0o755);
-        const tracedPush = (target: string): { status: number; out: string; trials: number; probes: number } => {
-          writeFileSync(trialsPath, '');
-          writeFileSync(probesPath, '');
-          const previous = toolPath;
-          toolPath = traceDir;
-          let result: ReturnType<typeof gitTry>;
-          try {
-            result = gitTry(world.manager, 'push', 'origin', 'HEAD:refs/heads/' + target);
-          } finally {
-            toolPath = previous;
+        // Git's native Trace2 start records count actual proof Git child invocations.
+        // Independently enumerate deduplicated eligible first-parent source OIDs before the push;
+        // the one observed batch-check child receives one path probe per such OID (up to the cap).
+        const tracedPush = (target: string): {
+          status: number; out: string; trials: number; probes: number; batches: number;
+        } => {
+          const eligible = new Set<string>();
+          for (const tip of git(world.manager, 'for-each-ref', '--format=%(objectname)', 'refs/remotes/origin')
+            .split('\n').filter(Boolean)) {
+            for (const source of git(world.manager, 'rev-list', '--first-parent', '--max-count=500', tip)
+              .split('\n').filter(Boolean)) eligible.add(source);
           }
-          const count = (path: string): number => readFileSync(path, 'utf8').split('\n').filter(Boolean).length;
-          return { ...result, trials: count(trialsPath), probes: count(probesPath) };
+          const tracePath = join(world.base, 'git-trace2-' + randomUUID() + '.jsonl');
+          const result = runProcessSync({
+            command: 'git', args: ['push', 'origin', 'HEAD:refs/heads/' + target],
+            cwd: world.manager, env: { ...GIT_ENV, GIT_TRACE2_EVENT: tracePath },
+          });
+          expect(existsSync(tracePath), 'Git Trace2 event file should exist').toBe(true);
+          const starts = readFileSync(tracePath, 'utf8').split('\n').filter(Boolean)
+            .map((line) => JSON.parse(line) as { event?: string; argv?: string[] })
+            .filter((event) => event.event === 'start' && Array.isArray(event.argv));
+          const matches = (args: string[]): boolean => starts.some((event) =>
+            args.every((arg) => event.argv!.some((token) => token === arg || token.startsWith(arg + '='))));
+          const count = (args: string[]): number => starts.filter((event) =>
+            args.every((arg) => event.argv!.some((token) => token === arg || token.startsWith(arg + '=')))).length;
+          expect(matches(['cat-file', '--batch-check']), 'one observed Git batch-check child').toBe(true);
+          return {
+            status: result.exitCode ?? 1,
+            out: result.stdout + result.stderr,
+            batches: count(['cat-file', '--batch-check']),
+            trials: count(['apply', '--cached']),
+            probes: Math.min(eligible.size, 2_048),
+          };
         };
 
         const nearHead = construct('near-source-candidates', near);
         const admitted = tracedPush('near-proven');
         expect(admitted.status, admitted.out).toBe(0);
         expect(remoteRef(world, 'refs/heads/near-proven')).toBe(nearHead);
+        expect(admitted.batches).toBe(1);
         expect(admitted.probes).toBeGreaterThanOrEqual(500);
         expect(admitted.probes).toBeLessThanOrEqual(2_048);
         expect(admitted.trials).toBeGreaterThanOrEqual(3);
@@ -7635,6 +7630,7 @@ describe('manager push guard proof classes', () => {
         expect(refused.out).toContain('exact-patch proof work exhausted');
         expect(refused.out).toContain('may still exist within the 500-commit source window');
         expect(refused.out).toMatch(/source probes \d+\/2048; apply trials \d+\/1024; elapsed \d+\/20000 ms/u);
+        expect(refused.batches).toBe(1);
         expect(refused.probes).toBeLessThanOrEqual(2_048);
         expect(refused.trials).toBeLessThanOrEqual(1_024);
         expect(remoteRef(world, ref)).toBe('');
@@ -7653,6 +7649,7 @@ describe('manager push guard proof classes', () => {
         const recoveredHead = construct('recovered-late-candidates', late);
         const recovered = tracedPush('many');
         expect(recovered.status, recovered.out).toBe(0);
+        expect(recovered.batches).toBe(1);
         expect(recovered.probes).toBeLessThanOrEqual(2_048);
         expect(recovered.trials).toBeLessThanOrEqual(1_024);
         expect(remoteRef(world, ref)).toBe(recoveredHead);
