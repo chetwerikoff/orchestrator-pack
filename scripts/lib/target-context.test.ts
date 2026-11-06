@@ -1,6 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -10,6 +10,9 @@ import { resolveWakeSupervisorStateRoot } from '../pr2-foundation/wake-superviso
 import { publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath } from './worker-assignment-store.ts';
 import { ensureProjectStateBinding } from './project-state-binding.ts';
 import { isCommandSafe } from './reverify-command-resolution.ts';
+import { runContractEvidenceReverify } from './contract-evidence-reverify.ts';
+import { captureBoundIssueSnapshot } from './reverify-bound-issue-snapshot.ts';
+import { isPrHeadNetworkSandboxAvailable } from './reverify-sandbox.ts';
 import { readWorkerSmokeReceipt } from './worker-smoke-receipt.ts';
 import {
   TargetContextError,
@@ -687,6 +690,137 @@ describe('target context', () => {
     await expect(resolvePackWorkerReportRequest(
       ['ready_for_review', '--repo-root', worktree], env, { run },
     )).resolves.toMatchObject({ kind: 'continue_work', reason: 'worktree_repository_mismatch' });
+  });
+
+
+  it('Issue #2790: selected producer is bound to a distinct exact-SHA PR worktree in library and CLI', () => {
+    const target = fixture({ projectId: 'synthetic-2790-w', repository: 'example/synthetic-2790-w' });
+    const packRoot = join(import.meta.dirname, '..', '..');
+    const p = target.primaryRoot;
+    const w = join(target.root, 'review-pr');
+    const producerDir = 'tests/fixtures/contract-evidence-reverify/producers';
+    const manifestPath = 'tests/external-output-references/capture-manifest.json';
+    const boundary = 'node scripts/selected-producer.mjs';
+    const proof = 'node ' + producerDir + '/genuine-new-proof.mjs';
+    const producer = "import { readFileSync } from 'node:fs';\n"
+      + "process.stdout.write(readFileSync('inputs/reverify.json', 'utf8'));\n";
+    for (const rel of ['scripts', producerDir, 'inputs', 'tests/external-output-references']) {
+      mkdirSync(join(p, rel), { recursive: true });
+    }
+    for (const file of ['genuine-new-proof.mjs', 'emit-reverify-status.mjs']) {
+      copyFileSync(join(packRoot, producerDir, file), join(p, producerDir, file));
+    }
+    writeFileSync(join(p, producerDir, 'emit-reverify-status.mjs'), producer);
+    writeFileSync(join(p, 'scripts/selected-producer.mjs'), producer);
+    writeFileSync(join(p, 'inputs/reverify.json'), JSON.stringify({ 'reverify-status': 'primary-only' }));
+    writeFileSync(join(p, manifestPath), JSON.stringify({
+      version: 1, corpusRoot: 'tests/external-output-references', entries: {},
+    }));
+    git(p, 'config', 'user.name', 'Fixture');
+    git(p, 'config', 'user.email', 'fixture@example.test');
+    git(p, 'add', '.');
+    git(p, 'commit', '-m', 'primary P trusted closure');
+    const sha = (cwd: string) => runProcessSync({
+      command: 'git', args: ['rev-parse', 'HEAD'], cwd, inheritParentEnv: true,
+    }).stdout.trim();
+    const pSha = sha(p);
+    git(p, 'worktree', 'add', '--detach', w, pSha);
+    writeFileSync(join(w, 'inputs/reverify.json'), JSON.stringify({ 'reverify-status': 'verified' }));
+    git(w, 'add', 'inputs/reverify.json');
+    git(w, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test',
+      'commit', '-m', 'PR input differs from P');
+    const prSha = sha(w);
+    expect(prSha).not.toBe(pSha);
+    expect(readFileSync(join(p, 'scripts/selected-producer.mjs')))
+      .toEqual(readFileSync(join(w, 'scripts/selected-producer.mjs')));
+    const card = { ...target.card, contractEvidenceProducer: {
+      name: 'selected-status', boundaryCommand: boundary,
+    } };
+    writeFileSync(target.cardPath, JSON.stringify(card));
+    const ticks = String.fromCharCode(96).repeat(3);
+    const body = [
+      '## Acceptance criteria', '1. Verify selected W producer.', '',
+      ticks + 'producer-emission', 'producer: selected-status', 'datum: reverify-status',
+      'expected: verified', 'proof-command: ' + proof, 'producer-command: ' + boundary,
+      ticks, '', ticks + 'contract-evidence',
+      'binding: selected worktree status',
+      'binding-id: selected-status:reverify-status:verified',
+      'producer: selected-status', 'evidence: NEW(produced-by AC#1)', ticks, '',
+    ].join('\n');
+    const library = (head: string | null, modified: string[] = ['inputs/reverify.json']) =>
+      runContractEvidenceReverify({
+        repoRoot: packRoot, trustedBaseRoot: p, reviewTargetRoot: w,
+        projectId: card.projectId, env: target.env, manifestPath,
+        boundSnapshotBody: body, explicitIssueNumber: 2790,
+        prHeadSha: head, prModifiedPaths: modified,
+      });
+    const candidate = library(prSha);
+    expect(candidate).toMatchObject({ runOutcome: 'rows-evaluated',
+      candidateOnly: true, neverBlocks: true });
+    expect(candidate.rows).toHaveLength(1);
+    if (isPrHeadNetworkSandboxAvailable()) {
+      expect(candidate.rows[0]).toMatchObject({
+        status: 'verified', verificationMode: 'live', producerVerified: true,
+      });
+    } else {
+      expect(candidate.rows[0]).toMatchObject({
+        status: 'unverified', reason: 'producer-unreachable',
+      });
+    }
+    const snapshotDir = join(target.root, 'bound-snapshots');
+    const captured = captureBoundIssueSnapshot({
+      projectId: card.projectId, prNumber: 2798, prHeadSha: prSha, issueNumber: 2790,
+      issueBody: body, storeDirOverride: snapshotDir,
+    });
+    const modifiedFile = join(target.root, 'paths.txt');
+    writeFileSync(modifiedFile, 'inputs/reverify.json\n');
+    const invoke = (head: string | null = prSha) => runProcessSync({
+      command: process.execPath,
+      args: ['--experimental-strip-types',
+        join(packRoot, 'scripts/invoke-contract-evidence-reverify.ts'),
+        '--repo-root', packRoot, '--trusted-base-root', p, '--review-target-root', w,
+        '--manifest-path', manifestPath, '--snapshot-file', captured.snapshotPath,
+        '--bound-snapshot-pr-number', '2798', '--bound-snapshot-issue-number', '2790',
+        '--project-id', card.projectId, '--explicit-issue', '2790',
+        ...(head === null ? [] : ['--pr-head-sha', head]),
+        '--changed-paths-file', modifiedFile],
+      env: { ...target.env, OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR: snapshotDir },
+      inheritParentEnv: false,
+    });
+    const verifiedCli = invoke();
+    expect(verifiedCli.exitCode, verifiedCli.stderr).toBe(0);
+    expect(JSON.parse(verifiedCli.stdout)).toMatchObject({
+      candidateOnly: true, neverBlocks: true, runOutcome: 'rows-evaluated',
+    });
+    expect(JSON.parse(verifiedCli.stdout).rows[0].status).toBe(candidate.rows[0]!.status);
+    const unverified = (row: { status?: string; producerVerified?: boolean } | undefined) => {
+      expect(row?.status).toBe('unverified');
+      expect(row?.producerVerified).not.toBe(true);
+    };
+    unverified(library('f'.repeat(40)).rows[0]);
+    unverified(library(null).rows[0]);
+    expect(invoke('f'.repeat(40)).exitCode).toBe(2);
+    expect(invoke(null).exitCode).toBe(2);
+    unverified(library(prSha, ['scripts/selected-producer.mjs']).rows[0]);
+    writeFileSync(modifiedFile, 'scripts/selected-producer.mjs\n');
+    const blocked = invoke();
+    expect(blocked.exitCode, blocked.stderr).toBe(0);
+    unverified(JSON.parse(blocked.stdout).rows[0]);
+    writeFileSync(modifiedFile, 'inputs/reverify.json\n');
+    git(w, 'checkout', '--detach', pSha);
+    unverified(library(prSha).rows[0]);
+    const wrongCli = invoke();
+    expect(wrongCli.exitCode, wrongCli.stderr).toBe(0);
+    unverified(JSON.parse(wrongCli.stdout).rows[0]);
+    git(w, 'checkout', '--detach', prSha);
+    writeFileSync(join(w, 'scripts/selected-producer.mjs'), 'process.exit(88);\n');
+    unverified(library(prSha).rows[0]);
+    git(w, 'checkout', '--', 'scripts/selected-producer.mjs');
+    git(w, 'remote', 'set-url', 'origin', 'https://github.com/example/other.git');
+    unverified(library(prSha).rows[0]);
+    git(w, 'remote', 'set-url', 'origin', 'https://github.com/' + card.repository + '.git');
+    rmSync(join(p, 'scripts/selected-producer.mjs'));
+    unverified(library(prSha).rows[0]);
   });
 
   it('refuses smoke receipts after the selected project repository is retargeted', () => {
