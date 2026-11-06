@@ -423,6 +423,62 @@ function resolveNpmTestDependencyClosure(command: string, repoRoot: string): { r
   return { relPaths: [...relPaths], establishable };
 }
 
+/**
+ * Check the exact selected-card producer against the committed primary P and
+ * the review worktree W. The existing command resolver stays the only command
+ * authorizer; this check never expands its allowlist.
+ */
+export function selectedCardProducerClosureIsTrusted(input: {
+  command: string;
+  selectedContext: TargetContext;
+  reviewTargetRoot: string;
+  prModifiedPaths: readonly string[];
+}): boolean {
+  const card = input.selectedContext.contractEvidenceProducer;
+  if (!card || input.command.trim() !== card.boundaryCommand) return false;
+  const primary = input.selectedContext.primaryRoot;
+  const review = input.reviewTargetRoot;
+  const primaryCommand = resolveAllowlistedCommand(card.boundaryCommand, {
+    repoRoot: primary, selectedContext: input.selectedContext,
+  });
+  const reviewCommand = resolveAllowlistedCommand(card.boundaryCommand, {
+    repoRoot: review, selectedContext: input.selectedContext,
+  });
+  if (!primaryCommand || !reviewCommand || primaryCommand.executable !== process.execPath
+      || reviewCommand.executable !== process.execPath) return false;
+  const primaryEntry = primaryCommand.args[0];
+  const reviewEntry = reviewCommand.args[0];
+  if (!primaryEntry || !reviewEntry) return false;
+  const a = resolveScriptDependencyClosureFromAbsEntry(primaryEntry, primary);
+  const b = resolveScriptDependencyClosureFromAbsEntry(reviewEntry, review);
+  if (!a.establishable || !b.establishable) return false;
+  const x = [...a.relPaths].sort();
+  const y = [...b.relPaths].sort();
+  if (x.length === 0 || x.length !== y.length
+      || x.some((rel, index) => rel !== y[index])) return false;
+  const changed = new Set(input.prModifiedPaths.map(normalizePath));
+  try {
+    const primaryRoot = realpathSync(primary);
+    const reviewRoot = realpathSync(review);
+    for (const rel of x) {
+      if (changed.has(rel)) return false;
+      const p = realpathSync(path.join(primary, rel));
+      const w = realpathSync(path.join(review, rel));
+      const confined = (root: string, file: string) => {
+        const relative = path.relative(root, file);
+        return !!relative && relative !== '..'
+          && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+      };
+      if (!confined(primaryRoot, p) || !confined(reviewRoot, w)
+          || !statSync(p).isFile() || !statSync(w).isFile()
+          || !readFileSync(p).equals(readFileSync(w))) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function listNodeScriptDependencyClosureRelPaths(command: string, repoRoot: string): string[] {
   return resolveNodeScriptDependencyClosure(command, repoRoot)?.relPaths ?? [];
 }
