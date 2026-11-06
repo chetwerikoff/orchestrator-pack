@@ -1,5 +1,6 @@
 import './toolchain/native-entrypoint-preflight.ts';
 import { randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import {
   appendFileSync,
   existsSync,
@@ -25,6 +26,7 @@ import { pathMatchesAnyPattern } from '../plugins/task-declaration/lib/glob_matc
 import { REPOSITORY_DENYLIST } from './pr-scope-declaration.ts';
 import { observePosixProcessGroup, runProcess, type ProcessResult } from './kernel/subprocess.ts';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
+import { parseRemoteSlug } from './lib/git-origin-slug.mjs';
 import { claudeHelpEdgeCapabilities } from './executor-profile-policy.ts';
 import {
   INSPECTION_EXPRESSION,
@@ -326,6 +328,12 @@ interface StartInput {
   fixtureChangedPaths?: string[];
   fixtureBoundIssueSnapshotBytes?: string;
   fixtureReviewCompareStatus?: string;
+  fixtureRebaseProtectionRunner?: typeof runProcess;
+  fixtureRebasePrReader?: () => Promise<{
+    prNumber: number; headSha: string; baseRef: string; body: string;
+  }> | { prNumber: number; headSha: string; baseRef: string; body: string };
+  fixtureRebaseOriginRepository?: string;
+  fixtureBeforeRebaseSettlementRecheck?: () => void | Promise<void>;
   fixtureSameHeadIssueResolutionRunner?: typeof runProcess;
   /** Synthetic GitHub evidence for the narrow #2655/#2656 incident. */
   fixtureIncidentGithubRunner?: typeof runProcess;
@@ -389,6 +397,12 @@ export interface ReconcileStalePackReviewRunsInput {
   fixtureChangedPaths?: string[];
   fixtureBoundIssueSnapshotBytes?: string;
   fixtureReviewCompareStatus?: string;
+  fixtureRebaseProtectionRunner?: typeof runProcess;
+  fixtureRebasePrReader?: () => Promise<{
+    prNumber: number; headSha: string; baseRef: string; body: string;
+  }> | { prNumber: number; headSha: string; baseRef: string; body: string };
+  fixtureRebaseOriginRepository?: string;
+  fixtureBeforeRebaseSettlementRecheck?: () => void | Promise<void>;
   fixtureSameHeadIssueResolutionRunner?: typeof runProcess;
   /** Offline connector-shaped existing GitHub architect/diff evidence; no runtime bypass. */
   fixtureIncidentGithubRunner?: typeof runProcess;
@@ -840,6 +854,179 @@ async function resolvePackReviewStrictDescendant(input: {
   fixtureReviewCompareStatus?: string;
 }): Promise<boolean> {
   return await resolvePackReviewFindingsHeadRelation(input) === 'strict_descendant';
+}
+
+
+interface VerifiedRebasedC {
+  anchorSha: string;
+  recheck: () => Promise<void>;
+}
+const rebaseSha1 = /^[0-9a-f]{40}$/;
+const rebaseRawDiffArgs = ['diff', '--no-ext-diff', '--no-textconv', '--no-color',
+  '--raw', '-z', '--no-renames', '--full-index', '--abbrev=40'] as const;
+function rebaseRawDelta(repoRoot: string, from: string, to: string): Buffer {
+  const result = spawnSync('git', [...rebaseRawDiffArgs, from, to], {
+    cwd: repoRoot, encoding: null, env: process.env, timeout: 30_000,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (result.error || result.status !== 0 || result.signal || !Buffer.isBuffer(result.stdout)) {
+    throw new Error('complete raw Git diff unavailable');
+  }
+  const raw = result.stdout;
+  for (let at = 0; at < raw.length;) {
+    const headerEnd = raw.indexOf(0, at);
+    const pathEnd = headerEnd < 0 ? -1 : raw.indexOf(0, headerEnd + 1);
+    if (headerEnd < 0 || pathEnd <= headerEnd + 1
+        || !/^:[0-7]{6} [0-7]{6} [0-9a-f]{40} [0-9a-f]{40} [A-Z][0-9]*$/.test(
+          raw.subarray(at, headerEnd).toString('latin1'),
+        )) throw new Error('raw Git diff full OID/mode/path invalid');
+    at = pathEnd + 1;
+  }
+  return raw;
+}
+async function rebaseGitSha1(root: string, args: string[], label: string): Promise<string> {
+  const value = (await runGit(root, args, label)).trim();
+  if (!rebaseSha1.test(value)) throw new Error(label + ': expected unique full SHA-1');
+  return value;
+}
+async function rebaseAncestor(root: string, from: string, to: string): Promise<boolean> {
+  const result = await runProcess({
+    command: 'git', args: ['merge-base', '--is-ancestor', from, to],
+    cwd: root, inheritParentEnv: true, allowEmptyStdout: true,
+  });
+  if (result.outcome !== 'exit' || ![0, 1].includes(result.exitCode ?? -1)) {
+    throw new Error('merge-base ancestry command failed');
+  }
+  return result.exitCode === 0;
+}
+async function rebaseUniqueMergeBase(root: string, head: string, b: string): Promise<string> {
+  const lines = (await runGit(root, ['merge-base', '--all', head, b], 'merge-base --all'))
+    .trim().split(/\r?\n/);
+  if (lines.length !== 1 || !rebaseSha1.test(lines[0] ?? '')
+      || (await runGit(root, ['cat-file', '-t', lines[0]!], 'base object')).trim() !== 'commit') {
+    throw new Error('missing/multiple/invalid merge bases');
+  }
+  return lines[0]!;
+}
+/** One per-call nonpersistent C proof for both PR-led and scoped entrypoints. */
+async function proveUniqueRebasedC(
+  input: ReconcileStalePackReviewRunsInput,
+  options: { projectId: string; repoSlug: string },
+  prNumber: number, h1: string, h2: string,
+): Promise<VerifiedRebasedC> {
+  const root = input.sourceRepoRoot;
+  const harness = process.env.OPK_VITEST_HARNESS === '1';
+  const selected = resolveTargetContext({ projectId: options.projectId, env: process.env });
+  const base = selected.defaultBranch;
+  if (selected.repository.toLowerCase() !== options.repoSlug.toLowerCase()
+      || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(base) || base.includes('..')
+      || base.endsWith('.lock') || base.includes('@{')
+      || ![base, 'origin/' + base].includes(String(input.baseRef || 'origin/' + base))) {
+    throw new Error('selected PR repository/baseRef not proven');
+  }
+  const remote = (await runGit(root, ['remote', 'get-url', 'origin'], 'selected origin')).trim();
+  const originSlug = harness && input.fixtureRebaseOriginRepository
+    ? input.fixtureRebaseOriginRepository : parseRemoteSlug(remote);
+  if (!originSlug || originSlug.toLowerCase() !== selected.repository.toLowerCase()) {
+    throw new Error('checkout origin is not selected PR repository');
+  }
+  const readPr = async () => {
+    if (harness && input.fixtureRebasePrReader) return input.fixtureRebasePrReader();
+    if (harness && input.fixturePrBody !== undefined && input.fixtureCurrentPrHeadSha) {
+      if (String(input.fixturePrState || 'OPEN').toUpperCase() !== 'OPEN'
+          || input.fixturePrMerged === true) throw new Error('PR not open/unmerged');
+      return { prNumber, headSha: input.fixtureCurrentPrHeadSha,
+        baseRef: base, body: input.fixturePrBody };
+    }
+    return { prNumber, ...await resolveCurrentPrTarget(root, options.repoSlug, prNumber) };
+  };
+  const pr = await readPr();
+  const requirePr = (next: Awaited<ReturnType<typeof readPr>>) => {
+    if (next.prNumber !== prNumber || next.headSha.toLowerCase() !== h2.toLowerCase()
+        || next.baseRef !== base || next.body !== pr.body
+        || !extractClosingIssueNumber(next.body)) {
+      throw new Error('live open PR number/head/baseRef/Issue changed');
+    }
+  };
+  requirePr(pr);
+  const protectionResult = await (harness && input.fixtureRebaseProtectionRunner
+    ? input.fixtureRebaseProtectionRunner : runProcess)({
+      command: resolveTrackedGhWrapper(),
+      args: ['api', 'repos/' + selected.repository + '/branches/' + base + '/protection'],
+      cwd: root, inheritParentEnv: true, allowEmptyStdout: false, timeoutMs: 30_000,
+    });
+  if (!protectionResult.ok) throw new Error('branch protection GET unavailable or denied');
+  let policy: unknown;
+  try { policy = JSON.parse(protectionResult.stdout); }
+  catch { throw new Error('branch protection GET invalid JSON'); }
+  if (!policy || typeof policy !== 'object' || Array.isArray(policy)) {
+    throw new Error('branch protection GET invalid object');
+  }
+  const record = policy as Record<string, unknown>;
+  const disabled = (key: string) => {
+    const value = record[key];
+    return !!value && typeof value === 'object' && !Array.isArray(value)
+      && (value as Record<string, unknown>).enabled === false;
+  };
+  if (!disabled('allow_force_pushes') || !disabled('allow_deletions')) {
+    throw new Error('force pushes/deletions must both be explicitly disabled');
+  }
+  if ((await runGit(root, ['rev-parse', '--show-object-format=storage'], 'object format')).trim() !== 'sha1') {
+    throw new Error('unsupported non-SHA-1 object format');
+  }
+  const fullRef = 'refs/heads/' + base;
+  const liveBase = async (): Promise<string> => {
+    let output: string;
+    try { output = await runGit(root, ['ls-remote', remote, fullRef], 'live selected base tip'); }
+    catch { throw new Error('ls-remote unavailable; rerun when remote is reachable'); }
+    const rows = output.trim().split(/\r?\n/);
+    const fields = rows.length === 1 ? rows[0]!.split('\t') : [];
+    if (fields.length !== 2 || !rebaseSha1.test(fields[0] ?? '')
+        || fields[1] !== fullRef) throw new Error('missing/malformed/nonunique live base tip');
+    return fields[0]!;
+  };
+  const localBase = async () => rebaseGitSha1(
+    root, ['rev-parse', '--verify', 'refs/remotes/origin/' + base + '^{commit}'],
+    'local origin base',
+  );
+  const b = await liveBase();
+  if (await localBase() !== b) throw new Error('stale local base; fetch origin ' + base + ' and rerun');
+  const m1 = await rebaseUniqueMergeBase(root, h1, b);
+  const m2 = await rebaseUniqueMergeBase(root, h2, b);
+  if (!(await rebaseAncestor(root, m1, m2))) throw new Error('rewritten-base M1/M2 ancestry false');
+  if (await rebaseAncestor(root, h1, h2)) throw new Error('H1 route is not rewritten');
+  const authenticDelta = rebaseRawDelta(root, m1, h1);
+  const output = (await runGit(root, ['rev-list', '--first-parent', m2 + '..' + h2],
+    'first-parent C census')).trim();
+  const candidates = output ? output.split(/\r?\n/) : [];
+  if (candidates.some((oid) => !rebaseSha1.test(oid))) throw new Error('malformed C candidates');
+  const matching: string[] = [];
+  for (const oid of candidates) {
+    if (rebaseRawDelta(root, m2, oid).equals(authenticDelta)) matching.push(oid);
+  }
+  if (matching.length !== 1) throw new Error('nonunique or absent full-raw matching C');
+  const anchorSha = matching[0]!;
+  if (anchorSha === h2 || !(await rebaseAncestor(root, anchorSha, h2))) {
+    throw new Error('C is not a strict H2 ancestor');
+  }
+  const cTree = await rebaseGitSha1(root, ['rev-parse', anchorSha + '^{tree}'], 'C tree');
+  const hTree = await rebaseGitSha1(root, ['rev-parse', h2 + '^{tree}'], 'H2 tree');
+  if (cTree === hTree) throw new Error('empty-tree C/H2 fix');
+  return { anchorSha, recheck: async () => {
+    await input.fixtureBeforeRebaseSettlementRecheck?.();
+    const card = resolveTargetContext({ projectId: options.projectId, env: process.env });
+    if (card.projectId !== selected.projectId || card.repository !== selected.repository
+        || card.defaultBranch !== base || card.primaryRoot !== selected.primaryRoot) {
+      throw new Error('selected card moved before C settlement');
+    }
+    if ((await runGit(root, ['remote', 'get-url', 'origin'], 'origin recheck')).trim() !== remote) {
+      throw new Error('checkout origin moved before C settlement');
+    }
+    requirePr(await readPr());
+    if (await localBase() !== b || await liveBase() !== b) {
+      throw new Error('selected live/local base tip moved; fetch origin ' + base + ' and rerun');
+    }
+  } };
 }
 
 export async function resolveCurrentPrTarget(
