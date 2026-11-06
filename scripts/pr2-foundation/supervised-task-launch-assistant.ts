@@ -259,6 +259,10 @@ export interface LaunchInput {
   readonly projectId?: string;
   readonly workClass: LaunchWorkClass;
   readonly primaryRoot?: string;
+  /** Absolute pack checkout that owns the merge skill, from the selected project card. */
+  readonly packRoot?: string;
+  /** One-command merge Task creation; existing --task launches do not use this field. */
+  readonly prNumber?: number;
   readonly issueNumber?: number;
   readonly delegatedIntegration?: DelegatedIntegrationMarker;
   readonly runId?: string;
@@ -292,6 +296,14 @@ export interface ManagerPushGuardRequest {
   readonly placementSeedOid?: string;
 }
 
+export interface MergePrSnapshot {
+  readonly number: number;
+  readonly state: 'open';
+  readonly baseRef: string;
+  readonly baseRepository: string;
+  readonly headSha: string;
+}
+
 export interface LaunchDependencies {
   readonly commandPreflight: () => Promise<EdgeResult<true>> | EdgeResult<true>;
   readonly repositoryPreflight: (repository: string) => Promise<EdgeResult<true>>;
@@ -300,7 +312,9 @@ export interface LaunchDependencies {
     env: Readonly<NodeJS.ProcessEnv>,
     startMode?: WorkerStartMode,
   ) => Promise<EdgeResult<ExecutorProfile>> | EdgeResult<ExecutorProfile>;
-  readonly observeManagerRun: (runId: string) => Promise<EdgeResult<{ readonly runId: string }>>;
+  readonly observeManagerRun: (runId: string) => Promise<EdgeResult<{ readonly runId: string; readonly coordinatorHandle?: string }>>;
+  /** Read the exact open PR/base/head via tracked GitHub REST before any Task create. */
+  readonly readMergePr?: (repository: string, prNumber: number) => Promise<EdgeResult<MergePrSnapshot>>;
   readonly proveManagerTaskMembership: (runId: string, taskId: string) => Promise<EdgeResult<{ readonly taskId: string }>>;
   readonly readManagerBriefTemplate: (name: ManagerBriefTemplateName) => Promise<EdgeResult<string>> | EdgeResult<string>;
   readonly readIssueTitle: (repository: string, issueNumber: number) => Promise<EdgeResult<string>>;
@@ -843,6 +857,30 @@ export async function observeQuiescentRestoreCensus(
   return { status: 'ok', value: { terminalFingerprint: keys.sort().join('\\u0000') } };
 }
 
+export function buildMergeTaskSpec(input: LaunchInput, pr: MergePrSnapshot, orchHandle: string): string {
+  if (!input.projectId || !input.primaryRoot || !input.packRoot || !isAbsolute(input.packRoot)
+    || !Number.isSafeInteger(input.prNumber) || input.prNumber !== pr.number
+    || !/^[a-f0-9]{40}$/iu.test(pr.headSha) || !orchHandle.trim()) {
+    throw new Error('merge Task spec requires verified project, absolute skill root, PR, head and coordinator terminal');
+  }
+  const skill = join(input.packRoot, '.cursor', 'skills', 'merge-with-local-adoption', 'SKILL.md');
+  const scripts = join(input.packRoot, 'scripts');
+  return [
+    `Read and execute ${skill} for PR ${pr.number}: «смерж ${pr.number}», orchestrator-issued Task mode`,
+    `Project: OPK_PROJECT_ID=${input.projectId}; --project ${input.projectId}; primary checkout ${input.primaryRoot}; put ${scripts} first on PATH; repository ${input.repository}.`,
+    `REST-verified OPEN PR #${pr.number}: base ${pr.baseRepository}:${pr.baseRef}; exact head ${pr.headSha}.`,
+    'Merge only this head; on drift, report to the coordinator. Recheck the exact PR head immediately before merge.',
+    'Use orchestrator-issued Task mode, never delegated-integration mode or an absent delegated marker.',
+    'No Chrome: do not open, start or use Chrome/CDP or another browser in this merge task.',
+    'No bsk: do not invoke bsk or browser-skill.',
+    'GNU timeout accepts seconds, not milliseconds; express every timeout in seconds.',
+    'ADOPTION_STARTED_AT_UTC: record the real UTC time when adoption begins; do not invent it.',
+    `Project ORCH_HANDLE=${orchHandle}. On completion run orca terminal send --terminal ${quote(orchHandle)} --enter --text ${quote(`merge-${pr.number} done: <state>, primary at <sha>`)} with actual state and adopted SHA; on refusal/failure send the concrete blocker to this same ORCH_HANDLE.`,
+    'The merge skill owns CI, review, smoke, readiness, adoption and final read-back; do not duplicate its gates in the launcher.',
+    '',
+  ].join('\n');
+}
+
 export async function runSupervisedTaskLaunchAssistant(
   input: LaunchInput,
   deps: LaunchDependencies,
@@ -982,6 +1020,49 @@ export async function runSupervisedTaskLaunchAssistant(
       }, resources, startedAtMs, timings, deps.now);
       resources = { ...resources, taskId };
     }
+  } else if (input.workClass === 'merge' && input.prNumber !== undefined && !taskId) {
+    // A new Task is created only after the selected coordinator Run and live PR
+    // are verified. No merge readiness gate is duplicated here.
+    if (!deps.readMergePr || !input.projectId || !input.primaryRoot || !input.packRoot
+      || !isAbsolute(input.packRoot) || !Number.isSafeInteger(input.prNumber) || input.prNumber <= 0) {
+      return continued(input, 'manager_run', {
+        cause: 'merge_pr_launch_context_unavailable', actor: 'orchestrator', evidence: {},
+        nextAction: { kind: 'reconcile_manager_run',
+          note: 'Restore the selected project card, current coordinator Run and exact --pr argument, then rerun the same command' },
+      }, resources, startedAtMs, timings, deps.now);
+    }
+    const currentRun = await checkpoint('manager_run', timings, deps.now, () => deps.observeManagerRun(''));
+    if (currentRun.status !== 'ok') return continued(input, 'manager_run', currentRun, resources, startedAtMs, timings, deps.now);
+    const runId = text(currentRun.value.runId);
+    const orchHandle = text(currentRun.value.coordinatorHandle);
+    if (!runId || !orchHandle) return continued(input, 'manager_run', {
+      cause: 'merge_coordinator_run_unproven', actor: 'orchestrator', evidence: {},
+      nextAction: { kind: 'reconcile_manager_run',
+        note: 'Select the project coordinator terminal and its current Orca Run, then rerun the same --pr command' },
+    }, resources, startedAtMs, timings, deps.now);
+    resources = { ...resources, runId };
+    const verified = await checkpoint('manager_task', timings, deps.now,
+      () => deps.readMergePr!(resources.repository, input.prNumber!));
+    if (verified.status !== 'ok') return continued(input, 'manager_task', verified, resources, startedAtMs, timings, deps.now);
+    const pr = verified.value;
+    if (pr.number !== input.prNumber || pr.state !== 'open'
+      || pr.baseRepository.toLowerCase() !== resources.repository || pr.baseRef !== input.defaultBranch
+      || !/^[a-f0-9]{40}$/iu.test(pr.headSha)) return continued(input, 'manager_task', {
+      cause: 'merge_pr_binding_mismatch', actor: 'orchestrator',
+      evidence: { prNumber: input.prNumber, expectedBase: input.defaultBranch ?? 'unknown' },
+      nextAction: { kind: 'reconcile_manager_task',
+        note: 'Recheck the OPEN PR repository, selected default base ref and exact head over REST; correct the target and rerun the same command' },
+    }, resources, startedAtMs, timings, deps.now);
+    const spec = buildMergeTaskSpec(input, pr, orchHandle);
+    const created = await checkpoint('manager_task', timings, deps.now, () => deps.createManagerTask(runId, spec));
+    if (created.status !== 'ok') return continued(input, 'manager_task', created, resources, startedAtMs, timings, deps.now);
+    taskId = text(created.value.taskId);
+    if (!taskId || !text(created.value.status)) return continued(input, 'manager_task', {
+      cause: 'merge_task_create_receipt_invalid', actor: 'provider', evidence: {},
+      nextAction: { kind: 'reconcile_manager_task',
+        note: 'Reconcile the outcome of the one Task-create mutation in the current Run; do not repeat --pr until resolved' },
+    }, resources, startedAtMs, timings, deps.now);
+    resources = { ...resources, taskId };
   } else if (!taskId) {
     return continued(input, 'manager_task', {
       cause: 'worker_task_required', actor: 'orchestrator', evidence: { requiredArgument: '--task' },
@@ -1310,8 +1391,19 @@ export async function runSupervisedTaskLaunchAssistant(
       nextAction: terminalCause === 'executor_effort_channel_unavailable'
         ? { kind: 'repair_executor_profile',
           note: 'read the exact Claude Code pane footer and native command; restore the selected model/effort on this Task-owned terminal before supervised start, or select another admitted profile' }
-        : { kind: 'remediate_terminal',
-          note: 'reuse only the exact owned terminal identity after a bounded startup refusal; never reuse a foreign, replaced, or mismatched target' },
+        : terminalCause === 'terminal_liveness_busy'
+          ? { kind: 'remediate_terminal',
+            ...(input.prNumber ? { command: `${FIRST_START_COMMAND} --project ${quote(input.projectId!)} --repository ${quote(resources.repository)} --work-class merge --task ${quote(taskId)} --worktree ${quote(`path:${input.primaryRoot}`)}` } : {}),
+            note: input.prNumber
+              ? 'Rerun the returned --task launch command for this same Task and terminal; do not close the terminal or rerun --pr, which would create a new Task'
+              : 'Rerun the same command with unchanged arguments: #2107 reuses this exact Task-owned terminal. Do not close the terminal' }
+          : spawn.status !== 'ok' && spawn.reason === 'launch_task_terminal_identity_unproven'
+            ? { kind: 'remediate_terminal',
+              note: input.workClass === 'merge'
+                ? 'Native terminal show could not prove the old owner gone or retitled. Rerun the same command; alternatively launch a fresh merge Task with --project P --repository R --work-class merge --pr N. Never send to the unproven terminal'
+                : 'Native terminal show did not prove the old owner gone or retitled. Rerun the same command after restoring terminal show; never send to the unproven terminal' }
+            : { kind: 'remediate_terminal',
+              note: 'reuse only the exact owned terminal identity after a bounded startup refusal; never reuse a foreign, replaced, or mismatched target' },
     }, resources, startedAtMs, timings, deps.now);
   }
 
@@ -2676,10 +2768,32 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       const observed = text(run?.id);
       const coordinator = text(env.ORCA_TERMINAL_HANDLE);
       return observed && (!runId || observed === runId) && coordinator && text(run?.coordinator_handle) === coordinator
-        ? { status: 'ok', value: { runId: observed } } : {
+        ? { status: 'ok', value: { runId: observed, coordinatorHandle: coordinator } } : {
         status: 'continue', cause: 'manager_run_observation_unavailable', actor: 'provider', evidence: {},
         nextAction: { kind: 'reconcile_manager_run', note: `reconcile the exact Run ${runId || 'selected by run-current'} and its coordinator with the selected caller terminal before continuing` },
       };
+    },
+    readMergePr: async (repository, prNumber) => {
+      const response = await child(['gh', 'api', `repos/${repository}/pulls/${prNumber}`], cwd, env);
+      let data: unknown;
+      try { data = response.ok ? JSON.parse(response.stdout) : null; }
+      catch { data = null; }
+      const pr = record(data) ? data : null;
+      const base = record(pr?.base) ? pr.base : null;
+      const head = record(pr?.head) ? pr.head : null;
+      const baseRepo = record(base?.repo) ? base.repo : null;
+      const baseRef = text(base?.ref);
+      const baseRepository = text(baseRepo?.full_name).toLowerCase();
+      const headSha = text(head?.sha).toLowerCase();
+      if (!response.ok || pr?.number !== prNumber || text(pr?.state).toLowerCase() !== 'open'
+        || baseRepository !== repository || baseRef !== target.defaultBranch
+        || !/^[a-f0-9]{40}$/iu.test(headSha)) return {
+        status: 'continue', cause: 'merge_pr_rest_binding_unavailable', actor: 'orchestrator',
+        evidence: { repository, prNumber, expectedBase: target.defaultBranch },
+        nextAction: { kind: 'reconcile_manager_task',
+          note: 'Verify the exact OPEN PR, base repository/ref and current 40-hex head through tracked GitHub REST, then rerun the same command' },
+      };
+      return { status: 'ok', value: { number: prNumber, state: 'open', baseRef, baseRepository, headSha } };
     },
     proveManagerTaskMembership: async (runId, taskId) => {
       const result = resultRecord(envelope(await child([
@@ -2957,6 +3071,7 @@ const LAUNCH_CLI_OPTIONS = new Set([
   '--delegated-integration',
   '--run',
   '--task',
+  '--pr',
   '--manager-brief',
   '--worktree',
   '--worktree-name',
@@ -3011,6 +3126,15 @@ export function parseLaunchAssistantCli(
   }
   const runId = (options.get('--run') ?? '').trim();
   const taskId = (options.get('--task') ?? '').trim();
+  const prText = (options.get('--pr') ?? '').trim();
+  let prNumber: number | undefined;
+  if (prText) {
+    if (!/^[1-9]\d*$/u.test(prText) || !Number.isSafeInteger(Number(prText))) {
+      throw new Error('--pr must be a safe positive integer');
+    }
+    prNumber = Number(prText);
+  }
+  if (prNumber !== undefined && workClass !== 'merge') throw new Error('--pr is merge-only');
   const managerBrief = options.get('--manager-brief');
   const worktreeSelector = (options.get('--worktree') ?? '').trim();
   const worktreeName = (options.get('--worktree-name') ?? '').trim();
@@ -3043,7 +3167,13 @@ export function parseLaunchAssistantCli(
   }
 
   if (workClass === 'merge') {
-    if (!hasTask || runId || hasManagerBrief || hasWorktreeName
+    if (prNumber !== undefined) {
+      if (!options.has('--project') || !explicitRepository || hasTask || hasWorktreeSelector
+        || hasWorktreeName || runId || hasManagerBrief || delegatedRaw !== undefined
+        || issueNumber || existingTerminal || explicitBaseBranch || requestedMode) {
+        throw new Error('merge --pr requires exactly --project P --repository R --work-class merge --pr N; --task, --worktree and all other launch selectors are forbidden');
+      }
+    } else if (!hasTask || runId || hasManagerBrief || hasWorktreeName
       || (delegatedIntegration
         ? (!issueNumber || hasWorktreeSelector)
         : (!hasWorktreeSelector || worktreeSelector !== `path:${target.primaryRoot}`))) {
@@ -3066,7 +3196,7 @@ export function parseLaunchAssistantCli(
     if (hasTask && !hasWorktreeSelector) throw new Error('existing manager Task requires --worktree');
     if (hasManagerBrief && !hasWorktreeName) throw new Error('fresh manager brief requires --worktree-name');
   } else {
-    if (!taskId) throw new Error(`${workClass} requires --task`);
+    if (!taskId && prNumber === undefined) throw new Error(`${workClass} requires --task`);
     if (runId || hasManagerBrief) throw new Error('--run and --manager-brief are manager-only');
   }
 
@@ -3074,13 +3204,15 @@ export function parseLaunchAssistantCli(
     repository,
     projectId: target.projectId,
     primaryRoot: target.primaryRoot,
+    ...(prNumber !== undefined ? { prNumber, packRoot: target.packRoot } : {}),
     workClass: workClass as LaunchWorkClass,
     ...(issueNumber ? { issueNumber } : {}),
     ...(delegatedIntegration ? { delegatedIntegration } : {}),
     ...(runId ? { runId } : {}),
     ...(taskId ? { taskId } : {}),
     ...(managerBrief !== undefined ? { managerBrief } : {}),
-    ...(workClass === 'merge' && delegatedIntegration ? { worktreeSelector: `path:${target.primaryRoot}` }
+    ...(workClass === 'merge' && (delegatedIntegration || prNumber !== undefined)
+      ? { worktreeSelector: `path:${target.primaryRoot}` }
       : worktreeSelector ? { worktreeSelector } : {}),
     ...(worktreeName ? { worktreeName } : {}),
     ...(existingTerminal ? { existingTerminal } : {}),
