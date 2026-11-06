@@ -17,7 +17,6 @@
     "vendor/"
   ],
   "allowed_roots": [
-    "docs/declarations/",
     "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/orca-runtime/task-adapter.ts",
     "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
