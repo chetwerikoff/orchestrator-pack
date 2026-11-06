@@ -201,21 +201,6 @@ function sameTaskTerminalDispatch(
       && ['failed', 'abandoned', 'cancelled', 'done', 'completed'].includes(observed.status ?? ''));
 }
 
-const FIRST_START_COMMAND = 'node --experimental-strip-types scripts/pr2-foundation/supervised-task-launch-assistant.ts';
-
-/**
- * Coordinator-owned first-start command for a new Task. Every option is one the
- * launch CLI requires for this work class; `$...` words are values the coordinator
- * supplies (new Task id or manager brief, fresh worktree name).
- */
-function newTaskStartCommand(input: LaunchInput): string {
-  const project = input.projectId?.trim() ? input.projectId.trim() : '"$PROJECT_ID"';
-  const issue = input.issueNumber ? ` --issue-number ${input.issueNumber}` : '';
-  const route = input.workClass === 'manager'
-    ? '--work-class manager --run "$RUN_ID" --manager-brief "$MANAGER_BRIEF"'
-    : `--work-class ${input.workClass} --task "$NEW_TASK_ID"`;
-  return `${FIRST_START_COMMAND} --project ${project}${issue} ${route} --worktree-name "$NEW_WORKTREE_NAME"`;
-}
 
 /**
  * A present Dispatch with no current assignment for this Task is never resumed by
@@ -246,8 +231,7 @@ function freshDispatchNotAbsent(
     evidence: { ...evidence, assignment: 'absent' },
     nextAction: {
       kind: 'start_new_task',
-      command: newTaskStartCommand(input),
-      note: `no current assignment owns Task ${taskId}, so no same-Task successor starts; the coordinator starts a new Task through the authorized first-start route`,
+      note: `no current assignment owns Task ${taskId}; inspect the exact Dispatch read-only and preserve the old checkout, including dirty bytes. The coordinator must supply the selected project, original Run, new Task/manager brief and unique worktree name. If one open same-repository Issue-closing PR has a verified default base and fetched head, use a fresh named worktree on origin/<verified PR branch>; otherwise separately authorize a clean default-branch first start. No executable retry is resolved here.`,
     },
   };
 }
@@ -850,6 +834,17 @@ export async function runSupervisedTaskLaunchAssistant(
   const startedAtMs = deps.now();
   const timings: StageTiming[] = [];
   let resources = initialResources(input);
+  const projectId = input.projectId?.trim();
+  const inheritedProject = (input.env ?? process.env).OPK_PROJECT_ID?.trim();
+  if (!projectId || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(projectId)
+    || (inheritedProject && inheritedProject !== projectId)) {
+    return continued(input, 'command_preflight', {
+      cause: !projectId ? 'project_selection_required' : inheritedProject && inheritedProject !== projectId
+        ? 'project_selector_mismatch' : 'project_selection_invalid',
+      actor: 'orchestrator', evidence: {},
+      nextAction: { kind: 'reconcile_dispatch', note: 'select the exact project card and matching OPK_PROJECT_ID before any native launch' },
+    }, resources, startedAtMs, timings, deps.now);
+  }
   const delegatedIntegration = input.workClass === 'merge'
     ? parseDelegatedIntegrationMarker(input.delegatedIntegration)
     : null;
@@ -1076,6 +1071,14 @@ export async function runSupervisedTaskLaunchAssistant(
             note: 'prove the exact native terminal/worktree; never select by title or stale pane text' } });
       }
       reusedIdentity = observed.value.identity;
+      const selection = deps.adapter.observeComposerFamily?.(observed.value.identity);
+      if (!selection || selection.status !== 'known'
+        || !selection.command?.startsWith(`OPK_PROJECT_ID=${quote(projectId)} `)) {
+        return Promise.resolve({ status: 'continue' as const,
+          cause: 'existing_terminal_project_unverified', actor: 'orchestrator' as const,
+          nextAction: { kind: 'remediate_terminal' as const,
+            note: 'inspect the exact native command; an existing process cannot acquire a new project selection through terminal reuse' } });
+      }
       // Read-only worktree reuse. Supervised start re-proves the native
       // terminal/worktree placement and publishes only after a ready receipt.
       return Promise.resolve({ status: 'ok' as const,
@@ -1151,9 +1154,11 @@ export async function runSupervisedTaskLaunchAssistant(
     resources = { ...resources };
     profile = finalized.value;
   }
+  const projectPrefix = `OPK_PROJECT_ID=${quote(projectId)} `;
+  profile = { ...profile, launchCommand: projectPrefix + profile.launchCommand };
   // The post-probe command is the actual spawn command; never trust the pre-probe
   // profile if a finalized OpenCode command silently dropped its deny overlay.
-  if (profile.family === 'opencode' && !openCodeLaunchHasFleetBrowserDenies({ command: profile.launchCommand, agentName: profile.agentName, inlineConfigJson: profile.inlineConfigJson, ...(profile.executable ? { executable: profile.executable } : {}) })) {
+  if (profile.family === 'opencode' && (!profile.launchCommand.startsWith(projectPrefix) || !openCodeLaunchHasFleetBrowserDenies({ command: profile.launchCommand.slice(projectPrefix.length), agentName: profile.agentName, inlineConfigJson: profile.inlineConfigJson, ...(profile.executable ? { executable: profile.executable } : {}) }))) {
     return continued(input, 'terminal_prepare', openCodeLaunchRefusal(input.workClass, Boolean(delegatedIntegration)), resources, startedAtMs, timings, deps.now);
   }
 
@@ -1317,9 +1322,11 @@ export async function runSupervisedTaskLaunchAssistant(
 
   if (input.existingTerminal && terminal) {
     const current = deps.adapter.findWorkerById(terminal.identity.id);
+    const commandObservation = deps.adapter.observeComposerFamily?.(terminal.identity);
     if (current.status !== 'ok' || !current.value
       || !sameIdentity(current.value.identity, terminal.identity)
-      || current.value.workspacePath !== terminal.workspacePath) {
+      || current.value.workspacePath !== terminal.workspacePath
+      || commandObservation?.status !== 'known' || commandObservation.command !== profile.launchCommand) {
       return continued(input, 'dispatch_admission_final', {
         cause: 'existing_terminal_generation_changed', actor: 'orchestrator', evidence: {},
         nextAction: { kind: 'remediate_terminal',
@@ -1398,12 +1405,11 @@ export async function runSupervisedTaskLaunchAssistant(
       actor: 'provider',
       evidence: {
         ...(supervised.errorCode ? { errorCode: supervised.errorCode } : {}),
-        // Assignment-side native causes are not always surfaced. Only expose a known
-        // safe admission reason; never forward arbitrary provider error strings.
+        taskId,
+        ...(terminal ? { terminalId: terminal.identity.id, terminalGeneration: terminal.identity.generation } : {}),
         ...(supervised.reason === 'target_unresolved' ? {
-          admissionDiagnostic: supervised.errorMessage === 'terminal_reuse_unauthorized'
-            ? 'terminal_reuse_unauthorized'
-            : 'native cause unavailable',
+          admissionDiagnostic: supervised.errorMessage?.trim() || 'assignment_native_witness_missing',
+          ...(supervised.admissionEvidence ? { holder: supervised.admissionEvidence } : {}),
         } : {}),
         ...(requestId ? { requestId } : {}),
         ...(safeDispatchId ? { dispatchId: safeDispatchId } : {}),
@@ -1411,8 +1417,8 @@ export async function runSupervisedTaskLaunchAssistant(
       nextAction: requestId ? {
         kind: 'retry_supervised_start', requestId, command: retry,
       } : {
-        kind: 'reconcile_supervised_start',
-        note: 'reconcile the non-ready start; never fall through to a fresh mutation',
+        kind: 'reconcile_dispatch',
+        note: 'inspect the exact Task/Dispatch with dispatch-show and worker-show and the selected assignment store read-only; establish the missing native witness before any repair. A completed or retired predecessor requires a separately authorized new Task and fresh named worktree, optionally at a verified unique Issue-closing PR head; preserve the old checkout. An external terminal cannot be stopped by worker-release; never repeat a failed start blindly',
       },
     }, {
       ...resources,
@@ -2285,7 +2291,7 @@ async function reuseTerminalOwnedWorktree(
   const expected = request.reuseAssignment;
   const refusal = (cause: string): EdgeResult<PreparedWorktree> =>
     worktreeContinue(cause, { worktreeId: id, worktreePath: path },
-      'prove the existing exact Issue-bound Dispatch and worktree ownership; preserve all local edits');
+      'inspect the exact selected-project current Issue assignment and Dispatch read-only; preserve all local edits. Once the assignment retires, do not restore this Task from native history: the coordinator must separately authorize a new Task/brief and unique fresh worktree, at a verified unique open Issue-closing PR head when available, otherwise a clean default-branch first start; name the retained old path as a read-only porting source in the new brief');
   if (!expected || expected.kind !== 'local' || expected.provider !== 'orca'
     || expected.issueNumber !== request.issueNumber
     || expected.repository !== request.repository.trim().toLowerCase()
@@ -2987,6 +2993,10 @@ export function parseLaunchAssistantCli(
   const workClass = (options.get('--work-class') ?? '').trim();
   if (!LAUNCH_WORK_CLASSES.includes(workClass as LaunchWorkClass)) throw new Error('--work-class must be exactly manager|t1|t2|t3|merge');
   const target = resolveTarget({ projectId: (options.get('--project') ?? '').trim(), env });
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(target.projectId)) throw new Error('project_selection_invalid');
+  if (env.OPK_PROJECT_ID?.trim() && env.OPK_PROJECT_ID.trim() !== target.projectId) {
+    throw new Error('project_selector_mismatch');
+  }
   const explicitRepository = (options.get('--repository') ?? '').trim().toLowerCase();
   if (explicitRepository && !/^[^/\s]+\/[^/\s]+$/u.test(explicitRepository)) throw new Error('--repository must be owner/repo');
   if (explicitRepository && explicitRepository !== target.repository) {
@@ -3192,10 +3202,7 @@ export async function runExistingOpenCodeResume(
       ...result('resume_manager_run_task_ownership_unproven', 0),
       nextAction: {
         kind: 'start_new_task',
-        command: newTaskStartCommand({
-          repository: input.repository, projectId: input.projectId, workClass: 'manager',
-        }),
-        note: `session ${input.session} has no proven manager Run/Task owner, so no --session terminal starts; the coordinator starts a new Task through the authorized first-start route`,
+        note: `session ${input.session} has no proven manager Run/Task owner, so no --session terminal starts; the coordinator must separately authorize a selected-project new Task/manager brief, original Run and unique fresh worktree name before an executable first-start command exists`,
       },
     };
   }

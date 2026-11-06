@@ -699,4 +699,16 @@ describe('Issue #2655 exact reboot evidence with adapter-unresolved assignment',
     })).toEqual({ status: 'target_unresolved' });
     expect(witness).not.toHaveBeenCalled();
   });
+
+  it('refuses a liveness observation from a different terminal incarnation', async () => {
+    const file = assignmentFile();
+    const expected = await publish(file, { bindingKey: 'ctx-exact' });
+    const runtime = orcaRuntimeWith({ status: 'ok', value: { kind: 'gone' } });
+    Object.defineProperty(runtime.adapter, 'resolveAssignmentWorker', { configurable: true,
+      value: () => ({ status: 'ok', value: { kind: 'resolved', worker: runtime.worker } }) });
+    Object.defineProperty(runtime.adapter, 'liveness', { configurable: true,
+      value: () => ({ status: 'idle', worker: { ...runtime.worker.identity, generation: 'foreign' } }) });
+    expect(await admitCurrentWorkerAssignmentReplacement({ file, expected, adapter: runtime.adapter }))
+      .toEqual({ status: 'target_unresolved', reason: 'resolved_target_liveness_identity_mismatch' });
+  });
 });

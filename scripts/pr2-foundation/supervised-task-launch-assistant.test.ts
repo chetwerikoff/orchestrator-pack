@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import * as subprocess from '../kernel/subprocess.ts';
 import { runProcess, runProcessSync } from '../kernel/subprocess.ts';
 import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
-import { openCodeControlFromCommand } from '../orca-runtime/adapter.ts';
+import { OrcaRuntimeAdapter, openCodeControlFromCommand } from '../orca-runtime/adapter.ts';
 import { lastFleetParkedLine, ownPaneOutcome } from '../fleet/fleet-sweep.ts';
 import type { OrcaJsonResponse } from '../orca-runtime/native.ts';
 import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
@@ -614,11 +614,64 @@ function deps(input: {
 
 function launchInput(workClass: LaunchInput['workClass'] = 't2'): LaunchInput {
   return {
-    repository: 'chetwerikoff/orchestrator-pack', workClass, issueNumber: 1479,
+    repository: 'chetwerikoff/orchestrator-pack', projectId: 'orchestrator-pack', workClass, issueNumber: 1479,
     taskId: 'task-1', env: profileEnv(), startMode: 'exact_terminal_worktree',
     ...(workClass === 'manager' ? { runId: 'run-1', defaultBranch: 'main', worktreeSelector: 'id:manager-worktree' } : { worktreeName: 'issue-1479' }),
   };
 }
+
+describe('Issue #2788 explicit selected-project native command', () => {
+  it.each(['orchestrator-pack', 'target-project'] as const)('delivers %s to the executable process for manager and worker commands', async (projectId) => {
+    for (const workClass of ['manager', 't2'] as const) {
+      let command = '';
+      const nativeCalls: string[][] = [];
+      const native = new OrcaRuntimeAdapter({ runJson: ((argv: readonly string[]) => {
+        nativeCalls.push([...argv]);
+        command = argv[argv.indexOf('--command') + 1] ?? '';
+        return { ok: true, result: { terminal: { handle: worker.identity.id, incarnationId: worker.identity.generation } } };
+      }) as never });
+      const adapter: RuntimeAdapter = { ...runtimeAdapter(), spawnWorker: (input) => native.spawnWorker(input) };
+      const result = await runSupervisedTaskLaunchAssistant({ ...launchInput(workClass), projectId,
+        env: profileEnv({ OPK_PROJECT_ID: projectId }),
+      }, deps({ adapter }));
+      expect(result.outcome).toBe('ready');
+      expect(command.startsWith(`OPK_PROJECT_ID='${projectId}' `)).toBe(true);
+      expect(nativeCalls).toEqual([['terminal', 'create', '--worktree', worker.workspacePath,
+        '--title', `opk-${workClass}-task-1`, '--command', command]]);
+      // Execute the actual command, replacing only the selected executor with
+      // a disposable process fixture; assignments/quoting remain byte-identical.
+      const fixtureCommand = command.replace(/cursor-agent\b/u, `${process.execPath} -e 'process.stdout.write(process.env.OPK_PROJECT_ID)' --`);
+      const processResult = await runProcess({ command: 'sh', args: ['-c', fixtureCommand],
+        timeoutMs: 5_000, inheritParentEnv: false, allowEmptyStdout: false });
+      expect(processResult.ok, processResult.stderr).toBe(true);
+      expect(processResult.stdout).toBe(projectId);
+    }
+  });
+
+  it.each([
+    { projectId: undefined, inherited: '', cause: 'project_selection_required' },
+    { projectId: 'target-project', inherited: 'orchestrator-pack', cause: 'project_selector_mismatch' },
+    { projectId: "target'; touch /tmp/forbidden", inherited: '', cause: 'project_selection_invalid' },
+  ])('refuses invalid or contradictory selection before native effects: $cause', async ({ projectId, inherited, cause }) => {
+    const spawn = vi.fn();
+    const start = vi.fn();
+    const result = await runSupervisedTaskLaunchAssistant({ ...launchInput(), projectId,
+      env: profileEnv({ OPK_PROJECT_ID: inherited }),
+    }, deps({ adapter: runtimeAdapter({ onSpawn: spawn }), onSupervised: start }));
+    expect(result).toMatchObject({ outcome: 'continue', observedCause: cause });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('refuses existing-terminal reuse without native selected-project command proof', async () => {
+    const start = vi.fn();
+    const result = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'),
+      existingTerminal: worker.identity.id,
+    }, deps({ onSupervised: start }));
+    expect(result).toMatchObject({ outcome: 'continue', observedCause: 'existing_terminal_project_unverified' });
+    expect(start).not.toHaveBeenCalled();
+  });
+});
 
 function okEnvelope(result: Record<string, unknown>): string {
   return JSON.stringify({ ok: true, result });
@@ -1118,7 +1171,7 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
     // spawn command must contain exactly one full OPENCODE_CONFIG_CONTENT.
     const command = spawned[0]!.command;
     expect(command.match(/OPENCODE_CONFIG_CONTENT=/gu)).toHaveLength(1);
-    const inline = /^OPENCODE_CONFIG_CONTENT='([^']+)' XDG_STATE_HOME='[^']+' \/opt\/opencode\/1\.18\.35\/bin\/opencode --hostname 127\.0\.0\.1 --port \d+ --agent '([^']+)'$/u.exec(command);
+    const inline = /^OPK_PROJECT_ID='orchestrator-pack' OPENCODE_CONFIG_CONTENT='([^']+)' XDG_STATE_HOME='[^']+' \/opt\/opencode\/1\.18\.35\/bin\/opencode --hostname 127\.0\.0\.1 --port \d+ --agent '([^']+)'$/u.exec(command);
     expect(inline).not.toBeNull();
     const config = JSON.parse(inline![1]!) as {
       permission: { bash: Record<string, string>; skill: Record<string, string> };
@@ -1715,6 +1768,8 @@ describe('supervised Task launch assistant', () => {
       expect(previous.outcome).toBe('ready');
       expect(currentWorkerAssignment(file, 2689)).toBeNull();
 
+      const selectedProfile = resolveExecutorProfile('manager', env, 'exact_terminal_worktree');
+      if (selectedProfile.status !== 'ok') throw new Error('fixture profile unavailable');
       const transition = await runSupervisedTaskLaunchAssistant({
         ...launchInput('manager'), issueNumber: 2689, taskId: 'task-new', env, defaultBranch: 'main',
         existingTerminal: worker.identity.id,
@@ -1723,6 +1778,9 @@ describe('supervised Task launch assistant', () => {
           onWorktree: () => { prepared += 1; },
           adapter: runtimeAdapter({ onSpawn: () => { spawned += 1; } }),
         }),
+        adapter: { ...runtimeAdapter({ onSpawn: () => { spawned += 1; } }),
+          observeComposerFamily: () => ({ status: 'known', family: 'non-opencode', provenance: 'orca-terminal-show',
+            command: "OPK_PROJECT_ID='orchestrator-pack' " + selectedProfile.value.launchCommand }) },
         installManagerPushGuard: (request) => { guardInstalls.push(request.worktreePath); return { status: 'ok', value: true }; },
         proveManagerTaskMembership: async (_runId, taskId) => ({ status: 'ok', value: { taskId } }),
         runSupervisedStart: start,
@@ -2546,6 +2604,7 @@ describe('supervised Task launch assistant', () => {
     let spawns = 0;
     let supervisedStarts = 0;
     const input: LaunchInput = {
+      projectId: 'orchestrator-pack',
       repository: 'chetwerikoff/orchestrator-pack', workClass: 'manager', runId: 'run-1', managerBrief: 'abstract brief',
       worktreeName: 'manager-worktree', env: opencodeProfileEnv('manager'),
     };
@@ -2609,6 +2668,7 @@ describe('supervised Task launch assistant', () => {
     let createdBrief = '';
     await runSupervisedTaskLaunchAssistant({
       repository: 'chetwerikoff/orchestrator-pack',
+      projectId: 'orchestrator-pack',
       workClass: 'manager',
       runId: 'run-1',
       managerBrief: 'ordinary delta',
@@ -2624,6 +2684,7 @@ describe('supervised Task launch assistant', () => {
     let createdBrief = '';
     await runSupervisedTaskLaunchAssistant({
       repository: 'chetwerikoff/orchestrator-pack',
+      projectId: 'orchestrator-pack',
       workClass: 'manager',
       issueNumber: 2385,
       runId: 'run-1',
@@ -2644,6 +2705,7 @@ describe('supervised Task launch assistant', () => {
     let createdBrief = '';
     await runSupervisedTaskLaunchAssistant({
       repository: 'chetwerikoff/orchestrator-pack',
+      projectId: 'orchestrator-pack',
       workClass: 'manager',
       runId: 'run-1',
       managerBrief: `${MANAGER_PREAMBLE_FIXTURE}\n${delta}`,
@@ -2667,6 +2729,7 @@ describe('supervised Task launch assistant', () => {
     let createdBrief = '';
     await runSupervisedTaskLaunchAssistant({
       repository: 'chetwerikoff/orchestrator-pack',
+      projectId: 'orchestrator-pack',
       workClass: 'manager',
       issueNumber: 2385,
       runId: 'run-1',
@@ -2692,6 +2755,7 @@ describe('supervised Task launch assistant', () => {
     let taskCreates = 0;
     const result = await runSupervisedTaskLaunchAssistant({
       repository: 'chetwerikoff/orchestrator-pack',
+      projectId: 'orchestrator-pack',
       workClass: 'manager',
       runId: 'run-1',
       managerBrief: `${preamble}\nfirefighter repair launch`,
@@ -2712,6 +2776,7 @@ describe('supervised Task launch assistant', () => {
     let createdBrief = '';
     await runSupervisedTaskLaunchAssistant({
       repository: 'chetwerikoff/orchestrator-pack',
+      projectId: 'orchestrator-pack',
       workClass: 'manager',
       runId: 'run-1',
       managerBrief: brief,
@@ -2725,6 +2790,7 @@ describe('supervised Task launch assistant', () => {
     const created: string[] = [];
     const base: LaunchInput = {
       repository: 'chetwerikoff/orchestrator-pack',
+      projectId: 'orchestrator-pack',
       workClass: 'manager',
       runId: 'run-1',
       managerBrief: 'delta only',
@@ -2774,6 +2840,7 @@ describe('supervised Task launch assistant', () => {
     let createdBrief = '';
     await runSupervisedTaskLaunchAssistant({
       repository: 'chetwerikoff/orchestrator-pack',
+      projectId: 'orchestrator-pack',
       workClass: 'manager',
       runId: 'run-1',
       managerBrief: alreadyPrepared,
@@ -2792,6 +2859,7 @@ context after the existing section`;
     let createdBrief = '';
     await runSupervisedTaskLaunchAssistant({
       repository: 'chetwerikoff/orchestrator-pack',
+      projectId: 'orchestrator-pack',
       workClass: 'manager',
       runId: 'run-1',
       managerBrief: alreadyPrepared,
@@ -2808,6 +2876,7 @@ The words Firefighter universal appear here only as prose.`;
     let createdBrief = '';
     await runSupervisedTaskLaunchAssistant({
       repository: 'chetwerikoff/orchestrator-pack',
+      projectId: 'orchestrator-pack',
       workClass: 'manager',
       runId: 'run-1',
       managerBrief: `${MANAGER_PREAMBLE_FIXTURE}\n${delta}`,
@@ -2824,6 +2893,7 @@ The words Firefighter universal appear here only as prose.`;
     let taskCreates = 0;
     const result = await runSupervisedTaskLaunchAssistant({
       repository: 'chetwerikoff/orchestrator-pack',
+      projectId: 'orchestrator-pack',
       workClass: 'manager',
       runId: 'run-1',
       managerBrief: 'firefighter repair launch',
@@ -2852,6 +2922,7 @@ The words Firefighter universal appear here only as prose.`;
     let taskCreates = 0;
     const result = await runSupervisedTaskLaunchAssistant({
       repository: 'chetwerikoff/orchestrator-pack',
+      projectId: 'orchestrator-pack',
       workClass: 'manager',
       issueNumber: 2385,
       runId: 'run-1',
@@ -2910,6 +2981,7 @@ The words Firefighter universal appear here only as prose.`;
     let taskCreates = 0;
     const result = await runSupervisedTaskLaunchAssistant({
       repository: 'chetwerikoff/orchestrator-pack',
+      projectId: 'orchestrator-pack',
       workClass: 'manager',
       runId: 'run-1',
       managerBrief: 'ordinary delta',
@@ -2937,6 +3009,7 @@ The words Firefighter universal appear here only as prose.`;
   it('reconciles an unknown creation without replaying a transformed fresh manager brief', async () => {
     const input: LaunchInput = {
       repository: 'chetwerikoff/orchestrator-pack', workClass: 'manager', issueNumber: 2385, runId: 'run-1',
+      projectId: 'orchestrator-pack',
       managerBrief: 'private brief payload', worktreeName: 'manager-worktree', env: profileEnv(),
     };
     let sentBrief = '';
@@ -3013,14 +3086,6 @@ The words Firefighter universal appear here only as prose.`;
     expect(spawns).toBe(0); expect(starts).toBe(0);
   });
 
-  /** Substitute the coordinator-supplied `$...` words and tokenize the emitted command like a shell would. */
-  function emittedLaunchArgv(command: string, values: Record<string, string>): string[] {
-    const filled = command.replace(/"\$([A-Z_]+)"/gu, (_m, name: string) => values[name] ?? `UNSET_${name}`);
-    const [runner, flags, script, ...argv] = filled.split(/\s+/u);
-    expect([runner, flags]).toEqual(['node', '--experimental-strip-types']);
-    expect(script).toBe('scripts/pr2-foundation/supervised-task-launch-assistant.ts');
-    return argv;
-  }
   const c1Target = () => ({
     projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
     primaryRoot: '/tmp/opk-2717-primary', defaultBranch: 'main',
@@ -3029,7 +3094,7 @@ The words Firefighter universal appear here only as prose.`;
   it.each([
     ['early', [{ kind: 'present', dispatchId: 'dispatch-old', status: 'completed' }] as DispatchObservation[], 'dispatch_admission_early'],
     ['final', [{ kind: 'absent' }, { kind: 'present', dispatchId: 'dispatch-old', status: 'completed' }] as DispatchObservation[], 'dispatch_admission_final'],
-  ] as const)('#2717 C1 %s absent-assignment same-Task successor refuses and names a runnable new-Task route', async (_when, dispatch, stage) => {
+  ] as const)('#2788 %s absent-assignment same-Task successor refuses with a conditional new-Task route', async (_when, dispatch, stage) => {
     let spawns = 0; let starts = 0;
     const result = await runSupervisedTaskLaunchAssistant({ ...launchInput(), projectId: 'orchestrator-pack' }, deps({ dispatch: [...dispatch],
       adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }), onSupervised: () => { starts += 1; } }));
@@ -3039,29 +3104,23 @@ The words Firefighter universal appear here only as prose.`;
     });
     expect(spawns).toBe(0); expect(starts).toBe(0);
     if (result.outcome !== 'continue') throw new Error('expected refusal');
-    expect(result.nextAction.note).toMatch(/starts a new Task through the authorized first-start route/u);
-    const command = result.nextAction.command!;
-    expect(command).toContain('--worktree-name');
-    expect(command).not.toContain('--task "task-1"');
-    // The emitted command itself must pass the launch CLI's own validation.
-    const parsed = parseLaunchAssistantCli(
-      emittedLaunchArgv(command, { NEW_TASK_ID: 'task-new', NEW_WORKTREE_NAME: 'issue-1479-new' }),
-      process.env, c1Target,
-    );
-    expect(parsed).toMatchObject({ workClass: 't2', taskId: 'task-new', worktreeName: 'issue-1479-new', issueNumber: 1479 });
-    expect(parsed.worktreeSelector).toBeUndefined();
+    expect(result.nextAction.note).toMatch(/coordinator must supply.*original Run.*unique worktree name/u);
+    expect(result.nextAction.note).toMatch(/one open same-repository Issue-closing PR/u);
+    expect(result.nextAction.command).toBeUndefined();
   });
 
-  it('#2717 C1 the emitted manager new-Task command passes the CLI and the parsed input starts', async () => {
+  it('#2788 coordinator supplies a complete fresh manager launch rather than executing a placeholder retry', async () => {
     let starts = 0;
     const refused = await runSupervisedTaskLaunchAssistant(
       { ...launchInput('manager'), projectId: 'orchestrator-pack' },
       deps({ dispatch: [{ kind: 'present', dispatchId: 'dispatch-old', status: 'completed' }] }));
     expect(refused).toMatchObject({ outcome: 'continue', nextAction: { kind: 'start_new_task' } });
     if (refused.outcome !== 'continue') throw new Error('expected refusal');
-    const parsed = parseLaunchAssistantCli(emittedLaunchArgv(refused.nextAction.command!, {
-      RUN_ID: 'run-1', MANAGER_BRIEF: 'fresh-brief', NEW_WORKTREE_NAME: 'manager-new',
-    }), process.env, c1Target);
+    expect(refused.nextAction.command).toBeUndefined();
+    const parsed = parseLaunchAssistantCli([
+      '--project', 'orchestrator-pack', '--issue-number', '1479', '--work-class', 'manager',
+      '--run', 'run-1', '--manager-brief', 'fresh-brief', '--worktree-name', 'manager-new',
+    ], {}, c1Target);
     expect(parsed).toMatchObject({ workClass: 'manager', runId: 'run-1', managerBrief: 'fresh-brief', worktreeName: 'manager-new' });
     expect(parsed.taskId).toBeUndefined();
     const started = await runSupervisedTaskLaunchAssistant({ ...parsed, env: profileEnv() }, deps({
@@ -3070,13 +3129,16 @@ The words Firefighter universal appear here only as prose.`;
     expect(starts).toBe(1);
   });
 
-  it('#2717 C1 the emitted worker new-Task command passes the CLI and the parsed input starts', async () => {
+  it('#2788 coordinator supplies an independent fresh worker Task and worktree', async () => {
     let spawns = 0; let starts = 0;
     const refused = await runSupervisedTaskLaunchAssistant({ ...launchInput(), projectId: 'orchestrator-pack' }, deps({
       dispatch: [{ kind: 'present', dispatchId: 'dispatch-old', status: 'completed' }] }));
     if (refused.outcome !== 'continue') throw new Error('expected refusal');
-    const parsed = parseLaunchAssistantCli(emittedLaunchArgv(refused.nextAction.command!, {
-      NEW_TASK_ID: 'task-new', NEW_WORKTREE_NAME: 'issue-1479-new' }), process.env, c1Target);
+    expect(refused.nextAction.command).toBeUndefined();
+    const parsed = parseLaunchAssistantCli([
+      '--project', 'orchestrator-pack', '--issue-number', '1479', '--work-class', 't2',
+      '--task', 'task-new', '--worktree-name', 'issue-1479-new',
+    ], {}, c1Target);
     const started = await runSupervisedTaskLaunchAssistant({ ...parsed, env: profileEnv() }, deps({
       adapter: runtimeAdapter({ onSpawn: () => { spawns += 1; } }), onSupervised: () => { starts += 1; } }));
     expect(started.outcome).toBe('ready');
@@ -3246,11 +3308,11 @@ The words Firefighter universal appear here only as prose.`;
     ]) expect(serialized).not.toContain(sentinel);
   });
 
-  it('reports only the sanctioned gone-path refusal or native cause unavailable', async () => {
+  it('reports the observed native refusal or names the missing assignment witness', async () => {
     for (const [message, expected] of [
       ['terminal_reuse_unauthorized', 'terminal_reuse_unauthorized'],
-      ['untrusted provider detail', 'native cause unavailable'],
-      [undefined, 'native cause unavailable'],
+      ['resolved_target_liveness_unknown_is_not_assignment_gone_evidence', 'resolved_target_liveness_unknown_is_not_assignment_gone_evidence'],
+      [undefined, 'assignment_native_witness_missing'],
     ] as const) {
       const result = await runSupervisedTaskLaunchAssistant(launchInput(), deps({
         supervised: { ok: false, reason: 'target_unresolved', ...(message ? { errorMessage: message } : {}) },
@@ -3259,9 +3321,9 @@ The words Firefighter universal appear here only as prose.`;
         outcome: 'continue', stage: 'supervised_start',
         observedCause: 'target_unresolved',
         evidence: { admissionDiagnostic: expected },
-        nextAction: { kind: 'reconcile_supervised_start' },
+        nextAction: { kind: 'reconcile_dispatch' },
       });
-      expect(JSON.stringify(result)).not.toContain('untrusted provider detail');
+      expect(JSON.stringify(result)).not.toContain('native cause unavailable');
     }
   });
 
@@ -3944,6 +4006,7 @@ The words Firefighter universal appear here only as prose.`;
   it('records a timing for a direct handled stage failure', async () => {
     const result = await runSupervisedTaskLaunchAssistant({
       repository: 'chetwerikoff/orchestrator-pack', workClass: 'manager', taskId: 'task-1',
+      projectId: 'orchestrator-pack',
       worktreeName: 'issue-1479', env: profileEnv(), startMode: 'exact_terminal_worktree',
     }, deps());
     expect(result).toMatchObject({ outcome: 'continue', stage: 'manager_run', observedCause: 'manager_run_required' });
@@ -5730,8 +5793,8 @@ describe('Issue #2661 B5 existing-session exact intent, census, and safe restart
       outcome: 'continue', cause: 'resume_manager_run_task_ownership_unproven', attempts: 0,
       nextAction: { kind: 'start_new_task' },
     });
-    expect(refused.nextAction?.note).toMatch(/new Task through the authorized first-start route/u);
-    expect(refused.nextAction?.command).toContain('--work-class manager');
+    expect(refused.nextAction?.note).toMatch(/separately authorize.*new Task/u);
+    expect(refused.nextAction?.command).toBeUndefined();
     expect(f.spawnedCommands).toHaveLength(0);
     expect(f.nativePanes).toHaveLength(0);
     expect(f.queriedUrls).toEqual([]);
@@ -5977,7 +6040,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
 
   it.each(models)('reuses the exact Claude manager terminal for %s %s without spawn or profile loss', async (model, effort, family) => {
     const env = claudeEnv(model, effort);
-    const command = "claude --model '" + model + "' --effort '" + effort + "'";
+    const command = "OPK_PROJECT_ID='orchestrator-pack' claude --model '" + model + "' --effort '" + effort + "'";
     const target = () => ({
       projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
       primaryRoot: '/tmp/primary', defaultBranch: 'main',
@@ -5992,7 +6055,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
     let spawns = 0;
     let prepared = 0;
     let supervised = 0;
-    const adapter = observedClaudeAdapter(command, family, effort, { onSpawn: () => { spawns += 1; } });
+    const adapter = observedClaudeAdapter(command, family, effort, { commandObserved: true, onSpawn: () => { spawns += 1; } });
     const base = readyStart('task-1');
     if (!base.assignment || !base.receipt) throw new Error('missing fixture receipt');
     const start: SupervisedWorkerStartResult = {

@@ -96,6 +96,8 @@ export interface SupervisedWorkerStartResult {
   readonly errorCode?: string;
   /** Bounded provider message from a structurally valid Orca error envelope. */
   readonly errorMessage?: string;
+  /** Read-only native holder diagnostics; never replacement or effect authority. */
+  readonly admissionEvidence?: Readonly<Record<string, string>>;
   /** Bounded provider next-step strings from Orca error.data, when present. */
   readonly nextSteps?: readonly string[];
   /** Exact non-secret provider recovery fields from Orca error.data, when present. */
@@ -104,6 +106,34 @@ export interface SupervisedWorkerStartResult {
   readonly residualResources?: readonly unknown[];
   readonly assignment?: WorkerAssignmentRecord;
   readonly residual?: SupervisedWorkerStartResidual;
+}
+
+async function unresolvedHolderEvidence(
+  expected: WorkerAssignmentRecord, inspect: (args: readonly string[]) => Promise<ChildResult>,
+): Promise<Readonly<Record<string, string>>> {
+  const evidence: Record<string, string> = { assignmentTaskId: expected.taskId, assignmentDispatchId: expected.bindingKey };
+  let shown: Record<string, unknown> | null;
+  try { shown = parsePlacementEnvelope(await inspect([
+    'orchestration', 'worker-show', '--dispatch', expected.bindingKey, '--full', '--json',
+  ])); } catch { shown = null; }
+  if (!shown) return { ...evidence, missingWitness: 'native_worker_show_unreadable' };
+  const dispatch = isRecord(shown.dispatch) ? shown.dispatch : null;
+  if (!dispatch || providerText(dispatch.id) !== expected.bindingKey
+    || providerText(dispatch.taskId) !== expected.taskId) {
+    return { ...evidence, missingWitness: 'native_dispatch_identity_missing_or_foreign' };
+  }
+  evidence.dispatchState = providerText(dispatch.status);
+  const observation = isRecord(shown.observation) ? shown.observation : null;
+  if (!observation || typeof observation.exactWorker !== 'boolean' || !providerText(observation.status)) {
+    return { ...evidence, missingWitness: 'native_worker_observation_malformed' };
+  }
+  evidence.observationStatus = providerText(observation.status);
+  const terminal = isRecord(shown.terminal) ? shown.terminal : null;
+  if (terminal && providerText(terminal.handle)) evidence.terminalHandle = providerText(terminal.handle);
+  if (terminal && providerText(terminal.incarnationId)) evidence.terminalIncarnation = providerText(terminal.incarnationId);
+  evidence.missingWitness = observation.exactWorker === true && observation.status === 'live'
+    ? 'holder_live_no_replacement_authority' : 'exact_terminal_gone_or_retained_reuse_unproven';
+  return evidence;
 }
 
 export type SupervisedWorkerIssueAttachResult =
@@ -367,6 +397,7 @@ export async function readTerminalGoneDispatch(
   const nativeDispatch = isRecord(selected?.dispatch) ? selected.dispatch : null;
   const status = providerText(nativeDispatch?.status).toLowerCase();
   if (providerText(nativeDispatch?.id) !== expected.bindingKey
+    || (nativeDispatch?.taskId !== undefined && nativeDispatch.taskId !== expected.taskId)
     || !['failed', 'abandoned', 'cancelled', 'done', 'completed'].includes(status)) return null;
 
   const shown = parsePlacementEnvelope(await inspect([
@@ -396,6 +427,7 @@ export async function readTerminalGoneDispatch(
     && (!workerTerminalId || terminalHandle === workerTerminalId)
     && (!resourceTerminalId || terminalHandle === resourceTerminalId);
   if ((observedId && observedId !== expected.bindingKey)
+    || (dispatch?.taskId !== undefined && dispatch.taskId !== expected.taskId)
     || providerText(dispatch?.status).toLowerCase() !== status
     || (!missingTerminal && !exitedOrphanedTerminal)
     || (shown?.worker !== null && shown?.worker !== undefined && !isRecord(shown.worker))
@@ -677,11 +709,14 @@ export async function runSupervisedWorkerStart(input: {
           };
         }
       } else {
+        const admissionEvidence = admission.status === 'target_unresolved' && !admission.reason && expectedCurrent
+          ? await unresolvedHolderEvidence(expectedCurrent, inspect) : undefined;
         return {
           ok: false,
           reason: admission.status,
           ...(admission.status === 'target_unresolved'
-            ? { errorMessage: admission.reason?.trim() || 'native cause unavailable' }
+            ? { errorMessage: admission.reason?.trim() || admissionEvidence?.missingWitness || 'assignment_native_witness_missing',
+              ...(admissionEvidence ? { admissionEvidence } : {}) }
             : {}),
         };
       }
