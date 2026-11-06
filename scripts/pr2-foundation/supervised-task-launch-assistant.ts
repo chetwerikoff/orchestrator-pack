@@ -14,7 +14,7 @@ import { selectRuntimeAdapter } from '../runtime/registry.ts';
 import type { RuntimeAdapter, RuntimeWorker, RuntimeWorkerIdentity } from '../runtime/contracts.ts';
 import { overlayExecutorProfileEnv } from '../executor-profile-store.ts';
 import {
-  currentWorkerAssignment, listCurrentWorkerAssignmentRecords, parseDelegatedIntegrationMarker, resolveWorkerAssignmentStorePath,
+  listCurrentWorkerAssignmentRecords, parseDelegatedIntegrationMarker, resolveWorkerAssignmentStorePath,
   sameDelegatedIntegrationMarker, type DelegatedIntegrationMarker, type WorkerAssignment, type WorkerAssignmentRecord,
 } from '../lib/worker-assignment-store.ts';
 import {
@@ -138,6 +138,27 @@ export type EdgeResult<T> =
   | { readonly status: 'ok'; readonly value: T; readonly evidence?: Readonly<Record<string, unknown>> }
   | { readonly status: 'continue'; readonly cause: string; readonly actor: LaunchActor;
       readonly evidence?: Readonly<Record<string, unknown>>; readonly nextAction: NextAction };
+
+type IssueAssignmentObservation = WorkerAssignment | null | Extract<EdgeResult<never>, { status: 'continue' }>;
+
+export function observeSelectedIssueAssignment(
+  file: string, issueNumber: number, projectId: string, repository: string,
+): IssueAssignmentObservation {
+  const rows = listCurrentWorkerAssignmentRecords(file);
+  const matches = rows?.filter((row): row is WorkerAssignment => row.issueNumber === issueNumber) ?? [];
+  if (!rows || rows.some((row) => row.projectId !== projectId || row.repository.toLowerCase() !== repository.toLowerCase())) {
+    return { status: 'continue', cause: 'assignment_store_untrusted', actor: 'orchestrator',
+      evidence: { issueNumber, storePath: file }, nextAction: { kind: 'reconcile_dispatch',
+        note: 'the selected assignment-store census is unreadable, malformed or belongs to another project/repository; the owning orchestrator must reconcile the exact Issue/store read-only before any launch; do not treat unknown as absence' } };
+  }
+  if (matches.length > 1) {
+    const claims = matches.map((row) => ({ taskId: row.taskId, dispatchId: row.bindingKey, assignmentId: row.assignmentId }));
+    return { status: 'continue', cause: 'issue_assignment_ambiguous', actor: 'orchestrator',
+      evidence: { issueNumber, claims }, nextAction: { kind: 'reconcile_dispatch',
+        note: `the owning orchestrator must reconcile Issue ${issueNumber} and all conflicting rows read-only: ${JSON.stringify(claims)}; no Task/terminal/Dispatch creation or automatic store repair` } };
+  }
+  return matches[0] ?? null;
+}
 
 export interface ExecutorProfile {
   readonly family: ExecutorFamily;
@@ -292,7 +313,7 @@ export interface LaunchDependencies {
   /** Existing selected-base/PR-head observation, before Task creation and again before spawn. */
   readonly observeFreshManagerBase?: () => Promise<EdgeResult<FreshPrHead | null>>;
   readonly observeDispatch: (taskId: string) => Promise<EdgeResult<DispatchObservation>>;
-  readonly readCurrentAssignment: (issueNumber: number) => WorkerAssignment | null;
+  readonly readCurrentAssignment: (issueNumber: number) => IssueAssignmentObservation;
   /** Read-only Orca worktree-show; never infer identity from --worktree text alone. */
   readonly resolveRestoreWorktree?: (selector: string) => Promise<EdgeResult<RestoreWorktreeIdentity>>;
   /** Complete all-workspace native terminal list and Linux CWD/descendant census. */
@@ -936,6 +957,7 @@ export async function runSupervisedTaskLaunchAssistant(
   });
   const observeFreshManagerAdmission = async (): Promise<EdgeResult<FreshPrHead | null>> => {
     const current = input.issueNumber ? deps.readCurrentAssignment(input.issueNumber) : null;
+    if (current && 'status' in current) return current;
     if (current) return holderRefusal(current);
     if (!deps.observeFreshManagerBase) return {
       status: 'continue', cause: 'fresh_manager_base_unobserved', actor: 'operator',
@@ -944,6 +966,7 @@ export async function runSupervisedTaskLaunchAssistant(
     const base = await deps.observeFreshManagerBase();
     if (base.status !== 'ok') return base;
     const after = input.issueNumber ? deps.readCurrentAssignment(input.issueNumber) : null;
+    if (after && 'status' in after) return after;
     return after ? holderRefusal(after) : base;
   };
   if (input.workClass === 'manager') {
@@ -1009,6 +1032,7 @@ export async function runSupervisedTaskLaunchAssistant(
   }
   resources = { ...resources, taskId };
   const predecessor = delegatedIntegration ? deps.readCurrentAssignment(input.issueNumber!) : null;
+  if (predecessor && 'status' in predecessor) return continued(input, 'dispatch_admission_early', predecessor, resources, startedAtMs, timings, deps.now);
   if (delegatedIntegration && !matchesMergePredecessor(predecessor, input, taskId, delegatedIntegration)) {
     return continued(input, 'dispatch_admission_early', mergePredecessorMismatch(), resources, startedAtMs, timings, deps.now);
   }
@@ -1016,6 +1040,7 @@ export async function runSupervisedTaskLaunchAssistant(
   const early = await checkpoint('dispatch_admission_early', timings, deps.now, () => deps.observeDispatch(taskId));
   if (early.status !== 'ok') return continued(input, 'dispatch_admission_early', early, resources, startedAtMs, timings, deps.now);
   const earlyCurrent = input.issueNumber ? deps.readCurrentAssignment(input.issueNumber) : null;
+  if (earlyCurrent && 'status' in earlyCurrent) return continued(input, 'dispatch_admission_early', earlyCurrent, resources, startedAtMs, timings, deps.now);
   if (freshManagerBase !== undefined && earlyCurrent) return continued(input, 'dispatch_admission_early',
     holderRefusal(earlyCurrent), resources, startedAtMs, timings, deps.now);
   const earlyCandidate = sameTaskTerminalDispatch(early.value, earlyCurrent, taskId, deps.adapter.id)
@@ -1215,6 +1240,7 @@ export async function runSupervisedTaskLaunchAssistant(
   // The final Dispatch observation precedes the terminal spawn: a Dispatch that
   // appears after the early read must not leave a successor worktree terminal.
   const finalPredecessor = delegatedIntegration ? deps.readCurrentAssignment(input.issueNumber!) : null;
+  if (finalPredecessor && 'status' in finalPredecessor) return continued(input, 'dispatch_admission_final', finalPredecessor, resources, startedAtMs, timings, deps.now);
   if (delegatedIntegration && (!matchesMergePredecessor(finalPredecessor, input, taskId, delegatedIntegration)
     || finalPredecessor?.bindingKey !== predecessor?.bindingKey)) {
     return continued(input, 'dispatch_admission_final', mergePredecessorMismatch(), resources, startedAtMs, timings, deps.now);
@@ -1222,6 +1248,7 @@ export async function runSupervisedTaskLaunchAssistant(
   const final = await checkpoint('dispatch_admission_final', timings, deps.now, () => deps.observeDispatch(taskId));
   if (final.status !== 'ok') return continued(input, 'dispatch_admission_final', final, resources, startedAtMs, timings, deps.now);
   const finalCurrent = input.issueNumber ? deps.readCurrentAssignment(input.issueNumber) : null;
+  if (finalCurrent && 'status' in finalCurrent) return continued(input, 'dispatch_admission_final', finalCurrent, resources, startedAtMs, timings, deps.now);
   const finalTerminal = earlyTerminal
     && sameTaskTerminalDispatch(final.value, finalCurrent, taskId, deps.adapter.id)
     && earlyCurrent?.assignmentId === finalCurrent?.assignmentId
@@ -1236,6 +1263,7 @@ export async function runSupervisedTaskLaunchAssistant(
   }
   if (restoreBefore && earlyCurrent) {
     const current = input.issueNumber ? deps.readCurrentAssignment(input.issueNumber) : null;
+    if (current && 'status' in current) return continued(input, 'dispatch_admission_final', current, resources, startedAtMs, timings, deps.now);
     const old = earlyCurrent.taskId === taskId ? final : await deps.observeDispatch(earlyCurrent.taskId);
     const gone = await deps.proveTerminalGone!(earlyCurrent);
     const selected = await deps.resolveRestoreWorktree!(input.worktreeSelector!);
@@ -1448,6 +1476,18 @@ export async function runSupervisedTaskLaunchAssistant(
     const requestId = supervised.recovery?.requestId;
     const receiptDispatchId = text(supervised.receipt?.dispatchId);
     const safeDispatchId = receiptDispatchId || supervised.recovery?.dispatchId;
+    if ((supervised.reason === 'assignment_stale' || supervised.reason === 'assignment_store_busy')
+      && safeDispatchId && supervised.receipt?.taskId === taskId) {
+      const ownTerminalId = resources.terminal?.id || resources.providerAgentTerminalId
+        || (record(supervised.receipt.terminal) ? text(supervised.receipt.terminal.handle) : '') || 'unavailable';
+      return continued(input, 'supervised_start', {
+        cause: supervised.reason, actor: 'orchestrator',
+        evidence: { taskId, dispatchId: safeDispatchId, terminalId: ownTerminalId, residual: supervised.residual },
+        nextAction: { kind: 'reconcile_dispatch',
+          command: `orca orchestration worker-stop --dispatch ${quote(safeDispatchId)} --json`,
+          note: `this losing launch owns Task ${taskId}, terminal ${ownTerminalId}, Dispatch ${safeDispatchId}; the owning orchestrator stops only this own Dispatch and reads it back with worker-show. Preserve the winning Issue assignment and all other Tasks/terminals; do not replay or automatically clean up` },
+      }, { ...resources, dispatchId: safeDispatchId }, startedAtMs, timings, deps.now);
+    }
     const retry = requestId ? [
       'node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/pr2-foundation/supervised-worker-start.ts --',
       ...(input.issueNumber ? ['--issue-number', String(input.issueNumber)] : []),
@@ -2830,7 +2870,7 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       (args, timeoutMs) => child(args, cwd, env, timeoutMs),
     ),
     readCurrentAssignment: (issueNumber) =>
-      currentWorkerAssignment(resolveWorkerAssignmentStorePath(target.projectId, env), issueNumber),
+      observeSelectedIssueAssignment(resolveWorkerAssignmentStorePath(target.projectId, env), issueNumber, target.projectId, input.repository),
     resolveRestoreWorktree: async (selector) => {
       const result = resultRecord(envelope(await child([
         'orca', 'worktree', 'show', '--worktree', selector, '--json',

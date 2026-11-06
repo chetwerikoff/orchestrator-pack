@@ -26,6 +26,7 @@ import {
   parseLaunchAssistantCli,
   prepareWorktreeWithOrca,
   observeFreshManagerBaseWithOrca,
+  observeSelectedIssueAssignment,
   resolveExecutorProfile,
   resolveLiveExecutorProfile,
   finalizeOpenCodeExecutorProfile,
@@ -3216,6 +3217,121 @@ The words Firefighter universal appear here only as prose.`;
     }));
     expect(result).toMatchObject({ outcome: 'continue', observedCause: 'fresh_manager_issue_assignment_present' });
     expect(effects).toEqual([]);
+  });
+
+  it.each(['malformed', 'duplicate', 'late-malformed'] as const)(
+    '#2788 refuses an untrusted or ambiguous selected Issue census before effects: %s', async (kind) => {
+      const root = mkdtempSync(join(tmpdir(), 'opk-2788-census-'));
+      try {
+      const env = { ...process.env, OPK_BASE_DIR: root };
+      const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
+      for (const issueNumber of [1479, 1480]) {
+        const row = await publishCurrentWorkerAssignment({ file, projectId: 'orchestrator-pack',
+          repository: 'chetwerikoff/orchestrator-pack', issueNumber, taskId: `claim-${issueNumber}`,
+          bindingKey: `dispatch-${issueNumber}`, role: 'orchestrator', kind: 'local', provider: 'orca' });
+        expect(row.ok).toBe(true);
+      }
+      const store = JSON.parse(readFileSync(file, 'utf8'));
+      for (const row of Object.values(store.assignments) as Array<{ issueNumber: number }>) row.issueNumber = 1479;
+      writeFileSync(file, kind === 'duplicate' ? JSON.stringify(store) : '{invalid');
+      if (kind === 'late-malformed') rmSync(file);
+      const effects: string[] = [];
+      const result = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), taskId: undefined,
+        worktreeSelector: undefined, managerBrief: 'manager', worktreeName: 'fresh', baseBranch: 'origin/main' }, {
+        ...deps({ onManagerCreate: () => { effects.push('task'); },
+          onWorktree: () => { effects.push('worktree'); if (kind === 'late-malformed') writeFileSync(file, '{invalid'); },
+          adapter: runtimeAdapter({ onSpawn: () => { effects.push('terminal'); } }),
+          onSupervised: () => { effects.push('start'); },
+        }),
+        readCurrentAssignment: (issue) => observeSelectedIssueAssignment(file, issue, 'orchestrator-pack', 'chetwerikoff/orchestrator-pack'),
+      });
+      if (result.outcome !== 'continue') throw new Error('untrusted census launched a worker');
+      expect(result).toMatchObject({ outcome: 'continue',
+        observedCause: kind === 'duplicate' ? 'issue_assignment_ambiguous' : 'assignment_store_untrusted' });
+      expect(effects).toEqual(kind === 'late-malformed' ? ['task', 'worktree'] : []);
+      expect(result.nextAction.note).toContain('read-only');
+      if (kind === 'duplicate') {
+        expect(result.evidence.claims).toHaveLength(2);
+        expect(result.nextAction.note).toContain('claim-1479');
+        expect(result.nextAction.note).toContain('claim-1480');
+        expect(readFileSync(file, 'utf8')).toBe(JSON.stringify(store));
+      } else expect(readFileSync(file, 'utf8')).toBe('{invalid');
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    },
+  );
+
+  it('#2788 exposes exactly one CAS winner and an own-Dispatch stop route for overlapping fresh callers', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2788-overlap-'));
+    try {
+    const env = { ...process.env, OPK_BASE_DIR: root };
+    const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
+    let entered = 0;
+    let release!: () => void;
+    const bothNativeStarts = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('both native starts did not enter')), 5_000);
+      release = () => { clearTimeout(timer); resolve(); };
+    });
+    const effects = { tasks: 0, worktrees: 0, terminals: 0, nativeStarts: 0, inputs: 0, stops: 0 };
+    let publishedWinner: SupervisedWorkerStartResult['assignment'];
+    const launches = [1, 2].map((id) => {
+      const path = `/tmp/overlap-${id}`;
+      const terminal = { ...worker, identity: { ...worker.identity, id: `terminal-${id}` }, workspacePath: path };
+      const adapter: RuntimeAdapter = { ...runtimeAdapter(),
+        findWorker: () => ({ status: 'ok', value: terminal }),
+        findWorkerById: () => ({ status: 'ok', value: terminal }),
+        liveness: () => ({ status: 'idle', worker: terminal.identity }),
+        spawnWorker: () => { effects.terminals += 1; return { status: 'ok', value: terminal }; },
+        stopWorker: () => { effects.stops += 1; return { status: 'ok', value: { stopped: true } }; },
+      };
+      return runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), taskId: undefined,
+        managerBrief: 'fresh manager', worktreeSelector: undefined, worktreeName: `fresh-${id}`, baseBranch: 'origin/main' }, {
+        ...deps({ adapter }),
+        createManagerTask: async () => { effects.tasks += 1; return { status: 'ok', value: { taskId: `task-${id}`, status: 'pending' } }; },
+        prepareWorktree: async () => { effects.worktrees += 1; return { status: 'ok', value: {
+          path, selector: `path:${path}`, id: `repo::${path}`, setupWitness: 'same_invocation_complete' } }; },
+        readCurrentAssignment: (issue) => observeSelectedIssueAssignment(file, issue, 'orchestrator-pack', 'chetwerikoff/orchestrator-pack'),
+        runSupervisedStart: async (start) => {
+          const result = await runSupervisedWorkerStart({ mode: 'exact_terminal_worktree', role: 'orchestrator',
+          projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack', issueNumber: 1479, env, adapter,
+          orcaArgs: start.orcaArgs,
+          inspect: async (args) => ({ ok: true, stdout: JSON.stringify({ ok: true, result: args[0] === 'terminal'
+            ? { terminal: { handle: terminal.identity.id, incarnationId: terminal.identity.generation, worktreeId: `repo::${path}` } }
+            : { worktree: { id: `repo::${path}`, path, head: 'a'.repeat(40) } } }) }),
+          execute: async () => {
+            effects.nativeStarts += 1;
+            if (++entered === 2) release();
+            await bothNativeStarts;
+            effects.inputs += 1;
+            const field = (name: string) => start.orcaArgs[start.orcaArgs.indexOf(name) + 1];
+            const launch = { agent: field('--agent'), model: field('--model') };
+            return { ok: true, stdout: JSON.stringify({ ok: true, result: { state: 'ready', taskId: `task-${id}`, dispatchId: `dispatch-${id}`,
+              worktree: { id: `repo::${path}`, path }, terminal: { handle: terminal.identity.id, runtime: 'orca', generation: terminal.identity.generation },
+              setup: { requested: 'run', effective: 'run', state: 'running' }, launch: { requested: launch, effective: launch },
+              effects: [{ kind: 'worktree', action: 'reused', id: `repo::${path}` },
+                { kind: 'terminal', role: 'agent', action: 'reused', id: terminal.identity.id },
+                { kind: 'dispatch_input', role: 'agent', id: terminal.identity.id, state: 'accepted' }],
+            } }) };
+          },
+          });
+          if (result.ok) publishedWinner = result.assignment;
+          return result;
+        },
+      });
+    });
+    const results = await Promise.all(launches);
+    expect(effects, JSON.stringify(results)).toEqual({ tasks: 2, worktrees: 2, terminals: 2, nativeStarts: 2, inputs: 2, stops: 0 });
+    expect(results.filter((result) => result.outcome === 'ready')).toHaveLength(1);
+    const winner = results.find((result) => result.outcome === 'ready')!;
+    const loser = results.find((result) => result.outcome === 'continue')!;
+    expect(loser).toMatchObject({ outcome: 'continue', observedCause: 'assignment_stale' });
+    expect(loser.nextAction.command).toBe(`orca orchestration worker-stop --dispatch '${loser.resources.dispatchId}' --json`);
+    expect(loser.nextAction.note).toContain(loser.resources.taskId!);
+    expect(loser.nextAction.note).toContain(loser.resources.terminal!.id);
+    expect(loser.nextAction.note).not.toContain(winner.resources.dispatchId!);
+    expect(currentWorkerAssignment(file, 1479)?.taskId).toBe(winner.resources.taskId);
+    expect(currentWorkerAssignment(file, 1479)?.bindingKey).toBe(winner.resources.dispatchId);
+    expect(currentWorkerAssignment(file, 1479)).toEqual(publishedWinner);
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   it.each(['missing-pr', 'ambiguous-pr', 'wrong-base', 'changed-before-task', 'changed-before-spawn',

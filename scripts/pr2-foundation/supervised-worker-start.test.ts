@@ -622,6 +622,7 @@ describe('supervised worker start exact assignment admission',()=>{
 
   it.each([
     { mode: 'live', cause: 'holder_live_no_replacement_authority' },
+    { mode: 'delegated-merge', cause: 'holder_live_no_replacement_authority' },
     { mode: 'malformed', cause: 'native_worker_observation_malformed' },
     { mode: 'foreign', cause: 'native_dispatch_identity_missing_or_foreign' },
   ])('Issue #2788 projects only source-observed holder evidence: $mode', async ({ mode, cause }) => {
@@ -639,14 +640,16 @@ describe('supervised worker start exact assignment admission',()=>{
     const placement = inspectPlacement({ terminal: 'foreign-terminal' });
     let starts = 0;
     const result = await runSupervisedWorkerStart({ role: 'worker', issueNumber: 1416,
-      repository: 'chetwerikoff/orchestrator-pack', env, orcaArgs: argsForTerminal('terminal:foreign-owned', 'task_new'),
+      ...(mode === 'delegated-merge' ? { delegatedIntegration: { prNumber: 926, expectedHeadSha: 'a'.repeat(40),
+        predecessorAssignmentId: old.assignment.assignmentId, predecessorGeneration: old.assignment.generation } } : {}),
+      repository: 'chetwerikoff/orchestrator-pack', env, orcaArgs: argsForTerminal('terminal:foreign-owned', mode === 'delegated-merge' ? 'task_old' : 'task_new'),
       adapter: new OrcaTaskRuntimeAdapter({ runJson: (() => ({ ok: true, result: terminallyFailedExactLiveRetainedShow() })) as never }),
       inspect: async (argv) => argv[1] === 'worker-show' ? { ok: true, stdout: envelope(shown) } : placement(argv),
       execute: async () => { starts += 1; return { ok: false, stdout: '' }; },
     });
     expect(result).toMatchObject({ ok: false, reason: 'target_unresolved', errorMessage: cause,
       admissionEvidence: { assignmentTaskId: 'task_old', assignmentDispatchId: 'dispatch_old', missingWitness: cause } });
-    if (mode === 'live') expect(result.admissionEvidence).toMatchObject({ terminalHandle: 'term-holder',
+    if (mode === 'live' || mode === 'delegated-merge') expect(result.admissionEvidence).toMatchObject({ terminalHandle: 'term-holder',
       terminalIncarnation: 'holder-incarnation', dispatchState: 'failed', observationStatus: 'live' });
     else expect(result.admissionEvidence).not.toHaveProperty('terminalHandle');
     expect(starts).toBe(0);

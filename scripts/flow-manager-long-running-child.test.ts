@@ -20,6 +20,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import {
   COMPLETION_MODE,
+  WAIT_SCHEMA,
   GITHUB_EFFECT_BASELINE_SCHEMA,
   HANDOFF_SCHEMA,
   RECEIPT_LOCATOR_SCHEMA,
@@ -3249,12 +3250,18 @@ describe('Issue #2788 selected owner and exact terminal finality', () => {
   ])('rejects malformed or foreign late winner %j before any further effect', async (change) => {
     const fx = ownerWaitFixture('2788-late-invalid');
     const github = { prTuple: vi.fn(), issueTuple: vi.fn() };
+    let occupant = '';
     const native = vi.fn(async () => {
       writePrivateJson(fx.envelopePath, launcherTerminal(fx, change));
+      occupant = readFileSync(fx.envelopePath, 'utf8');
       return undefined;
     });
-    await expect(captureWait(ownerWaitOptions(fx, { dispatchWitness: native, githubReaders: github })))
-      .rejects.toThrow('wait_receipt_identity_changed');
+    const out = await captureWait(ownerWaitOptions(fx, { dispatchWitness: native, githubReaders: github }));
+    expect(out).toMatchObject({ terminal: false, no_success_authority: true, no_retry_authority: true,
+      owner_wait: { effect: 'none', reason: 'terminal_publication_uncertain', no_signal_sent: true } });
+    expect(out.owner_wait.nextStep).toContain('wait_receipt_identity_changed');
+    expect(out.owner_wait.nextStep).toContain('read-only');
+    expect(readFileSync(fx.envelopePath, 'utf8')).toBe(occupant);
     expect(github.prTuple).not.toHaveBeenCalled();
     expect(github.issueTuple).not.toHaveBeenCalled();
   });
@@ -3267,8 +3274,10 @@ describe('Issue #2788 selected owner and exact terminal finality', () => {
       writePrivateJson(fx.locatorPath, { ...locator, terminal_envelope_path: join(fx.root, 'foreign.json') });
       return undefined;
     });
-    await expect(captureWait(ownerWaitOptions(fx, { dispatchWitness: native })))
-      .rejects.toThrow('wait_locator_identity_changed');
+    const out = await captureWait(ownerWaitOptions(fx, { dispatchWitness: native }));
+    expect(out).toMatchObject({ terminal: false, owner_wait: { effect: 'none', reason: 'terminal_publication_uncertain' } });
+    expect(out.owner_wait.nextStep).toContain('wait_locator_identity_changed');
+    expect(readFileSync(fx.locatorPath, 'utf8')).toContain('foreign.json');
   });
 });
 
@@ -3567,7 +3576,11 @@ describe('Issue #2750 owner-wait reaper matrix (AC1-AC3)', () => {
     ] as const)('treats a %s as uncertain and never republishes over it', async (_name, occupant) => {
       const fx = ownerWaitFixture('occupant');
       writeFileSync(fx.envelopePath, occupant, { mode: 0o600 });
-      await expect(captureWait(ownerWaitOptions(fx))).rejects.toThrow('wait_receipt_identity_changed');
+      const out = await captureWait(ownerWaitOptions(fx));
+      expect(out).toMatchObject({ schema: WAIT_SCHEMA, terminal: false, no_success_authority: true, no_retry_authority: true,
+        owner_wait: { effect: 'none', reason: 'terminal_publication_uncertain', no_signal_sent: true } });
+      expect(out.owner_wait.nextStep).toContain(fx.invocation);
+      expect(out.owner_wait.nextStep).toContain('read-only');
       expect(readFileSync(fx.envelopePath, 'utf8')).toBe(occupant);
       expect(envelopeArtifacts(fx)).toEqual([basename(fx.envelopePath)]);
     });

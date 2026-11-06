@@ -2985,12 +2985,15 @@ export async function runWait(options: {
   };
   const started = Date.now();
   let envelope: TerminalEnvelope | null = null;
+  let handoff: HandoffReceipt | null = initialReceipt ?? bound?.receipt ?? null;
+  let ownerWait: OwnerWaitOutcome | undefined;
+  try {
   while (Date.now() - started < options.deadlineMs) {
     envelope = readWinner();
     if (envelope) break;
     await delay(50);
   }
-  const handoff = readHandoffReceipt(handoffReceiptPath, {
+  handoff = readHandoffReceipt(handoffReceiptPath, {
     runIdentity: options.runIdentity,
     attemptIdentity: options.attemptIdentity,
   });
@@ -3034,7 +3037,6 @@ export async function runWait(options: {
   }
   // Only a Task-bound wait over a managed original receipt can ever reach the reaper; legacy,
   // direct and unbound waits stay diagnostic-only.
-  let ownerWait: OwnerWaitOutcome | undefined;
   if (!envelope && taskBound && handoff && initialReceipt && options.ownerDispatchId === undefined) {
     ownerWait = {
       effect: 'none', reason: 'owner_dispatch_required',
@@ -3057,6 +3059,16 @@ export async function runWait(options: {
       deps: options.ownerWaitDependencies ?? {},
     });
     if (ownerWait.effect !== 'none') envelope = ownerWait.envelope;
+  }
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : '';
+    if (!(indexed || taskBound) || !existsSync(terminalEnvelopePath)
+      || !['wait_receipt_identity_changed', 'wait_locator_identity_changed'].includes(reason)) throw error;
+    // Occupancy is not terminal authority; keep the original bytes and the
+    // existing structured uncertainty outcome even when a late winner is invalid.
+    envelope = null;
+    ownerWait = { effect: 'none', reason: 'terminal_publication_uncertain',
+      nextStep: `${reason}: preserve the occupied terminal path; reconcile the exact original invocation ${options.invocationId ?? bound?.locator.invocation_id} and its receipt/locator read-only; do not overwrite, republish, signal a process or send again` };
   }
   process.stdout.write(JSON.stringify({
     schema: WAIT_SCHEMA,
