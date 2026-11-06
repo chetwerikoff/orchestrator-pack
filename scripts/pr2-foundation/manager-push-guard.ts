@@ -119,11 +119,9 @@ interface Refspec {
   readonly dst: string;
 }
 
-function parseRefspecs(cwd: string, remote: string): Refspec[] {
-  const listed = git(cwd, ['config', '--get-all', `remote.${remote}.fetch`]);
-  if (!listed.ok) return [];
+function parseRefspecText(text: string): Refspec[] {
   const specs: Refspec[] = [];
-  for (const raw of listed.stdout.split('\n').map(trimmed).filter(Boolean)) {
+  for (const raw of text.split('\n').map(trimmed).filter(Boolean)) {
     if (raw.startsWith('^')) {
       specs.push({ negative: true, src: raw.slice(1), dst: '' });
       continue;
@@ -139,6 +137,11 @@ function parseRefspecs(cwd: string, remote: string): Refspec[] {
     specs.push({ negative: false, src, dst });
   }
   return specs;
+}
+
+function parseRefspecs(cwd: string, remote: string): Refspec[] {
+  const listed = git(cwd, ['config', '--get-all', `remote.${remote}.fetch`]);
+  return listed.ok ? parseRefspecText(listed.stdout) : [];
 }
 
 function mapThroughRefspec(spec: Refspec, ref: string): string | null {
@@ -185,17 +188,26 @@ type TrackingResolution =
   | { readonly kind: 'ok'; readonly tracking: string }
   | { readonly kind: 'unverified'; readonly reason: string };
 
-function resolveTrackingRef(cwd: string, remotes: readonly string[], remoteRef: string): TrackingResolution {
+function resolveTrackingRef(cwd: string, remotes: readonly string[], remoteRef: string): TrackingResolution;
+function resolveTrackingRef(cwd: string, remotes: readonly string[], remoteRef: string,
+  cached: ReadonlyMap<string, readonly Refspec[]>, hasTime: () => boolean): TrackingResolution | null;
+function resolveTrackingRef(cwd: string, remotes: readonly string[], remoteRef: string,
+  cached?: ReadonlyMap<string, readonly Refspec[]>, hasTime?: () => boolean): TrackingResolution | null {
   if (remotes.length === 0) {
     return { kind: 'unverified', reason: 'no configured remote has an effective fetch URL equal to this push endpoint' };
   }
   const candidates = new Set<string>();
   for (const remote of remotes) {
-    const specs = parseRefspecs(cwd, remote);
-    if (specs.some((spec) => spec.negative && negativeMatches(spec, remoteRef))) {
-      return { kind: 'unverified', reason: `a negative fetch refspec of remote ${remote} excludes ${remoteRef}` };
+    if (hasTime && !hasTime()) return null;
+    const specs = cached?.get(remote) ?? parseRefspecs(cwd, remote);
+    for (const spec of specs) {
+      if (hasTime && !hasTime()) return null;
+      if (spec.negative && negativeMatches(spec, remoteRef)) {
+        return { kind: 'unverified', reason: `a negative fetch refspec of remote ${remote} excludes ${remoteRef}` };
+      }
     }
     for (const spec of specs) {
+      if (hasTime && !hasTime()) return null;
       if (spec.negative) continue;
       const mapped = mapThroughRefspec(spec, remoteRef);
       if (mapped && !aliasesLocalRefs(mapped)) candidates.add(mapped);
@@ -224,23 +236,39 @@ function reverseMap(spec: Refspec, tracking: string): string | null {
  * Commit tips evidenced as published on this endpoint: local tracking refs whose source ref maps back to the
  * same tracking ref through the unique positive, non-negated fetch mapping of a same-endpoint remote.
  */
-function publishedCommitOids(cwd: string, remotes: readonly string[]): string[] {
+function publishedCommitOids(cwd: string, remotes: readonly string[],
+  proofGit: (operation: string, args: readonly string[]) => GitResult | null,
+  hasTime: () => boolean): string[] | null {
   const oids = new Set<string>();
   const seen = new Set<string>();
+  // Cache the same-endpoint fetch refspecs once. The AC4 resolver still reads live
+  // mappings on its own path; source selection does not fork mapping semantics.
+  const cached = new Map<string, readonly Refspec[]>();
   for (const remote of remotes) {
-    for (const spec of parseRefspecs(cwd, remote)) {
+    const listed = proofGit('eligible tracking refspec lookup', ['config', '--get-all', `remote.${remote}.fetch`]);
+    if (!listed) return null;
+    // Git config returns exit 1 with no stderr for an absent key.
+    if (!listed.ok && (listed.outcome !== 'exit' || trimmed(listed.stderr) !== '')) return null;
+    cached.set(remote, listed.ok ? parseRefspecText(listed.stdout) : []);
+  }
+  for (const remote of remotes) {
+    for (const spec of cached.get(remote) ?? []) {
+      if (!hasTime()) return null;
       if (spec.negative || aliasesLocalRefs(spec.dst)) continue;
       const star = spec.dst.indexOf('*');
       const prefix = star < 0 ? spec.dst : spec.dst.slice(0, star);
-      const listed = git(cwd, ['for-each-ref', '--format=%(objectname) %(objecttype) %(refname)', prefix]);
-      if (!listed.ok) continue;
-      for (const line of listed.stdout.split('\n').map(trimmed).filter(Boolean)) {
-        const [oid, type, name] = line.split(' ');
+      const listed = proofGit('eligible tracking ref enumeration',
+        ['for-each-ref', '--format=%(objectname) %(objecttype) %(refname)', prefix]);
+      if (!listed || !listed.ok) return null;
+      for (const line of listed.stdout.split('\n')) {
+        if (!hasTime()) return null;
+        const [oid, type, name] = trimmed(line).split(' ');
         if (!oid || type !== 'commit' || !name || seen.has(name)) continue;
         const source = reverseMap(spec, name);
         if (source === null) continue;
         seen.add(name);
-        const resolved = resolveTrackingRef(cwd, remotes, source);
+        const resolved = resolveTrackingRef(cwd, remotes, source, cached, hasTime);
+        if (resolved === null) return null;
         if (resolved.kind === 'ok' && resolved.tracking === name) oids.add(oid);
       }
     }
@@ -374,21 +402,40 @@ function withScratchDir<T>(body: (dir: string) => T): T {
  */
 class PublishedPatchProof {
   private readonly cwd: string;
-  private readonly published: readonly string[];
-  private startedAt: number | null = null;
+  private published: readonly string[] = [];
+  private readonly startedAt = performance.now();
   private sourceProbes = 0;
   private applyTrials = 0;
   private blobs: string[] | null = null;
   private sourceTruncated = false;
   private stopped: string | null = null;
 
-  constructor(cwd: string, published: readonly string[]) {
+  constructor(cwd: string) {
     this.cwd = cwd;
-    this.published = published;
+  }
+
+  selectPublished(remotes: readonly string[]): readonly string[] {
+    const found = publishedCommitOids(this.cwd, remotes,
+      (operation, args) => this.proofGit(operation, args),
+      () => this.hasTimeForDiscovery());
+    if (found === null || !this.hasTimeForDiscovery()) {
+      this.stopped ??= this.exhausted('eligible tracking-ref source discovery incomplete');
+      return [];
+    }
+    this.published = found;
+    return found;
+  }
+
+  incomplete(): string | null { return this.stopped; }
+
+  private hasTimeForDiscovery(): boolean {
+    if (this.elapsedMs() < PATCH_PROOF_DEADLINE_MS) return true;
+    this.stopped ??= this.exhausted('eligible tracking-ref discovery elapsed deadline');
+    return false;
   }
 
   private elapsedMs(): number {
-    return this.startedAt === null ? 0 : Math.ceil(performance.now() - this.startedAt);
+    return Math.ceil(performance.now() - this.startedAt);
   }
 
   private exhausted(dimension: string): string {
@@ -422,7 +469,6 @@ class PublishedPatchProof {
   private discover(): boolean {
     if (this.stopped !== null) return false;
     if (this.blobs !== null) return true;
-    this.startedAt = performance.now();
     const commits = new Map<string, { distance: number; tip: string }>();
     for (const tip of [...this.published].sort()) {
       const history = this.proofGit('first-parent enumeration',
@@ -613,6 +659,8 @@ interface AccountingInput {
 }
 
 async function newCommitFailure(input: AccountingInput, patchProof: PublishedPatchProof): Promise<string | null> {
+  const incomplete = patchProof.incomplete();
+  if (incomplete) return `unpublished manager-local candidate ${input.localOid.slice(0, 12)}: ${incomplete}`;
   const listed = git(input.cwd, ['rev-list', '--parents', '--reverse', '--topo-order', '--stdin'],
     `${[input.localOid, ...[input.baseOid, ...input.published].map((oid) => `^${oid}`)].join('\n')}\n`);
   if (!listed.ok) return 'the outgoing commit range is unreadable';
@@ -670,8 +718,8 @@ async function evaluateTuples(cwd: string, endpointUrl: string, stdin: string): 
   const shownEndpoint = redactEndpoint(endpointUrl);
   const defaultBranch = worktreeConfig(cwd, KEY.defaultBranch);
   const remotes = verifiedFetchRemotes(cwd, endpoint);
-  const published = publishedCommitOids(cwd, remotes);
-  const patchProof = new PublishedPatchProof(cwd, published);
+  const patchProof = new PublishedPatchProof(cwd);
+  const published = patchProof.selectPublished(remotes);
   const seedOid = worktreeConfig(cwd, KEY.seedOid);
   const seedEndpoint = worktreeConfig(cwd, KEY.seedEndpoint);
   const denials: Denial[] = [];
