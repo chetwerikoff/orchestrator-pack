@@ -334,6 +334,7 @@ interface StartInput {
   }> | { prNumber: number; headSha: string; baseRef: string; body: string };
   fixtureRebaseOriginRepository?: string;
   fixtureBeforeRebaseSettlementRecheck?: () => void | Promise<void>;
+  fixtureStrictDescendantTreeChanged?: boolean;
   fixtureSameHeadIssueResolutionRunner?: typeof runProcess;
   /** Synthetic GitHub evidence for the narrow #2655/#2656 incident. */
   fixtureIncidentGithubRunner?: typeof runProcess;
@@ -403,6 +404,7 @@ export interface ReconcileStalePackReviewRunsInput {
   }> | { prNumber: number; headSha: string; baseRef: string; body: string };
   fixtureRebaseOriginRepository?: string;
   fixtureBeforeRebaseSettlementRecheck?: () => void | Promise<void>;
+  fixtureStrictDescendantTreeChanged?: boolean;
   fixtureSameHeadIssueResolutionRunner?: typeof runProcess;
   /** Offline connector-shaped existing GitHub architect/diff evidence; no runtime bypass. */
   fixtureIncidentGithubRunner?: typeof runProcess;
@@ -909,6 +911,26 @@ async function rebaseUniqueMergeBase(root: string, head: string, b: string): Pro
   return lines[0]!;
 }
 /** One per-call nonpersistent C proof for both PR-led and scoped entrypoints. */
+async function verifiedStrictDescendantTreeChanged(
+  input: ReconcileStalePackReviewRunsInput, reviewedH1: string, currentH2: string,
+): Promise<boolean> {
+  if (process.env.OPK_VITEST_HARNESS === '1') {
+    if (input.fixtureStrictDescendantTreeChanged !== undefined) {
+      return input.fixtureStrictDescendantTreeChanged;
+    }
+    // Existing synthetic ancestry fixtures lack real Git objects; they are
+    // neither proof of production ancestry nor a real changed-tree positive.
+    if (input.fixtureReviewCompareStatus !== undefined) return true;
+  }
+  const h1Tree = await rebaseGitSha1(
+    input.sourceRepoRoot, ['rev-parse', reviewedH1 + '^{tree}'], 'review H1 tree',
+  );
+  const h2Tree = await rebaseGitSha1(
+    input.sourceRepoRoot, ['rev-parse', currentH2 + '^{tree}'], 'current H2 tree',
+  );
+  return h1Tree !== h2Tree;
+}
+
 async function proveUniqueRebasedC(
   input: ReconcileStalePackReviewRunsInput,
   options: { projectId: string; repoSlug: string },
@@ -1023,7 +1045,9 @@ async function proveUniqueRebasedC(
       throw new Error('checkout origin moved before C settlement');
     }
     requirePr(await readPr());
-    if (await localBase() !== b || await liveBase() !== b) {
+    const secondLiveB = await liveBase();
+    const secondLocalB = await localBase();
+    if (secondLiveB !== b || secondLocalB !== b) {
       throw new Error('selected live/local base tip moved; fetch origin ' + base + ' and rerun');
     }
   } };
@@ -6667,6 +6691,21 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       currentHeadSha: currentHead,
       fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
     });
+    if (strict) {
+      try {
+        if (!(await verifiedStrictDescendantTreeChanged(
+          input, authority.terminal.targetSha, currentHead,
+        ))) {
+          return { prNumber, headSha: currentHead, finalCapSettlement: true,
+            settled: false, reason: 'final_cap_strict_descendant_required',
+            nextAction: 'make a real changed-tree fix after the reviewed findings head, then rerun reconcile' };
+        }
+      } catch {
+        return { prNumber, headSha: currentHead, finalCapSettlement: true,
+          settled: false, reason: 'final_cap_strict_descendant_required',
+          nextAction: 'restore current-head Git tree proof, then rerun reconcile' };
+      }
+    }
     if (!strict) {
       try {
         rebasedC = await proveUniqueRebasedC(input, options, prNumber,
@@ -6678,7 +6717,8 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
           nextAction: detail.includes('ls-remote unavailable')
             ? 'rerun when the remote is reachable'
             : detail.includes('base tip moved') || detail.includes('stale local')
-              ? 'git fetch origin BASEREF, then rerun the same reconcile'
+              ? 'git fetch origin ' + String(input.baseRef || 'origin/main').replace(/^origin\//, '')
+                + ', then rerun the same reconcile'
               : 'restore the selected protected base/PR identity and unique changed-tree C proof, then rerun scoped reconcile or seek architect/operator decision' };
       }
     }
@@ -7136,7 +7176,9 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
           prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
           settled: false, reason: `final_cap_settlement_incomplete:${describeError(error)}`,
           nextAction: rebasedC
-            ? 'revalidate selected PR and authoritative live/local base tip; fetch origin BASEREF and rerun, or rerun when remote is reachable'
+            ? 'revalidate selected PR and authoritative live/local base tip; git fetch origin '
+              + String(input.baseRef || 'origin/main').replace(/^origin\//, '')
+              + ', then rerun the same reconcile (or rerun when the remote is reachable on network failure)'
             : 'rerun scoped reconcile after confirming the current PR head',
         };
       }
@@ -9661,6 +9703,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         fixtureRebasePrReader: input.fixtureRebasePrReader,
         fixtureRebaseOriginRepository: input.fixtureRebaseOriginRepository,
         fixtureBeforeRebaseSettlementRecheck: input.fixtureBeforeRebaseSettlementRecheck,
+        fixtureStrictDescendantTreeChanged: input.fixtureStrictDescendantTreeChanged,
         fixtureSameHeadIssueResolutionRunner: input.fixtureSameHeadIssueResolutionRunner,
         fixtureGptSourceCommentTransport: input.fixtureGptSourceCommentTransport,
         fixtureGithubReviewTransport: input.fixtureGithubReviewTransport,
