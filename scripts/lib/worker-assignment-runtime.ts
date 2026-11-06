@@ -326,6 +326,11 @@ export async function admitCurrentWorkerAssignmentReplacement(input: {
         worker: target.worker.identity,
         observationWindowMs: input.observationWindowMs ?? 50,
       }, { timeoutMs: input.timeoutMs ?? 5_000 });
+      if (liveness.worker.runtime !== target.worker.identity.runtime
+        || liveness.worker.id !== target.worker.identity.id
+        || liveness.worker.generation !== target.worker.identity.generation) {
+        return { status: 'target_unresolved', reason: 'resolved_target_liveness_identity_mismatch' } as const;
+      }
       if (liveness.status === 'busy' || liveness.status === 'idle') {
         return {
           status: 'skipped_live',

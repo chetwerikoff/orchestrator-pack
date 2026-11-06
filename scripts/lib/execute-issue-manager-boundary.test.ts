@@ -1383,11 +1383,18 @@ describe('Issue #2544: unavailable observation and Task-owned receipt recovery',
         f.saveTerminal();
         const original = JSON.parse(readFileSync(f.envelopePath, 'utf8')) as Record<string, unknown>;
         writeFileSync(f.envelopePath, JSON.stringify({ ...original, ...conflictingEnvelope }), { mode: 0o600 });
-        await expect(runWait({
-          ...explicit(f), ownerTaskId: ownTask, ownerDispatchId: ownDispatch,
-        })).rejects.toThrow(/wait_receipt_identity_changed/u);
+        const occupant = readFileSync(f.envelopePath, 'utf8');
+        await runWait({ ...explicit(f), ownerTaskId: ownTask, ownerDispatchId: ownDispatch });
+        const result = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+        expect(result).toMatchObject({ schema: 'flow-manager-long-running-child-wait/v1',
+          terminal: false, no_success_authority: true, no_retry_authority: true,
+          owner_wait: { effect: 'none', reason: 'terminal_publication_uncertain', no_signal_sent: true } });
+        expect(result).not.toHaveProperty('envelope');
+        expect(result.owner_wait.nextStep).toContain('read-only');
+        expect(result.owner_wait.nextStep).toContain(f.invocationId);
+        expect(readFileSync(f.envelopePath, 'utf8')).toBe(occupant);
       }
-      expect(stdout).not.toHaveBeenCalled();
+      expect(stdout).toHaveBeenCalledTimes(3);
     } finally {
       stdout.mockRestore();
     }
@@ -1432,11 +1439,20 @@ describe('Issue #2544: unavailable observation and Task-owned receipt recovery',
           ...options, ownerTaskId: ownTask, ownerDispatchId: ownDispatch, deadlineMs: 75,
         })).rejects.toThrow(/wait_receipt_owner_mismatch|wait_receipt_identity_changed/u);
       }
+      expect(stdout).not.toHaveBeenCalled();
       const f = fixture();
       f.saveTerminal('foreign-invocation');
-      await expect(runWait({ ...explicit(f), ownerTaskId: ownTask, ownerDispatchId: ownDispatch }))
-        .rejects.toThrow(/wait_receipt_identity_changed/u);
-      expect(stdout).not.toHaveBeenCalled();
+      const occupant = readFileSync(f.envelopePath, 'utf8');
+      await runWait({ ...explicit(f), ownerTaskId: ownTask, ownerDispatchId: ownDispatch });
+      expect(stdout).toHaveBeenCalledTimes(1);
+      const result = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+      expect(result).toMatchObject({ schema: 'flow-manager-long-running-child-wait/v1',
+        terminal: false, no_success_authority: true, no_retry_authority: true,
+        owner_wait: { effect: 'none', reason: 'terminal_publication_uncertain', no_signal_sent: true } });
+      expect(result).not.toHaveProperty('envelope');
+      expect(result.owner_wait.nextStep).toContain('read-only');
+      expect(result.owner_wait.nextStep).toContain(f.invocationId);
+      expect(readFileSync(f.envelopePath, 'utf8')).toBe(occupant);
     } finally {
       stdout.mockRestore();
     }

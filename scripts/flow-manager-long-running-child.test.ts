@@ -20,6 +20,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import {
   COMPLETION_MODE,
+  WAIT_SCHEMA,
   GITHUB_EFFECT_BASELINE_SCHEMA,
   HANDOFF_SCHEMA,
   RECEIPT_LOCATOR_SCHEMA,
@@ -36,6 +37,7 @@ import {
   launchConfigFromArgv,
   observeOriginalLauncher,
   observeOwnerCurrency,
+  verifyCurrentInvokingOwner,
   parseGithubEffectBaseline,
   procProcessWitnessProbe,
   readPredecessorReceiptLocator,
@@ -3167,6 +3169,121 @@ function seedObservation(
   });
 }
 
+describe('Issue #2788 selected owner and exact terminal finality', () => {
+  it('never reads a guessed pack store or native owner when project selection is absent', async () => {
+    const fx = ownerWaitFixture('2788-no-project');
+    const unselected = { ...fx.ownerEnv, OPK_PROJECT_ID: '' };
+    // A matching pack row must not rescue a legacy target process with no selection.
+    writeAssignmentStore({ ...fx.ownerEnv, OPK_PROJECT_ID: 'orchestrator-pack' },
+      [{ taskId: OWNER_TASK, dispatchId: OWNER_DISPATCH }]);
+    const native = vi.fn(async () => nativeDispatch());
+    expect(observeOwnerCurrency(OWNER_TASK, OWNER_DISPATCH, unselected)).toEqual({
+      state: 'unverified', evidence: 'project_selection_required',
+    });
+    expect(await verifyCurrentInvokingOwner({ taskId: OWNER_TASK, dispatchId: OWNER_DISPATCH,
+      env: unselected, dispatchWitness: native })).toEqual({ ok: false, evidence: 'project_selection_required' });
+    const out = await captureWait(ownerWaitOptions(fx, { ownerEnv: unselected, dispatchWitness: native }));
+    expect(out.owner_wait.reason).toBe('owner_not_current:project_selection_required');
+    expect(out.owner_wait.nextStep).toContain('only if the original Task+Dispatch owner and owner-wait effect remain lawful');
+    expect(out.owner_wait.nextStep).toContain('exact original wait argv unchanged');
+    expect(out.owner_wait.nextStep).toContain('shell-quoted OPK_PROJECT_ID assignment for the independently verified selected project');
+    expect(out.owner_wait.nextStep).toContain('Otherwise inspect');
+    expect(out.owner_wait.nextStep).toContain('read-only');
+    expect(out.owner_wait.nextStep).toContain('do not guess the project or send again');
+    expect(native).not.toHaveBeenCalled();
+    expect(existsSync(fx.envelopePath)).toBe(false);
+    writePrivateJson(fx.envelopePath, launcherTerminal(fx));
+    const terminal = await captureWait(ownerWaitOptions(fx, { ownerEnv: unselected, dispatchWitness: native }));
+    expect(terminal.terminal).toBe(true);
+    expect(native).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('re-invokes the original missing-selection wait only with current owner authority: %s', async (current) => {
+    const fx = ownerWaitFixture('2788-project-recovery-' + current);
+    const native = vi.fn(async () => nativeDispatch());
+    const options = ownerWaitOptions(fx, {
+      ownerEnv: { ...fx.ownerEnv, OPK_PROJECT_ID: '' }, dispatchWitness: native,
+    });
+    const refused = await captureWait(options);
+    expectDiagnosticOnly(fx, refused);
+    expect(refused.owner_wait.reason).toBe('owner_not_current:project_selection_required');
+    expect(native).not.toHaveBeenCalled();
+    if (!current) writeAssignmentStore(fx.ownerEnv, []);
+    // Preserve every original wait input; restore only the independently known selection.
+    const selected = await captureWait({ ...options, ownerWaitDependencies: {
+      ...options.ownerWaitDependencies, ownerEnv: fx.ownerEnv,
+    } });
+    if (current) {
+      expect(selected.terminal).toBe(true);
+      expect(selected.owner_wait.effect).toBe('published');
+      expect(native).toHaveBeenCalled();
+    } else {
+      expectDiagnosticOnly(fx, selected);
+      expect(selected.owner_wait.reason).toBe('owner_not_current:task_not_in_selected_store');
+      expect(native).not.toHaveBeenCalled();
+    }
+  });
+
+  it('accepts a fully bound late terminal after native owner observation retires the owner', async () => {
+    const fx = ownerWaitFixture('2788-late-owner');
+    const github = { prTuple: vi.fn(), issueTuple: vi.fn() };
+    const native = vi.fn(async () => {
+      writePrivateJson(fx.envelopePath, launcherTerminal(fx));
+      writeAssignmentStore(fx.ownerEnv, []);
+      return undefined;
+    });
+    const out = await captureWait(ownerWaitOptions(fx, { dispatchWitness: native, githubReaders: github }));
+    expect(out).toMatchObject({ terminal: true, owner_wait: { effect: 'occupied_by_winner' } });
+    expect(native).toHaveBeenCalledTimes(1);
+    expect(github.prTuple).not.toHaveBeenCalled();
+    expect(github.issueTuple).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { observed_invocation_id: undefined },
+    { observed_invocation_id: 'foreign' },
+    { handoff_receipt_path: '/foreign/receipt.json' },
+    { launcher_started_at: 'different' },
+    { completion_mode: 'invented' },
+    { lifecycle_outcome: 'invented' },
+    { delivery: 'invented' },
+    { recovery_available: undefined },
+    { terminal_at: undefined },
+    { schema: 'invented' },
+  ])('rejects malformed or foreign late winner %j before any further effect', async (change) => {
+    const fx = ownerWaitFixture('2788-late-invalid');
+    const github = { prTuple: vi.fn(), issueTuple: vi.fn() };
+    let occupant = '';
+    const native = vi.fn(async () => {
+      writePrivateJson(fx.envelopePath, launcherTerminal(fx, change));
+      occupant = readFileSync(fx.envelopePath, 'utf8');
+      return undefined;
+    });
+    const out = await captureWait(ownerWaitOptions(fx, { dispatchWitness: native, githubReaders: github }));
+    expect(out).toMatchObject({ terminal: false, no_success_authority: true, no_retry_authority: true,
+      owner_wait: { effect: 'none', reason: 'terminal_publication_uncertain', no_signal_sent: true } });
+    expect(out.owner_wait.nextStep).toContain('wait_receipt_identity_changed');
+    expect(out.owner_wait.nextStep).toContain('read-only');
+    expect(readFileSync(fx.envelopePath, 'utf8')).toBe(occupant);
+    expect(github.prTuple).not.toHaveBeenCalled();
+    expect(github.issueTuple).not.toHaveBeenCalled();
+  });
+
+  it('revalidates the locator when a late terminal wins during owner verification', async () => {
+    const fx = ownerWaitFixture('2788-late-locator');
+    const native = vi.fn(async () => {
+      writePrivateJson(fx.envelopePath, launcherTerminal(fx));
+      const locator = JSON.parse(readFileSync(fx.locatorPath, 'utf8'));
+      writePrivateJson(fx.locatorPath, { ...locator, terminal_envelope_path: join(fx.root, 'foreign.json') });
+      return undefined;
+    });
+    const out = await captureWait(ownerWaitOptions(fx, { dispatchWitness: native }));
+    expect(out).toMatchObject({ terminal: false, owner_wait: { effect: 'none', reason: 'terminal_publication_uncertain' } });
+    expect(out.owner_wait.nextStep).toContain('wait_locator_identity_changed');
+    expect(readFileSync(fx.locatorPath, 'utf8')).toContain('foreign.json');
+  });
+});
+
 describe('Issue #2750 owner-wait reaper matrix (AC1-AC3)', () => {
   let kill: MockInstance;
   beforeEach(() => {
@@ -3463,8 +3580,10 @@ describe('Issue #2750 owner-wait reaper matrix (AC1-AC3)', () => {
       const fx = ownerWaitFixture('occupant');
       writeFileSync(fx.envelopePath, occupant, { mode: 0o600 });
       const out = await captureWait(ownerWaitOptions(fx));
-      expect(out).toMatchObject({ terminal: false, owner_wait: { effect: 'none', reason: 'terminal_publication_uncertain', no_signal_sent: true } });
-      expect(String(out.owner_wait.nextStep)).toMatch(/never republish/u);
+      expect(out).toMatchObject({ schema: WAIT_SCHEMA, terminal: false, no_success_authority: true, no_retry_authority: true,
+        owner_wait: { effect: 'none', reason: 'terminal_publication_uncertain', no_signal_sent: true } });
+      expect(out.owner_wait.nextStep).toContain(fx.invocation);
+      expect(out.owner_wait.nextStep).toContain('read-only');
       expect(readFileSync(fx.envelopePath, 'utf8')).toBe(occupant);
       expect(envelopeArtifacts(fx)).toEqual([basename(fx.envelopePath)]);
     });

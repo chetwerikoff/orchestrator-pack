@@ -1,0 +1,42 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2788,
+  "declared_paths": [
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/execute-issue-manager-boundary.test.ts",
+    "scripts/lib/worker-assignment-runtime.test.ts",
+    "scripts/lib/worker-assignment-runtime.ts",
+    "scripts/pr2-foundation/scheduler-assignment-lifecycle.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
+    "scripts/pr2-foundation/supervised-worker-start.test.ts",
+    "scripts/pr2-foundation/supervised-worker-start.ts"
+  ],
+  "denylist": [
+    ".config/",
+    ".env",
+    ".local/",
+    "credentials/",
+    "packages/core/",
+    "runtime-state/",
+    "secrets/",
+    "state/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/execute-issue-manager-boundary.test.ts",
+    "scripts/lib/worker-assignment-runtime.test.ts",
+    "scripts/lib/worker-assignment-runtime.ts",
+    "scripts/pr2-foundation/scheduler-assignment-lifecycle.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
+    "scripts/pr2-foundation/supervised-worker-start.test.ts",
+    "scripts/pr2-foundation/supervised-worker-start.ts"
+  ],
+  "source_revision": "94da18761d9fe853863f4fbc5e24da7572db0933"
+}
