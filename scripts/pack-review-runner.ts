@@ -1,6 +1,5 @@
 import './toolchain/native-entrypoint-preflight.ts';
 import { randomUUID } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
 import {
   appendFileSync,
   existsSync,
@@ -24,7 +23,7 @@ import {
 import { normalizePath } from '@orchestrator-pack/shared/lib/normalize.js';
 import { pathMatchesAnyPattern } from '../plugins/task-declaration/lib/glob_match.ts';
 import { REPOSITORY_DENYLIST } from './pr-scope-declaration.ts';
-import { observePosixProcessGroup, runProcess, type ProcessResult } from './kernel/subprocess.ts';
+import { observePosixProcessGroup, runProcess, runProcessSync, type ProcessResult } from './kernel/subprocess.ts';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
 import { parseRemoteSlug } from './lib/git-origin-slug.mjs';
 import { claudeHelpEdgeCapabilities } from './executor-profile-policy.ts';
@@ -867,14 +866,17 @@ const rebaseSha1 = /^[0-9a-f]{40}$/;
 const rebaseRawDiffArgs = ['diff', '--no-ext-diff', '--no-textconv', '--no-color',
   '--raw', '-z', '--no-renames', '--full-index', '--abbrev=40'] as const;
 function rebaseRawDelta(repoRoot: string, from: string, to: string): Buffer {
-  const result = spawnSync('git', [...rebaseRawDiffArgs, from, to], {
-    cwd: repoRoot, encoding: null, env: process.env, timeout: 30_000,
-    maxBuffer: 64 * 1024 * 1024,
+  // The canonical subprocess wrapper buffers all output. Latin-1 is a
+  // reversible one-byte mapping, including NUL, non-UTF-8 pathnames and modes;
+  // reconstruct bytes before comparing the *complete* Git --raw -z result.
+  const result = runProcessSync({
+    command: 'git', args: [...rebaseRawDiffArgs, from, to],
+    cwd: repoRoot, encoding: 'latin1', inheritParentEnv: true, timeoutMs: 30_000,
   });
-  if (result.error || result.status !== 0 || result.signal || !Buffer.isBuffer(result.stdout)) {
+  if (!result.ok || result.outcome !== 'exit' || result.exitCode !== 0) {
     throw new Error('complete raw Git diff unavailable');
   }
-  const raw = result.stdout;
+  const raw = Buffer.from(result.stdout, 'latin1');
   for (let at = 0; at < raw.length;) {
     const headerEnd = raw.indexOf(0, at);
     const pathEnd = headerEnd < 0 ? -1 : raw.indexOf(0, headerEnd + 1);
