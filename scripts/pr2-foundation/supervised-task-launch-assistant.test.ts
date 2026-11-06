@@ -7542,16 +7542,21 @@ describe('manager push guard proof classes', () => {
           } else {
             write(other, 'README.md', 'distinct scratch patch ' + index + '\n');
           }
-          git(other, 'diff', '--binary', '--output=patch.diff');
-          const bytes = readFileSync(join(other, 'patch.diff'));
+          // Never diff into the already tracked patch.diff: its truncation could contaminate the source diff.
+          const patchOutput = join(world.base, 'source-' + index + '.patch');
+          git(other, 'diff', '--binary', '--output=' + patchOutput);
+          const bytes = readFileSync(patchOutput);
+          rmSync(patchOutput);
+          expect(bytes.length).toBeGreaterThan(0);
           if (indexFor.has(index)) {
             const path = 'out/patch-' + index + '.txt';
             special.set(index, { path, value: 'exact patch ' + index + '\n', bytes });
-            git(other, 'reset', '-q', 'HEAD', '--', path);
+            git(other, 'reset', '-q', 'HEAD');
             rmSync(join(other, path));
           } else {
             git(other, 'checkout', '--', 'README.md');
           }
+          writeFileSync(join(other, 'patch.diff'), bytes);
           commit(other, 'published patch source ' + index);
         }
         git(other, 'push', '-q', 'origin', 'gpt-history');
