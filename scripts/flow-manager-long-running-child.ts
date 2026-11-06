@@ -33,7 +33,7 @@ import {
   type BrowserTurnCancellationReceipt,
 } from './chatgpt-browser-turn/state-light-cancellation.ts';
 import {
-  absoluteProfilePathError, boundTargetReadFirstNextAction, configuredProfileKey,
+  absoluteProfilePathError, boundTargetReadFirstNextAction, configuredProfileKey, githubFirstOwnerRecoveryNextAction,
   PROFILE_ABSOLUTE_NEXT_STEP, PROFILE_ABSOLUTE_REQUIRED_CODE, type BoundGithubTarget,
 } from './chatgpt-browser-turn/storage-common.ts';
 import { launchingTerminalHandle } from './chatgpt-browser-turn/chat-bindings.ts';
@@ -1532,12 +1532,22 @@ async function terminalGithubEffect(
 async function withTerminalGithubEffect(
   config: LaunchConfig, receipt: HandoffReceipt, envelope: TerminalEnvelope, candidateBound: boolean,
 ): Promise<TerminalEnvelope> {
+  const scopedRecovery = !envelope.next_action && (
+    envelope.turn_result_cause?.startsWith('predecessor_handoff_unproven:')
+    || envelope.turn_result_cause === 'input_invalid:exact_predecessor_selector_required'
+    || (envelope.turn_result_state === 'observation_uncertain'
+      && ((envelope.send_count ?? 0) > 0 || envelope.turn_result_cause === 'post_send_absolute_deadline_elapsed'))
+  );
+  const advised = scopedRecovery
+    ? { ...envelope, next_action: githubFirstOwnerRecoveryNextAction(launchBoundTarget(config)) }
+    : !envelope.next_action && envelope.turn_result_state === 'driver_error'
+      ? { ...envelope, next_action: boundTargetReadFirstNextAction(launchBoundTarget(config)) } : envelope;
   const effect = await terminalGithubEffect(config, receipt, candidateBound);
-  if (!effect) return envelope;
-  const readFirst = effect.target
+  if (!effect) return advised;
+  const readFirst = !advised.next_action && effect.target
     && (envelope.lifecycle_outcome !== 'success' || envelope.turn_result_cause === 'author_effect_pr_head_changed');
   return {
-    ...envelope,
+    ...advised,
     ...(readFirst ? { next_action: boundTargetReadFirstNextAction(effect.target) } : {}),
     diagnostics: boundedDiagnostics({ ...(envelope.diagnostics ?? {}), github_effect: effect.classification }),
   };
@@ -1610,7 +1620,9 @@ async function finalizeCandidatePath(
     child_exit_diagnostic: childExitDiagnostic,
     turn_result_state: candidate.state,
     turn_result_cause: candidate.cause,
-    ...(candidate.next_action ? { next_action: candidate.next_action } : {}),
+    ...(candidate.next_action ? { next_action: candidate.next_action }
+      : candidate.state === 'observation_uncertain' && candidate.send_attempted
+        ? { next_action: githubFirstOwnerRecoveryNextAction(launchBoundTarget(config)) } : {}),
     send_count: candidate.resolved_send_count,
     observed_invocation_id: candidate.invocation_id,
     ...projectedTurnDiagnostics,
@@ -1693,7 +1705,7 @@ async function finalizeCandidatePath(
 /** Default executable remediation for each pre-child launcher refusal code (AC13). */
 const REFUSAL_NEXT_STEPS: Readonly<Record<string, string>> = {
   durable_artifact_root_invalid: 'set HOME to an absolute home directory, make $HOME/.local/state/orchestrator-pack private (0700) and owned by you, then relaunch',
-  predecessor_handoff_unproven: 'reconcile the exact predecessor invocation through its own locator/terminal (wait --invocation-id <old> with its original Run/attempt) before any SEND; do not retry while it is unresolved',
+  predecessor_handoff_unproven: githubFirstOwnerRecoveryNextAction(undefined),
   owner_identity_pair_required: 'pass both --owner-task-id and --owner-dispatch-id from the current upstream-admitted Task+Dispatch, or neither for a legacy direct launch',
   owner_dispatch_not_current: 'the selected assignment store records a different Dispatch for this Task: relaunch only from the currently approved Task+Dispatch owner',
   invalid_cwd: 'pass --cwd <existing worktree directory>',
@@ -1702,8 +1714,8 @@ const REFUSAL_NEXT_STEPS: Readonly<Record<string, string>> = {
   preflight_failed: 'make the durable root and browser-output parent private (0700) writable directories with distinct artifact paths, then relaunch',
   liveness_contract_invalid: 'fix the OPK browser-turn liveness timing environment, then relaunch',
   invocation_admission_failed_use_fresh_id: 'relaunch with a fresh --invocation-id; this id is already reserved or its observation exists',
-  receipt_create_or_index_readback_failed: 'reconcile the exact original invocation with wait --invocation-id before any new SEND; never resend blindly',
-  receipt_create_failed: 'check the durable root permissions, then relaunch with fresh artifact basenames',
+  receipt_create_or_index_readback_failed: githubFirstOwnerRecoveryNextAction(undefined),
+  receipt_create_failed: githubFirstOwnerRecoveryNextAction(undefined),
   canary_in_receipt: 'remove secret-bearing values from launch arguments, then relaunch with a fresh invocation id',
   [PROFILE_ABSOLUTE_REQUIRED_CODE]: PROFILE_ABSOLUTE_NEXT_STEP,
 };
@@ -1728,9 +1740,13 @@ export function boundedRefusalReason(message: unknown): string | undefined {
   return scrubbed.length > REFUSAL_REASON_CAP ? `${scrubbed.slice(0, REFUSAL_REASON_CAP - 3)}...` : scrubbed;
 }
 
-function refusalDetails(code: string, details: Record<string, unknown> = {}): Record<string, unknown> {
-  const base = typeof details.nextStep === 'string' && details.nextStep.trim()
-    ? details.nextStep : REFUSAL_NEXT_STEPS[code] ?? 'reconcile the exact original invocation before any new SEND';
+export function refusalDetails(code: string, details: Record<string, unknown> = {}, config?: LaunchConfig): Record<string, unknown> {
+  const scopedRecovery = code === 'predecessor_handoff_unproven' || code === 'receipt_create_or_index_readback_failed'
+    || code === 'receipt_create_failed' || !(code in REFUSAL_NEXT_STEPS);
+  const base = typeof details.nextStep === 'string' && details.nextStep.trim() ? details.nextStep
+    : scopedRecovery ? githubFirstOwnerRecoveryNextAction(config ? launchBoundTarget(config) : undefined)
+      + (code === 'receipt_create_failed' ? ' Also check durable-root permissions and artifact basenames.' : '')
+      : REFUSAL_NEXT_STEPS[code]!;
   // The caller sees the genuine bounded cause first, then the executable repair.
   const reason = boundedRefusalReason(details.message);
   const nextStep = reason && !base.startsWith('reason: ') ? `reason: ${reason}; ${base}` : base;
@@ -1761,10 +1777,11 @@ export interface RefusalCompanion {
 }
 
 /** Detached launcher refusals lose stderr; when the wrapper asks, leave one bounded scrubbed companion. */
-function writeRefusalCompanion(config: LaunchConfig, code: string, details: Record<string, unknown>): void {
+export function writeRefusalCompanion(config: LaunchConfig, code: string, details: Record<string, unknown>): void {
   if (process.env[REFUSAL_COMPANION_ENV] !== 'v1') return;
   try {
-    const nextStep = String(details.nextStep ?? '').slice(0, 512);
+    // Keep the complete conditional advice; the serialized companion remains bounded by COMPANION_BYTE_CAP.
+    const nextStep = String(details.nextStep ?? '');
     const body: RefusalCompanion = {
       schema: REFUSAL_COMPANION_SCHEMA,
       run_identity: config.runIdentity,
@@ -1943,7 +1960,7 @@ export type LaunchPreSpawnValidation =
  */
 export function validateLaunchPreSpawn(input: LaunchConfig): LaunchPreSpawnValidation {
   const fail = (code: string, details: Record<string, unknown> = {}): LaunchPreSpawnValidation => ({
-    ok: false, code, details: refusalDetails(code, details),
+    ok: false, code, details: refusalDetails(code, details, input),
   });
   let config = input;
   if (!config.terminalEnvelopeRoot) {
@@ -2115,7 +2132,7 @@ export async function runLaunch(input: LaunchConfig): Promise<number> {
   let config = validation.config;
   const launcherArtifacts = [config.handoffReceiptPath, config.terminalEnvelopePath, config.browserOutputPath];
   const refuseAfterValidation = (code: string, details?: Record<string, unknown>): number => {
-    const full = refusalDetails(code, details);
+    const full = refusalDetails(code, details, config);
     refuse(code, full);
     writeRefusalCompanion(config, code, full);
     return 2;

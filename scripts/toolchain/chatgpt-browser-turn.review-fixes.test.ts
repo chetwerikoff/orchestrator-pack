@@ -26,7 +26,7 @@ import {
 } from '../chatgpt-browser-turn/state.ts';
 import { atomicJson, configuredProfileKey, profileDirs, sha256 } from '../chatgpt-browser-turn/storage-common.ts';
 import {
-  absoluteProfilePathError, boundTargetReadFirstNextAction, boundTargetReadOnlyArgv,
+  absoluteProfilePathError, boundTargetReadFirstNextAction, boundTargetReadOnlyArgv, githubFirstOwnerRecoveryNextAction,
 } from '../chatgpt-browser-turn/storage-common.ts';
 import { classifyArgv } from '../lib/gh-inventory-match.mjs';
 import * as coordination from '../chatgpt-browser-turn/coordination.ts';
@@ -1103,10 +1103,32 @@ describe('issue 1068 profile identity and legacy keys', () => {
       const next = boundTargetReadFirstNextAction(target);
       expect(next).toContain(`read-only first: ${argv.join(' ')}`);
       expect(next).not.toMatch(/fresh chat|--new-chat/iu);
+      const recovery = githubFirstOwnerRecoveryNextAction(target);
+      expect(recovery).toContain(`read-only first: ${argv.join(' ')}`);
+      expect(recovery).toContain('unverified attribution');
+      expect(recovery).toContain('manually inspect comments/new PR/other commits and ambiguous body/head changes');
+      expect(recovery).toContain('against original intent');
+      expect(recovery).toContain('incomplete coverage or failed read means effect unknown');
+      expect(recovery).toContain('Only if owner confirms relevant effect: one separate authorized new-chat continuation');
+      expect(recovery).toContain('Only if owner completes relevant kind-specific inspection confirming no expected effect AND independently has original reported Send time');
+      expect(recovery).toContain('at least 20 minutes elapsed');
+      expect(recovery).toContain('current Task+Dispatch/send admission');
+      expect(recovery).toContain('neither --predecessor-invocation-id nor --predecessor-attempt-identity');
+      expect(recovery).toContain('no original-prompt replay or automatic resend');
+      // Hypothetical owner facts only: no production clock/time input is supplied.
+      for (const reportedAge of ['19:59', '20:00', undefined]) {
+        expect(recovery).toBe(githubFirstOwnerRecoveryNextAction(target));
+        expect(recovery).not.toContain(String(reportedAge));
+        expect(recovery).toContain('Missing time, under 20 minutes, incomplete inspection, ambiguous intent/effect or ownership');
+      }
     }
     const unbound = boundTargetReadFirstNextAction(undefined);
     expect(unbound).toContain('no trusted original-bound GitHub target');
     expect(unbound).not.toMatch(/scripts\/gh/u);
+    const recovery = githubFirstOwnerRecoveryNextAction(undefined);
+    expect(recovery).toMatch(/^read-only first: still-current owner must identify and inspect the live GitHub target/u);
+    expect(recovery).not.toContain('scripts/gh');
+    expect(recovery).toContain('further supported GitHub inspection/manual current-owner decision');
   });
 
   it('AC6: active legacy possible_delivery blocks startup on the new key', () => {

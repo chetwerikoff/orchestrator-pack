@@ -88,6 +88,21 @@ export function boundTargetReadFirstNextAction(target: BoundGithubTarget | undef
     : `read-only first: no trusted original-bound GitHub target; inspect the exact original invocation read-only; ${tail}`;
 }
 
+/** Owner-evaluated recovery for named predecessor/receipt refusals and post-SEND uncertainty only. */
+export function githubFirstOwnerRecoveryNextAction(target: BoundGithubTarget | undefined): string {
+  const first = target ? `read-only first: ${boundTargetReadOnlyArgv(target).join(' ')}; `
+    : 'read-only first: still-current owner must identify and inspect the live GitHub target; ';
+  return first + 'body/head progress has unverified attribution, not intended-effect or physical Send proof. '
+    + 'Still-current owner: manually inspect comments/new PR/other commits and ambiguous body/head changes on GitHub against original intent; '
+    + 'incomplete coverage or failed read means effect unknown. '
+    + 'Only if owner confirms relevant effect: one separate authorized new-chat continuation from live Issue/PR/commit head, --new-chat. '
+    + 'Only if owner completes relevant kind-specific inspection confirming no expected effect AND independently has original reported Send time '
+    + 'with at least 20 minutes elapsed: owner may admit a fresh turn as new work from live head, --new-chat. '
+    + 'Both choices require current Task+Dispatch/send admission and neither --predecessor-invocation-id nor --predecessor-attempt-identity; '
+    + 'no original-prompt replay or automatic resend. Missing time, under 20 minutes, incomplete inspection, ambiguous intent/effect or ownership: '
+    + 'further supported GitHub inspection/manual current-owner decision; no observed progress is not no Send, reported Send is not physical proof.';
+}
+
 function toPortableProfilePath(profile: string): string {
   let portable = profile.trim().replaceAll('\\', '/');
   const drive = /^([A-Za-z]):(.*)$/.exec(portable);

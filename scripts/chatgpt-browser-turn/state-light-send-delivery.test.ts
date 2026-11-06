@@ -1006,6 +1006,25 @@ describe('production attempted-send result and durable envelope', () => {
     }
   });
 
+  it.each([
+    { selectors: ['--predecessor-invocation-id', 'missing'], cause: 'input_invalid:exact_predecessor_selector_required' },
+    { selectors: ['--predecessor-attempt-identity', 'missing'], cause: 'input_invalid:exact_predecessor_selector_required' },
+  ])('emits owner-conditional GitHub recovery for the actual driver selector refusal $selectors', async ({ selectors, cause }) => {
+    const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      '--profile', join(root, 'profile'), '--cdp', 'http://127.0.0.1:9222',
+      '--input', join(root, 'synthetic-input'), '--output', join(root, randomUUID() + '.txt'),
+      '--new-chat', '--project-url', 'https://chatgpt.com/g/g-p-fixture/project',
+      '--invocation-id', randomUUID(), '--bound-issue', 'acme/widgets#42', ...selectors,
+    ]);
+    expect(result).toMatchObject({ state: 'input_invalid', cause, send_count: 0 });
+    expect(result.next_action).toContain('scripts/gh issue view 42 --repo acme/widgets --json state,title,body,closedAt');
+    expect(result.next_action).toContain('nothing was sent by this invocation');
+    expect(result.next_action).toContain('Only if owner confirms relevant effect');
+    expect(result.next_action).toContain('original reported Send time with at least 20 minutes elapsed');
+    expect(result.next_action).toContain('neither --predecessor-invocation-id nor --predecessor-attempt-identity');
+    expect(mocks.browserQueue).toHaveLength(0);
+  });
+
   it.each((['click', 'enter'] as const).flatMap((transport) =>
     (['witness_then_throw', 'throw_no_witness', 'return_no_witness', 'pre_dispatch'] as const)
       .map((scenario) => ({ transport, scenario })),
@@ -1098,6 +1117,12 @@ describe('production attempted-send result and durable envelope', () => {
         });
         expect(result.incidents).toContain('send_transport_error');
         expect(result.incidents).not.toContain('helper_failure_before_send');
+        expect(result.next_action).toContain('still-current owner must identify and inspect the live GitHub target');
+        expect(result.next_action).toContain('Only if owner confirms relevant effect');
+        expect(result.next_action).toContain('original reported Send time');
+        expect(result.next_action).toContain('at least 20 minutes elapsed');
+        expect(result.next_action).toContain('current Task+Dispatch/send admission');
+        expect(result.next_action).toContain('neither --predecessor-invocation-id nor --predecessor-attempt-identity');
       }
 
       // Consume the real finalized production result through the unchanged
