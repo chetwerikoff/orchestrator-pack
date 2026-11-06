@@ -273,142 +273,122 @@ describe('Orca task terminal ownership persistence', () => {
     }
   });
 
-  it('replaces an absent pre-reboot terminal under exact current Task/Dispatch ownership and reuses its new durable record', async () => {
-    const stateRoot = mkdtempSync(join(tmpdir(), 'opk-2655-reboot-terminal-'));
-    const env = { OPK_WAKE_SUPERVISOR_STATE_DIR: stateRoot, OPK_BASE_DIR: stateRoot };
-    const repository = 'chetwerikoff/orchestrator-pack';
-    const title = 'opk-t2-task_2107';
-    const worktree = '/tmp/opk-task-2107';
-    const worktreeId = 'repo::owned-2107';
-    const oldDispatch = 'ctx_2107_old';
-    const terminals: Array<{ handle: string; incarnationId: string; worktreePath: string; title: string; status: 'running' }> = [];
+  function staleLaunchFixture(title: string) {
+    const stateRoot = mkdtempSync(join(tmpdir(), 'opk-2794-terminal-recovery-'));
+    const env = { OPK_WAKE_SUPERVISOR_STATE_DIR: stateRoot };
+    const workspace = '/tmp/opk-2794-workspace';
+    const terminals: Array<{ handle: string; incarnationId: string; title: string; worktreePath: string; status: 'running' }> = [];
     let creates = 0;
-    let absentTerminalCode = 'not_found';
-    let selectedStatus = 'failed';
-    let observedStatus = 'missing';
-    let observedExact = false;
-    let observedId = oldDispatch;
-    let observedWorktreeId = worktreeId;
-    let observedHandle = 'terminal-1';
+    let showFailure: string | undefined;
     const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
-      const key = `${args[0]} ${args[1]}`;
-      if (key === 'terminal create') {
+      const operation = `${args[0]} ${args[1]}`;
+      if (operation === 'terminal create') {
         creates += 1;
-        const terminal = { handle: `terminal-${creates}`,
-          incarnationId: `incarnation-${creates}`, worktreePath: worktree, title, status: 'running' as const };
+        const terminal = { handle: `terminal-${creates}`, incarnationId: `generation-${creates}`,
+          title: String(args[args.indexOf('--title') + 1]), worktreePath: workspace, status: 'running' as const };
         terminals.push(terminal);
         return { ok: true, result: { terminal } };
       }
-      if (key === 'terminal show') {
+      if (operation === 'terminal show') {
+        if (showFailure) return { ok: false, error: { code: showFailure, message: 'native show failure' } };
         const handle = args[args.indexOf('--terminal') + 1];
         const terminal = terminals.find((item) => item.handle === handle);
         return terminal ? { ok: true, result: { terminal } }
-          : { ok: false, error: { code: absentTerminalCode, message: 'terminal absent after reboot' } };
+          : { ok: false, error: { code: 'not_found', message: 'old terminal absent' } };
       }
-      if (key === 'terminal list') return { ok: true,
-        result: { terminals, totalCount: terminals.length, truncated: false } };
-      if (key === 'orchestration dispatch-show') return { ok: true, result: {
-        dispatch: { id: observedId, status: selectedStatus },
-      } };
-      if (key === 'orchestration worker-show') return { ok: true, result: {
-        dispatch: { status: selectedStatus },
-        worker: { agent_terminal_handle: observedHandle, worktree_id: observedWorktreeId,
-          state: 'abandoned', stage: 'terminal_missing' },
-        terminal: null,
-        observation: { exactWorker: observedExact, status: observedStatus },
-      } };
-      return { ok: false, error: { code: 'unexpected', message: key } };
+      if (operation === 'terminal list') {
+        const requested = args[args.indexOf('--worktree') + 1];
+        const listed = terminals.filter((terminal) => !requested || terminal.worktreePath === requested);
+        return { ok: true, result: { terminals: listed, totalCount: listed.length, truncated: false } };
+      }
+      return { ok: false, error: { code: 'unexpected', message: operation } };
     });
+    const adapter = () => new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env });
+    const request = { title, command: 'opencode', workspace };
+    const recordPath = join(stateRoot, 'launch-task-terminals',
+      `${createHash('sha256').update(title).digest('hex')}.json`);
+    const dispose = () => rmSync(stateRoot, { recursive: true, force: true });
+    return { terminals, adapter, request, recordPath, runJson, dispose,
+      creations: () => creates, failShow: (code?: string) => { showFailure = code; } };
+  }
+
+  it.each(['opk-t2-task_2107', 'opk-t2-merge-task_2107'])(
+    '#2794 replaces a natively disappeared %s terminal and persists only the new owner', (title) => {
+      const world = staleLaunchFixture(title);
+      try {
+        const first = world.adapter().spawnWorker(world.request);
+        expect(first.status).toBe('ok');
+        const originalRecord = readFileSync(world.recordPath, 'utf8');
+        world.terminals.splice(0);
+        const recovered = world.adapter().spawnWorker(world.request);
+        expect(recovered).toMatchObject({ status: 'ok', value: {
+          identity: { id: 'terminal-2', generation: 'generation-2' }, title,
+          workspacePath: world.request.workspace, provenance: 'internal',
+        } });
+        expect(world.creations()).toBe(2);
+        expect(readFileSync(world.recordPath, 'utf8')).not.toBe(originalRecord);
+        const durable = JSON.parse(readFileSync(world.recordPath, 'utf8')) as {
+          title: string; workspacePath: string; identity: { id: string };
+        };
+        expect(durable).toMatchObject({ title, workspacePath: world.request.workspace,
+          identity: { id: 'terminal-2' } });
+        expect(world.adapter().spawnWorker(world.request)).toMatchObject({
+          status: 'ok', value: { identity: { id: 'terminal-2' }, provenance: 'internal' },
+        });
+        expect(world.creations()).toBe(2);
+      } finally { world.dispose(); }
+    },
+  );
+
+  it.each(['title', 'worktree'] as const)(
+    '#2794 replaces a live reused handle with a different %s and never sends to that old handle', (mismatch) => {
+      const world = staleLaunchFixture('opk-t2-merge-task_2794');
+      try {
+        expect(world.adapter().spawnWorker(world.request).status).toBe('ok');
+        const old = world.terminals[0]!;
+        if (mismatch === 'title') old.title = 'unrelated-worker';
+        else old.worktreePath = '/tmp/foreign-worktree';
+        const refreshed = world.adapter().spawnWorker(world.request);
+        expect(refreshed).toMatchObject({
+          status: 'ok', value: { identity: { id: 'terminal-2' }, provenance: 'internal' },
+        });
+        expect(world.creations()).toBe(2);
+        const calls = world.runJson.mock.calls.map((call) => call[0] as readonly string[]);
+        expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'send'
+          && args.includes('terminal-1'))).toBe(false);
+        expect(JSON.parse(readFileSync(world.recordPath, 'utf8'))).toMatchObject({
+          identity: { id: 'terminal-2' },
+        });
+      } finally { world.dispose(); }
+    },
+  );
+
+  it('#2794 refuses unknown native show failures with no new terminal and preserves the recorded owner', () => {
+    const world = staleLaunchFixture('opk-t2-task_2794');
     try {
-      const assignmentFile = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
-      const published = await publishCurrentWorkerAssignment({
-        file: assignmentFile, repository, issueNumber: 2655, taskId: 'task_2107',
-        kind: 'local', provider: 'orca', bindingKey: oldDispatch, role: 'worker',
+      expect(world.adapter().spawnWorker(world.request).status).toBe('ok');
+      const oldRecord = readFileSync(world.recordPath, 'utf8');
+      world.failShow('rpc_timeout');
+      expect(world.adapter().spawnWorker(world.request)).toMatchObject({
+        status: 'failed', reason: 'launch_task_terminal_identity_unproven',
       });
-      if (!published.ok) throw new Error(published.reason);
-      const first = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env });
-      const old = first.spawnWorker({ title, command: 'opencode', workspace: worktree });
-      expect(old.status).toBe('ok');
-      expect(creates).toBe(1);
-      const path = join(stateRoot, 'launch-task-terminals',
-        `${createHash('sha256').update(title).digest('hex')}.json`);
-      const oldBytes = readFileSync(path);
-      expect(JSON.parse(String(oldBytes)).identity.id).toBe('terminal-1');
-
-      // Reboot: durable title ownership survives, but the exact old terminal is gone.
-      terminals.splice(0);
-      const next = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env });
-      const request = { title, command: 'opencode', workspace: worktree,
-        terminalGoneRecovery: { assignment: published.assignment, worktreeId } };
-      const before = creates;
-      const staleOnly = next.spawnWorker({ title, command: 'opencode', workspace: worktree });
-      expect(staleOnly.status).not.toBe('ok');
-      expect(creates).toBe(before);
-      for (const mismatch of ['active Dispatch', 'unknown worker', 'foreign Dispatch',
-        'foreign terminal handle', 'foreign worktree'] as const) {
-        selectedStatus = mismatch === 'active Dispatch' ? 'dispatched' : 'failed';
-        observedStatus = mismatch === 'unknown worker' ? 'unknown' : 'missing';
-        observedId = mismatch === 'foreign Dispatch' ? 'ctx_foreign' : oldDispatch;
-        observedHandle = mismatch === 'foreign terminal handle' ? 'terminal_foreign' : 'terminal-1';
-        observedWorktreeId = mismatch === 'foreign worktree' ? 'repo::foreign' : worktreeId;
-        expect(next.spawnWorker(request).status).not.toBe('ok');
-        expect(creates).toBe(before);
-      }
-      selectedStatus = 'failed'; observedStatus = 'missing';
-      observedId = oldDispatch; observedHandle = 'terminal-1'; observedWorktreeId = worktreeId;
-
-      // A reused native handle with a replacement generation is not the
-      // previously owned terminal and must never authorize another create.
-      terminals.push({ handle: 'terminal-1', incarnationId: 'foreign-replaced-incarnation',
-        worktreePath: worktree, title: 'unrelated-worker', status: 'running' });
-      expect(next.spawnWorker(request).status).not.toBe('ok');
-      expect(creates).toBe(before);
-      terminals.splice(0);
-
-      const replaced = await publishCurrentWorkerAssignment({
-        file: assignmentFile, repository, issueNumber: 2655, taskId: 'task_2107',
-        kind: 'local', provider: 'orca', bindingKey: 'ctx_other_assignment', role: 'worker',
-        expectedCurrent: { assignmentId: published.assignment.assignmentId,
-          generation: published.assignment.generation },
-      });
-      if (!replaced.ok) throw new Error(replaced.reason);
-      expect(next.spawnWorker(request).status).not.toBe('ok');
-      expect(creates).toBe(before);
-      const restored = await publishCurrentWorkerAssignment({
-        file: assignmentFile, repository, issueNumber: 2655, taskId: 'task_2107',
-        kind: 'local', provider: 'orca', bindingKey: oldDispatch, role: 'worker',
-        expectedCurrent: { assignmentId: replaced.assignment.assignmentId,
-          generation: replaced.assignment.generation },
-      });
-      if (!restored.ok) throw new Error(restored.reason);
-      const admittedRequest = { ...request,
-        terminalGoneRecovery: { assignment: restored.assignment, worktreeId } };
-      // terminal_handle_stale proves absence of the old handle only; the exact
-      // terminal Dispatch, assignment and worktree checks above still apply.
-      absentTerminalCode = 'terminal_handle_stale';
-      const admitted = next.spawnWorker(admittedRequest);
-      expect(admitted).toMatchObject({ status: 'ok', value: {
-        identity: { id: 'terminal-2', generation: 'incarnation-2' }, provenance: 'internal',
-        title, workspacePath: worktree,
-      } });
-      expect(creates).toBe(2);
-      const persistedNew = JSON.parse(readFileSync(path, 'utf8')) as {
-        identity: { id: string; generation: string }; title: string; workspacePath: string;
-      };
-      expect(persistedNew).toMatchObject({
-        title, workspacePath: worktree, identity: { id: 'terminal-2', generation: 'incarnation-2' },
-      });
-      expect(readFileSync(path)).not.toEqual(oldBytes);
-      const reused = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env })
-        .spawnWorker({ title, command: 'opencode', workspace: worktree });
-      expect(reused).toMatchObject({ status: 'ok',
-        value: { identity: admitted.status === 'ok' ? admitted.value.identity : undefined,
-          provenance: 'internal' } });
-      expect(creates).toBe(2);
-    } finally {
-      rmSync(stateRoot, { recursive: true, force: true });
-    }
+      expect(world.creations()).toBe(1);
+      expect(readFileSync(world.recordPath, 'utf8')).toBe(oldRecord);
+    } finally { world.dispose(); }
   });
+
+  it('#2794 refuses a changed incarnation under the same native title/worktree', () => {
+    const world = staleLaunchFixture('opk-t2-task_2794');
+    try {
+      expect(world.adapter().spawnWorker(world.request).status).toBe('ok');
+      world.terminals[0]!.incarnationId = 'foreign-generation';
+      expect(world.adapter().spawnWorker(world.request)).toMatchObject({
+        status: 'failed', reason: 'launch_task_terminal_identity_unproven',
+      });
+      expect(world.creations()).toBe(1);
+    } finally { world.dispose(); }
+  });
+
 });
 
 describe('OpenCode durable launch control', () => {

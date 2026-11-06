@@ -42,6 +42,9 @@ import {
   procProcessWitnessProbe,
   readPredecessorReceiptLocator,
   refusalCompanionPath,
+  refusalDetails,
+  writeRefusalCompanion,
+  readRefusalCompanion,
   resolveDurableArtifactPath,
   resolveDurableArtifactRoot,
   sameHandoffIdentity,
@@ -4346,6 +4349,10 @@ describe('Issue #2750 managed adapter refusal matrix (AC10-AC13, AC17)', () => {
       // The bounded genuine reason reaches the caller, never a generic handoff mismatch.
       expect(result.lines[0]).toMatch(/predecessor_handoff_unproven; nextStep: reason: \S/u);
       expect(result.lines[0]).not.toMatch(/handoff mismatch/iu);
+      expect(result.lines[0]).toContain('Only if owner confirms relevant effect');
+      expect(result.lines[0]).toContain('original reported Send time');
+      expect(result.lines[0]).toContain('at least 20 minutes elapsed');
+      expect(result.lines[0]).not.toContain('wait --invocation-id <old>');
     }
   });
 
@@ -4358,6 +4365,51 @@ describe('Issue #2750 managed adapter refusal matrix (AC10-AC13, AC17)', () => {
     expect(boundedRefusalReason('x'.repeat(500))!.length).toBeLessThanOrEqual(160);
     expect(boundedRefusalReason('   ')).toBeUndefined();
     expect(boundedRefusalReason(undefined)).toBeUndefined();
+  });
+
+  it.each([
+    ['durable_artifact_root_invalid', 'set HOME to an absolute home directory'],
+    ['predecessor_handoff_unproven', 'Only if owner confirms relevant effect'],
+    ['owner_identity_pair_required', 'pass both --owner-task-id and --owner-dispatch-id'],
+    ['owner_dispatch_not_current', 'currently approved Task+Dispatch owner'],
+    ['invalid_cwd', 'pass --cwd <existing worktree directory>'],
+    ['terminal_envelope_name_not_wakeable', 'basename ending in terminal.json'],
+    ['occupied_launcher_owned_path', 'choose fresh handoff/terminal/browser-output basenames'],
+    ['preflight_failed', 'private (0700) writable directories'],
+    ['liveness_contract_invalid', 'fix the OPK browser-turn liveness timing environment'],
+    ['invocation_admission_failed_use_fresh_id', 'fresh --invocation-id'],
+    ['receipt_create_or_index_readback_failed', 'Only if owner confirms relevant effect'],
+    ['receipt_create_failed', 'Also check durable-root permissions'],
+    ['canary_in_receipt', 'remove secret-bearing values'],
+    ['profile_absolute_user_data_dir_required', '--profile <absolute-user-data-dir>'],
+    ['unknown_dynamic_launcher_cause', 'Only if owner confirms relevant effect'],
+  ])('retains complete actual companion advice for finite launcher refusal %s', (code, repair) => {
+    const ctx = matrixContext();
+    vi.stubEnv(REFUSAL_COMPANION_ENV, 'v1');
+    const config: LaunchConfig = {
+      runIdentity: 'run-m', attemptIdentity: 'attempt-m', invocationId: 'inv-m', cwd: ctx.root,
+      handoffReceiptPath: ctx.paths.receipt, terminalEnvelopePath: ctx.paths.envelope,
+      terminalEnvelopeRoot: ctx.root, browserOutputPath: ctx.paths.output,
+      childCommand: process.execPath, childArgs: ['--bound-issue', 'acme/widgets#42'],
+    };
+    const details = refusalDetails(code!, { message: 'bounded_reason '.repeat(30) }, config);
+    writeRefusalCompanion(config, code!, details);
+    const emitted = readRefusalCompanion(ctx.paths.receipt, {
+      runIdentity: 'run-m', attemptIdentity: 'attempt-m', invocationId: 'inv-m', launcherPid: process.pid,
+    });
+    expect(emitted?.physical_send).toBe('none');
+    expect(emitted?.nextStep).toContain(repair);
+    expect(emitted?.nextStep).toBe(details.nextStep);
+    expect(String(details.message)).toHaveLength(160);
+    if (['predecessor_handoff_unproven', 'receipt_create_or_index_readback_failed', 'receipt_create_failed', 'unknown_dynamic_launcher_cause'].includes(code!)) {
+      expect(emitted!.nextStep.length).toBeGreaterThan(512);
+      expect(emitted!.nextStep).toContain('scripts/gh issue view 42 --repo acme/widgets --json state,title,body,closedAt');
+      expect(emitted!.nextStep).toContain('Only if owner confirms relevant effect');
+      expect(emitted!.nextStep).toContain('original reported Send time with at least 20 minutes elapsed');
+      expect(emitted!.nextStep).toContain('neither --predecessor-invocation-id nor --predecessor-attempt-identity');
+      expect(emitted!.nextStep).toContain('further supported GitHub inspection/manual current-owner decision');
+      expect(emitted!.nextStep).not.toContain('wait --invocation-id <old>');
+    } else expect(emitted!.nextStep).not.toContain('--new-chat');
   });
 
   describe('post-spawn evidence tiers (a launcher may already have run: SEND unknown)', () => {
@@ -4621,6 +4673,11 @@ describe('Issue #2750 managed adapter refusal matrix (AC10-AC13, AC17)', () => {
       expect(result.code).toBe(2);
       expect(result.stderr).toContain('"reason":"receipt_create_failed"');
       expect(result.stderr).toMatch(/"nextStep":"[^"]+\S/u);
+      expect(result.stderr).toContain('still-current owner must identify and inspect the live GitHub target');
+      expect(result.stderr).toContain('Only if owner confirms relevant effect');
+      expect(result.stderr).toContain('original reported Send time');
+      expect(result.stderr).toContain('at least 20 minutes elapsed');
+      expect(result.stderr).toContain('Also check durable-root permissions and artifact basenames');
       expectNoLauncherEffects(paths, marker);
     });
 
@@ -4815,7 +4872,9 @@ describe('Issue #2750 predecessor identity and continuity (AC14-AC15)', () => {
       if (validation.ok) return;
       expect(validation.code).toBe('predecessor_handoff_unproven');
       expect(String(validation.details.message)).toMatch(message);
-      expect(String(validation.details.nextStep)).toMatch(/reconcile the exact predecessor invocation/u);
+      expect(String(validation.details.nextStep)).toContain('still-current owner must identify and inspect the live GitHub target');
+      expect(String(validation.details.nextStep)).toContain('Only if owner confirms relevant effect');
+      expect(String(validation.details.nextStep)).not.toContain('wait --invocation-id <old>');
       expect(scenario.protectedFiles()).toEqual(before);
       expect(existsSync(scenario.config.handoffReceiptPath)).toBe(false);
       expect(existsSync(scenario.config.terminalEnvelopePath)).toBe(false);
@@ -5912,6 +5971,43 @@ describe('Issue #2772 AC3: launcher terminal GitHub effect on the bound candidat
   }
 
   const zeroCount = { cause: 'author_effect_pr_head_changed', witness: undefined, observation_uncertainty_diagnostics: { cause: 'author_effect_pr_head_changed', send_count: 0, owned_prompt_seen: false } };
+
+  it.each([
+    { id: 'uncertain-pr', state: 'observation_uncertain', cause: 'post_send_absolute_deadline_elapsed', selectors: ['--repo', 'acme/widgets', '--pr', '7'] },
+    { id: 'uncertain-issue', state: 'observation_uncertain', cause: 'post_send_read_failed', selectors: ['--bound-issue', 'acme/widgets#42'] },
+    { id: 'uncertain-unbound', state: 'observation_uncertain', cause: 'post_send_absolute_deadline_elapsed', selectors: [] },
+    { id: 'predecessor', state: 'driver_error', cause: 'predecessor_handoff_unproven:composer_unknown', selectors: [] },
+    { id: 'selector', state: 'driver_error', cause: 'input_invalid:exact_predecessor_selector_required', selectors: [] },
+  ])('projects conditional recovery without changing the parsed child evidence: $id', async ({ id, state, cause, selectors }) => {
+    const { envelope } = await launchWithBaseline({
+      id, selectors, readers: tupleReaders({}),
+      result: { state: state as TurnResultV1['state'], cause, witness: undefined, send_attempted: true,
+        observation_uncertainty_diagnostics: { cause, send_count: 1, owned_prompt_seen: false } },
+    });
+    expect(envelope).toMatchObject({ incident: `child_turn_state:${state}`, turn_result_state: state,
+      turn_result_cause: cause, delivery: 'POSSIBLY_DELIVERED', send_count: 1 });
+    expect(envelope).not.toHaveProperty('send_witness');
+    expect(envelope!.next_action).toContain('Only if owner confirms relevant effect');
+    expect(envelope!.next_action).toContain('original reported Send time');
+    expect(envelope!.next_action).toContain('at least 20 minutes elapsed');
+    expect(envelope!.next_action).toContain('current Task+Dispatch/send admission');
+    expect(envelope!.next_action).toContain('neither --predecessor-invocation-id nor --predecessor-attempt-identity');
+    expect(envelope!.next_action).toContain('effect unknown');
+    if (!selectors.length) expect(envelope!.next_action).toContain('still-current owner must identify and inspect the live GitHub target');
+    else expect(envelope!.next_action).toContain(selectors[0] === '--repo' ? 'scripts/gh pr view 7' : 'scripts/gh issue view 42');
+  });
+
+  it.each(['another_turn_active', 'conversation_load_error', 'unrelated_dynamic_driver_cause'])(
+    'preserves a specific conservative candidate action for %s with a bound target', async (cause) => {
+      const next = 'Preserve original Page; current owner must inspect read-only; no Send.';
+      const { envelope } = await launchWithBaseline({
+        id: 'specific', baseline: prBaselineFor('specific'), readers: tupleReaders({}),
+        result: { state: 'driver_error', cause, next_action: next },
+      });
+      expect(envelope!.next_action).toBe(next);
+      expect(envelope!.next_action).not.toContain('--new-chat');
+    },
+  );
 
   it('classifies the exact bound PR, keeps POSSIBLY_DELIVERED, and leads with the exact read-only argv', async () => {
     const prHead = vi.fn(async () => HEAD_AFTER);
