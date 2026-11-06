@@ -2779,9 +2779,9 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       try { data = response.ok ? JSON.parse(response.stdout) : null; }
       catch { data = null; }
       const pr = record(data) ? data : null;
-      const base = record(pr?.base) ? pr.base : null;
-      const head = record(pr?.head) ? pr.head : null;
-      const baseRepo = record(base?.repo) ? base.repo : null;
+      const base = pr && record(pr.base) ? pr.base : null;
+      const head = pr && record(pr.head) ? pr.head : null;
+      const baseRepo = base && record(base.repo) ? base.repo : null;
       const baseRef = text(base?.ref);
       const baseRepository = text(baseRepo?.full_name).toLowerCase();
       const headSha = text(head?.sha).toLowerCase();
