@@ -2837,7 +2837,8 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       summary: 'DEFER: _quality_summary_v2 sets per-month and aggregate complete_response_windows to eligible-parent count minus ambiguous_response_parents. Trigger: 120 already-admitted parents, one legal complete direct SB-call/BB-raise or SB-first-aggression prefix. It reports 119 complete windows and zero incomplete_eligible_windows even though all 120 #180 direct windows passed response_window_outcome; ambiguity is the unobserved later continuation, not a missing/invalid direct window. This makes operator source-completeness diagnostics misleading, but the count-qualified ambiguous cell already refuses before frequencies or EV, so it need not block merge. Cheap correction: retain structural complete-window count N and report the ambiguous-parent count separately, as /1 does for structurally valid unsupported prefixes; no new state or gate.', source: 'gpt-browser' },
   ] };
 
-  function fixture(settings: { scopeType?: string; scopePath?: string; allowedRoot?: string; denylist?: string[]; summary?: string; details?: string; dispositionSignature?: string; frozenBodyOverride?: string } = {}) {
+  function fixture(settings: { scopeType?: string; scopePath?: string; allowedRoot?: string; denylist?: string[]; summary?: string; details?: string; dispositionSignature?: string; frozenBodyOverride?: string; reviewedHeadSha?: string; sourceRepoRoot?: string } = {}) {
+    const selectedHead = settings.reviewedHeadSha ?? reviewedHead;
     const scopePath = settings.scopePath ?? witnessSource.findings[0]!.path;
     const allowedRoot = settings.allowedRoot ?? scopePath;
     const liveBody = `<!-- source-revision: r12 -->\n\`\`\`allowed-roots\nsrc/**\n${allowedRoot}\n\`\`\`\n\`\`\`denylist\n${(settings.denylist ?? ['vendor/**', 'packages/core/**']).join('\n')}\n\`\`\`\n` + syntheticCriteria;
@@ -2847,14 +2848,14 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     setupHarness(storeRoot);
     const options = { projectId: 'orchestrator-pack', storeRoot };
     const frozenBody = settings.frozenBodyOverride ?? '<!-- source-revision: r12 -->\n```allowed-roots\nsrc/**\n```\n```denylist\nvendor/**\npackages/core/**\n```\n' + syntheticCriteria;
-    captureBoundIssueSnapshot({ ...options, prNumber, prHeadSha: reviewedHead, issueNumber, issueBody: frozenBody });
+    captureBoundIssueSnapshot({ ...options, prNumber, prHeadSha: selectedHead, issueNumber, issueBody: frozenBody });
     let authority = initializePackReviewAuthority({
-      prNumber, headSha: reviewedHead, tier: 'T3', capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options,
+      prNumber, headSha: selectedHead, tier: 'T3', capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options,
     });
     authority = commitPackReviewTerminal({
       prNumber, expectedTransitionSeq: authority.transitionSeq, status: 'clean', findingCount: 0, options,
       terminal: { schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal', runId: 'fixture-r1',
-        targetSha: reviewedHead, reviewVerdict: 'clean', findingCount: 0, findingsDigest: fingerprint([]),
+        targetSha: selectedHead, reviewVerdict: 'clean', findingCount: 0, findingsDigest: fingerprint([]),
         automaticBudgetDisposition: 'consume', logicalRoundOrdinal: 1 },
     });
     const sourcePayload = JSON.stringify({ findings: [
@@ -2866,15 +2867,15 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     const [blocker, deferred] = mapped.findings;
     if (!blocker || !deferred) throw new Error('observed source payload lost its two findings');
     const sourceSignature = settings.dispositionSignature ?? blocker.fingerprint;
-    const run = createPackReviewRun({ ...options, prNumber, headSha: reviewedHead, trustedPackRoot: process.cwd(),
-      sourceRepoRoot: process.cwd(), canonicalRepository: repository, resolvedReviewer: 'gpt',
+    const run = createPackReviewRun({ ...options, prNumber, headSha: selectedHead, trustedPackRoot: process.cwd(),
+      sourceRepoRoot: settings.sourceRepoRoot ?? process.cwd(), canonicalRepository: repository, resolvedReviewer: 'gpt',
       accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, reviewCycleId: authority.cycle!.cycleId,
       logicalRoundOrdinal: 2, logicalRoundCap: 2, now: new Date(terminalAt),
     }).run;
     const sourceProofs = [1, 2, 3].map((ordinal) => {
       const slotId = `source-${String(ordinal).padStart(2, '0')}`;
       const invocationId = `24280000-0000-4000-8000-${String(ordinal).padStart(12, '0')}`;
-      const identity = { repository, prNumber, headSha: reviewedHead, runId: run.id, slotId, invocationId };
+      const identity = { repository, prNumber, headSha: selectedHead, runId: run.id, slotId, invocationId };
       const body = formatPackGptSourceCommentEnvelope(identity, ordinal === 1 ? sourcePayload : 'NO_FINDINGS');
       const comment: PackGptSourceGithubComment = {
         id: 6068301800 + ordinal, body, actorLogin: 'chetwerikoff',
@@ -2915,16 +2916,16 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     authority = commitPackReviewTerminal({
       prNumber, expectedTransitionSeq: authority.transitionSeq, status: 'changes_requested', findingCount: 2, options,
       terminal: { schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal', runId: run.id,
-        targetSha: reviewedHead, reviewVerdict: 'findings', findingCount: 2, findingsDigest: fingerprint(findings),
+        targetSha: selectedHead, reviewVerdict: 'findings', findingCount: 2, findingsDigest: fingerprint(findings),
         automaticBudgetDisposition: 'consume', logicalRoundOrdinal: 2 },
     });
     const reviewId = 6068701800;
     updatePackReviewRun(run.id, { githubReviewId: reviewId, githubReviewEvent: 'COMMENT' }, options);
     const review: GithubReviewSummary = {
       id: reviewId, state: 'COMMENTED', userLogin: 'chetwerikoff',
-      submittedAt: '2026-10-08T20:45:00Z', commitId: reviewedHead,
+      submittedAt: '2026-10-08T20:45:00Z', commitId: selectedHead,
       url: `https://github.com/${repository}/pull/${prNumber}#pullrequestreview-${reviewId}`,
-      body: `## Pack review — findings\n\nRun: \`${run.id}\`\nHead: \`${reviewedHead}\`\n\n### scope finding\n${blocker.body}\n`,
+      body: `## Pack review — findings\n\nRun: \`${run.id}\`\nHead: \`${selectedHead}\`\n\n### scope finding\n${blocker.body}\n`,
     };
     const reviewTransport: GithubReviewTransport = {
       resolveActorLogin: async () => 'chetwerikoff',
@@ -2937,14 +2938,14 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       html_url: `https://github.com/${repository}/pull/${prNumber}#issuecomment-6068301792`,
       user: { login: 'chetwerikoff' }, author_association: 'OWNER',
       created_at: '2026-10-08T20:50:00Z', updated_at: '2026-10-08T20:51:48Z',
-      body: `R1 FIXED in code.\n\n## R2 dispositions — run \`${run.id}\`, head \`${reviewedHead}\`\n\nTerminal REVIEW: \`${reviewId}\`\nReviewed Issue digest: \`${computeBoundIssueSnapshotHash(frozenBody)}\`\nCorrected Issue revision: \`r12\`\n\n- **FIXED — blocking scope finding \`${code}\`** (source signature \`${sourceSignature}\`). The live r12 Issue now includes \`${allowedRoot}\` in \`allowed-roots\`, under the operator amendment note.${allowedRoot === scopePath ? '' : ` This root covers \`${scopePath}\`.`} No code or behavior change was made for this disposition.\n- **DEFER — non-blocking \`field:ambiguous-complete-window-undercount\`**.`,
+      body: `R1 FIXED in code.\n\n## R2 dispositions — run \`${run.id}\`, head \`${selectedHead}\`\n\nTerminal REVIEW: \`${reviewId}\`\nReviewed Issue digest: \`${computeBoundIssueSnapshotHash(frozenBody)}\`\nCorrected Issue revision: \`r12\`\n\n- **FIXED — blocking scope finding \`${code}\`** (source signature \`${sourceSignature}\`). The live r12 Issue now includes \`${allowedRoot}\` in \`allowed-roots\`, under the operator amendment note.${allowedRoot === scopePath ? '' : ` This root covers \`${scopePath}\`.`} No code or behavior change was made for this disposition.\n- **DEFER — non-blocking \`field:ambiguous-complete-window-undercount\`**.`,
     };
     const issue = { node_id: 'fixture-issue-node', number: issueNumber, html_url: `https://github.com/${repository}/issues/${issueNumber}`,
       repository_url: `https://api.github.com/repos/${repository}`, body: liveBody };
     const statuses: Array<{ state: string; context: string }> = [];
     const transports = { issue, comment, review, sourceProofs,
       pr: { number: prNumber, url: `https://api.github.com/repos/${repository}/pulls/${prNumber}`,
-        head: { sha: reviewedHead }, base: { ref: 'main' }, state: 'open', body: `Closes #${issueNumber}` } };
+        head: { sha: selectedHead }, base: { ref: 'main' }, state: 'open', body: `Closes #${issueNumber}` } };
     const read = vi.fn(async (request: Parameters<typeof runProcess>[0]) => {
       const args = request.args ?? [];
       const endpoint = args.find((arg) => String(arg).startsWith('repos/')) ?? (args.includes('user') ? 'user' : undefined);
@@ -2957,8 +2958,8 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       return { ok: true, outcome: 'exit' as const, exitCode: 0, stdout: endpoint === 'user' ? 'chetwerikoff' : JSON.stringify(response), stderr: '',
         timedOut: false, cancelled: false, signal: null, durationMs: 1 };
     });
-    const input = { ...options, sourceRepoRoot: process.cwd(), repoSlug: repository, prNumber, immediate: true,
-      fixtureCurrentPrHeadSha: reviewedHead, fixtureReviewCompareStatus: 'identical',
+    const input = { ...options, sourceRepoRoot: settings.sourceRepoRoot ?? process.cwd(), repoSlug: repository, prNumber, immediate: true,
+      fixtureCurrentPrHeadSha: selectedHead, fixtureReviewCompareStatus: 'identical',
       fixturePrState: 'OPEN', fixturePrBody: `Closes #${issueNumber}`,
       fixtureIssueNumber: issueNumber, fixtureIssueTitle: '[T3] Synthetic scope-only resolution',
       fixtureIssueBody: liveBody,
@@ -3646,6 +3647,213 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     }));
     expect(readPackReviewAuthority(prNumber, f.options)?.publication?.status).not.toBe('succeeded');
     expect(f.statuses).toHaveLength(1);
+  });
+
+
+  // Issue #2790: a real protected-main advance must be observed through one
+  // live bare remote; reviewed H1 is not an ancestor of the rebased H2.
+  function realRebasedGitGraph() {
+    const root = mkdtempSync(join(tmpdir(), 'pack-review-2790-real-git-'));
+    roots.push(root);
+    const remote = join(root, 'selected-remote.git');
+    const checkout = join(root, 'checkout');
+    mkdirSync(checkout);
+    const git = (cwd: string, ...args: string[]) => {
+      const result = runProcessSync({ command: 'git', args, cwd, inheritParentEnv: true });
+      if (!result.ok) throw new Error('real Git #2790 fixture: ' + args.join(' ') + ': ' + result.stderr);
+      return result.stdout.trim();
+    };
+    git(root, 'init', '--bare', remote);
+    git(checkout, 'init', '-b', 'main');
+    git(checkout, 'config', 'user.name', 'Synthetic');
+    git(checkout, 'config', 'user.email', 'fixture@example.test');
+    git(checkout, 'remote', 'add', 'origin', remote);
+    writeFileSync(join(checkout, 'original.txt'), 'unchanged reviewed base\n');
+    git(checkout, 'add', 'original.txt');
+    git(checkout, 'commit', '-m', 'review base B1');
+    const b1 = git(checkout, 'rev-parse', 'HEAD');
+    git(checkout, 'push', '-u', 'origin', 'main');
+    git(remote, 'symbolic-ref', 'HEAD', 'refs/heads/main');
+    git(checkout, 'checkout', '-b', 'review');
+    writeFileSync(join(checkout, 'feature.txt'), 'reviewed feature bytes\n');
+    git(checkout, 'add', 'feature.txt');
+    git(checkout, 'commit', '-m', 'reviewed H1');
+    const h1 = git(checkout, 'rev-parse', 'HEAD');
+    git(checkout, 'checkout', 'main');
+    writeFileSync(join(checkout, 'unrelated.txt'), 'protected main B2\n');
+    git(checkout, 'add', 'unrelated.txt');
+    git(checkout, 'commit', '-m', 'unrelated protected main advance');
+    const b2 = git(checkout, 'rev-parse', 'HEAD');
+    git(checkout, 'push', 'origin', 'main');
+    git(checkout, 'checkout', 'review');
+    git(checkout, 'rebase', 'main');
+    const c = git(checkout, 'rev-parse', 'HEAD');
+    writeFileSync(join(checkout, 'fix.txt'), 'genuine code fix after rebase\n');
+    git(checkout, 'add', 'fix.txt');
+    git(checkout, 'commit', '-m', 'separate changed-tree H2 fix');
+    const h2 = git(checkout, 'rev-parse', 'HEAD');
+    expect(git(checkout, 'merge-base', '--all', h1, b2)).toBe(b1);
+    expect(git(checkout, 'merge-base', '--all', h2, b2)).toBe(b2);
+    expect(git(checkout, 'merge-base', '--is-ancestor', b1, b2)).toBe('');
+    const h1Ancestor = runProcessSync({
+      command: 'git', args: ['merge-base', '--is-ancestor', h1, h2],
+      cwd: checkout, inheritParentEnv: true,
+    });
+    expect(h1Ancestor.exitCode).toBe(1);
+    expect(git(checkout, 'merge-base', '--is-ancestor', c, h2)).toBe('');
+    expect(git(checkout, 'rev-parse', 'origin/main')).toBe(b2);
+    expect(git(checkout, 'ls-remote', remote, 'refs/heads/main')).toBe(b2 + '\trefs/heads/main');
+    return { root, remote, checkout, git, b1, b2, h1, c, h2 };
+  }
+
+  function eligibleRebaseCase(graph: ReturnType<typeof realRebasedGitGraph>) {
+    const f = fixture({
+      frozenBodyOverride: revisedBody,
+      reviewedHeadSha: graph.h1,
+      sourceRepoRoot: graph.checkout,
+    });
+    const protection = vi.fn(async (request: Parameters<typeof runProcess>[0]) => {
+      expect(request.command).toContain('/scripts/gh');
+      expect(request.args).toEqual([
+        'api', 'repos/chetwerikoff/orchestrator-pack/branches/main/protection',
+      ]);
+      return {
+        ok: true, outcome: 'exit' as const, exitCode: 0,
+        stdout: JSON.stringify({
+          allow_force_pushes: { enabled: false }, allow_deletions: { enabled: false },
+        }), stderr: '', timedOut: false, cancelled: false, signal: null, durationMs: 1,
+      };
+    });
+    const input = {
+      ...f.input, fixtureCurrentPrHeadSha: graph.h2,
+      fixtureIssueBody: revisedBody, fixtureReviewCompareStatus: 'diverged',
+      fixtureRebaseOriginRepository: repository,
+      fixtureRebaseProtectionRunner: protection,
+    };
+    return { ...f, input, protection };
+  }
+
+  it('Issue #2790: real Git B1/H1 -> unrelated B2 -> C -> changed-tree H2 settles with immutable H1 and current-H2 status', async () => {
+    const g = realRebasedGitGraph();
+    const f = eligibleRebaseCase(g);
+    const first = await reconcileStalePackReviewRuns(f.input);
+    expect(first.results).toContainEqual(expect.objectContaining({
+      prNumber, headSha: g.h2, settled: true,
+      reason: 'final_cap_descendant_settled', publicationHeadSha: g.h2,
+      statusPublished: true,
+    }));
+    expect(f.protection).toHaveBeenCalledTimes(1);
+    expect(f.statuses).toContainEqual(expect.objectContaining({
+      state: 'success', context: 'orchestrator-pack/pack-review',
+    }));
+    const completed = readPackReviewAuthority(prNumber, f.options);
+    expect(completed?.terminal).toEqual(f.authority.terminal);
+    expect(completed?.cycle).toMatchObject({
+      state: 'closed', reviewStageComplete: true, consumedRoundOrdinals: [1, 2],
+    });
+    expect(completed?.currentHeadSha).toBe(g.h2);
+    const again = await reconcileStalePackReviewRuns(f.input);
+    expect(again.results).toContainEqual(expect.objectContaining({
+      settled: true, publicationHeadSha: g.h2,
+    }));
+    expect(readPackReviewAuthority(prNumber, f.options)?.terminal).toEqual(f.authority.terminal);
+  });
+
+  it('Issue #2790: protected-base eligibility is fail-closed for force pushes, deletions and malformed policies', async () => {
+    const g = realRebasedGitGraph();
+    for (const policy of [
+      { allow_force_pushes: { enabled: true }, allow_deletions: { enabled: false } },
+      { allow_force_pushes: { enabled: false }, allow_deletions: { enabled: true } },
+      { allow_force_pushes: { enabled: false } },
+      { allow_force_pushes: null, allow_deletions: { enabled: false } },
+      {},
+    ]) {
+      const f = eligibleRebaseCase(g);
+      const read = async () => ({
+        ok: true, outcome: 'exit' as const, exitCode: 0, stdout: JSON.stringify(policy),
+        stderr: '', timedOut: false, cancelled: false, signal: null, durationMs: 1,
+      });
+      const result = await reconcileStalePackReviewRuns({
+        ...f.input, fixtureRebaseProtectionRunner: read,
+      });
+      expect(result.results).toContainEqual(expect.objectContaining({
+        prNumber, headSha: g.h2, settled: false,
+        reason: 'final_cap_strict_descendant_required',
+      }));
+      expect(readPackReviewAuthority(prNumber, f.options)?.cycle?.reviewStageComplete).not.toBe(true);
+      expect(f.statuses.some((value) => value.state === 'success')).toBe(false);
+    }
+  });
+
+  it('Issue #2790: selected bare remote fast-forward requires fresh local origin/main before C settlement', async () => {
+    const g = realRebasedGitGraph();
+    const f = eligibleRebaseCase(g);
+    const other = join(g.root, 'other');
+    g.git(g.root, 'clone', g.remote, other);
+    g.git(other, 'config', 'user.name', 'Synthetic');
+    g.git(other, 'config', 'user.email', 'fixture@example.test');
+    writeFileSync(join(other, 'new-main.txt'), 'later protected base tip B3\n');
+    g.git(other, 'add', 'new-main.txt');
+    g.git(other, 'commit', '-m', 'protected fast-forward B3');
+    const b3 = g.git(other, 'rev-parse', 'HEAD');
+    g.git(other, 'push', 'origin', 'main');
+    expect(g.git(g.checkout, 'rev-parse', 'origin/main')).toBe(g.b2);
+    expect(g.git(g.checkout, 'ls-remote', g.remote, 'refs/heads/main'))
+      .toBe(b3 + '\trefs/heads/main');
+    const first = await reconcileStalePackReviewRuns(f.input);
+    expect(first.results).toContainEqual(expect.objectContaining({
+      settled: false, reason: 'final_cap_strict_descendant_required',
+      nextAction: expect.stringContaining('git fetch origin main'),
+    }));
+    const second = await reconcileStalePackReviewRuns(f.input);
+    expect(second.results).toContainEqual(expect.objectContaining({ settled: false }));
+    expect(readPackReviewAuthority(prNumber, f.options)?.cycle?.reviewStageComplete).not.toBe(true);
+    g.git(g.checkout, 'fetch', 'origin', 'main');
+    expect(g.git(g.checkout, 'rev-parse', 'origin/main')).toBe(b3);
+    const settled = await reconcileStalePackReviewRuns(f.input);
+    expect(settled.results).toContainEqual(expect.objectContaining({
+      settled: true, reason: 'final_cap_descendant_settled', publicationHeadSha: g.h2,
+    }));
+  });
+
+  it('Issue #2790: live B moves between two ls-remote reads; post-observation authority bytes stay immutable', async () => {
+    const g = realRebasedGitGraph();
+    const f = eligibleRebaseCase(g);
+    const other = join(g.root, 'other');
+    g.git(g.root, 'clone', g.remote, other);
+    g.git(other, 'config', 'user.name', 'Synthetic');
+    g.git(other, 'config', 'user.email', 'fixture@example.test');
+    const authorityFile = join(f.options.storeRoot, 'authority', 'pr-' + prNumber + '.json');
+    let preRecheck: Buffer | undefined;
+    let calls = 0;
+    const moving = {
+      ...f.input,
+      fixtureBeforeRebaseSettlementRecheck: () => {
+        preRecheck = readFileSync(authorityFile);
+        calls += 1;
+        writeFileSync(join(other, 'tip-move.txt'), 'new B3 after first observation\n');
+        g.git(other, 'add', 'tip-move.txt');
+        g.git(other, 'commit', '-m', 'protected tip moved during C proof');
+        g.git(other, 'push', 'origin', 'main');
+      },
+    };
+    const first = await reconcileStalePackReviewRuns(moving);
+    expect(calls).toBe(1);
+    expect(first.results).toContainEqual(expect.objectContaining({
+      settled: false, reason: expect.stringContaining('final_cap_settlement_incomplete'),
+    }));
+    expect(readFileSync(authorityFile)).toEqual(preRecheck);
+    expect(readPackReviewAuthority(prNumber, f.options)?.cycle).toMatchObject({
+      reviewStageComplete: false,
+    });
+    expect(readPackReviewAuthority(prNumber, f.options)?.terminal).toEqual(f.authority.terminal);
+    const again = await reconcileStalePackReviewRuns(f.input);
+    expect(again.results).toContainEqual(expect.objectContaining({ settled: false }));
+    g.git(g.checkout, 'fetch', 'origin', 'main');
+    const success = await reconcileStalePackReviewRuns(f.input);
+    expect(success.results).toContainEqual(expect.objectContaining({
+      settled: true, reason: 'final_cap_descendant_settled',
+    }));
   });
 
   it('retries status publication without a new logical round or duplicate settlement transition', async () => {
