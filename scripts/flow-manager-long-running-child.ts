@@ -2747,7 +2747,9 @@ async function ownerWaitReap(input: {
     ...(input.deps.invokingTerminalHandle ? { invokingTerminalHandle: input.deps.invokingTerminalHandle } : {}),
   };
   const notOwner = (evidence: string) => none(`owner_not_current:${evidence}`,
-    'run this wait from the original Task+Dispatch worker terminal while that Dispatch is current and live (worker-show / current assignment), or reconcile the exact invocation on GitHub');
+    evidence === 'project_selection_required'
+      ? 'only if the original Task+Dispatch owner and owner-wait effect remain lawful: from that original worker terminal, re-invoke the exact original wait argv unchanged with a shell-quoted OPK_PROJECT_ID assignment for the independently verified selected project; do not guess the project or send again. Otherwise inspect the exact current assignment / worker-show, original Page and GitHub target read-only; do not re-invoke an unlawful owner-wait'
+      : 'run this wait from the original Task+Dispatch worker terminal while that Dispatch is current and live (worker-show / current assignment), or reconcile the exact invocation on GitHub');
   const owner = await verifyCurrentInvokingOwner(authorityInput);
   const ownerRaceWinner = winnerOutcome();
   if (ownerRaceWinner) return ownerRaceWinner;

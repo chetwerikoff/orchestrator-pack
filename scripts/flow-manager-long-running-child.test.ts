@@ -3180,12 +3180,44 @@ describe('Issue #2788 selected owner and exact terminal finality', () => {
       env: unselected, dispatchWitness: native })).toEqual({ ok: false, evidence: 'project_selection_required' });
     const out = await captureWait(ownerWaitOptions(fx, { ownerEnv: unselected, dispatchWitness: native }));
     expect(out.owner_wait.reason).toBe('owner_not_current:project_selection_required');
+    expect(out.owner_wait.nextStep).toContain('only if the original Task+Dispatch owner and owner-wait effect remain lawful');
+    expect(out.owner_wait.nextStep).toContain('exact original wait argv unchanged');
+    expect(out.owner_wait.nextStep).toContain('shell-quoted OPK_PROJECT_ID assignment for the independently verified selected project');
+    expect(out.owner_wait.nextStep).toContain('Otherwise inspect');
+    expect(out.owner_wait.nextStep).toContain('read-only');
+    expect(out.owner_wait.nextStep).toContain('do not guess the project or send again');
     expect(native).not.toHaveBeenCalled();
     expect(existsSync(fx.envelopePath)).toBe(false);
     writePrivateJson(fx.envelopePath, launcherTerminal(fx));
     const terminal = await captureWait(ownerWaitOptions(fx, { ownerEnv: unselected, dispatchWitness: native }));
     expect(terminal.terminal).toBe(true);
     expect(native).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('re-invokes the original missing-selection wait only with current owner authority: %s', async (current) => {
+    const fx = ownerWaitFixture('2788-project-recovery-' + current);
+    const native = vi.fn(async () => nativeDispatch());
+    const options = ownerWaitOptions(fx, {
+      ownerEnv: { ...fx.ownerEnv, OPK_PROJECT_ID: '' }, dispatchWitness: native,
+    });
+    const refused = await captureWait(options);
+    expectDiagnosticOnly(fx, refused);
+    expect(refused.owner_wait.reason).toBe('owner_not_current:project_selection_required');
+    expect(native).not.toHaveBeenCalled();
+    if (!current) writeAssignmentStore(fx.ownerEnv, []);
+    // Preserve every original wait input; restore only the independently known selection.
+    const selected = await captureWait({ ...options, ownerWaitDependencies: {
+      ...options.ownerWaitDependencies, ownerEnv: fx.ownerEnv,
+    } });
+    if (current) {
+      expect(selected.terminal).toBe(true);
+      expect(selected.owner_wait.effect).toBe('published');
+      expect(native).toHaveBeenCalled();
+    } else {
+      expectDiagnosticOnly(fx, selected);
+      expect(selected.owner_wait.reason).toBe('owner_not_current:task_not_in_selected_store');
+      expect(native).not.toHaveBeenCalled();
+    }
   });
 
   it('accepts a fully bound late terminal after native owner observation retires the owner', async () => {
