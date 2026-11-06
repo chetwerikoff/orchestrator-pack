@@ -3843,9 +3843,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       settled: false, reason: expect.stringContaining('final_cap_settlement_incomplete'),
     }));
     expect(readFileSync(authorityFile)).toEqual(preRecheck);
-    expect(readPackReviewAuthority(prNumber, f.options)?.cycle).toMatchObject({
-      reviewStageComplete: false,
-    });
+    expect(readPackReviewAuthority(prNumber, f.options)?.cycle?.reviewStageComplete).not.toBe(true);
+    expect(readPackReviewAuthority(prNumber, f.options)?.cycle?.state)
+      .toMatch(/^at_cap_/);
     expect(readPackReviewAuthority(prNumber, f.options)?.terminal).toEqual(f.authority.terminal);
     const again = await reconcileStalePackReviewRuns(f.input);
     expect(again.results).toContainEqual(expect.objectContaining({ settled: false }));
