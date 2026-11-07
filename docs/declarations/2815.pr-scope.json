@@ -52,5 +52,5 @@
     "scripts/tier-gate-guard.test.ts",
     "scripts/toolchain/raw-child-process-baseline.json"
   ],
-  "source_revision": "c70ed00750bba7db18dfde87b6c382ccf8e981e9"
+  "source_revision": "413252831ae27eb83b4941c843f9522f8923a656"
 }

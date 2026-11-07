@@ -3845,6 +3845,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       fixtureIssueBody: revisedBody, fixtureReviewCompareStatus: 'diverged',
       fixtureIssueNumber: issueNumber, fixtureIssueTitle: '[T3] Synthetic unchanged criteria',
       fixtureRebaseOriginRepository: repository,
+      fixtureRebaseProtectionRunner: async () => ({ ok: true, outcome: 'exit', exitCode: 0,
+        stdout: JSON.stringify({ allow_force_pushes: { enabled: false }, allow_deletions: { enabled: false } }),
+        stderr: '', timedOut: false, cancelled: false, signal: null }),
     };
     return { ...f, input };
   }
@@ -4086,7 +4089,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
   );
 
   it.each(['scoped', 'start'] as const)(
-    'Issue #2815: %s uses commit ancestry rather than a protection policy for matching raw C', async (entry) => {
+    'Issue #2815: %s refuses unprotected oldbase rewrite despite matching raw C and ancestry', async (entry) => {
       const g = realRebasedGitGraph();
       const addOldbase = (parent: string, message: string) => {
         g.git(g.checkout, 'checkout', '--detach', parent);
@@ -4106,7 +4109,10 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       const raw = (from: string, to: string) => g.git(g.checkout, 'diff', '--raw', '-z', '--no-renames', '--abbrev=40', from, to);
       expect(raw(g.b1, h1)).toBe(raw(g.b2, c));
       const f = eligibleRebaseCase({ ...g, h1, c, h2 });
-      expect((await enterRebase(f, entry)).reason).toBe('final_cap_descendant_settled');
+      f.input.fixtureRebaseProtectionRunner = async () => ({ ok: true, outcome: 'exit', exitCode: 0,
+        stdout: JSON.stringify({ allow_force_pushes: { enabled: true }, allow_deletions: { enabled: false } }),
+        stderr: '', timedOut: false, cancelled: false, signal: null });
+      expectRebaseRefusal(f, await enterRebase(f, entry));
     },
   );
 
@@ -4272,9 +4278,10 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     },
   );
 
-  it('Issue #2815: rebased C settles when the tracked protection GET would return 403', async () => {
+  it('Issue #2815: tracked protection GET 403 refuses rebased C with fresh review next step', async () => {
     const g = realRebasedGitGraph();
     const f = eligibleRebaseCase(g);
+    f.input.fixtureRebaseProtectionRunner = undefined;
     const preload = join(g.root, 'native-gh.cjs');
     const audit = join(g.root, 'native-argv.json');
     writeFileSync(preload, [
@@ -4293,8 +4300,14 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     }));
     try {
       const result = await enterRebase(f, 'scoped');
-      expect(result.reason).toBe('final_cap_descendant_settled');
-      expect(existsSync(audit)).toBe(false);
+      expectRebaseRefusal(f, result);
+      expect(result).toMatchObject({ reason: 'final_cap_strict_descendant_required', detail: 'base_trust_unprovable' });
+      expect(result.nextAction).toContain('head rewrote history and base trust cannot be read on this repository');
+      expect(result.nextAction).toContain('one fresh normal review round on the current head');
+      expect(result.nextAction).not.toMatch(/waiver|architect|operator decision/);
+      expect(JSON.parse(readFileSync(audit, 'utf8'))).toEqual([
+        'api', 'repos/chetwerikoff/orchestrator-pack/branches/main/protection',
+      ]);
     } finally { vi.mocked(runProcess).mockImplementation(actual.runProcess); }
     // There is no caller-supplied protection argv: polluted base/repository
     // bindings fail before invoking the runner transport, not at a matcher.
@@ -4330,24 +4343,34 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(readPackReviewAuthority(prNumber, f.options)?.terminal).toEqual(f.authority.terminal);
   });
 
-  it.each(['scoped', 'start'] as const)('Issue #2815: %s failed reviewed-base ancestry requires a fresh normal review', async (entry) => {
+  it.each(['scoped', 'start'] as const)('Issue #2815: %s denied base trust requires a fresh normal review', async (entry) => {
     const g = realRebasedGitGraph();
     const f = eligibleRebaseCase(g);
-    const actual = await vi.importActual<typeof import('./kernel/subprocess.ts')>('./kernel/subprocess.ts');
-    vi.mocked(runProcess).mockImplementation(async (request) => {
-      if (JSON.stringify(request.args) === JSON.stringify(['merge-base', '--is-ancestor', g.b1, g.b2])) {
-        return { ok: false, outcome: 'exit', exitCode: 1, stdout: '', stderr: '',
-          timedOut: false, cancelled: false, signal: null };
-      }
-      return actual.runProcess(request);
-    });
-    try {
-      const result = await enterRebase(f, entry);
-      expectRebaseRefusal(f, result);
-      expect(result.reason).toBe('final_cap_strict_descendant_required');
-      expect(result.nextAction).toContain('base history was rewritten');
-      expect(result.nextAction).toContain('fresh normal review round');
-    } finally { vi.mocked(runProcess).mockImplementation(actual.runProcess); }
+    f.input.fixtureRebaseProtectionRunner = async () => ({ ok: false, outcome: 'exit', exitCode: 1,
+      stdout: '', stderr: 'HTTP 403', timedOut: false, cancelled: false, signal: null });
+    const result = await enterRebase(f, entry);
+    expectRebaseRefusal(f, result);
+    expect(result.reason).toBe('final_cap_strict_descendant_required');
+    expect(result.detail).toBe('base_trust_unprovable');
+    expect(result.nextAction).toContain('one fresh normal review round on the current head');
+    expect(result.nextAction).not.toMatch(/waiver|architect|operator decision/);
+  });
+
+  it('Issue #2815: restored protection policy still refuses unsafe or incomplete settings', async () => {
+    const g = realRebasedGitGraph();
+    for (const policy of [
+      { allow_force_pushes: { enabled: true }, allow_deletions: { enabled: false } },
+      { allow_force_pushes: { enabled: false }, allow_deletions: { enabled: true } },
+      { allow_force_pushes: { enabled: false } },
+      { allow_force_pushes: null, allow_deletions: { enabled: false } },
+      { allow_force_pushes: { enabled: 'false' }, allow_deletions: { enabled: false } },
+      {},
+    ]) {
+      const f = eligibleRebaseCase(g);
+      f.input.fixtureRebaseProtectionRunner = async () => ({ ok: true, outcome: 'exit', exitCode: 0,
+        stdout: JSON.stringify(policy), stderr: '', timedOut: false, cancelled: false, signal: null });
+      expectRebaseRefusal(f, await enterRebase(f, 'scoped'));
+    }
   });
 
   it.each(['scoped', 'start'] as const)('Issue #2790: %s selected bare remote fast-forward requires fresh local origin/main before C settlement', async (entry) => {

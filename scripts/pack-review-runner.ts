@@ -316,6 +316,7 @@ interface StartInput {
   fixtureChangedPaths?: string[];
   fixtureBoundIssueSnapshotBytes?: string;
   fixtureReviewCompareStatus?: string;
+  fixtureRebaseProtectionRunner?: typeof runProcess;
   fixtureRebasePrReader?: () => Promise<{
     prNumber: number; headSha: string; baseRef: string; body: string;
   }> | { prNumber: number; headSha: string; baseRef: string; body: string };
@@ -383,6 +384,7 @@ export interface ReconcileStalePackReviewRunsInput {
   fixtureChangedPaths?: string[];
   fixtureBoundIssueSnapshotBytes?: string;
   fixtureReviewCompareStatus?: string;
+  fixtureRebaseProtectionRunner?: typeof runProcess;
   fixtureRebasePrReader?: () => Promise<{
     prNumber: number; headSha: string; baseRef: string; body: string;
   }> | { prNumber: number; headSha: string; baseRef: string; body: string };
@@ -970,6 +972,28 @@ async function proveUniqueRebasedC(
     }
   };
   requirePr(pr);
+  const protectionResult = await (harness && input.fixtureRebaseProtectionRunner
+    ? input.fixtureRebaseProtectionRunner : runProcess)({
+      command: resolveTrackedGhWrapper(),
+      args: ['api', 'repos/' + selected.repository + '/branches/' + base + '/protection'],
+      cwd: root, inheritParentEnv: true, allowEmptyStdout: false, timeoutMs: 30_000,
+    });
+  if (!protectionResult.ok) throw new Error('base_trust_unprovable');
+  let policy: unknown;
+  try { policy = JSON.parse(protectionResult.stdout); }
+  catch { throw new Error('branch protection GET invalid JSON'); }
+  if (!policy || typeof policy !== 'object' || Array.isArray(policy)) {
+    throw new Error('branch protection GET invalid object');
+  }
+  const record = policy as Record<string, unknown>;
+  const disabled = (key: string) => {
+    const value = record[key];
+    return !!value && typeof value === 'object' && !Array.isArray(value)
+      && (value as Record<string, unknown>).enabled === false;
+  };
+  if (!disabled('allow_force_pushes') || !disabled('allow_deletions')) {
+    throw new Error('force pushes/deletions must both be explicitly disabled');
+  }
   if ((await runGit(root, ['rev-parse', '--show-object-format=storage'], 'object format')).trim() !== 'sha1') {
     throw new Error('unsupported non-SHA-1 object format');
   }
@@ -991,9 +1015,6 @@ async function proveUniqueRebasedC(
   const b = await liveBase();
   if (await localBase() !== b) throw new Error('stale local base; fetch origin ' + base + ' and rerun');
   const m1 = await rebaseUniqueMergeBase(root, h1, b);
-  if (!(await rebaseAncestor(root, m1, b))) {
-    throw new Error('base history was rewritten; a fresh normal review round is required');
-  }
   const m2 = await rebaseUniqueMergeBase(root, h2, b);
   if (!(await rebaseAncestor(root, m1, m2))) throw new Error('rewritten-base M1/M2 ancestry false');
   if (await rebaseAncestor(root, h1, h2)) throw new Error('H1 route is not rewritten');
@@ -4403,10 +4424,11 @@ async function recoverStaleGptSourceComments(options: {
     const reason = degradedEligible && !graceExpired
       ? `gpt_sources_waiting_for_grace:${usableSourceCount}/${round.cardinality}`
       : `gpt_sources_incomplete_after_grace:${usableSourceCount}/${round.cardinality}`;
-    const heartbeatMs = Date.parse(persisted.heartbeatAtUtc || persisted.updatedAt);
+    const heartbeatMs = Date.parse(options.run.heartbeatAtUtc || options.run.updatedAt);
     const graceEndsAtUtc = Number.isFinite(heartbeatMs)
       ? new Date(heartbeatMs + packReviewRunStaleMinutes() * 60_000).toISOString() : 'unknown';
-    const ownerStale = isPackReviewRunStale(persisted);
+    const ownerTerminal = ['failed', 'timed_out', 'cancelled'].includes(persisted.status);
+    const ownerStale = ownerTerminal || isPackReviewRunStale(options.run);
     return {
       recovered: false,
       reason,
@@ -6360,8 +6382,8 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
             : detail.includes('base tip moved') || detail.includes('stale local')
               ? 'git fetch origin ' + String(input.baseRef || 'origin/main').replace(/^origin\//, '')
                 + ', then rerun the same reconcile'
-              : detail.includes('base history was rewritten')
-                ? 'base history was rewritten; start a fresh normal review round for the current PR head'
+              : detail === 'base_trust_unprovable'
+                ? 'the head rewrote history and base trust cannot be read on this repository; the next step is one fresh normal review round on the current head'
                 : 'restore the selected base/PR identity and unique changed-tree C proof, then rerun scoped reconcile or seek architect/operator decision' };
       }
     }
@@ -9358,6 +9380,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         fixtureIssueNumber: input.fixtureIssueNumber,
         fixtureIssueBody: input.fixtureIssueBody, fixtureIssueTitle: input.fixtureIssueTitle,
         fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
+        fixtureRebaseProtectionRunner: input.fixtureRebaseProtectionRunner,
         fixtureRebasePrReader: input.fixtureRebasePrReader,
         fixtureRebaseOriginRepository: input.fixtureRebaseOriginRepository,
         fixtureBeforeRebaseSettlementRecheck: input.fixtureBeforeRebaseSettlementRecheck,

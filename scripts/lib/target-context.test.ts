@@ -773,7 +773,7 @@ describe('target context', () => {
       'binding-id: selected-status:reverify-status:verified',
       'producer: selected-status', 'evidence: NEW(produced-by AC#1)', ticks, '',
     ].join('\n');
-    const library = (head: string | null, modified: string[] = [proofPath]) =>
+    const library = (head?: string | null, modified: string[] = [proofPath]) =>
       runContractEvidenceReverify({
         repoRoot: packRoot, trustedBaseRoot: p, reviewTargetRoot: w,
         projectId: card.projectId, env: target.env, manifestPath,
@@ -784,6 +784,12 @@ describe('target context', () => {
     expect(candidate).toMatchObject({ runOutcome: 'rows-evaluated',
       candidateOnly: true, neverBlocks: true });
     expect(candidate.rows).toHaveLength(1);
+    for (const missingSha of [null, undefined, '', 'not-a-sha']) {
+      const unbound = library(missingSha);
+      expect(unbound.rows[0]).toMatchObject({ status: 'unverified', producerVerified: false });
+      expect(unbound.rows[0]?.observed, JSON.stringify({ missingSha, unbound })).toContain('supply the exact 40-hex PR head SHA');
+      expect(unbound).toMatchObject({ candidateOnly: true, neverBlocks: true });
+    }
     if (isPrHeadNetworkSandboxAvailable()) {
       expect(candidate.rows[0]).toMatchObject({
         status: 'verified', verificationMode: 'live', producerVerified: true,

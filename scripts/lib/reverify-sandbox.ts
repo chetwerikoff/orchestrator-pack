@@ -654,6 +654,12 @@ function isSandboxBlocked(stderr: string, networkRestricted: boolean): string | 
   return null;
 }
 
+export function prHeadSnapshotBindingRefusal(cwd: string, prHeadSha?: string | null): string | null {
+  return existsSync(path.join(cwd, '.git')) && !/^[0-9a-f]{40}$/.test(prHeadSha ?? '')
+    ? `${PR_HEAD_SANDBOX_UNAVAILABLE}: immutable prHeadSha is missing or invalid; supply the exact 40-hex PR head SHA and rerun candidate evidence`
+    : null;
+}
+
 export function runSandboxedAllowlistedCommand(
   resolved: ResolvedAllowlistedCommand,
   options: {
@@ -665,6 +671,12 @@ export function runSandboxedAllowlistedCommand(
     forceUnreachable?: boolean;
   },
 ): CommandRunResult {
+  const reason = options.sandboxMode === 'pr-head-new'
+    ? prHeadSnapshotBindingRefusal(options.cwd, options.prHeadSha) : null;
+  if (reason) {
+    return { ok: false, stdout: '', stderr: reason, exitCode: null,
+      timedOut: false, blocked: true, blockReason: reason };
+  }
   if (options.forceUnreachable) {
     return {
       ok: false,

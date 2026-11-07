@@ -94,7 +94,7 @@ describe('Issue #2815 single canonical REVIEW POST election', () => {
     expect(result.exitCode, result.stderr).toBe(7);
   });
 
-  it.each(['before-post', 'after-accepted', 'definitely-rejected'] as const)(
+  it.each(['before-post', 'after-accepted', 'definitely-rejected', 'empty-lookup', 'failed-lookup'] as const)(
     'concurrent deliveries elect one POST and the loser reads the same id: %s', async (mode) => {
       const storeRoot = tempRoot('opk-single-review-post-');
       harnessEnv(storeRoot, path.join(storeRoot, 'capture.json'));
@@ -120,11 +120,24 @@ describe('Issue #2815 single canonical REVIEW POST election', () => {
       const lookup = new Promise<void>((resolve) => { lookupEntered = resolve; });
       let published!: () => void;
       const accepted = new Promise<void>((resolve) => { published = resolve; });
+      let ownerFinished!: () => void;
+      const ownerComplete = new Promise<void>((resolve) => { ownerFinished = resolve; });
       const reviews: GithubReviewSummary[] = [];
       let actors = 0;
       const transport: GithubReviewTransport = {
         resolveActorLogin: async () => { if (++actors === 2) await secondActorGate; return 'fixture'; },
-        listReviews: async () => { lookupEntered(); await accepted; return reviews; },
+        listReviews: async () => {
+          lookupEntered();
+          if ((mode === 'empty-lookup' || mode === 'failed-lookup') && reviews.length === 0) {
+            // Capture an immediately empty response, then let the winner finish
+            // before the losing caller's async lookup continuation resumes.
+            const empty: GithubReviewSummary[] = [];
+            await ownerComplete;
+            if (mode === 'failed-lookup') throw new Error('lookup failed after winner completed');
+            return empty;
+          }
+          await accepted; return reviews;
+        },
         postReview: vi.fn(async (input) => {
           postEntered(); await postGate;
           const review = { id: 282501, url: 'https://github.com/fixture/repo/pull/2825#pullrequestreview-282501' };
@@ -142,12 +155,18 @@ describe('Issue #2815 single canonical REVIEW POST election', () => {
         releasePost(); await original; releaseSecondActor();
       } else {
         releaseSecondActor(); await lookup; releasePost();
+        if (mode === 'empty-lookup' || mode === 'failed-lookup') {
+          await original;
+          expect(getPackReviewRun(run.id, options)?.githubReviewReconciliation)
+            .toMatchObject({ phase: 'complete', commentReviewId: 282501 });
+          ownerFinished();
+        }
       }
       const results = await Promise.all([original, follower]);
       expect(transport.postReview).toHaveBeenCalledTimes(1);
       expect(results.map((result) => result.id)).toEqual([282501, 282501]);
       expect(getPackReviewRun(run.id, options)?.githubReviewReconciliation)
-        .toMatchObject({ postOutcome: 'accepted', commentReviewId: 282501 });
+        .toMatchObject({ phase: 'complete', postOutcome: 'accepted', commentReviewId: 282501 });
     },
   );
 });
@@ -5489,7 +5508,7 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
     return replacement.run.id;
   }
 
-  it.each(['alive', 'fresh', 'stale'] as const)(
+  it.each(['alive', 'fresh', 'stale', 'failed', 'timed_out', 'cancelled'] as const)(
     'Issue #2815: incomplete sources give owner-aware recovery advice for %s owner', async (owner) => {
       const f = seed(1);
       if (owner !== 'fresh') f.expireGrace();
@@ -5500,17 +5519,21 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
         saved.runnerPid = process.pid;
         writeFileSync(file, JSON.stringify(saved));
       }
+      if (owner === 'failed' || owner === 'timed_out' || owner === 'cancelled') {
+        setPackReviewRunTerminal(f.runId, owner, {}, f.options);
+      }
+      const originalOwner = getPackReviewRun(f.runId, f.options)!;
       const result = await reconcileStalePackReviewRuns(f.input);
       const row = result.results.find((entry) => entry.runId === f.runId)!;
       expect(row, JSON.stringify(result)).toBeDefined();
-      if (owner !== 'stale') {
+      if (owner === 'alive' || owner === 'fresh') {
         expect(row.nextAction).toContain('observe the original run');
-        const persisted = getPackReviewRun(f.runId, f.options)!;
-        const graceEnd = new Date(Date.parse(persisted.heartbeatAtUtc || persisted.updatedAt) + 2 * 60_000).toISOString();
+        const graceEnd = new Date(Date.parse(originalOwner.heartbeatAtUtc || originalOwner.updatedAt) + 2 * 60_000).toISOString();
         expect(row.nextAction).toContain(`graceEndsAtUtc=${graceEnd}`);
         expect(row.nextAction).not.toContain('retry the missing');
       } else {
         expect(row.nextAction).toContain('reconcile');
+        expect(row.nextAction).not.toContain('let its live or unproven owner finish');
       }
       expect(f.reviewBodies).toEqual([]);
     },

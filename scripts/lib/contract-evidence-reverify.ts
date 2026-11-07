@@ -33,7 +33,7 @@ import {
   selectedCardProducerClosureIsTrusted,
 } from './reverify-command-resolution.ts';
 import { loadReverifyAllowlistConfig } from './reverify-allowlist-config.ts';
-import { runSandboxedAllowlistedCommand } from './reverify-sandbox.ts';
+import { prHeadSnapshotBindingRefusal, runSandboxedAllowlistedCommand } from './reverify-sandbox.ts';
 import { runProcessSync } from '../kernel/subprocess.ts';
 import { parseRemoteSlug } from './git-origin-slug.mjs';
 import { resolveTargetContext, type TargetContext } from './target-context.ts';
@@ -821,6 +821,10 @@ function evaluateNewRow(input: {
 }): ReverifyRowResult {
   const { row, rowIndex, markdown, trustedBaseRoot, reviewTargetRoot, timeoutMs,
     forceProducerUnreachable, selectedContext, selectedProducerUnavailable, prModifiedPaths } = input;
+  const bindingRefusal = prHeadSnapshotBindingRefusal(reviewTargetRoot, input.prHeadSha);
+  if (bindingRefusal) {
+    return { ...buildUnverified(rowIndex, row, 'producer-unreachable'), observed: bindingRefusal };
+  }
   const selectedTarget = selectedContext?.contractEvidenceProducer;
   const producer = canonicalProducer(row.producer ?? '');
   if (selectedProducerUnavailable && !(producerRegistry.repoOwned ?? []).includes(producer)) {
@@ -884,7 +888,7 @@ function evaluateNewRow(input: {
     prHeadSha: input.prHeadSha,
   });
   if (run.blocked) {
-    return buildUnverified(rowIndex, row, blockedUnverifiedReason(run));
+    return { ...buildUnverified(rowIndex, row, blockedUnverifiedReason(run)), observed: run.blockReason };
   }
   if (run.timedOut) {
     return buildUnverified(rowIndex, row, 'producer-unreachable');
@@ -903,7 +907,7 @@ function evaluateNewRow(input: {
     selectedContext,
   });
   if (independentRun.blocked) {
-    return buildUnverified(rowIndex, row, blockedUnverifiedReason(independentRun));
+    return { ...buildUnverified(rowIndex, row, blockedUnverifiedReason(independentRun)), observed: independentRun.blockReason };
   }
   if (independentRun.timedOut) {
     return buildUnverified(rowIndex, row, 'producer-unreachable');
