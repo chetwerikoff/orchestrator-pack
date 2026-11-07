@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { collectLocalModuleSpecifiers } from './module-specifiers.mjs';
 import { loadReverifyAllowlistConfig } from './reverify-allowlist-config.ts';
 import type { TargetContext } from './target-context.ts';
@@ -277,7 +278,6 @@ function resolveLocalModulePath(fromFile: string, specifier: string): string | n
 function resolveScriptDependencyClosureFromAbsEntry(
   entryScript: string,
   repoRoot: string,
-  selectedCardProducer = false,
 ): { relPaths: string[]; establishable: boolean } {
   const repoRootNorm = path.normalize(repoRoot);
   const visited = new Set<string>();
@@ -304,14 +304,6 @@ function resolveScriptDependencyClosureFromAbsEntry(
     }
 
     const collected = collectLocalModuleSpecifiers(content);
-    // The shared collector proves only literal require(...) calls. A
-    // createRequire handle can be aliased or invoked with a computed path;
-    // do not credit an incomplete selected-card P/W closure as trusted.
-    if (selectedCardProducer && (/\bcreateRequire\b/.test(content)
-        || [...content.matchAll(/\brequire\b/g)].some((call) =>
-          !/^require\(\s*(['"])[^'"]+\1\s*\)/.test(content.slice(call.index))))) {
-      establishable = false;
-    }
     if (!collected.establishable) {
       establishable = false;
     }
@@ -433,15 +425,17 @@ function resolveNpmTestDependencyClosure(command: string, repoRoot: string): { r
 }
 
 /**
- * Check the exact selected-card producer against the committed primary P and
- * the review worktree W. The existing command resolver stays the only command
- * authorizer; this check never expands its allowlist.
+ * Trust the exact selected-card producer against the entire PR file set, never
+ * an inferred import closure. Only declared data fixtures may vary; executable,
+ * JSON and package changes elsewhere fail closed regardless of loader syntax.
+ * The existing command resolver remains the only command authorizer.
  */
 export function selectedCardProducerClosureIsTrusted(input: {
   command: string;
   selectedContext: TargetContext;
   reviewTargetRoot: string;
   prModifiedPaths: readonly string[];
+  declaredFixturePaths: readonly string[];
 }): boolean {
   const card = input.selectedContext.contractEvidenceProducer;
   if (!card || input.command.trim() !== card.boundaryCommand) return false;
@@ -458,31 +452,36 @@ export function selectedCardProducerClosureIsTrusted(input: {
   const primaryEntry = primaryCommand.args[0];
   const reviewEntry = reviewCommand.args[0];
   if (!primaryEntry || !reviewEntry) return false;
-  const a = resolveScriptDependencyClosureFromAbsEntry(primaryEntry, primary, true);
-  const b = resolveScriptDependencyClosureFromAbsEntry(reviewEntry, review, true);
-  if (!a.establishable || !b.establishable) return false;
-  const x = [...a.relPaths].sort();
-  const y = [...b.relPaths].sort();
-  if (x.length === 0 || x.length !== y.length
-      || x.some((rel, index) => rel !== y[index])) return false;
-  const changed = new Set(input.prModifiedPaths.map(normalizePath));
   try {
     const primaryRoot = realpathSync(primary);
     const reviewRoot = realpathSync(review);
-    for (const rel of x) {
-      if (changed.has(rel)) return false;
-      const p = realpathSync(path.join(primary, rel));
-      const w = realpathSync(path.join(review, rel));
-      const confined = (root: string, file: string) => {
-        const relative = path.relative(root, file);
-        return !!relative && relative !== '..'
-          && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
-      };
-      if (!confined(primaryRoot, p) || !confined(reviewRoot, w)
-          || !statSync(p).isFile() || !statSync(w).isFile()
-          || !readFileSync(p).equals(readFileSync(w))) return false;
+    if (primaryRoot === reviewRoot) return false;
+    const git = (cwd: string, args: string[]) => runProcessSync({
+      command: 'git', args, cwd, inheritParentEnv: false,
+    });
+    const primaryHead = git(primary, ['rev-parse', '--verify', 'HEAD^{commit}']);
+    const reviewHead = git(review, ['rev-parse', '--verify', 'HEAD^{commit}']);
+    const primaryStatus = git(primary, ['status', '--porcelain', '--untracked-files=all']);
+    if (!primaryHead.ok || !reviewHead.ok || !primaryStatus.ok || primaryStatus.stdout.trim()
+        || !/^[0-9a-f]{40}$/.test(primaryHead.stdout.trim())
+        || !/^[0-9a-f]{40}$/.test(reviewHead.stdout.trim())) return false;
+    const diff = git(review, ['diff', '--name-only', '--no-renames', '-z',
+      primaryHead.stdout.trim(), reviewHead.stdout.trim(), '--']);
+    if (!diff.ok || (diff.stdout && !diff.stdout.endsWith('\0'))) return false;
+    const changed = new Set([...input.prModifiedPaths, ...diff.stdout.split('\0').filter(Boolean)]
+      .map((rel) => path.posix.normalize(normalizePath(rel))));
+    const fixtures = new Set(input.declaredFixturePaths.map((rel) => path.posix.normalize(normalizePath(rel))));
+    for (const rel of changed) {
+      if (rel === '..' || rel.startsWith('../') || path.posix.isAbsolute(rel)) return false;
+      const packageFile = /(?:^|\/)(?:package(?:-[^/]*)?\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-(?:lock|workspace)\.yaml|bun\.lockb?|\.npmrc|\.yarnrc(?:\.yml)?)$/i.test(rel);
+      const runtimeFile = /\.(?:[cm]?[jt]s|[jt]sx|json)$/i.test(rel);
+      if (packageFile || (runtimeFile && !(rel.toLowerCase().endsWith('.json') && fixtures.has(rel)))) return false;
     }
-    return true;
+    // Keep exact entrypoint identity/confinement, independent of imports.
+    return normalizePath(path.relative(primaryRoot, realpathSync(primaryEntry)))
+        === normalizePath(path.relative(reviewRoot, realpathSync(reviewEntry)))
+      && !changed.has(normalizePath(path.relative(primaryRoot, realpathSync(primaryEntry))))
+      && readFileSync(primaryEntry).equals(readFileSync(reviewEntry));
   } catch {
     return false;
   }

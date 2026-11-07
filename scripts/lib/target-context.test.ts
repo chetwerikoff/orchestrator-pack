@@ -702,9 +702,10 @@ describe('target context', () => {
     const manifestPath = 'tests/external-output-references/capture-manifest.json';
     const boundary = 'node scripts/selected-producer.mjs';
     const proof = 'node ' + producerDir + '/genuine-new-proof.mjs';
+    const proofPath = 'tests/external-output-references/captures/synthetic/reverify.raw.json';
     const producer = "import { readFileSync } from 'node:fs';\n"
-      + "process.stdout.write(readFileSync('inputs/reverify.json', 'utf8'));\n";
-    for (const rel of ['scripts', producerDir, 'inputs', 'tests/external-output-references']) {
+      + "process.stdout.write(readFileSync('" + proofPath + "', 'utf8'));\n";
+    for (const rel of ['scripts', producerDir, 'tests/external-output-references/captures/synthetic']) {
       mkdirSync(join(p, rel), { recursive: true });
     }
     for (const file of ['genuine-new-proof.mjs', 'emit-reverify-status.mjs']) {
@@ -712,9 +713,11 @@ describe('target context', () => {
     }
     writeFileSync(join(p, producerDir, 'emit-reverify-status.mjs'), producer);
     writeFileSync(join(p, 'scripts/selected-producer.mjs'), producer);
-    writeFileSync(join(p, 'inputs/reverify.json'), JSON.stringify({ 'reverify-status': 'primary-only' }));
+    writeFileSync(join(p, proofPath), JSON.stringify({ 'reverify-status': 'primary-only' }));
     writeFileSync(join(p, manifestPath), JSON.stringify({
-      version: 1, corpusRoot: 'tests/external-output-references', entries: {},
+      version: 1, corpusRoot: 'tests/external-output-references', entries: {
+        'synthetic/reverify': { producer: 'selected-status', kind: 'structured', path: 'captures/synthetic/reverify.raw.json' },
+      },
     }));
     git(p, 'config', 'user.name', 'Fixture');
     git(p, 'config', 'user.email', 'fixture@example.test');
@@ -725,8 +728,8 @@ describe('target context', () => {
     }).stdout.trim();
     const pSha = sha(p);
     git(p, 'worktree', 'add', '--detach', w, pSha);
-    writeFileSync(join(w, 'inputs/reverify.json'), JSON.stringify({ 'reverify-status': 'verified' }));
-    git(w, 'add', 'inputs/reverify.json');
+    writeFileSync(join(w, proofPath), JSON.stringify({ 'reverify-status': 'verified' }));
+    git(w, 'add', proofPath);
     git(w, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test',
       'commit', '-m', 'PR input differs from P');
     const prSha = sha(w);
@@ -747,7 +750,7 @@ describe('target context', () => {
       'binding-id: selected-status:reverify-status:verified',
       'producer: selected-status', 'evidence: NEW(produced-by AC#1)', ticks, '',
     ].join('\n');
-    const library = (head: string | null, modified: string[] = ['inputs/reverify.json']) =>
+    const library = (head: string | null, modified: string[] = [proofPath]) =>
       runContractEvidenceReverify({
         repoRoot: packRoot, trustedBaseRoot: p, reviewTargetRoot: w,
         projectId: card.projectId, env: target.env, manifestPath,
@@ -773,7 +776,7 @@ describe('target context', () => {
       issueBody: body, storeDirOverride: snapshotDir,
     });
     const modifiedFile = join(target.root, 'paths.txt');
-    writeFileSync(modifiedFile, 'inputs/reverify.json\n');
+    writeFileSync(modifiedFile, proofPath + '\n');
     const invoke = (head: string | null = prSha) => runProcessSync({
       command: process.execPath,
       args: ['--experimental-strip-types',

@@ -154,7 +154,8 @@ describe('current substantive Issue floor', () => {
       '  - action: resume run_123abcd | expected: complete')).ok).toBe(false);
   });
 
-  it.each(['baseline', 'dynamic-commonjs', 'nested-root'] as const)(
+  it.each(['baseline', 'dynamic-commonjs', 'nested-root', 'multiline-commonjs',
+    'computed-loader', 'multiline-import', 'docs-only', 'aliased-roots', 'aliased-roots-symlink', 'aliased-roots-default'] as const)(
     'binds target NEW evidence and independent proof to a synthetic selected card without admitting other commands: %s', (mode) => {
     const temp = mkdtempSync(join(tmpdir(), 'opk2751-'));
     const packRoot = fileURLToPath(new URL('../', import.meta.url));
@@ -164,8 +165,12 @@ describe('current substantive Issue floor', () => {
     const env = { ...process.env, OPK_PROJECT_ID: projectId, XDG_CONFIG_HOME: join(temp, 'config'), HOME: temp };
     const cardPath = join(env.XDG_CONFIG_HOME, 'orchestrator-pack', 'projects', projectId + '.json');
     const producerDir = 'tests/fixtures/contract-evidence-reverify/producers';
+    const proofPath = 'tests/external-output-references/captures/synthetic/proof.raw.json';
     const proofCommand = 'node ' + producerDir + '/genuine-new-proof.mjs';
-    const boundaryCommand = 'node scripts/verify-boundary.mjs';
+    const boundaryPath = mode === 'multiline-commonjs' ? 'scripts/verify-boundary.cjs' : 'scripts/verify-boundary.mjs';
+    const boundaryCommand = 'node ' + boundaryPath;
+    const helperPath = mode === 'multiline-import' ? 'scripts/worker.mjs' : 'scripts/worker.cjs';
+    const changedHelper = ['multiline-commonjs', 'computed-loader', 'multiline-import'].includes(mode);
     const runGit = (...args: string[]) => {
       const output = runProcessSync({ command: 'git', args, cwd: targetRoot, inheritParentEnv: true });
       if (!output.ok) throw new Error('synthetic git setup failed: ' + String(output.stderr || output.error));
@@ -191,8 +196,15 @@ describe('current substantive Issue floor', () => {
         "process.stdout.write(readProof());",
         '',
       ].join('\n');
-      const dependency = "import { readFileSync } from 'node:fs';\nexport const readProof = () => readFileSync('inputs/proof.json', 'utf8');\n";
-      writeFileSync(join(targetRoot, 'scripts', 'verify-boundary.mjs'), observedProducer);
+      const dependency = "import { readFileSync } from 'node:fs';\nexport const readProof = () => readFileSync('" + proofPath + "', 'utf8');\n";
+      const boundarySource = mode === 'multiline-commonjs'
+        ? "const worker = require(\n  './worker.cjs'\n);\nprocess.stdout.write(worker);\n"
+        : mode === 'computed-loader'
+          ? "import * as Module from 'node:module';\nconst load = Module['create'+'Require'](import.meta.url);\nprocess.stdout.write(load('./worker.cjs'));\n"
+          : mode === 'multiline-import'
+            ? "const worker = await import(\n  './worker.mjs'\n);\nprocess.stdout.write(worker.default);\n"
+            : observedProducer;
+      writeFileSync(join(targetRoot, boundaryPath), boundarySource);
       writeFileSync(join(targetRoot, producerDir, 'emit-reverify-status.mjs'), observedProducer);
       writeFileSync(join(targetRoot, 'scripts', 'proof-input.mjs'), dependency);
       writeFileSync(join(targetRoot, producerDir, 'proof-input.mjs'), dependency);
@@ -202,12 +214,17 @@ describe('current substantive Issue floor', () => {
             'module.exports = ' + JSON.stringify(JSON.stringify({ 'reverify-status': 'primary-only' })) + ';\n');
         }
       }
-      mkdirSync(join(targetRoot, 'inputs'), { recursive: true });
-      writeFileSync(join(targetRoot, 'inputs', 'proof.json'), JSON.stringify({ 'reverify-status': 'primary-only' }));
+      const helperSource = (value: string) => (mode === 'multiline-import' ? 'export default ' : 'module.exports = ')
+        + JSON.stringify(JSON.stringify({ 'reverify-status': value })) + ';\n';
+      if (changedHelper) writeFileSync(join(targetRoot, helperPath), helperSource('primary-only'));
+      mkdirSync(dirname(join(targetRoot, proofPath)), { recursive: true });
+      writeFileSync(join(targetRoot, proofPath), JSON.stringify({ 'reverify-status': 'primary-only' }));
       const manifestPath = 'tests/external-output-references/capture-manifest.json';
       mkdirSync(dirname(join(targetRoot, manifestPath)), { recursive: true });
       writeFileSync(join(targetRoot, manifestPath), JSON.stringify({
-        version: 1, corpusRoot: 'tests/external-output-references', entries: {},
+        version: 1, corpusRoot: 'tests/external-output-references', entries: {
+          'synthetic/proof': { producer: 'target-status', kind: 'structured', path: 'captures/synthetic/proof.raw.json' },
+        },
       }));
       runGit('init');
       runGit('remote', 'add', 'origin', 'https://github.com/' + repository + '.git');
@@ -232,8 +249,8 @@ describe('current substantive Issue floor', () => {
         if (!result.ok) throw new Error('PR HEAD unreadable');
         return result.stdout.trim();
       };
-      writeFileSync(join(reviewRoot, 'inputs', 'proof.json'), JSON.stringify({ 'reverify-status': 'verified' }));
-      gitW('add', 'inputs/proof.json');
+      writeFileSync(join(reviewRoot, proofPath), JSON.stringify({ 'reverify-status': 'verified' }));
+      gitW('add', proofPath);
       gitW('-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.test', 'commit', '-m', 'PR input only');
       if (mode === 'dynamic-commonjs') {
         for (const directory of ['scripts', producerDir]) {
@@ -243,6 +260,17 @@ describe('current substantive Issue floor', () => {
         gitW('add', 'scripts/worker.cjs', producerDir + '/worker.cjs');
         gitW('-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.test', 'commit', '-m', 'PR changes runtime CommonJS dependency');
       }
+      if (changedHelper) {
+        writeFileSync(join(reviewRoot, helperPath), helperSource('verified'));
+        gitW('add', helperPath);
+        gitW('-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.test', 'commit', '-m', 'PR modifies hidden runtime helper');
+      }
+      if (mode === 'docs-only') {
+        mkdirSync(join(reviewRoot, 'docs'), { recursive: true });
+        writeFileSync(join(reviewRoot, 'docs', 'notes.md'), 'Unrelated documentation update.\n');
+        gitW('add', 'docs/notes.md');
+        gitW('-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.test', 'commit', '-m', 'PR documentation only outside declared fixture');
+      }
       if (mode === 'nested-root') {
         writeFileSync(join(worktreeRoot, '.gitignore'), 'nested-w/\n');
         gitW('add', '.gitignore');
@@ -250,7 +278,7 @@ describe('current substantive Issue floor', () => {
         reviewRoot = join(worktreeRoot, 'nested-w');
         for (const relative of ['scripts/verify-boundary.mjs', 'scripts/proof-input.mjs',
           producerDir + '/genuine-new-proof.mjs', producerDir + '/emit-reverify-status.mjs',
-          producerDir + '/proof-input.mjs', 'inputs/proof.json']) {
+          producerDir + '/proof-input.mjs', proofPath]) {
           mkdirSync(dirname(join(reviewRoot, relative)), { recursive: true });
           copyFileSync(join(worktreeRoot, relative), join(reviewRoot, relative));
         }
@@ -258,17 +286,20 @@ describe('current substantive Issue floor', () => {
         const clean = runProcessSync({ command: 'git', args: ['status', '--porcelain', '--untracked-files=all'], cwd: reviewRoot });
         expect(clean.ok).toBe(true);
         expect(clean.stdout).toBe('');
-        expect(runProcessSync({ command: 'git', args: ['check-ignore', 'inputs/proof.json'], cwd: reviewRoot }).ok).toBe(true);
+        expect(runProcessSync({ command: 'git', args: ['check-ignore', proofPath], cwd: reviewRoot }).ok).toBe(true);
       }
       const prHeadSha = headW();
       expect(prHeadSha).not.toBe(primaryHeadSha);
-      expect(readFileSync(join(targetRoot, 'inputs', 'proof.json'), 'utf8')).toContain('primary-only');
-      expect(readFileSync(join(reviewRoot, 'inputs', 'proof.json'), 'utf8')).toContain('verified');
-      expect(readFileSync(join(targetRoot, 'scripts', 'verify-boundary.mjs')))
-        .toEqual(readFileSync(join(reviewRoot, 'scripts', 'verify-boundary.mjs')));
+      expect(readFileSync(join(targetRoot, proofPath), 'utf8')).toContain('primary-only');
+      expect(readFileSync(join(reviewRoot, proofPath), 'utf8')).toContain('verified');
+      expect(readFileSync(join(targetRoot, boundaryPath)))
+        .toEqual(readFileSync(join(reviewRoot, boundaryPath)));
+      const aliasedRoots = mode.startsWith('aliased-roots');
+      const trustedRoot = mode === 'aliased-roots-symlink' ? join(temp, 'primary-alias') : aliasedRoots ? reviewRoot : targetRoot;
+      if (mode === 'aliased-roots-symlink') symlinkSync(reviewRoot, trustedRoot);
       mkdirSync(dirname(cardPath), { recursive: true });
       const card = {
-        projectId, repository, primaryRoot: targetRoot, defaultBranch: 'main',
+        projectId, repository, primaryRoot: trustedRoot, defaultBranch: 'main',
         orcaWorkspacePattern: 'synthetic/workspaces/',
         orchestratorTitlePattern: 'synthetic orchestrator',
         browserGpt: { projectUrl: 'https://chatgpt.com/g/synthetic-2751/project' },
@@ -312,10 +343,11 @@ describe('current substantive Issue floor', () => {
         forceProducerUnreachable?: boolean; prHeadSha?: string | null; prModifiedPaths?: string[];
       } = {}) =>
         runContractEvidenceReverify({
-          repoRoot: packRoot, trustedBaseRoot: targetRoot, reviewTargetRoot: reviewRoot,
+          repoRoot: packRoot, trustedBaseRoot: trustedRoot, reviewTargetRoot: reviewRoot,
           manifestPath, boundSnapshotBody: body, explicitIssueNumber: 2751,
-          prHeadSha, projectId, env, prModifiedPaths: mode === 'dynamic-commonjs'
-            ? ['inputs/proof.json', 'scripts/worker.cjs', producerDir + '/worker.cjs'] : ['inputs/proof.json'], ...extra,
+          prHeadSha, projectId, env, prModifiedPaths: [proofPath,
+            ...(mode === 'dynamic-commonjs' ? ['scripts/worker.cjs', producerDir + '/worker.cjs'] : []),
+            ...(changedHelper ? [helperPath] : []), ...(mode === 'docs-only' ? ['docs/notes.md'] : [])], ...extra,
         });
       const verified = reverify(targetIssue);
       expect(verified).toMatchObject({ candidateOnly: true, neverBlocks: true, runOutcome: 'rows-evaluated' });
@@ -323,9 +355,10 @@ describe('current substantive Issue floor', () => {
         .toMatchObject({ status: 'unverified', reason: 'producer-unreachable', producerVerified: false });
       expect(reverify(targetIssue, { prHeadSha: null }).rows[0])
         .toMatchObject({ status: 'unverified', reason: 'producer-unreachable', producerVerified: false });
-      if (mode === 'baseline' && isPrHeadNetworkSandboxAvailable()) {
+      const positive = mode === 'baseline' || mode === 'docs-only';
+      if (positive && isPrHeadNetworkSandboxAvailable()) {
         expect(verified.rows[0]).toMatchObject({ status: 'verified', verificationMode: 'live', producerVerified: true });
-      } else if (mode === 'baseline') {
+      } else if (positive) {
         expect(verified.rows[0]).toMatchObject({ status: 'unverified', reason: 'producer-unreachable' });
       }
 
@@ -336,14 +369,16 @@ describe('current substantive Issue floor', () => {
         issueBody: targetIssue, storeDirOverride: snapshotStore,
       });
       const changedPathsFile = join(temp, 'changed-paths.txt');
-      writeFileSync(changedPathsFile, mode === 'dynamic-commonjs'
-        ? 'inputs/proof.json\nscripts/worker.cjs\n' + producerDir + '/worker.cjs\n' : '', 'utf8');
+      writeFileSync(changedPathsFile, [proofPath,
+        ...(mode === 'dynamic-commonjs' ? ['scripts/worker.cjs', producerDir + '/worker.cjs'] : []),
+        ...(changedHelper ? [helperPath] : []), ...(mode === 'docs-only' ? ['docs/notes.md'] : [])].join('\n'), 'utf8');
       const cliEnv: NodeJS.ProcessEnv = { ...env, OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR: snapshotStore };
       delete cliEnv.OPK_PROJECT_ID;
       const invokeCli = (sha: string | null = prHeadSha, snapshotPath = captured.snapshotPath, extraArgs: string[] = []) => runProcessSync({
         command: process.execPath,
         args: ['--experimental-strip-types', join(packRoot, 'scripts', 'invoke-contract-evidence-reverify.ts'),
-          '--repo-root', packRoot, '--trusted-base-root', targetRoot, '--review-target-root', reviewRoot,
+          '--repo-root', mode === 'aliased-roots-default' ? reviewRoot : packRoot, '--trusted-base-root', trustedRoot,
+          ...(mode === 'aliased-roots-default' ? [] : ['--review-target-root', reviewRoot]),
           '--manifest-path', manifestPath, '--snapshot-file', snapshotPath,
           '--bound-snapshot-pr-number', '2769', '--bound-snapshot-issue-number', '2751',
           '--project-id', projectId, '--explicit-issue', '2751',
@@ -356,11 +391,22 @@ describe('current substantive Issue floor', () => {
       const cliResult = JSON.parse(cliReverify.stdout);
       expect(cliResult).toMatchObject({ candidateOnly: true, neverBlocks: true, runOutcome: 'rows-evaluated' });
       expect(cliResult.rows).toHaveLength(1);
-      if (mode !== 'baseline') {
+      if (!positive) {
         for (const result of [verified, cliResult]) {
           expect(result).toMatchObject({ candidateOnly: true, neverBlocks: true });
           expect(result.rows[0], mode).toMatchObject({ status: 'unverified', producerVerified: false });
-          if (mode === 'nested-root') expect(result.rows[0].reason).toBe('producer-unreachable');
+          expect(result.rows[0].reason).toBe(mode === 'nested-root' || aliasedRoots
+            ? 'producer-unreachable' : 'untrusted-pr-modified');
+        }
+        if (changedHelper) {
+          // An incomplete caller-supplied list must not hide a changed helper.
+          expect(reverify(targetIssue, { prModifiedPaths: [] }).rows[0])
+            .toMatchObject({ status: 'unverified', reason: 'untrusted-pr-modified', producerVerified: false });
+          writeFileSync(changedPathsFile, '');
+          const missingPaths = invokeCli();
+          expect(missingPaths.exitCode, missingPaths.stderr).toBe(0);
+          expect(JSON.parse(missingPaths.stdout).rows[0])
+            .toMatchObject({ status: 'unverified', reason: 'untrusted-pr-modified', producerVerified: false });
         }
         return;
       }
@@ -369,6 +415,32 @@ describe('current substantive Issue floor', () => {
         expect(cliResult.rows[0]).toMatchObject({ status: 'verified', verificationMode: 'live', producerVerified: true });
       } else {
         expect(cliResult.rows[0]).toMatchObject({ status: 'unverified', reason: 'producer-unreachable' });
+      }
+      if (mode === 'docs-only') {
+        // None of these files is imported by the approved entry. Trust depends
+        // on the complete PR file set, not our ability to infer imports.
+        for (const relative of ['docs/unimported.js', 'docs/unimported.mjs', 'docs/unimported.cjs',
+          'docs/unimported.ts', 'docs/unimported.mts', 'docs/unimported.cts', 'docs/unimported.json',
+          'tests/external-output-references/captures/synthetic/undeclared.json',
+          'package.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock']) {
+          mkdirSync(dirname(join(reviewRoot, relative)), { recursive: true });
+          writeFileSync(join(reviewRoot, relative), '{}\n');
+          gitW('add', relative);
+          gitW('-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.test', 'commit', '-m', 'PR changes unimported runtime or package file');
+          const head = headW();
+          const snapshot = captureBoundIssueSnapshot({ projectId, prNumber: 2769, prHeadSha: head,
+            issueNumber: 2751, issueBody: targetIssue, storeDirOverride: snapshotStore });
+          // Deliberately omit the changed file from the caller list in both routes.
+          expect(reverify(targetIssue, { prHeadSha: head, prModifiedPaths: [] }).rows[0], relative)
+            .toMatchObject({ status: 'unverified', reason: 'untrusted-pr-modified', producerVerified: false });
+          writeFileSync(changedPathsFile, '');
+          const result = invokeCli(head, snapshot.snapshotPath);
+          expect(result.exitCode, result.stderr).toBe(0);
+          expect(JSON.parse(result.stdout).rows[0], relative)
+            .toMatchObject({ status: 'unverified', reason: 'untrusted-pr-modified', producerVerified: false });
+          gitW('checkout', '--detach', prHeadSha);
+        }
+        return;
       }
       // Distinct exact-SHA W is required for both the library and the CLI.
       const assertUnverified = (row: ReturnType<typeof reverify>['rows'][number]) => {
@@ -395,7 +467,7 @@ describe('current substantive Issue floor', () => {
       const modifiedCli = invokeCli();
       expect(modifiedCli.exitCode, modifiedCli.stderr).toBe(0);
       assertUnverified(JSON.parse(modifiedCli.stdout).rows[0]);
-      writeFileSync(changedPathsFile, 'inputs/proof.json\n');
+      writeFileSync(changedPathsFile, proofPath + '\n');
 
       gitW('checkout', '--detach', primaryHeadSha);
       assertUnverified(reverify(targetIssue).rows[0]);

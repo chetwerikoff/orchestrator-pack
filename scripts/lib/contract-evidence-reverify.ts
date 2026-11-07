@@ -814,6 +814,7 @@ function evaluateNewRow(input: {
   selectedContext?: TargetContext;
   selectedProducerUnavailable?: boolean;
   prModifiedPaths: string[];
+  declaredFixturePaths: string[];
 }): ReverifyRowResult {
   const { row, rowIndex, markdown, trustedBaseRoot, reviewTargetRoot, timeoutMs,
     forceProducerUnreachable, selectedContext, selectedProducerUnavailable, prModifiedPaths } = input;
@@ -862,7 +863,7 @@ function evaluateNewRow(input: {
   if (selectedTarget?.name === producer
       && !selectedCardProducerClosureIsTrusted({
         command: independentCommand, selectedContext: selectedContext!,
-        reviewTargetRoot, prModifiedPaths,
+        reviewTargetRoot, prModifiedPaths, declaredFixturePaths: input.declaredFixturePaths,
       })) {
     return buildUnverified(rowIndex, row, 'untrusted-pr-modified');
   }
@@ -1161,7 +1162,11 @@ export function runContractEvidenceReverify(input: ReverifyRunInput): ReverifyRu
       cwd: reviewTargetRoot, inheritParentEnv: false,
     });
     const boundSha = String(input.prHeadSha ?? '').trim().toLowerCase();
+    const validRoots = !context.contractEvidenceProducer
+      || (realpathSync(context.primaryRoot) === realpathSync(input.trustedBaseRoot)
+        && realpathSync(input.trustedBaseRoot) !== realpathSync(reviewTargetRoot));
     const validHead = /^[0-9a-f]{40}$/.test(boundSha)
+      && validRoots
       && existsSync(path.join(reviewTargetRoot, '.git'))
       && topLevel.ok && realpathSync(topLevel.stdout.trim()) === realpathSync(reviewTargetRoot)
       && head.ok && head.stdout.trim().toLowerCase() === boundSha
@@ -1202,6 +1207,11 @@ export function runContractEvidenceReverify(input: ReverifyRunInput): ReverifyRu
           selectedContext,
           selectedProducerUnavailable,
           prModifiedPaths,
+          declaredFixturePaths: Object.values(manifest.entries ?? {})
+            .map((entry) => (entry as CaptureManifestEntry).path)
+            .filter((entry): entry is string => typeof entry === 'string')
+            .map((entry) => path.posix.join(corpusRoot, entry))
+            .filter((entry) => entry.startsWith(corpusRoot + '/')),
         }),
       );
       continue;
