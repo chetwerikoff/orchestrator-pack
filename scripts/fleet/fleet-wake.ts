@@ -2122,7 +2122,7 @@ async function wakePanesOnEvents(
         pane, key, ci: { pull, ...(fallbackIssue !== undefined ? { fallbackIssue } : {}) },
         message: fallbackIssue !== undefined
           ? `Advisory: CI on ${pull.sha} finished for PR #${pull.number} - re-check only if you own this PR; no new Task authority`
-          : `Wake: CI on ${pull.sha} finished for PR #${pull.number}`,
+          : `Wake: CI on ${pull.sha} finished for PR #${pull.number}. If a check failed, run node ${JSON.stringify(fileURLToPath(new URL('../manager-formatter-fix.ts', import.meta.url)))} --project ${JSON.stringify(options.config.projectId)} --pr ${pull.number} first.`,
       });
     }
   }

@@ -82,6 +82,32 @@ green; the automation Chrome is logged into ChatGPT; and Orca is running.
 
    Missing/empty/focused-only verification and blank local commands are invalid
    for target verification. There is no fallback to pack verification commands.
+
+   `verification.formatter` is optional. It declares a non-empty ordered `fix`
+   list of shell commands using the project's locked tools and one `check` shell
+   command equal to the CI formatter check. For example, LeoPoker can declare:
+
+   ```json
+   {
+     "verification": {
+       "local": ["make check"],
+       "formatter": {
+         "fix": ["uv run --locked ruff format .", "uv run --locked ruff check --fix ."],
+         "check": "make lint"
+       }
+     }
+   }
+   ```
+
+   When a PR check fails and no author turn is live, run
+   `node --experimental-strip-types "$PACK_ROOT/scripts/lib/Invoke-TypeScriptCli.ts" --repo-root "$PACK_ROOT" --script "$PACK_ROOT/scripts/manager-formatter-fix.ts" -- --project <projectId> --pr <number>`
+   first and follow its printed next step. It runs only these card-declared
+   commands in its own disposable detached checkout of the exact PR head, then
+   commits and pushes a nonempty passing repair to that PR branch. The caller's
+   checkout is not used for edits. Missing configuration means no automatic
+   repair; projects without a CI formatter check (such as AppliedIn) omit it.
+   A malformed declaration is `card-invalid`; commands are never inferred from
+   the project name or `verification.local`.
 3. **Target-mode GitHub binding.** Export the same selected project id for every local target-running pack entrypoint:
 
    ```bash

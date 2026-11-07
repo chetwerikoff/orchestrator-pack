@@ -3,7 +3,7 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { parseEnv } from 'node:util';
 import * as targetContext from '../lib/target-context.ts';
 import { describe, expect, it, vi } from 'vitest';
@@ -833,17 +833,21 @@ describe('fleet alarm', () => {
 
     const first = await tick({ screens, store, config: wakeConfig, terminals: owned, listOpenPulls, supervisedPullOwner, readNamedPull,
       checkRunsFinishedAt: (_repository, sha) => sha === headA ? now - 60_000 : undefined });
-    expect(sendsTo(first.calls, 'one')[0]).toContain(`Wake: CI on ${headA} finished for PR #7`);
+    expect(sendsTo(first.calls, 'one')[0]?.join(' ')).toContain(`Wake: CI on ${headA} finished for PR #7`);
+    const formatterHint = sendsTo(first.calls, 'one')[0]!.join(' ');
+    expect(formatterHint).toContain(`If a check failed, run node ${JSON.stringify(resolve(import.meta.dirname, '../manager-formatter-fix.ts'))} --project ${JSON.stringify(wakeConfig.projectId)} --pr 7 first.`);
+    expect(formatterHint).not.toContain('`');
+    expect(formatterHint).not.toContain('!');
     expect(sendsTo(first.calls, 'mgr')).toHaveLength(0);
 
     const second = await tick({ screens, store, config: wakeConfig, terminals: owned, listOpenPulls, supervisedPullOwner, readNamedPull,
       checkRunsFinishedAt: () => now - 60_000 });
     expect(sendsTo(second.calls, 'one')).toHaveLength(0);
-    expect(sendsTo(second.calls, 'mgr')[0]).toContain(`Wake: CI on ${headB} finished for PR #8`);
+    expect(sendsTo(second.calls, 'mgr')[0]?.join(' ')).toContain(`Wake: CI on ${headB} finished for PR #8`);
 
     const rerun = await tick({ screens, store, config: wakeConfig, terminals: owned, listOpenPulls, supervisedPullOwner, readNamedPull,
       checkRunsFinishedAt: (_repository, sha) => sha === headA ? now : now - 60_000 });
-    expect(sendsTo(rerun.calls, 'one')[0]).toContain(`Wake: CI on ${headA} finished for PR #7`);
+    expect(sendsTo(rerun.calls, 'one')[0]?.join(' ')).toContain(`Wake: CI on ${headA} finished for PR #7`);
     expect(sendsTo(rerun.calls, 'mgr')).toHaveLength(0);
   });
 
