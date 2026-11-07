@@ -33,7 +33,7 @@ import {
   selectedCardProducerClosureIsTrusted,
 } from './reverify-command-resolution.ts';
 import { loadReverifyAllowlistConfig } from './reverify-allowlist-config.ts';
-import { runSandboxedAllowlistedCommand } from './reverify-sandbox.ts';
+import { prHeadSnapshotBindingRefusal, runSandboxedAllowlistedCommand } from './reverify-sandbox.ts';
 import { runProcessSync } from '../kernel/subprocess.ts';
 import { parseRemoteSlug } from './git-origin-slug.mjs';
 import { resolveTargetContext, type TargetContext } from './target-context.ts';
@@ -296,6 +296,7 @@ function runTrustedCommand(command: string, options: {
   timeoutMs: number;
   forceUnreachable?: boolean;
   sandboxMode: 'trusted-base' | 'pr-head-new';
+  prHeadSha?: string | null;
   selectedContext?: TargetContext;
 }): CommandRunResult {
   const resolutionRoot = options.resolutionRoot ?? options.cwd;
@@ -320,6 +321,7 @@ function runTrustedCommand(command: string, options: {
     dependencyRoot: options.dependencyRoot ?? options.cwd,
     timeoutMs: options.timeoutMs,
     sandboxMode: options.sandboxMode,
+    prHeadSha: options.prHeadSha ?? undefined,
     forceUnreachable: options.forceUnreachable,
   });
 }
@@ -804,6 +806,7 @@ function findProducerEmissionForRow(markdown: string, acNumber: number, row: Rec
 }
 
 function evaluateNewRow(input: {
+  prHeadSha?: string | null;
   rowIndex: number;
   row: Record<string, string>;
   markdown: string;
@@ -818,6 +821,10 @@ function evaluateNewRow(input: {
 }): ReverifyRowResult {
   const { row, rowIndex, markdown, trustedBaseRoot, reviewTargetRoot, timeoutMs,
     forceProducerUnreachable, selectedContext, selectedProducerUnavailable, prModifiedPaths } = input;
+  const bindingRefusal = prHeadSnapshotBindingRefusal(reviewTargetRoot, input.prHeadSha);
+  if (bindingRefusal) {
+    return { ...buildUnverified(rowIndex, row, 'producer-unreachable'), observed: bindingRefusal };
+  }
   const selectedTarget = selectedContext?.contractEvidenceProducer;
   const producer = canonicalProducer(row.producer ?? '');
   if (selectedProducerUnavailable && !(producerRegistry.repoOwned ?? []).includes(producer)) {
@@ -878,9 +885,10 @@ function evaluateNewRow(input: {
     timeoutMs,
     forceUnreachable: forceProducerUnreachable,
     sandboxMode: 'pr-head-new',
+    prHeadSha: input.prHeadSha,
   });
   if (run.blocked) {
-    return buildUnverified(rowIndex, row, blockedUnverifiedReason(run));
+    return { ...buildUnverified(rowIndex, row, blockedUnverifiedReason(run)), observed: run.blockReason };
   }
   if (run.timedOut) {
     return buildUnverified(rowIndex, row, 'producer-unreachable');
@@ -895,10 +903,11 @@ function evaluateNewRow(input: {
     timeoutMs,
     forceUnreachable: forceProducerUnreachable,
     sandboxMode: 'pr-head-new',
+    prHeadSha: input.prHeadSha,
     selectedContext,
   });
   if (independentRun.blocked) {
-    return buildUnverified(rowIndex, row, blockedUnverifiedReason(independentRun));
+    return { ...buildUnverified(rowIndex, row, blockedUnverifiedReason(independentRun)), observed: independentRun.blockReason };
   }
   if (independentRun.timedOut) {
     return buildUnverified(rowIndex, row, 'producer-unreachable');
@@ -1197,6 +1206,7 @@ export function runContractEvidenceReverify(input: ReverifyRunInput): ReverifyRu
     if (/^NEW\(produced-by AC#\d+\)$/i.test(evidence)) {
       rows.push(
         evaluateNewRow({
+          prHeadSha: input.prHeadSha,
           rowIndex: index,
           row,
           markdown: input.boundSnapshotBody,

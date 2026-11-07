@@ -520,6 +520,7 @@ describe('execute-Issue manager boundary', () => {
     });
 
     const externalCases = [
+      ['scenario_precondition_unavailable', 'external:smoke_precondition_unavailable'],
       ['browser_cdp_unavailable', 'external:chrome_not_running'],
       ['profile_mismatch', 'external:profile_mismatch'],
       ['login_required', 'external:login_required'],

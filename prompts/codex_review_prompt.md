@@ -56,7 +56,7 @@ node --experimental-strip-types scripts/invoke-reviewer-contract-mapping.ts \
   --issue-file <issue-body> \
   --pr-body-file <pr-body> \
   --explicit-issue <n> \
-  --pr-number <n> \
+  --pr-number <pr-number> \
   --pr-head-sha <sha> \
   -ChangedPathsFile <changed-paths>
 ```
@@ -139,18 +139,22 @@ origin/main archive — never the PR checkout) — the helper owns row evaluatio
 ```bash
 SnapshotFile="$(node --experimental-strip-types <trusted-pack-root>/scripts/bound-issue-snapshot-cli.ts resolve \
   --project-id <project-id> \
-  --pr-number <n> \
+  --pr-number <pr-number> \
   --pr-head-sha <sha> \
-  --issue-number <n> \
-  --require)"
+  --issue-number <issue-number> \
+  --require --path-only)"
 
 node --experimental-strip-types <trusted-pack-root>/scripts/invoke-contract-evidence-reverify.ts \
+  --repo-root <trusted-pack-root> \
+  --trusted-base-root <trusted-base-root> \
   --review-target-root <pr-worktree-path> \
-  --pr-number <n> \
+  --project-id <project-id> \
+  --bound-snapshot-pr-number <pr-number> \
+  --pr-head-sha <sha> \
   --snapshot-file "$SnapshotFile" \
   --current-issue-file <issue-body> \
   --pr-body-file <pr-body> \
-  --explicit-issue <n> \
+  --explicit-issue <issue-number> \
   --changed-paths-file <changed-paths> \
   --summary
 ```

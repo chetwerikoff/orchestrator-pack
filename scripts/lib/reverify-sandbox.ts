@@ -2,6 +2,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSy
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import type { ResolvedAllowlistedCommand } from './reverify-command-resolution.ts';
 
 export interface CommandRunResult {
@@ -234,8 +235,13 @@ function copyDirectoryTree(sourceRoot: string, dest: string): boolean {
   }
 }
 
-function createDisposableWorktreeCopy(cwd: string): string | null {
+function createDisposableWorktreeCopy(cwd: string, prHeadSha?: string): string | null {
   const dest = mkdtempSync(path.join(tmpdir(), 'reverify-sandbox-wt-'));
+  if (prHeadSha !== undefined && (!/^[0-9a-f]{40}$/.test(prHeadSha)
+      || !existsSync(path.join(cwd, '.git')))) {
+    rmSync(dest, { recursive: true, force: true });
+    return null;
+  }
   if (!existsSync(path.join(cwd, '.git'))) {
     if (!copyDirectoryTree(cwd, dest)) {
       rmSync(dest, { recursive: true, force: true });
@@ -244,12 +250,11 @@ function createDisposableWorktreeCopy(cwd: string): string | null {
     return dest;
   }
 
-  const archive = spawnSync('git', ['archive', 'HEAD'], {
-    cwd,
-    shell: false,
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  if (archive.status !== 0 || !archive.stdout || !(archive.stdout as Buffer).length) {
+  // latin1 preserves every archive byte through the kernel's string result.
+  const archived = runProcessSync({ command: 'git', args: ['archive', prHeadSha ?? 'HEAD'],
+    cwd, inheritParentEnv: true, encoding: 'latin1' });
+  const archive = { stdout: Buffer.from(archived.stdout, 'latin1') };
+  if (!archived.ok || archive.stdout.length === 0) {
     rmSync(dest, { recursive: true, force: true });
     return null;
   }
@@ -564,13 +569,14 @@ function spawnPrHeadIsolated(
     baseEnv: Record<string, string>;
     binDirs: string[];
     npmVitestProof?: boolean;
+    prHeadSha?: string;
   },
 ): SpawnSyncReturns<string> {
   if (process.platform !== 'linux' || !bwrapAvailable()) {
     return sandboxUnavailableResult(NETWORK_SANDBOX_UNAVAILABLE);
   }
 
-  const disposable = createDisposableWorktreeCopy(options.cwd);
+  const disposable = createDisposableWorktreeCopy(options.cwd, options.prHeadSha);
   if (!disposable) {
     return sandboxUnavailableResult(PR_HEAD_SANDBOX_UNAVAILABLE);
   }
@@ -623,6 +629,7 @@ function spawnIsolated(
     binDirs: string[];
     networkRestricted: boolean;
     npmVitestProof?: boolean;
+    prHeadSha?: string;
   },
 ): SpawnSyncReturns<string> {
   if (options.networkRestricted) {
@@ -647,6 +654,12 @@ function isSandboxBlocked(stderr: string, networkRestricted: boolean): string | 
   return null;
 }
 
+export function prHeadSnapshotBindingRefusal(cwd: string, prHeadSha?: string | null): string | null {
+  return existsSync(path.join(cwd, '.git')) && !/^[0-9a-f]{40}$/.test(prHeadSha ?? '')
+    ? `${PR_HEAD_SANDBOX_UNAVAILABLE}: immutable prHeadSha is missing or invalid; supply the exact 40-hex PR head SHA and rerun candidate evidence`
+    : null;
+}
+
 export function runSandboxedAllowlistedCommand(
   resolved: ResolvedAllowlistedCommand,
   options: {
@@ -654,9 +667,16 @@ export function runSandboxedAllowlistedCommand(
     dependencyRoot?: string;
     timeoutMs: number;
     sandboxMode: SandboxMode;
+    prHeadSha?: string;
     forceUnreachable?: boolean;
   },
 ): CommandRunResult {
+  const reason = options.sandboxMode === 'pr-head-new'
+    ? prHeadSnapshotBindingRefusal(options.cwd, options.prHeadSha) : null;
+  if (reason) {
+    return { ok: false, stdout: '', stderr: reason, exitCode: null,
+      timedOut: false, blocked: true, blockReason: reason };
+  }
   if (options.forceUnreachable) {
     return {
       ok: false,
@@ -683,6 +703,7 @@ export function runSandboxedAllowlistedCommand(
     binDirs,
     networkRestricted,
     npmVitestProof,
+    prHeadSha: options.prHeadSha,
   });
 
   const stderr = result.stderr ?? '';

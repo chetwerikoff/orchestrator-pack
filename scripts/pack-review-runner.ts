@@ -1,4 +1,5 @@
 import './toolchain/native-entrypoint-preflight.ts';
+import { resolvePrScopeGuardApplicability } from './pr-scope-declaration.ts';
 import { randomUUID } from 'node:crypto';
 import {
   appendFileSync,
@@ -92,7 +93,7 @@ import {
   testReviewStartClaimOwnership,
   type ClaimResult,
 } from './lib/review-start-claim-store.ts';
-import type { ExplicitDeadReviewerTakeover } from './lib/review-start-claim-cli.ts';
+import { releaseForTerminalizedRun, type ExplicitDeadReviewerTakeover } from './lib/review-start-claim-cli.ts';
 import {
   PACK_REVIEW_ACTIVE_STATUSES,
   createPackReviewRun,
@@ -323,8 +324,6 @@ interface StartInput {
   fixtureBeforeRebaseSettlementRecheck?: () => void | Promise<void>;
   fixtureStrictDescendantTreeChanged?: boolean;
   fixtureSameHeadIssueResolutionRunner?: typeof runProcess;
-  /** Synthetic GitHub evidence for the narrow #2655/#2656 incident. */
-  fixtureIncidentGithubRunner?: typeof runProcess;
 }
 
 interface DirectCliStartInput extends StartInput {
@@ -394,7 +393,6 @@ export interface ReconcileStalePackReviewRunsInput {
   fixtureStrictDescendantTreeChanged?: boolean;
   fixtureSameHeadIssueResolutionRunner?: typeof runProcess;
   /** Offline connector-shaped existing GitHub architect/diff evidence; no runtime bypass. */
-  fixtureIncidentGithubRunner?: typeof runProcess;
   fixtureRequiredCi?: StartInput['fixtureRequiredCi'];
   fixtureRequiredCiChecks?: StartInput['fixtureRequiredCiChecks'];
   fixtureRequiredCiPolicy?: StartInput['fixtureRequiredCiPolicy'];
@@ -980,7 +978,7 @@ async function proveUniqueRebasedC(
       args: ['api', 'repos/' + selected.repository + '/branches/' + base + '/protection'],
       cwd: root, inheritParentEnv: true, allowEmptyStdout: false, timeoutMs: 30_000,
     });
-  if (!protectionResult.ok) throw new Error('branch protection GET unavailable or denied');
+  if (!protectionResult.ok) throw new Error('base_trust_unprovable');
   let policy: unknown;
   try { policy = JSON.parse(protectionResult.stdout); }
   catch { throw new Error('branch protection GET invalid JSON'); }
@@ -4426,6 +4424,11 @@ async function recoverStaleGptSourceComments(options: {
     const reason = degradedEligible && !graceExpired
       ? `gpt_sources_waiting_for_grace:${usableSourceCount}/${round.cardinality}`
       : `gpt_sources_incomplete_after_grace:${usableSourceCount}/${round.cardinality}`;
+    const heartbeatMs = Date.parse(options.run.heartbeatAtUtc || options.run.updatedAt);
+    const graceEndsAtUtc = Number.isFinite(heartbeatMs)
+      ? new Date(heartbeatMs + packReviewRunStaleMinutes() * 60_000).toISOString() : 'unknown';
+    const ownerTerminal = ['failed', 'timed_out', 'cancelled'].includes(persisted.status);
+    const ownerStale = ownerTerminal || isPackReviewRunStale(options.run);
     return {
       recovered: false,
       reason,
@@ -4433,7 +4436,9 @@ async function recoverStaleGptSourceComments(options: {
       usableSourceCount,
       graceExpired,
       missingFirstAttemptIdentities,
-      nextAction: degradedEligible && !graceExpired
+      nextAction: !ownerStale
+        ? `observe the original run ${persisted.id} and let its live or unproven owner finish; graceEndsAtUtc=${graceEndsAtUtc}; rerun scoped reconcile when the source publishes or the owner is stale; do not resend sources`
+        : degradedEligible && !graceExpired
         ? 'rerun scoped reconcile after the shared grace threshold or when the missing source publishes'
         : `reconcile or retry the missing source work (${unresolved.join(', ') || 'missing source comment'})`,
     };
@@ -4746,7 +4751,28 @@ async function settleRecoveredGptDelivery(options: {
     projectId: options.projectId,
     storeRoot: options.storeRoot,
   }) ?? options.run;
-  const resumed = await resumeRecoveredGptDelivery({ ...options, run: latestRun });
+  let resumed = await resumeRecoveredGptDelivery({ ...options, run: latestRun });
+  // A prior owner may have failed the success write before its REVIEW existed.
+  // Once journal recovery publishes that REVIEW, use the incumbent restoration
+  // path to repair and read back the status, without replaying any sources.
+  if (resumed.reason === 'completed_with_delivery_failures'
+      && latestRun.deliveryOutcomes.githubComment?.state !== 'succeeded'
+      && latestRun.deliveryOutcomes.requiredStatus?.state === 'failed'
+      && latestRun.automaticBudgetDisposition !== 'non_consuming_explicit') {
+    const publication = await observePackReviewVerdictDelivery({
+      input: options.input, projectId: options.projectId, storeRoot: options.storeRoot,
+      runId: latestRun.id, prNumber: latestRun.prNumber, headSha: latestRun.targetSha,
+      repoSlug: options.repoSlug, sourceRepoRoot: options.input.sourceRepoRoot,
+      readHead: () => readCheckedReviewPrHead(options.input, options.repoSlug,
+        latestRun.prNumber, latestRun.targetSha),
+      writeRequiredStatus: options.writeRequiredStatus, resumeFailedStatus: true,
+    });
+    if (publication.verified) resumed = { ...resumed, reason: 'completed' };
+  }
+  if (resumed.reason === 'completed') {
+    releaseForTerminalizedRun({ projectId: options.projectId, runId: latestRun.id,
+      prNumber: latestRun.prNumber, headSha: latestRun.targetSha });
+  }
   if (options.run.automaticBudgetDisposition === 'non_consuming_explicit') {
     // Journal and the original reviewer COMMENT alone settle advisory recovery.
     return resumed;
@@ -4876,15 +4902,12 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
   const cycle = authority.cycle;
   const terminal = authority.terminal;
   const round = run.reviewRound;
-  const alreadySettled = cycle?.settlementKind === 'same_head_issue_resolution'
-    && cycle.reviewStageComplete === true && cycle.state === 'closed';
   const currentHead = trim(candidateHeadSha ?? authority.currentHeadSha).toLowerCase();
   if (!cycle || !terminal || !round || run.id !== terminal.runId || run.runId !== run.id
       || run.projectId !== options.projectId || run.prNumber !== authority.prNumber
       || run.canonicalRepository?.toLowerCase() !== options.repoSlug.toLowerCase()
       || run.targetSha !== terminal.targetSha || run.headSha !== terminal.targetSha
-      || (!alreadySettled && (authority.currentHeadSha !== terminal.targetSha
-        || currentHead !== terminal.targetSha))
+      || (authority.currentHeadSha !== terminal.targetSha && authority.currentHeadSha !== currentHead)
       || run.reviewCycleId !== cycle.cycleId
       || cycle.capMapVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
       || !frozenLogicalGptSourceIdentity(run)
@@ -5016,13 +5039,12 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
   if (target.headSha !== currentHead || extractClosingIssueNumber(target.body) !== round.issueNumber) {
     throw new Error('live PR head or linked Issue changed');
   }
-  if (currentHead !== terminal.targetSha && (!alreadySettled
-      || !await resolvePackReviewStrictDescendant({
+  if (currentHead !== terminal.targetSha && !await resolvePackReviewStrictDescendant({
         repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
         reviewedHeadSha: terminal.targetSha, currentHeadSha: currentHead,
         fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
-      }))) {
-    throw new Error('completed same-head resolution must remain on a proven descendant');
+      })) {
+    throw new Error('scope correction must remain on a proven strict descendant');
   }
   if (!await manualPackReviewRequiredCiGreen({
     startInput: { ...input, projectId: options.projectId },
@@ -5069,6 +5091,56 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
     !['warning', 'info', 'non-blocking'].includes(trim(finding.severity).toLowerCase()));
   if (blockers.length === 0) throw new Error('terminal original blocking findings missing');
   const scope = parseIssueBody(revision.body);
+  // A scope-only correction on a fix head uses this same disposition, now
+  // bound to the complete live PR diff as well as the original findings.
+  const descendantCorrection = currentHead !== terminal.targetSha
+    && cycle.settlementKind !== 'same_head_issue_resolution';
+  let fixDiffDigest: string | undefined;
+  if (descendantCorrection) {
+    const restPr = githubEvidenceObject(await readFinalCapGithubJson(input, [
+      'api', `repos/${options.repoSlug}/pulls/${run.prNumber}`,
+    ], runner));
+    if (restPr.number !== run.prNumber || restPr.state !== 'open' || restPr.merged === true
+        || trim(restPr.merged_at) || githubEvidenceObject(restPr.head).sha !== currentHead
+        || githubEvidenceObject(restPr.base).ref !== target.baseRef
+        || !Number.isInteger(restPr.changed_files)) throw new Error('scope fix PR identity changed');
+    const files: Array<Record<string, unknown>> = [];
+    for (let page = 1; page <= 10; page += 1) {
+      const response = await readFinalCapGithubJson(input, [
+        'api', `repos/${options.repoSlug}/pulls/${run.prNumber}/files?per_page=100&page=${page}`,
+      ], runner);
+      if (!Array.isArray(response)) throw new Error('scope fix PR files unavailable');
+      for (const value of response) {
+        const file = githubEvidenceObject(value);
+        if (!trim(file.filename) || !trim(file.sha) || !trim(file.status)
+            || !trim(file.patch)) throw new Error('scope fix PR diff incomplete');
+        for (const path of [file.filename, file.previous_filename].filter(Boolean)) {
+          const normalized = normalizePath(String(path));
+          if (!normalized.ok
+              || pathMatchesAnyPattern(normalized.path, [...REPOSITORY_DENYLIST, ...scope.denylist])) {
+            throw new Error('scope fix PR file is outside corrected Issue scope');
+          }
+          if (!pathMatchesAnyPattern(normalized.path, scope.allowed_roots ?? [])) {
+            const selectedArtifact = `docs/declarations/${round.issueNumber}.pr-scope.json`;
+            const applicability = normalized.path === selectedArtifact
+              ? resolvePrScopeGuardApplicability(input.sourceRepoRoot, { baseRef: target.baseRef }) : null;
+            if (applicability?.status !== 'guarded'
+                || applicability.repository?.toLowerCase() !== options.repoSlug.toLowerCase()) {
+              throw new Error('scope fix PR file is outside corrected Issue scope');
+            }
+          }
+        }
+        files.push(file);
+      }
+      if (response.length < 100) break;
+      if (page === 10) throw new Error('scope fix PR file census incomplete');
+    }
+    if (!files.length || files.length !== restPr.changed_files) throw new Error('scope fix PR file count mismatch');
+    fixDiffDigest = sha256Bytes(stableJson(files.map((file) => ({
+      filename: file.filename, sha: file.sha, status: file.status,
+      patch: file.patch, previous_filename: file.previous_filename ?? null,
+    })).sort((a, b) => String(a.filename).localeCompare(String(b.filename)))));
+  }
   const candidates = census.filter((comment) => {
     const author = comment.user && typeof comment.user === 'object'
       && !Array.isArray(comment.user) ? comment.user as Record<string, unknown> : {};
@@ -5088,6 +5160,8 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
     });
     if (sections.length !== 1) return false;
     const section = sections[0]!;
+    if (descendantCorrection && (!section.includes('Fix head: `' + currentHead + '`')
+        || !section.includes('Fix diff: `' + fixDiffDigest + '`'))) return false;
     if (!section.includes('Terminal REVIEW: `' + String(review.id) + '`')
         || !section.includes('Reviewed Issue digest: `' + snapshot.snapshotHash + '`')
         || !section.includes('Corrected Issue revision: `' + revision.revision + '`')) return false;
@@ -5769,137 +5843,6 @@ async function reconcileMergedPackReviewTerminalStatus(
 }
 
 
-/** Exact byte removal only inside one existing allowed-roots block on each body.
- * Revision markers, whitespace and line endings are part of the comparison. */
-function exact2655ScopeOnlyLineDelta(reviewedBody: string, currentBody: string): boolean {
-  const fences = /^```allowed-roots\r?\n([\s\S]*?)^```(?:\r?\n|$)/gm;
-  const original = [...reviewedBody.matchAll(fences)];
-  const updated = [...currentBody.matchAll(fences)];
-  if (original.length !== 1 || updated.length !== 1) return false;
-  const lines = updated[0]![1]!.match(/[^\n]*\n|[^\n]+$/g) ?? [];
-  const added = ['scripts/orca-runtime/task-adapter.ts',
-    'scripts/orca-runtime/task-adapter.test.ts'];
-  for (const path of added) {
-    if (lines.filter((line) => line === `${path}\n` || line === `${path}\r\n`).length !== 1) {
-      return false;
-    }
-  }
-  const restoredBlock = lines.filter((line) =>
-    !added.some((path) => line === `${path}\n` || line === `${path}\r\n`)).join('');
-  const match = updated[0]!;
-  const restoredFullBody = currentBody.slice(0, match.index!)
-    + match[0].replace(match[1]!, restoredBlock)
-    + currentBody.slice(match.index! + match[0].length);
-  return restoredFullBody === reviewedBody;
-}
-
-/**
- * §11 is a one-incident classification using live existing GitHub evidence,
- * not an additional authority store. An ARCH direction lacking a determination
- * bound to the exact current head AND its complete changed-file diff is not
- * a settlement witness.
- */
-async function verify2655ScopeOnlyFixSettlement(
-  input: ReconcileStalePackReviewRunsInput,
-  options: { projectId: string; repoSlug: string; prNumber: number; issueNumber: number;
-    reviewedHeadSha: string; currentHeadSha: string;
-    reviewedBody: string; currentBody: string; priorRun: PackReviewRunRecord },
-): Promise<boolean> {
-  if (options.repoSlug.toLowerCase() !== 'chetwerikoff/orchestrator-pack'
-      || options.prNumber !== 2656 || options.issueNumber !== 2655
-      || !exact2655ScopeOnlyLineDelta(options.reviewedBody, options.currentBody)) return false;
-  const round = options.priorRun.reviewRound;
-  if (!round || round.issueNumber !== 2655
-      || round.settledSourceCount !== 2 || round.cardinality !== 3
-      || round.roundOrdinal !== options.priorRun.logicalRoundOrdinal
-      || options.priorRun.reviewVerdict !== 'findings'
-      || options.priorRun.targetSha.toLowerCase() !== options.reviewedHeadSha.toLowerCase()
-      || options.currentHeadSha.toLowerCase() === options.reviewedHeadSha.toLowerCase()
-      || !options.priorRun.completedAtUtc) return false;
-  try {
-    const livePr = process.env.OPK_VITEST_HARNESS === '1'
-      ? { headSha: trim(input.fixtureCurrentPrHeadSha).toLowerCase(),
-          body: input.fixturePrBody ?? '', baseRef: input.baseRef ?? 'main' }
-      : await resolveCurrentPrTarget(input.sourceRepoRoot, options.repoSlug, 2656);
-    if (livePr.headSha !== options.currentHeadSha.toLowerCase()
-        || extractClosingIssueNumber(livePr.body) !== 2655) return false;
-    if (!await resolvePackReviewStrictDescendant({
-      repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
-      reviewedHeadSha: options.reviewedHeadSha, currentHeadSha: options.currentHeadSha,
-      fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
-    })) return false;
-    if (!await manualPackReviewRequiredCiGreen({
-      startInput: { ...input, projectId: options.projectId },
-      target: { prNumber: 2656, headSha: options.currentHeadSha,
-        repoSlug: options.repoSlug, sourceRepoRoot: input.sourceRepoRoot,
-        prBaseRef: livePr.baseRef },
-    })) return false;
-    const evidenceRunner = process.env.OPK_VITEST_HARNESS === '1'
-      ? input.fixtureIncidentGithubRunner ?? runProcess : runProcess;
-    const restPr = githubEvidenceObject(await readFinalCapGithubJson(input, [
-      'api', `repos/${options.repoSlug}/pulls/2656`,
-    ], evidenceRunner));
-    const head = githubEvidenceObject(restPr.head);
-    const base = githubEvidenceObject(restPr.base);
-    if (restPr.number !== 2656 || trim(restPr.state).toLowerCase() !== 'open'
-        || restPr.merged === true || trim(restPr.merged_at)
-        || trim(head.sha).toLowerCase() !== options.currentHeadSha.toLowerCase()
-        || trim(base.ref) !== livePr.baseRef
-        || typeof restPr.changed_files !== 'number') return false;
-    const files: Array<Record<string, unknown>> = [];
-    for (let page = 1; page <= 10; page += 1) {
-      const response = await readFinalCapGithubJson(input, [
-        'api', `repos/${options.repoSlug}/pulls/2656/files?per_page=100&page=${page}`,
-      ], evidenceRunner);
-      if (!Array.isArray(response)) return false;
-      for (const file of response) {
-        const data = githubEvidenceObject(file);
-        if (!trim(data.filename) || !trim(data.sha) || !trim(data.status)
-            || typeof data.patch !== 'string' || !data.patch) return false;
-        files.push(data);
-      }
-      if (response.length < 100) break;
-      if (page === 10) return false;
-    }
-    if (files.length === 0 || files.length !== restPr.changed_files) return false;
-    const diffDigest = sha256Bytes(stableJson(files.map((file) => ({
-      filename: file.filename, sha: file.sha, status: file.status,
-      patch: file.patch, previous_filename: file.previous_filename ?? null,
-    })).sort((a, b) => String(a.filename).localeCompare(String(b.filename)))));
-    const commentResponse = await readFinalCapGithubJson(input, [
-      'api', `repos/${options.repoSlug}/issues/2656/comments?per_page=100`,
-    ], evidenceRunner);
-    if (!Array.isArray(commentResponse) || commentResponse.length >= 100) return false;
-    const approvals = commentResponse.filter((comment) => {
-      const row = githubEvidenceObject(comment);
-      const author = githubEvidenceObject(row.user);
-      const body = typeof row.body === 'string' ? row.body : '';
-      const normalized = body.toLowerCase();
-      return trim(author.login).toLowerCase() === 'chetwerikoff'
-        && /\barch(?:itect)?\b/i.test(body)
-        && normalized.includes('2655') && normalized.includes('2656')
-        && normalized.includes(options.currentHeadSha.toLowerCase())
-        && normalized.includes(diffDigest.toLowerCase())
-        && /all three(?: published)? findings (?:are )?resolved/i.test(body)
-        && /no unrelated (?:change|fix)/i.test(body)
-        && /provider[\s\S]{0,150}worktree/i.test(body)
-        && /native[\s\S]{0,150}completed[\s\S]{0,150}both/i.test(body)
-        && /stale[\s\S]{0,150}same-task/i.test(body);
-    });
-    if (approvals.length !== 1) return false;
-    // No status is written until the same live PR/head remains bound after
-    // the independent required-CI and exact-diff architect observations.
-    const after = process.env.OPK_VITEST_HARNESS === '1'
-      ? { headSha: trim(input.fixtureCurrentPrHeadSha).toLowerCase(),
-          body: input.fixturePrBody ?? '', baseRef: input.baseRef ?? 'main' }
-      : await resolveCurrentPrTarget(input.sourceRepoRoot, options.repoSlug, 2656);
-    return after.headSha === livePr.headSha && after.baseRef === livePr.baseRef
-      && extractClosingIssueNumber(after.body) === 2655;
-  } catch {
-    return false;
-  }
-}
-
 /** Read exactly one behavior-criteria section, never infer a semantic change
  * from a revision marker, allowed-roots edit, prose or comments alone. */
 function reviewBehaviorCriteria(body: string): string | null {
@@ -6150,28 +6093,6 @@ export async function maybeAdmitPackReviewBodyAmendment(
       }
     } catch { /* Not a valid tier-only promotion. */ }
   }
-  if (prNumber === 2656 && issueNumber === 2655
-      && exact2655ScopeOnlyLineDelta(oldBody, currentIssue.body)) {
-    // An already committed §11 strict-descendant completion is rechecked by
-    // the completed-stage projection, which repeats exact-byte, identity,
-    // architect/diff and current-head CI proof. Do not veto that route here.
-    // This is only routing, never independent success authority.
-    if (cycle.state === 'closed' && cycle.reviewStageComplete === true
-        && cycle.settlementKind !== 'same_head_issue_resolution'
-        && authority.terminal?.reviewVerdict === 'findings'
-        && terminal.targetSha.toLowerCase() !== livePr.headSha.toLowerCase()
-        && authority.currentHeadSha.toLowerCase() === livePr.headSha.toLowerCase()) {
-      return null;
-    }
-    const approved = await verify2655ScopeOnlyFixSettlement(input, {
-      projectId: options.projectId, repoSlug: options.repoSlug, prNumber, issueNumber,
-      reviewedHeadSha: terminal.targetSha, currentHeadSha: livePr.headSha,
-      reviewedBody: oldBody, currentBody: currentIssue.body, priorRun,
-    });
-    // Eligible scope-only settlements retain the original capped terminal and
-    // defer to its ordinary strict-descendant/status path, not a new reviewer.
-    return approved ? null : confirmUnreviewedBodyNonSuccess('scope_only_fix_evidence_unverified');
-  }
   if (cycle.amendmentOrigin?.previouslyAdmittedBodyDigests.includes(nextDigest)) {
     return confirmUnreviewedBodyNonSuccess('amendment_digest_replayed');
   }
@@ -6183,10 +6104,8 @@ export async function maybeAdmitPackReviewBodyAmendment(
   if (oldCriteria === newCriteria) {
     // Only a genuine behavior-criteria change admits a new review. A full
     // mismatch elsewhere must still deassert success, except for the separately
-    // proven prior same-head Issue-only resolution / §11 incident settlement.
-    if (terminal.reviewVerdict === 'findings' && priorRun.reviewRound
-        && (livePr.headSha === terminal.targetSha
-          || cycle.settlementKind === 'same_head_issue_resolution')) {
+    // proven authorized scope-only correction on the reviewed head or a fix descendant.
+    if (terminal.reviewVerdict === 'findings' && priorRun.reviewRound) {
       // The only criteria-equal body exception is an independently verified,
       // authorized #2428 post-terminal Issue-only scope correction. It is not
       // a generic equal-criteria shortcut for completed green statuses.
@@ -6463,7 +6382,9 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
             : detail.includes('base tip moved') || detail.includes('stale local')
               ? 'git fetch origin ' + String(input.baseRef || 'origin/main').replace(/^origin\//, '')
                 + ', then rerun the same reconcile'
-              : 'restore the selected protected base/PR identity and unique changed-tree C proof, then rerun scoped reconcile or seek architect/operator decision' };
+              : detail === 'base_trust_unprovable'
+                ? 'the head rewrote history and base trust cannot be read on this repository; the next step is one fresh normal review round on the current head'
+                : 'restore the selected base/PR identity and unique changed-tree C proof, then rerun scoped reconcile or seek architect/operator decision' };
       }
     }
   }
@@ -6471,7 +6392,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
   // At the findings cap, review completion and required success use the old
   // preflight body snapshot, not a revision tag or an amended current Issue.
   let verifiedFinalIssue: { issueNumber: number; digest: string } | undefined;
-  let verifiedScopeOnlyIncident: { reviewedBody: string; issueNumber: number } | undefined;
+  let verifiedScopeCorrection = false;
   let sameHeadPublicationDigest: string | undefined;
   if (logicalAccounting && (authority.cycle.frozenTier !== 'T1' || sourceBoundT1)
       && currentHead !== authority.terminal.targetSha) {
@@ -6637,17 +6558,13 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         expectedDigest = proof.correctedBodyDigest;
         sameHeadPublicationDigest = proof.publicationDigest;
       }
-      if (digest !== expectedDigest && prNumber === 2656 && issueNumber === 2655) {
-        const reviewedBody = readFileSync(frozen.snapshotPath!, 'utf8');
-        const eligible = await verify2655ScopeOnlyFixSettlement(input, {
-          projectId: options.projectId, repoSlug: options.repoSlug, prNumber, issueNumber,
-          reviewedHeadSha: terminal.targetSha, currentHeadSha: currentHead,
-          reviewedBody, currentBody: liveIssue.body, priorRun,
-        });
-        if (eligible) {
-          expectedDigest = digest;
-          verifiedScopeOnlyIncident = { reviewedBody, issueNumber };
-        }
+      if (digest !== expectedDigest && currentHead !== terminal.targetSha && priorRun.reviewRound) {
+        try {
+          const proof = await resolveSameHeadIssueResolution(input, options, authority, priorRun, currentHead);
+          expectedDigest = proof.correctedBodyDigest;
+          sameHeadPublicationDigest = proof.publicationDigest;
+          verifiedScopeCorrection = true;
+        } catch { /* A nonqualifying correction retains the ordinary body-mismatch refusal below. */ }
       }
       if (digest !== expectedDigest) {
         // This path also owns legacy/incomplete-terminal mismatch refusals,
@@ -6687,7 +6604,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
           prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
           settled: false, reason: 'final_cap_issue_body_amended',
           reviewedIssueNumber: issueNumber,
-          nextAction: 'recheck the immutable final-cap terminal, exact linked Issue-body bytes and any §11 incident architect/diff/CI authority; a nonqualifying mismatch must retain a non-success status, and only a genuine behavior amendment may enter one ordinary digest-bound continuation round',
+          nextAction: 'recheck the immutable final-cap terminal, exact linked Issue-body bytes and authorized scope disposition/diff/CI evidence; a nonqualifying mismatch must retain a non-success status, and only a genuine behavior amendment may enter one ordinary digest-bound continuation round',
         };
       }
       verifiedFinalIssue = { issueNumber, digest };
@@ -6779,14 +6696,10 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
             && extractClosingIssueNumber(currentPr.body ?? '') === verifiedFinalIssue.issueNumber
             && typeof currentIssue.body === 'string'
             && computeBoundIssueSnapshotHash(currentIssue.body) === verifiedFinalIssue.digest;
-          if (currentIssueStillBound && verifiedScopeOnlyIncident && typeof currentIssue.body === 'string') {
-            currentIssueStillBound = await verify2655ScopeOnlyFixSettlement(input, {
-              projectId: options.projectId, repoSlug: options.repoSlug,
-              prNumber, issueNumber: verifiedScopeOnlyIncident.issueNumber,
-              reviewedHeadSha: priorRun.targetSha, currentHeadSha: publicationHead,
-              reviewedBody: verifiedScopeOnlyIncident.reviewedBody,
-              currentBody: currentIssue.body, priorRun,
-            });
+          if (currentIssueStillBound && verifiedScopeCorrection && latest) {
+            const proof = await resolveSameHeadIssueResolution(input, options, latest, priorRun, publicationHead);
+            currentIssueStillBound = proof.correctedBodyDigest === verifiedFinalIssue.digest
+              && proof.publicationDigest === sameHeadPublicationDigest;
           }
         } catch { currentIssueStillBound = false; }
       }
@@ -7224,10 +7137,13 @@ export async function reconcileStalePackReviewRuns(
     const activeStale = isPackReviewRunStale(candidate);
     if (input.staleOnly && !activeStale) continue;
     const unfinishedTerminal = isPackReviewUnfinishedTerminalRun(candidate);
+    const pendingJournalDelivery = candidate.reviewRound?.reviewer === 'gpt'
+      && candidate.automaticBudgetDisposition !== 'non_consuming_explicit'
+      && Boolean(packReviewJournaledPayload(candidate)) && packReviewDeliveryNeedsResume(candidate);
     const activeGptRecovery = (input.immediate === true || input.recoverActiveGptSources === true)
       && PACK_REVIEW_ACTIVE_STATUSES.has(candidate.status)
       && candidate.reviewRound?.reviewer === 'gpt';
-    if (!activeStale && !unfinishedTerminal && !activeGptRecovery) continue;
+    if (!activeStale && !unfinishedTerminal && !activeGptRecovery && !pendingJournalDelivery) continue;
 
     const unresolvedIdentity = await findUnresolvedSameHeadRepositoryIdentity({
       projectId,
@@ -7304,7 +7220,7 @@ export async function reconcileStalePackReviewRuns(
         request,
       }));
 
-    if (unfinishedTerminal
+    if ((unfinishedTerminal || pendingJournalDelivery)
         && run.reviewRound?.reviewer === 'gpt'
         && packReviewJournaledPayload(run)
         && packReviewDeliveryNeedsResume(run)) {
@@ -9436,17 +9352,6 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
       });
     }
 
-    // An already completed §11 incident must use the completed-stage branch,
-    // which independently revalidates the exact incident evidence on retry.
-    // This candidate predicate is NOT a waiver or a success verdict.
-    const completedScopeOnlyReplayCandidate = authority.cycle?.state === 'closed'
-      && authority.cycle.reviewStageComplete === true
-      && authority.cycle.settlementKind !== 'same_head_issue_resolution'
-      && authority.terminal?.reviewVerdict === 'findings'
-      && authority.terminal.targetSha.toLowerCase() !== target.headSha.toLowerCase()
-      && target.repoSlug.toLowerCase() === 'chetwerikoff/orchestrator-pack'
-      && target.prNumber === 2656 && target.issueNumber === 2655
-      && authority.currentHeadSha.toLowerCase() === target.headSha.toLowerCase();
     // Reuse the same final-cap evidence and publication decision as scoped
     // reconciliation. Do not let start settle first or swallow its refusal.
     // Native T1 retains its established at-cap continuation response; the
@@ -9465,7 +9370,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
     // rewritten/diverged heads; ancestry is decided inside reconciliation.
     let completedFinalCapVerified = false;
     if (finalFindings && authority.terminal!.targetSha !== target.headSha
-        && !supplementalMode && !completedScopeOnlyReplayCandidate) {
+        && !supplementalMode) {
       const alreadyComplete = authority.cycle?.reviewStageComplete === true;
       const result = await reconcileFinalCapSettlement({
         projectId, storeRoot, prNumber: target.prNumber,
@@ -9568,15 +9473,8 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
           const bound = original.boundIssueSnapshotDigest
             ?? original.reviewRound?.boundIssueSnapshotDigest
             ?? authoritative.snapshotDigest;
-          // Only #2655/#2656 §11 deliberately binds its exact scope-only
-          // edited body on a strict descendant. Revalidate the full independent
-          // architect/diff/CI evidence, never just the changed Issue digest.
-          const scopeOnlyIncident = target.repoSlug.toLowerCase() === 'chetwerikoff/orchestrator-pack'
-            && target.prNumber === 2656 && target.issueNumber === 2655
-            && authority.terminal.reviewVerdict === 'findings'
-            && authority.terminal.targetSha !== target.headSha;
           const originalDigestMatches = Boolean(bound && bound === authoritative.snapshotDigest);
-          if (!originalDigestMatches && !scopeOnlyIncident
+          if (!originalDigestMatches && !completedFinalCapVerified
               && authority.cycle?.settlementKind !== 'same_head_issue_resolution') return false;
           const body = process.env.OPK_VITEST_HARNESS === '1'
             ? input.fixtureIssueBody
@@ -9593,8 +9491,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
           // review-preflight body. Reverting to B0 must never use this shortcut.
           if (authority.cycle?.settlementKind !== 'same_head_issue_resolution'
               && originalDigestMatches && computeBoundIssueSnapshotHash(body) === bound) return true;
-          if (!scopeOnlyIncident
-              && (authority.cycle?.settlementKind !== 'same_head_issue_resolution'
+          if ((authority.cycle?.settlementKind !== 'same_head_issue_resolution'
                 || authority.terminal.reviewVerdict !== 'findings')) return false;
           // Both exceptional completions are proven by the existing scoped
           // reconciler; a general Issue mutation cannot inherit their success.
@@ -9609,7 +9506,6 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
             fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
             fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
             fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
-            fixtureIncidentGithubRunner: input.fixtureIncidentGithubRunner,
             fixtureRequiredCi: input.fixtureRequiredCi,
             fixtureRequiredCiChecks: input.fixtureRequiredCiChecks,
             fixtureRequiredCiPolicy: input.fixtureRequiredCiPolicy,

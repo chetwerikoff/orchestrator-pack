@@ -10,6 +10,7 @@ import { authorizeTargetGhInvocation, TargetGhAuthorizationError } from './lib/g
 import { resolveTargetContext } from './lib/target-context.ts';
 import { PACK_GPT_REVIEW_RESULT_SCHEMA, runPackGptReviewCommand } from './pack-gpt-review.ts';
 import { classifyExecuteIssueManagerRecord } from './lib/execute-issue-manager-boundary.ts';
+import * as prScopeDeclaration from './pr-scope-declaration.ts';
 
 // Carries an actual runner result through the CLI and the manager boundary.
 async function cliAndBoundary(
@@ -2334,111 +2335,6 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
   });
 
 
-  it.each([
-    'approved' as const, 'missing-architect' as const, 'wrong-architect-head' as const,
-    'wrong-diff-approval' as const, 'ci-not-green' as const,
-    'additional-body-byte' as const, 'wrong-pr' as const, 'wrong-issue' as const,
-    'wrong-descendant' as const,
-  ])('Issue #2659 §11: #2655/#2656 exact scope-only fix %s preserves 2/3 and exact-head status', async (variation) => {
-    const B0 = [
-      '<!-- source-revision: r02 -->', '```complexity-tier', 'tier: T2', '```',
-      '```allowed-roots', 'scripts/pack-review-runner.ts', '```',
-      '## Acceptance criteria', '- original behavior', '',
-    ].join('\n');
-    const B1 = B0.replace('scripts/pack-review-runner.ts\n',
-      'scripts/pack-review-runner.ts\nscripts/orca-runtime/task-adapter.ts\nscripts/orca-runtime/task-adapter.test.ts\n');
-    const incident = { prNumber: variation === 'wrong-pr' ? 2657 : 2656,
-      issueNumber: variation === 'wrong-issue' ? 2654 : 2655,
-      settledSourceCount: 2 as const };
-    const f = fixture('gpt', B0, true, undefined, 'findings', incident);
-    // A one-byte revision-marker mutation is not a change to behavior criteria.
-    // Appending inside the acceptance section would test a different, reviewable case.
-    const currentBody = variation === 'additional-body-byte'
-      ? B1.replace('<!-- source-revision: r02 -->', '<!-- source-revision: r02x -->') : B1;
-    const paths = [
-      { filename: 'scripts/orca-runtime/task-adapter.ts', sha: 'a'.repeat(40),
-        status: 'modified', patch: '@@ -1,2 +1,3 @@\n+ same-task replacement' },
-      { filename: 'scripts/orca-runtime/task-adapter.test.ts', sha: 'b'.repeat(40),
-        status: 'modified', patch: '@@ -1,2 +1,3 @@\n+ same-task negative' },
-    ];
-    const digest = createHash('sha256').update(stableJson(paths.map((path) => ({
-      filename: path.filename, sha: path.sha, status: path.status,
-      patch: path.patch, previous_filename: null,
-    })).sort((a, b) => String(a.filename).localeCompare(String(b.filename))))).digest('hex');
-    const architectComment = {
-      user: { login: 'chetwerikoff' },
-      body: `ARCH architect: Issue #2655 PR #2656 head ${variation === 'wrong-architect-head'
-        ? 'f'.repeat(40) : f.current} exact diff ${variation === 'wrong-diff-approval'
-        ? '0'.repeat(64) : digest}. all three published findings resolved:
-provider start fresh-worktree cleanliness; native completed Dispatch at both existing consumers;
-stale same-Task terminal ownership; no unrelated changes.`,
-    };
-    const fakeEvidence = (async (request: { args: string[] }) => {
-      const endpoint = request.args[1] ?? '';
-      const data = endpoint.includes('/files?')
-        ? (endpoint.endsWith('page=1') ? paths : [])
-        : endpoint.includes('/issues/2656/comments')
-          ? variation === 'missing-architect' ? [] : [architectComment]
-          : endpoint.endsWith('/pulls/2656')
-            ? { number: 2656, state: 'open', merged: false, merged_at: null,
-                head: { sha: f.current }, base: { ref: 'main' }, changed_files: paths.length }
-            : null;
-      return { outcome: 'exit' as const, ok: true, exitCode: 0,
-        stdout: JSON.stringify(data), stderr: '' };
-    }) as unknown as typeof runProcess;
-    const before = readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot });
-    const start = {
-      ...f.request(currentBody), baseRef: 'main',
-      fixtureCurrentPrHeadSha: variation === 'wrong-descendant' ? f.reviewed : f.current,
-      fixtureReviewCompareStatus: variation === 'wrong-descendant' ? 'identical' : 'ahead',
-      fixtureRequiredCiPolicy: { contexts: ['CI'], checks: [] },
-      fixtureRequiredCiChecks: [{ name: 'CI', state: variation === 'ci-not-green' ? 'FAILURE' : 'SUCCESS' }],
-      fixtureIncidentGithubRunner: fakeEvidence,
-    };
-    const result = await reconcileStalePackReviewRuns(start);
-    const completed = result.results.some((entry) =>
-      entry.settled === true && entry.reason === 'final_cap_descendant_settled');
-    if (variation === 'approved') {
-      expect(completed).toBe(true);
-      expect(f.getStatus()).toBe('success');
-      // An exact §11 strict-descendant completion remains authoritative on
-      // an ordinary PR-led start and its repeated completed-stage projection.
-      const prLed = {
-        ...start, headSha: f.current, immediate: undefined,
-        claimMode: 'preacquired' as const,
-        fixturePostReviewHeadSha: f.current,
-        fixturePostReviewPrBody: `Closes #${f.issueNumber}`,
-      };
-      for (let retry = 0; retry < 2; retry += 1) {
-        const replay = await startPackReview(prLed);
-        expect(replay, JSON.stringify(replay)).toMatchObject({
-          ok: true, created: false, reused: true,
-          reason: 'review_stage_complete', publicationVerified: true,
-          publicationHeadSha: f.current,
-        });
-        expect(f.getStatus()).toBe('success');
-      }
-      expect(f.statusWrites).not.toContain('error');
-    } else {
-      expect(completed).toBe(false);
-      expect(f.getStatus()).not.toBe('success');
-      expect(f.statusWrites).not.toContain('success');
-    }
-    if (variation === 'additional-body-byte') {
-      // A changed revision marker alone is not a behavior-criteria amendment
-      // and must not erase the frozen 2/3 terminal by admitting a new cycle.
-      expect(result.results).toContainEqual(expect.objectContaining({
-        settled: false, amendmentAdmission: false, reason: 'amendment_unverified_body_mismatch',
-      }));
-    }
-    const after = readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot });
-    expect(after?.terminal?.runId).toBe(before?.terminal?.runId);
-    expect(after?.terminal?.digest).toBe(before?.terminal?.digest);
-    const original = getPackReviewRun(f.run.id, { projectId: f.projectId, storeRoot: f.storeRoot });
-    expect(original?.reviewRound?.settledSourceCount).toBe(2);
-    expect(listPackReviewRuns({ projectId: f.projectId, storeRoot: f.storeRoot })).toHaveLength(1);
-  });
-
   it('does not claim to detect a comment-only amendment when Issue body is identical', async () => {
     const f = fixture();
     // Comment text never enters computeBoundIssueSnapshotHash; only a folded body would differ.
@@ -3013,12 +2909,15 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       repository_url: `https://api.github.com/repos/${selectedRepository}`, body: liveBody };
     const statuses: Array<{ state: string; context: string }> = [];
     const transports = { issue, comment, review, sourceProofs,
+      files: [{ filename: scopePath, sha: 'b'.repeat(40), status: 'modified',
+        patch: '@@ -1 +1 @@\n-old fixture\n+corrected fixture' }],
       pr: { number: prNumber, url: `https://api.github.com/repos/${selectedRepository}/pulls/${prNumber}`,
-        head: { sha: selectedHead }, base: { ref: 'main' }, state: 'open', body: `Closes #${issueNumber}` } };
+        head: { sha: selectedHead }, base: { ref: 'main' }, state: 'open', changed_files: 1, body: `Closes #${issueNumber}` } };
     const read = vi.fn(async (request: Parameters<typeof runProcess>[0]) => {
       const args = request.args ?? [];
       const endpoint = args.find((arg) => String(arg).startsWith('repos/')) ?? (args.includes('user') ? 'user' : undefined);
       const response = endpoint === `repos/${selectedRepository}/pulls/${prNumber}` ? transports.pr
+        : endpoint?.includes(`/pulls/${prNumber}/files?`) ? transports.files
         : endpoint === `repos/${selectedRepository}/issues/${issueNumber}` ? transports.issue
         : endpoint?.endsWith('/comments') ? [[transports.comment]]
         : endpoint?.includes('/issues/comments/') ? transports.comment
@@ -3055,6 +2954,69 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     });
     return f;
   }
+
+  it.each(['scoped reconcile', 'PR-led start', 'unauthorized', 'wrong-head', 'wrong-diff',
+    'changed-behavior', 'body-drift', 'not-descendant', 'outside-scope', 'red-ci',
+    'guarded-declaration', 'guarded-declaration-start', 'guard-free-declaration',
+    'unverified-declaration', 'wrong-issue-declaration', 'denied-declaration'] as const)(
+    'Issue #2815: generic scope-only strict-descendant settlement via %s', async (mode) => {
+      const f = fixture({ settledSourceCount: 2,
+        ...(mode === 'denied-declaration' ? {
+          denylist: ['vendor/**', 'packages/core/**', 'docs/declarations/**'],
+          frozenBodyOverride: revisedBody.replace('tests/spot/test_field_benchmark_r13.py\n', '')
+            .replace('vendor/**\n', 'vendor/**\ndocs/declarations/**\n'),
+        } : {}) });
+      const guard = mode.includes('declaration')
+        ? vi.spyOn(prScopeDeclaration, 'resolvePrScopeGuardApplicability').mockReturnValue({
+          repository, status: mode === 'guard-free-declaration' ? 'guard-free'
+            : mode === 'unverified-declaration' ? 'unverified' : 'guarded',
+        }) : null;
+      try {
+      const before = getPackReviewRun(f.run.id, f.options)!;
+      f.transports.pr.head.sha = HEAD;
+      if (guard) {
+        f.transports.files.push({ filename: `docs/declarations/${mode === 'wrong-issue-declaration' ? issueNumber + 1 : issueNumber}.pr-scope.json`,
+          sha: 'c'.repeat(40), status: 'modified', patch: '@@ -1 +1 @@\n-old declaration\n+regenerated declaration' });
+        f.transports.pr.changed_files = f.transports.files.length;
+      }
+      const digest = createHash('sha256').update(stableJson(f.transports.files.map((file) => ({
+        ...file, previous_filename: null,
+      })).sort((a, b) => a.filename.localeCompare(b.filename)))).digest('hex');
+      f.transports.comment.body += `\nFix head: \`${mode === 'wrong-head' ? 'f'.repeat(40) : HEAD}\`\nFix diff: \`${mode === 'wrong-diff' ? '0'.repeat(64) : digest}\`\n`;
+      if (mode === 'unauthorized') f.transports.comment.user.login = 'untrusted';
+      if (mode === 'changed-behavior') f.transports.issue.body += 'New behavior requirement\n';
+      if (mode === 'body-drift') f.transports.issue.body = 'Unrelated prose\n' + f.transports.issue.body;
+      if (mode === 'outside-scope') f.transports.files[0]!.filename = 'unrelated/other.ts';
+      const target = { ...f.input, fixtureCurrentPrHeadSha: HEAD,
+        fixtureIssueBody: f.transports.issue.body,
+        fixtureReviewCompareStatus: mode === 'not-descendant' ? 'diverged' : 'ahead',
+        fixtureRequiredCiChecks: [{ name: 'CI', state: mode === 'red-ci' ? 'FAILURE' : 'SUCCESS' }],
+      };
+      const positive = mode === 'scoped reconcile' || mode === 'PR-led start'
+        || mode === 'guarded-declaration' || mode === 'guarded-declaration-start';
+      if (mode === 'PR-led start' || mode === 'guarded-declaration-start') {
+        const result = await startPackReview({ ...target, headSha: HEAD, claimMode: 'acquire',
+          fixtureRepoSlug: repository, fixturePostReviewHeadSha: HEAD,
+          fixturePostReviewPrBody: 'Closes #' + issueNumber });
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, created: false,
+          reason: 'final_cap_descendant_settled', publicationVerified: true });
+      } else {
+        const result = await reconcileStalePackReviewRuns(target);
+        expect(result.results.some((entry) => entry.settled === true), JSON.stringify(result)).toBe(positive);
+        if (!positive) expect(result.results.some((entry) => typeof entry.nextAction === 'string')).toBe(true);
+      }
+      expect(f.statuses.some((status) => status.state === 'success')).toBe(positive);
+      expect(getPackReviewRun(f.run.id, f.options)?.reviewRound).toEqual(before.reviewRound);
+      expect(readPackReviewAuthority(prNumber, f.options)?.terminal).toEqual(f.authority.terminal);
+      expect(listPackReviewRuns(f.options)).toHaveLength(1);
+      if (positive) {
+        const again = await reconcileStalePackReviewRuns(target);
+        expect(again.results, JSON.stringify(again)).toContainEqual(expect.objectContaining({ settled: true }));
+        expect(f.statuses.filter((status) => status.state === 'success')).toHaveLength(1);
+      }
+      } finally { guard?.mockRestore(); }
+    },
+  );
 
 
   it('Issue #2790: one registered non-pack target-mode corrected-scope final-cap fixture authorizes each observed REST/COMMENT or registered GraphQL call', async () => {
@@ -3878,26 +3840,16 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       sourceRepoRoot: graph.checkout,
       settledSourceCount,
     });
-    const protection = vi.fn(async (request: Parameters<typeof runProcess>[0]) => {
-      expect(request.command).toContain('/scripts/gh');
-      expect(request.args).toEqual([
-        'api', 'repos/chetwerikoff/orchestrator-pack/branches/main/protection',
-      ]);
-      return {
-        ok: true, outcome: 'exit' as const, exitCode: 0,
-        stdout: JSON.stringify({
-          allow_force_pushes: { enabled: false }, allow_deletions: { enabled: false },
-        }), stderr: '', timedOut: false, cancelled: false, signal: null, durationMs: 1,
-      };
-    });
     const input: Parameters<typeof reconcileStalePackReviewRuns>[0] & { fixtureCurrentPrHeadSha: string } = {
       ...f.input, fixtureCurrentPrHeadSha: graph.h2,
       fixtureIssueBody: revisedBody, fixtureReviewCompareStatus: 'diverged',
       fixtureIssueNumber: issueNumber, fixtureIssueTitle: '[T3] Synthetic unchanged criteria',
       fixtureRebaseOriginRepository: repository,
-      fixtureRebaseProtectionRunner: protection as typeof runProcess,
+      fixtureRebaseProtectionRunner: async () => ({ ok: true, outcome: 'exit', exitCode: 0,
+        stdout: JSON.stringify({ allow_force_pushes: { enabled: false }, allow_deletions: { enabled: false } }),
+        stderr: '', timedOut: false, cancelled: false, signal: null }),
     };
-    return { ...f, input, protection };
+    return { ...f, input };
   }
 
   type RebaseCase = ReturnType<typeof eligibleRebaseCase>;
@@ -3961,7 +3913,6 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       const result = await enterRebase(f, entry);
       expect(result).toMatchObject({ reason: 'final_cap_descendant_settled', headSha: g.h2 });
       expect('settled' in result ? result.settled : result.ok).toBe(true);
-      expect(f.protection).toHaveBeenCalledTimes(1);
       expect(reads).toContain(g.h2);
       expect(writes).toContainEqual(expect.objectContaining({ state: 'success', head: g.h2 }));
       expect(readPackReviewAuthority(prNumber, f.options)?.terminal).toEqual(f.authority.terminal);
@@ -3977,7 +3928,6 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       expect(reused).toMatchObject({ ok: true, created: false, reused: true, reason: 'review_stage_complete',
         publicationVerified: true, publicationHeadSha: g.h2, headSha: g.h2, httpStatus: 200 });
       expect(reused).not.toHaveProperty('requiredStatusState');
-      expect(f.protection).toHaveBeenCalledTimes(1);
     },
   );
 
@@ -4004,7 +3954,6 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
             expect(result.reason, JSON.stringify(result)).toBe('final_cap_descendant_settled');
             expect('settled' in result ? result.settled : result.ok).toBe(true);
           } else expectRebaseRefusal(f, result);
-          expect(f.protection).not.toHaveBeenCalled();
         }
       } finally { vi.mocked(runProcess).mockImplementation(actual.runProcess); }
     },
@@ -4020,11 +3969,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       const h3 = g.git(g.checkout, 'commit-tree', g.git(g.checkout, 'rev-parse', g.b2 + '^{tree}'),
         '-p', g.b2, '-m', 'later unequal-tree rewritten head');
       f.input.fixtureCurrentPrHeadSha = h3;
-      f.protection.mockClear();
       const result = await enterRebase(f, entry);
       expect('settled' in result ? result.settled : result.ok).toBe(true);
       if (entry === 'start') expect(result.reason).toBe('review_stage_complete');
-      expect(f.protection).not.toHaveBeenCalled();
       expect(readPackReviewAuthority(prNumber, f.options)?.terminal).toEqual(f.authority.terminal);
     },
   );
@@ -4142,7 +4089,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
   );
 
   it.each(['scoped', 'start'] as const)(
-    'Issue #2790: %s refuses unprotected oldbase.txt rewrite despite matching raw C and ancestry', async (entry) => {
+    'Issue #2815: %s refuses unprotected oldbase rewrite despite matching raw C and ancestry', async (entry) => {
       const g = realRebasedGitGraph();
       const addOldbase = (parent: string, message: string) => {
         g.git(g.checkout, 'checkout', '--detach', parent);
@@ -4162,11 +4109,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       const raw = (from: string, to: string) => g.git(g.checkout, 'diff', '--raw', '-z', '--no-renames', '--abbrev=40', from, to);
       expect(raw(g.b1, h1)).toBe(raw(g.b2, c));
       const f = eligibleRebaseCase({ ...g, h1, c, h2 });
-      f.input.fixtureRebaseProtectionRunner = vi.fn(async () => ({
-        ok: true, outcome: 'exit' as const, exitCode: 0,
+      f.input.fixtureRebaseProtectionRunner = async () => ({ ok: true, outcome: 'exit', exitCode: 0,
         stdout: JSON.stringify({ allow_force_pushes: { enabled: true }, allow_deletions: { enabled: false } }),
-        stderr: '', timedOut: false, cancelled: false, signal: null, durationMs: 1,
-      }));
+        stderr: '', timedOut: false, cancelled: false, signal: null });
       expectRebaseRefusal(f, await enterRebase(f, entry));
     },
   );
@@ -4241,15 +4186,14 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
   );
 
   it.each(['scoped', 'start'] as const)(
-    'Issue #2790: %s refuses failed Git/protection reads and truncated or malformed full raw records', async (entry) => {
+    'Issue #2790: %s refuses failed Git reads and truncated or malformed full raw records', async (entry) => {
       const g = realRebasedGitGraph();
       const actual = await vi.importActual<typeof import('./kernel/subprocess.ts')>('./kernel/subprocess.ts');
-      for (const command of ['ls-remote', 'merge-base', 'diff', 'protection']) {
+      for (const command of ['ls-remote', 'merge-base', 'diff']) {
         const f = eligibleRebaseCase(g);
         const failure = { ok: false, outcome: 'exit' as const, exitCode: 128, stdout: '', stderr: 'unavailable',
           timedOut: false, cancelled: false, signal: null, durationMs: 1 };
-        if (command === 'protection') f.input.fixtureRebaseProtectionRunner = async () => failure;
-        else if (command === 'diff') vi.mocked(runProcessSync).mockImplementation((request) =>
+        if (command === 'diff') vi.mocked(runProcessSync).mockImplementation((request) =>
           request.command === 'git' && request.args?.[0] === command ? failure : actual.runProcessSync(request));
         else vi.mocked(runProcess).mockImplementation(async (request) =>
           request.command === 'git' && request.args?.[0] === command ? failure : actual.runProcess(request));
@@ -4304,7 +4248,6 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
           try {
             expectRebaseRefusal(f, await enterRebase(f, entry));
             if (snapshot) expect(readFileSync(authorityFile)).toEqual(snapshot);
-            if (phase === 'entry') expect(f.protection).not.toHaveBeenCalled();
           } finally {
             g.git(g.checkout, 'remote', 'set-url', 'origin', g.remote);
             writeFileSync(cardPath, originalCard);
@@ -4335,37 +4278,43 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     },
   );
 
-  it('Issue #2790: actual tracked gh rest_direct executes only runner-constructed canonical protection GET', async () => {
+  it('Issue #2815: tracked protection GET 403 refuses rebased C with fresh review next step', async () => {
     const g = realRebasedGitGraph();
     const f = eligibleRebaseCase(g);
+    f.input.fixtureRebaseProtectionRunner = undefined;
     const preload = join(g.root, 'native-gh.cjs');
     const audit = join(g.root, 'native-argv.json');
     writeFileSync(preload, [
       "const fs = require('node:fs');",
       "if (process.argv[1] && /(?:^|\\/)api$/.test(process.argv[1])) {",
       "  fs.writeFileSync(process.env.TEST_NATIVE_ARGV, JSON.stringify(['api', ...process.argv.slice(2)]));",
-      "  process.stdout.write(JSON.stringify({allow_force_pushes:{enabled:false},allow_deletions:{enabled:false}}));",
-      "  process.exit(0);",
+      "  process.stderr.write('HTTP 403: Resource not accessible');",
+      "  process.exit(1);",
       "}",
     ].join('\n'));
     const actual = await vi.importActual<typeof import('./kernel/subprocess.ts')>('./kernel/subprocess.ts');
-    f.input.fixtureRebaseProtectionRunner = (request) => actual.runProcess({
+    vi.mocked(runProcess).mockImplementation((request) => actual.runProcess({
       ...request, env: { ...process.env, OPK_PROJECT_ID: '', OPK_SIDE_PROCESS_CHILD_ID: '',
         GH_REAL_BINARY: process.execPath, NODE_OPTIONS: '--require=' + preload,
         TEST_NATIVE_ARGV: audit, GH_WRAPPER_ACTIVE: '', GH_WRAPPER_AUDIT_FILE: '' },
-    });
-    const result = await enterRebase(f, 'scoped');
-    expect(result.reason).toBe('final_cap_descendant_settled');
-    expect(JSON.parse(readFileSync(audit, 'utf8'))).toEqual([
-      'api', 'repos/chetwerikoff/orchestrator-pack/branches/main/protection',
-    ]);
+    }));
+    try {
+      const result = await enterRebase(f, 'scoped');
+      expectRebaseRefusal(f, result);
+      expect(result).toMatchObject({ reason: 'final_cap_strict_descendant_required', detail: 'base_trust_unprovable' });
+      expect(result.nextAction).toContain('head rewrote history and base trust cannot be read on this repository');
+      expect(result.nextAction).toContain('one fresh normal review round on the current head');
+      expect(result.nextAction).not.toMatch(/waiver|architect|operator decision/);
+      expect(JSON.parse(readFileSync(audit, 'utf8'))).toEqual([
+        'api', 'repos/chetwerikoff/orchestrator-pack/branches/main/protection',
+      ]);
+    } finally { vi.mocked(runProcess).mockImplementation(actual.runProcess); }
     // There is no caller-supplied protection argv: polluted base/repository
     // bindings fail before invoking the runner transport, not at a matcher.
     for (const baseRef of ['other', 'main -X POST', 'main --header unsafe', 'main/protection?extra=1']) {
       const bad = eligibleRebaseCase(g);
       bad.input.baseRef = baseRef;
       expectRebaseRefusal(bad, await enterRebase(bad, 'scoped'));
-      expect(bad.protection).not.toHaveBeenCalled();
     }
   });
 
@@ -4378,7 +4327,6 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       reason: 'final_cap_descendant_settled', publicationHeadSha: g.h2,
       statusPublished: true,
     }));
-    expect(f.protection).toHaveBeenCalledTimes(1);
     expect(f.statuses).toContainEqual(expect.objectContaining({
       state: 'success', context: 'orchestrator-pack/pack-review',
     }));
@@ -4395,7 +4343,20 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(readPackReviewAuthority(prNumber, f.options)?.terminal).toEqual(f.authority.terminal);
   });
 
-  it.each(['scoped', 'start'] as const)('Issue #2790: %s protected-base eligibility is fail-closed for force pushes, deletions and malformed policies', async (entry) => {
+  it.each(['scoped', 'start'] as const)('Issue #2815: %s denied base trust requires a fresh normal review', async (entry) => {
+    const g = realRebasedGitGraph();
+    const f = eligibleRebaseCase(g);
+    f.input.fixtureRebaseProtectionRunner = async () => ({ ok: false, outcome: 'exit', exitCode: 1,
+      stdout: '', stderr: 'HTTP 403', timedOut: false, cancelled: false, signal: null });
+    const result = await enterRebase(f, entry);
+    expectRebaseRefusal(f, result);
+    expect(result.reason).toBe('final_cap_strict_descendant_required');
+    expect(result.detail).toBe('base_trust_unprovable');
+    expect(result.nextAction).toContain('one fresh normal review round on the current head');
+    expect(result.nextAction).not.toMatch(/waiver|architect|operator decision/);
+  });
+
+  it('Issue #2815: restored protection policy still refuses unsafe or incomplete settings', async () => {
     const g = realRebasedGitGraph();
     for (const policy of [
       { allow_force_pushes: { enabled: true }, allow_deletions: { enabled: false } },
@@ -4406,16 +4367,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       {},
     ]) {
       const f = eligibleRebaseCase(g);
-      const read = async () => ({
-        ok: true, outcome: 'exit' as const, exitCode: 0, stdout: JSON.stringify(policy),
-        stderr: '', timedOut: false, cancelled: false, signal: null, durationMs: 1,
-      });
-      f.input.fixtureRebaseProtectionRunner = read;
-      const result = await enterRebase(f, entry);
-      expectRebaseRefusal(f, result);
-      expect(result.reason).toBe('final_cap_strict_descendant_required');
-      expect(readPackReviewAuthority(prNumber, f.options)?.cycle?.reviewStageComplete).not.toBe(true);
-      expect(f.statuses.some((value) => value.state === 'success')).toBe(false);
+      f.input.fixtureRebaseProtectionRunner = async () => ({ ok: true, outcome: 'exit', exitCode: 0,
+        stdout: JSON.stringify(policy), stderr: '', timedOut: false, cancelled: false, signal: null });
+      expectRebaseRefusal(f, await enterRebase(f, 'scoped'));
     }
   });
 

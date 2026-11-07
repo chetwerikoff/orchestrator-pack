@@ -253,8 +253,9 @@ After every new commit or history rewrite:
   `orchestrator-pack/pack-review=success` on the current head with
   `Required pack-review stage completed; no additional review round required.`
   only while the original closing-Issue body remains verified against its
-  immutable reviewed binding, or the sole exact scope-only #2655/#2656
-  exception in Issue #2659 Binding §11 is fully proven. A verified changed
+  immutable reviewed binding, or the authorized scope-only disposition lane
+  in the [worker lifecycle](orchestration-runbook.md#worker-lifecycle-concise-reference)
+  is fully proven for this Issue/PR and exact fix head. A verified changed
   behavior-criteria body instead requires current-head non-success status
   write/read-back on first observation and one genuine digest-bound ordinary
   continuation round; an unverified mismatch cannot inherit historical green.

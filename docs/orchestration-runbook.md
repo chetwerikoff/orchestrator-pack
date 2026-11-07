@@ -52,8 +52,8 @@ The manager starts pack review with
 `npm run --silent pack-gpt-review -- --project <PROJECT_ID> --session-id <MANAGER_SESSION_ID> --pr-number <PR_NUMBER>`
 when it will park on the existing review-completion notification. The session id is the exact
 already-owned supervised session identity, never inferred from branch/worktree/title/PID. If no
-such binding is available, omit `--session-id`, keep the review command foregrounded/observed,
-consume its terminal result directly, and do not park waiting for `workerNotification`.
+such binding is available, omit `--session-id` and use the [Long-review recipe](#long-review-recipe)
+to consume its terminal result; do not wait for an unbound `workerNotification`.
 The manager never manufactures scheduler, WorkerStatus, WorkerReport, or review-candidate state.
 
 ### Worker
@@ -417,8 +417,8 @@ A new manual review
 `npm run --silent pack-gpt-review -- --project <PROJECT_ID> [--session-id <SESSION_ID>] --pr-number <PR_NUMBER> [--reviewer <gpt|claude|codex>]`
 starts only when review-independent required CI is green on the exact current head;
 `orchestrator-pack/pack-review` itself is excluded from that check. A supervised caller that will
-park on completion supplies its exact owned session id; an unbound caller omits the option and
-keeps the command foregrounded/observed instead of waiting for a notification target that does not exist.
+park on completion supplies its exact owned session id; an unbound caller omits the option.
+Both use the [Long-review recipe](#long-review-recipe), including delivery-only resumes.
 The historical `pack-gpt-review` command name does not imply GPT. Reviewer
 authority is selected once per newly admitted run: validated explicit `--reviewer`
 > explicit nonempty `PACK_REVIEW_BOUND_REVIEWER` > valid saved preference
@@ -641,7 +641,7 @@ authority.
 Local Codex PR review is active through the pack-owned review runner. GitHub PR
 review is the authoritative verdict; the pack run store is operational state.
 
-- the canonical prescriptive review entrypoint is `npm run --silent pack-gpt-review -- --project <PROJECT_ID> [--session-id <SESSION_ID>] --pr-number <PR_NUMBER>`; a supervised caller that will park supplies its exact already-owned session id, while an unbound caller omits it and keeps the command foregrounded/observed; scheduler/internal starts remain implementation details;
+- the canonical prescriptive review entrypoint is `npm run --silent pack-gpt-review -- --project <PROJECT_ID> [--session-id <SESSION_ID>] --pr-number <PR_NUMBER>`; a supervised caller supplies its exact already-owned session id, while an unbound caller omits it; execute starts and resumes through the [Long-review recipe](#long-review-recipe); scheduler/internal starts remain implementation details;
 - the live PR supplies the current head and its closing reference supplies the Issue;
 - session-binding cache data is advisory correlation only and cannot veto a valid
   PR-led start or substitute a different repository, head, or Issue;
@@ -650,7 +650,7 @@ review is the authoritative verdict; the pack run store is operational state.
 - manual Browser-GPT review uses
   `npm run --silent pack-gpt-review -- --project <PROJECT_ID> [--session-id <SESSION_ID>] --pr-number <PR_NUMBER>`;
   a supervised manager/worker supplies the exact already-owned session id before parking on completion,
-  while an unbound invocation stays foregrounded/observed and consumes its terminal result directly;
+  while an unbound invocation consumes the dedicated terminal's logged result through that recipe;
   a new manual review starts only when review-independent required CI is green for the exact current
   PR head, with `orchestrator-pack/pack-review` itself excluded from that precondition;
 - review start/list/status use the pack runner, run store, and claim authority;
@@ -666,6 +666,35 @@ review is the authoritative verdict; the pack run store is operational state.
 Review-call suppression never carries unrelated review or CI facts across heads.
 Required CI stays current-head bound; a prior-head smoke PASS on the same PR
 remains sufficient, and smoke is not an at-cap or review admission gate.
+
+#### Long-review recipe
+
+Run every long `pack-gpt-review` start **and journaled-delivery resume** in its own
+Orca command terminal, outside the caller tool's lifetime. The command has no detach
+mode. Load the session's `orca-cli` guide and use its selected executable below.
+Before launch, expand the caller's exact `ORCA_TERMINAL_HANDLE` into `<caller-pane>`;
+never let the child expand it to its own pane. Use the selected project card's pack
+root, project and worktree, and a unique log path for this invocation.
+
+```text
+orca terminal create --worktree path:<owned-worktree> --title "review-<PR_NUMBER>" --command "cd <PACK_ROOT> && OPK_PROJECT_ID=<PROJECT_ID> npm run --silent pack-gpt-review -- --project <PROJECT_ID> --pr-number <PR_NUMBER> > <review-log> 2>&1; review_exit=\$?; orca terminal send --terminal <caller-pane> --enter --text \"pack-review <PR_NUMBER> ended, exit \$review_exit, read <review-log>\"; exit \"\$review_exit\""
+```
+
+Add `--session-id <SESSION_ID>` only for an exact already-owned supervised session;
+preserve the original `--reviewer` for a delivery-only resume. Shell-quote actual
+paths/arguments when substituting. The exit wake names the log rather than pasting
+untrusted reviewer output into a terminal. The job ends with `exit`, leaving no idle
+job shell. This uses existing Orca terminal/wake transport, not a new reviewer or
+delivery mechanism.
+
+Within a minute, use short log/terminal reads to confirm `[pack-gpt-review] started`
+or read the actual refusal/terminal JSON. Then park on that terminal's exit wake
+(`PARKED on pack-review <PR_NUMBER>`); each observation/wait stays below the caller
+tool limit. On wake, consume the full terminal JSON from the log and read back the
+same run's journal/GitHub publication. An absent wake, missing response or tool
+timeout is not no-Send proof: inspect the original terminal/log/run and follow the
+existing recovery recipe without replacing sources. An unbound caller relies on
+this exit wake, not a nonexistent `workerNotification` target.
 
 ### Issue #2161 main-update sequencing
 
@@ -684,8 +713,9 @@ source remains unresolved rather than becoming an invented 2/3 verdict.
 
 The command below is an **operator diagnostic/fallback**, not a routine manager
 step. Scoped reconciliation covers stale-active runs, unfinished-terminal runs
-without a persisted verdict, and opted-in active GPT recovery; use it only
-for those eligible records, not as a universal retry of terminal delivery.
+without a persisted verdict, opted-in active GPT recovery, and terminal GPT runs
+whose persisted verdict journal still has pending delivery. Resume the same
+journal without resending sources; this is not a universal terminal retry.
 
 ```text
 node --experimental-strip-types scripts/pack-review-runner.ts reconcile \
@@ -863,7 +893,35 @@ degraded 2/3 verdict does consume its logical round, even if the late third
 comment appears before the original review/status publication finishes.
 A T3 clean round 1 still requires round 2. Once required rounds and findings settle,
 the durable `reviewStageComplete` state prevents later commits, smoke fixes, or
-CI-only changes from reopening the required stage. At the T2/T3 findings cap, scoped reconciliation and normal PR-led start require canonical equality of the live PR-closing Issue body digest and the verified last terminal findings round's immutable bound Issue snapshot before unchanged-body strict-descendant settlement or success. A **verified behavior-criteria amendment** instead requires an exact-current-head non-success required-status write/read-back at first observation, followed by one ordinary, digest-bound body-amendment continuation cycle on the real head (even when the head is unchanged), without rewriting the reviewed snapshot, previous terminal or cycle and without an audited reset; a further distinct amendment waits for its predecessor's terminal and cannot reuse an already admitted body digest. A separate narrowly verified **same-head Issue-only** exception (#2428) requires the complete original GPT source census and exact-run canonical findings REVIEW, the frozen original Issue digest, a trusted post-REVIEW author disposition created strictly later and bound to the corrected REST Issue revision, every typed blocking scope path admitted by the corrected allowed-roots and denylist, and green current-head CI; it consumes no additional logical round and never converts findings into approval. No GraphQL Issue edit-history or `updated_at` guess substitutes for this provenance. The **only strict-descendant scope-only exception** is Issue #2655 r02→r03 / PR #2656 under Binding §11 of Issue #2659: byte-exact addition of only the two specified `allowed-roots` path lines, verified original identities, a strict-descendant exact fix head and architect determination covering precisely the three published findings, and green required CI on that fix head permit the original terminal/status settlement without a fresh round or reset. Unproved scope-only or other body mismatches remain non-success under #2565's default guard, not a review admission or success shortcut. Comment-only changes remain undetected; unchanged-body findings-fix descendants and unrelated audited-reset uses remain unchanged. A cap never converts findings into approval.
+CI-only changes from reopening the required stage. At the T2/T3 findings cap,
+scoped reconciliation and normal PR-led start require equality of the live closing
+Issue body digest and the final findings round's immutable bound snapshot before
+unchanged-body strict-descendant settlement. A verified **behavior-criteria amendment**
+instead requires current-head non-success status write/read-back, then one ordinary
+digest-bound continuation cycle, without rewriting the original snapshot/terminal or
+resetting the cycle. A further distinct amendment waits for its predecessor's terminal
+and cannot reuse an admitted digest.
+
+The existing **scope-only disposition lane** applies to the run's own Issue/PR on
+the reviewed head or a proven strict-descendant fix head. It requires complete
+credentialed original GPT sources and their canonical findings REVIEW, the frozen
+Issue digest, unchanged behavioral criteria, and exactly one trusted author/architect
+disposition created strictly after the REVIEW. The disposition identifies the
+original run/head, terminal REVIEW, reviewed Issue digest, corrected REST Issue
+revision and every original typed blocking scope finding/signature/path. Only the
+disposition's exact `allowed-roots` additions are admitted; no other body edits,
+root removals or denylist weakening are accepted. On a strict descendant the same
+disposition also names `Fix head: <backtick-quoted exact SHA>` and
+`Fix diff: <backtick-quoted SHA-256>` of the complete PR files (canonical stable JSON
+of filename/sha/status/patch/previous_filename, sorted by filename). All changed
+paths must fit corrected scope, the PR/head/base must remain bound, and required
+current-head CI must be green. Reconciliation rechecks this evidence before status
+publication, retains original findings/source census/terminal, and consumes no new
+round. It never converts findings into a fabricated clean review. Missing authority,
+body drift or an unrelated fix remains non-success with a concrete recovery action.
+REST `updated_at` or Issue edit-history guesses cannot replace the post-REVIEW
+disposition. Comment-only changes remain undetected; unchanged-body findings-fix
+descendants and unrelated audited-reset uses remain unchanged. A cap never approves findings.
 
 Manual start, degraded-source settlement, and interrupted-review recovery follow
 `## Deterministic reconciliation`; do not duplicate those rules here.
