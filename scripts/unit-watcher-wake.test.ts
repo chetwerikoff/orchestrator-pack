@@ -295,9 +295,9 @@ describe('unit watcher wake', () => {
     });
 
     expect(output.exitCode).toBe(1);
-    expect(output.stderr).toContain('delivery-unknown: send_acceptance_unverified');
+    expect(output.stderr).toContain('delivery-unknown: submit_witness_unavailable');
     expect(output.stderr).toContain(
-      '{"status":"dispatch_unknown","reason":"send_acceptance_unverified"}',
+      '{"status":"dispatch_unknown","reason":"submit_witness_unavailable"}',
     );
     const sends = runJson.mock.calls
       .filter((call) => call[0]?.[0] === 'terminal' && call[0]?.[1] === 'send');
