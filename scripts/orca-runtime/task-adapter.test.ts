@@ -108,6 +108,39 @@ describe('Orca async transport envelope classification', () => {
 });
 
 describe('Orca terminal-show metadata', () => {
+  it.each(['turn_started', 'replacement_incarnation', 'accepted_only', 'launch_failed', 'submitOnly', 'writeOnly'] as const)(
+    'Issue #2808: unbound OpenCode native prompt delivery: %s', (mode) => {
+      const terminal = { handle: 'term-native-prompt', incarnationId: 'inc-native-prompt',
+        worktreePath: process.cwd(), agentIdentity: 'opencode', status: 'running' };
+      const calls: string[][] = [];
+      const adapter = new OrcaRuntimeAdapter({ runJson: ((args: readonly string[]) => {
+        calls.push([...args]);
+        if (args[1] === 'show') return { ok: true, result: { terminal } };
+        if (args[1] === 'send') {
+          if (mode === 'launch_failed') return { ok: false, outcomeCategory: 'process_launch_failed',
+            error: { code: 'orca_process_launch_failed', message: 'synthetic executable absent' } };
+          return { ok: true, result: { send: { handle: terminal.handle, accepted: true, prompt: {
+            requestId: 'native-request', processIncarnation: mode === 'replacement_incarnation' ? 'replacement-process' : terminal.incarnationId,
+            provider: 'opencode', observation: 'supported',
+            stages: mode === 'turn_started' || mode === 'replacement_incarnation' ? ['input_accepted', 'turn_started'] : ['input_accepted'],
+          } }, mutation: { requestId: 'native-request', replayed: false } } };
+        }
+        return { ok: false, error: { code: 'unexpected', message: args.join(' ') } };
+      }) as never });
+      const result = adapter.dispatchInput({
+        worker: { runtime: 'orca', id: terminal.handle, generation: terminal.incarnationId },
+        ...(mode === 'submitOnly' ? { submitOnly: true } : { text: 'wake', ...(mode === 'writeOnly' ? { writeOnly: true } : {}) }),
+      });
+      expect(result).toMatchObject(mode === 'turn_started' ? { status: 'dispatched' }
+        : mode === 'accepted_only' || mode === 'replacement_incarnation' ? { status: 'dispatch_unknown' }
+          : mode === 'launch_failed' ? { status: 'send_failed' }
+            : { status: 'send_failed', reason: 'opencode_control_unbound' });
+      const sends = calls.filter((args) => args[1] === 'send');
+      expect(sends).toHaveLength(mode === 'submitOnly' || mode === 'writeOnly' ? 0 : 1);
+      if (sends.length) expect(sends[0]).toContain('--wait-submit');
+    },
+  );
+
   it('preserves an absent command instead of inferring it from other fields', () => {
     const response = parseOrcaJsonOutput<{
       terminal?: { handle: string; worktreeId?: string; worktreePath?: string; agentIdentity?: string; command?: string };
@@ -1845,7 +1878,7 @@ describe('Orca assignment resolution', () => {
         status: 'failed', reason: 'assignment_target_unresolved',
       });
       expect(adapter.observeAssignmentLifecycle({ provider: 'orca', bindingKey: 'dispatch-1' })).toMatchObject({
-        status: 'failed', reason: 'assignment_target_unresolved',
+        status: 'ok', value: { kind: 'gone', evidence: 'producer_exact_absence' },
       });
       expect(runJson.mock.calls.every((call) => call[0]?.[0] === 'orchestration')).toBe(true);
     },
@@ -1861,7 +1894,7 @@ describe('Orca assignment resolution', () => {
       status: 'failed', reason: 'assignment_target_unresolved',
     });
     expect(adapter.observeAssignmentLifecycle({ provider: 'orca', bindingKey: 'dispatch-1' })).toMatchObject({
-      status: 'failed', reason: 'assignment_target_unresolved',
+      status: 'ok', value: { kind: 'gone', evidence: 'producer_exact_absence' },
     });
   });
 

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   publishFleetReconciliationHandoff,
   readFleetReconciliationHandoff,
+  MAX_FLEET_RECONCILIATION_HANDOFF_BYTES,
 } from './fleet-reconciliation-handoff.ts';
 
 const roots: string[] = [];
@@ -19,6 +20,26 @@ function file(): string {
 }
 
 describe('fleet reconciliation handoff', () => {
+  it('preserves all compact reconciliation rows and truncates overflow without losing the primary or total', () => {
+    const target = file();
+    const rows = Array.from({ length: 300 }, (_, index) => ({
+      assignmentId: `wa-${index}`, assignmentGeneration: 1, issueNumber: index + 1,
+      taskId: `task-${index}`, reason: 'target_unresolved' as const,
+    }));
+    const result = publishFleetReconciliationHandoff({
+      file: target, repository: 'chetwerikoff/orchestrator-pack', activationLineage: 'al-test',
+      schedulerGeneration: 'sg-test', tickSequence: 1,
+      ...rows[0]!, reconciliations: rows,
+    });
+    expect(result.ok).toBe(true);
+    const stored = readFleetReconciliationHandoff(target)!;
+    expect(stored).toMatchObject({ assignmentId: 'wa-0', issueNumber: 1, reconciliationCount: 300 });
+    expect(stored.reconciliations!.length).toBeGreaterThan(0);
+    expect(stored.reconciliations!.length).toBeLessThan(300);
+    expect(stored.reconciliations).toEqual(rows.slice(0, stored.reconciliations!.length));
+    expect(Buffer.byteLength(readFileSync(target))).toBeLessThanOrEqual(MAX_FLEET_RECONCILIATION_HANDOFF_BYTES);
+  });
+
   it('survives producer lifetime and contains persistence-safe facts only', () => {
     const target = file();
     const published = publishFleetReconciliationHandoff({

@@ -105,6 +105,29 @@ afterEach(() => {
 });
 
 describe('target context', () => {
+  it.each(['leopoker', 'appliedin', 'orchestrator-pack'])('defaults an existing %s-shaped card to no formatter', (projectId) => {
+    const target = fixture({ projectId });
+    expect(resolveTargetContext({ projectId, env: target.env }).verification)
+      .toEqual({ local: ['npm test'], focused: 'npm test -- {path}' });
+  });
+
+  it('validates and freezes the optional formatter fix/check declaration', () => {
+    const target = fixture();
+    const formatter = { fix: ['uv run --locked ruff format .', 'uv run --locked ruff check --fix .'], check: 'make lint' };
+    writeFileSync(target.cardPath, JSON.stringify({ ...target.card, verification: { ...target.card.verification, formatter } }));
+    const actual = resolveTargetContext({ env: target.env, projectId: target.card.projectId }).verification?.formatter;
+    expect(actual).toEqual(formatter);
+    expect(Object.isFrozen(actual)).toBe(true);
+    expect(Object.isFrozen(actual?.fix)).toBe(true);
+    for (const malformed of [null, [], 'ruff', {}, { fix: [], check: 'make lint' },
+      { fix: [' '], check: 'make lint' }, { fix: [1], check: 'make lint' },
+      { fix: ['ruff format .'] }, { fix: ['ruff format .'], check: '' },
+      { fix: ['ruff format .'], check: ['make lint'] }]) {
+      writeFileSync(target.cardPath, JSON.stringify({ ...target.card, verification: { formatter: malformed } }));
+      expect(codeOf(() => resolveTargetContext({ env: target.env, projectId: target.card.projectId }))).toBe('card-invalid');
+    }
+  });
+
   it('resolves one valid selected card into a frozen cwd-independent context', () => {
     const { env, primaryRoot } = fixture();
     const context = resolveTargetContext({ projectId: 'orchestrator-pack', env });

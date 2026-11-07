@@ -27,6 +27,14 @@ export type FleetReconciliationReason =
   | 'dispatch_unknown'
   | 'effect_untrusted';
 
+export interface FleetAssignmentReconciliation {
+  readonly assignmentId: string;
+  readonly assignmentGeneration: number;
+  readonly issueNumber: number;
+  readonly taskId: string;
+  readonly reason: FleetReconciliationReason;
+}
+
 export interface FleetReconciliationHandoff {
   readonly schema: typeof FLEET_RECONCILIATION_HANDOFF_SCHEMA;
   readonly projectId: string;
@@ -41,6 +49,8 @@ export interface FleetReconciliationHandoff {
   readonly taskId?: string;
   readonly assignmentId?: string;
   readonly assignmentGeneration?: number;
+  readonly reconciliations?: readonly FleetAssignmentReconciliation[];
+  readonly reconciliationCount?: number;
   readonly recordedAtUtc: string;
   readonly payloadDigest: string;
 }
@@ -101,6 +111,7 @@ export function publishFleetReconciliationHandoff(input: {
   readonly taskId?: string;
   readonly assignmentId?: string;
   readonly assignmentGeneration?: number;
+  readonly reconciliations?: readonly FleetAssignmentReconciliation[];
   readonly now?: () => Date;
 }): { readonly ok: true; readonly record: FleetReconciliationHandoff } | { readonly ok: false; readonly reason: string } {
   const payload = {
@@ -117,11 +128,24 @@ export function publishFleetReconciliationHandoff(input: {
     ...(input.taskId ? { taskId: input.taskId } : {}),
     ...(input.assignmentId ? { assignmentId: input.assignmentId } : {}),
     ...(input.assignmentGeneration ? { assignmentGeneration: input.assignmentGeneration } : {}),
+    ...(input.reconciliations ? { reconciliations: [] as FleetAssignmentReconciliation[], reconciliationCount: input.reconciliations.length } : {}),
     recordedAtUtc: (input.now?.() ?? new Date()).toISOString(),
   };
   if (!validRepository(payload.repository) || !payload.activationLineage || !payload.schedulerGeneration
     || !Number.isInteger(payload.tickSequence) || payload.tickSequence <= 0) {
     return { ok: false, reason: validRepository(payload.repository) ? 'handoff_input_invalid' : 'handoff_repository_unresolved' };
+  }
+  // Reserve the fixed-size digest and formatting overhead before accepting rows.
+  // A truncated handoff preserves its primary binding and reports the full total.
+  if (input.reconciliations) {
+    for (const row of input.reconciliations) {
+      payload.reconciliations!.push(row);
+      if (Buffer.byteLength(`${JSON.stringify({ ...payload, payloadDigest: '0'.repeat(64) }, null, 2)}\n`, 'utf8')
+        > MAX_FLEET_RECONCILIATION_HANDOFF_BYTES) {
+        payload.reconciliations!.pop();
+        break;
+      }
+    }
   }
   const record: FleetReconciliationHandoff = {
     ...payload,

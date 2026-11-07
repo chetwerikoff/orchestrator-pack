@@ -54,6 +54,7 @@ export class TargetVerificationError extends Error {
 export interface TargetVerification {
   readonly local?: readonly string[];
   readonly focused?: string;
+  readonly formatter?: Readonly<{ fix: readonly string[]; check: string }>;
 }
 
 export interface ContractEvidenceProducer {
@@ -225,9 +226,22 @@ function parseVerification(value: unknown, cardPath: string): TargetVerification
   if (record.focused !== undefined && !focused) {
     throw new TargetContextError('card-invalid', `verification.focused must be a non-empty string in ${cardPath}`, cardPath);
   }
+  let formatter: TargetVerification['formatter'];
+  if (record.formatter !== undefined) {
+    const value = record.formatter as Record<string, unknown> | null;
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+      || !Array.isArray(value.fix) || value.fix.length === 0
+      || value.fix.some((command) => typeof command !== 'string' || !command.trim())
+      || typeof value.check !== 'string' || !value.check.trim()) {
+      throw new TargetContextError('card-invalid',
+        `verification.formatter requires a non-empty fix command list and check command in ${cardPath}`, cardPath);
+    }
+    formatter = Object.freeze({ fix: Object.freeze([...value.fix] as string[]), check: value.check });
+  }
   return Object.freeze({
     ...(local ? { local } : {}),
     ...(focused ? { focused } : {}),
+    ...(formatter ? { formatter } : {}),
   });
 }
 
