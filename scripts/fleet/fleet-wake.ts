@@ -1361,6 +1361,7 @@ function resolveParkEvent(
   wait: string,
   terminals: readonly FleetTerminal[],
   options: FleetAlarmTickOptions,
+  log: (line: string) => void,
 ): ProducerResolution | undefined {
   const producer = parseNamedParkedProducer(wait);
   if (!producer || producer.kind === 'gpt' || producer.kind === 'gpt-multi'
@@ -1377,7 +1378,14 @@ function resolveParkEvent(
   }
   if (!repo) return undefined;
   if (producer.kind === 'review-run') {
-    const matches = readSelectedProjectReviewRuns(options)?.records.filter((run) => run.id === producer.id) ?? [];
+    let matches: readonly PackReviewRunRecord[];
+    try {
+      matches = readSelectedProjectReviewRuns(options)?.records.filter((run) => run.id === producer.id) ?? [];
+    } catch {
+      log('review-run Wake pending/unverified for ' + producer.id
+        + ': selected-project run store unreadable - re-check the store before the next normal tick');
+      return undefined;
+    }
     const run = matches.length === 1 ? matches[0] : undefined;
     return run && PACK_REVIEW_TERMINAL_STATUSES.has(run.status)
       ? resolved(run.status, 'PR-' + run.prNumber + '-head-' + run.targetSha,
@@ -1876,7 +1884,7 @@ async function wakeNamedParkedProducers(
         uncertainty = 'process provenance unverified';
       }
     } else if (producer) {
-      match = resolveParkEvent(pane.wait, terminals, options);
+      match = resolveParkEvent(pane.wait, terminals, options, log);
       if (!match && (producer.kind === 'ci' || producer.kind === 'pack-review') && producer.number) {
         log('named PR Wake pending/unverified for ' + pane.handle
           + ': re-check exact PR #' + producer.number + ' open/current head and its current-head producer');

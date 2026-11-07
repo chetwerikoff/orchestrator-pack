@@ -2717,6 +2717,27 @@ describe('Issue #2821 exact review-run park wake', () => {
     expect(store.eventStatus.get('event:one:review-run:' + id + ':changes_requested')).toBe('attempted_unverified');
     expect(sendsTo((await tick(options)).calls, unit.handle)).toHaveLength(0);
   });
+
+  it('isolates an unreadable run store while an unrelated time wake and the run reminder remain deliverable', async () => {
+    const other = { ...terminals[2]!, agentIdentity: 'opencode' };
+    const options = { ...input([]), store: new MemoryWakeStore(), terminals: [unit, other],
+      screens: { ...screens, two: 'PARKED on time 1970-01-01T00:00:00Z' },
+      readPackReviewRuns: () => { throw new Error('store_lock_timeout'); },
+    };
+    const first = await tick(options);
+    expect(sendsTo(first.calls, unit.handle)).toHaveLength(0);
+    expect(sendsTo(first.calls, other.handle)).toHaveLength(1);
+    expect(first.logs).toEqual(expect.arrayContaining([
+      expect.stringContaining('review-run Wake pending/unverified for ' + id),
+    ]));
+    const later = await tick({ ...options, now: () => 30 * 60 * 1_000 });
+    const reminder = sendsTo(later.calls, unit.handle);
+    expect(reminder).toHaveLength(1);
+    expect(reminder[0]![reminder[0]!.indexOf('--text') + 1]).toContain('Reminder:');
+    expect(sendsTo(later.calls, other.handle).some((call) =>
+      call[call.indexOf('--text') + 1]?.startsWith('Wake:'))).toBe(false);
+    expect(options.reconcilePackReview).not.toHaveBeenCalled();
+  });
 });
 
 describe('Issue #2556 stale-only selected-project pack-review fleet backstop', () => {
