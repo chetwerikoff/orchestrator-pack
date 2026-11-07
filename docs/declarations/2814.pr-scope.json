@@ -4,6 +4,8 @@
   "declared_paths": [
     "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/orca-runtime/task-adapter.ts",
+    "scripts/pr2-foundation/fleet-escalation-delivery.test.ts",
+    "scripts/pr2-foundation/fleet-escalation-delivery.ts",
     "scripts/pr2-foundation/fleet-reconciliation-handoff.test.ts",
     "scripts/pr2-foundation/fleet-reconciliation-handoff.ts",
     "scripts/pr2-foundation/scheduler-assignment-lifecycle.test.ts",
@@ -21,10 +23,12 @@
     "scripts/orca-runtime/task-adapter-assignment-lifecycle.test.ts",
     "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/orca-runtime/task-adapter.ts",
+    "scripts/pr2-foundation/fleet-escalation-delivery.test.ts",
+    "scripts/pr2-foundation/fleet-escalation-delivery.ts",
     "scripts/pr2-foundation/fleet-reconciliation-handoff.test.ts",
     "scripts/pr2-foundation/fleet-reconciliation-handoff.ts",
     "scripts/pr2-foundation/scheduler-assignment-lifecycle.test.ts",
     "scripts/pr2-foundation/scheduler.ts"
   ],
-  "source_revision": "c2800046cd4889a5b567ae16f8c68c90aece5962"
+  "source_revision": "f1d3491867790b4b7105fdb098b2a370b3b3ca03"
 }

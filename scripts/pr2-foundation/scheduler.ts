@@ -771,13 +771,15 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       batchSize: ASSIGNMENT_LIFECYCLE_BATCH_SIZE,
       terminalMailDeps: { env },
     }));
+    if (assignmentLifecycleSweep.status === 'ok') {
+      assignmentReconciliations = assignmentLifecycleSweep.reconciliations;
+    }
     const built = assignmentLifecycleSweep.status === 'ok'
       ? buildFleetAssignmentBindings(assignmentLifecycleSweep.bindings)
       : null;
     if (assignmentLifecycleSweep.status === 'ok' && built) {
       mailWorkers = assignmentLifecycleSweep.bindings.map(({ worker }) => worker);
       fleetBindings = built;
-      assignmentReconciliations = assignmentLifecycleSweep.reconciliations;
       fleetObserver = new FleetObserver({
         source: productionFleetObserverSource(runtime, fleetBindings),
         activationLineage,
