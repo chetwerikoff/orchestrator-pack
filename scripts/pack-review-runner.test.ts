@@ -10,6 +10,7 @@ import { authorizeTargetGhInvocation, TargetGhAuthorizationError } from './lib/g
 import { resolveTargetContext } from './lib/target-context.ts';
 import { PACK_GPT_REVIEW_RESULT_SCHEMA, runPackGptReviewCommand } from './pack-gpt-review.ts';
 import { classifyExecuteIssueManagerRecord } from './lib/execute-issue-manager-boundary.ts';
+import * as prScopeDeclaration from './pr-scope-declaration.ts';
 
 // Carries an actual runner result through the CLI and the manager boundary.
 async function cliAndBoundary(
@@ -2955,14 +2956,32 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
   }
 
   it.each(['scoped reconcile', 'PR-led start', 'unauthorized', 'wrong-head', 'wrong-diff',
-    'changed-behavior', 'body-drift', 'not-descendant', 'outside-scope', 'red-ci'] as const)(
+    'changed-behavior', 'body-drift', 'not-descendant', 'outside-scope', 'red-ci',
+    'guarded-declaration', 'guarded-declaration-start', 'guard-free-declaration',
+    'unverified-declaration', 'wrong-issue-declaration', 'denied-declaration'] as const)(
     'Issue #2815: generic scope-only strict-descendant settlement via %s', async (mode) => {
-      const f = fixture({ settledSourceCount: 2 });
+      const f = fixture({ settledSourceCount: 2,
+        ...(mode === 'denied-declaration' ? {
+          denylist: ['vendor/**', 'packages/core/**', 'docs/declarations/**'],
+          frozenBodyOverride: revisedBody.replace('tests/spot/test_field_benchmark_r13.py\n', '')
+            .replace('vendor/**\n', 'vendor/**\ndocs/declarations/**\n'),
+        } : {}) });
+      const guard = mode.includes('declaration')
+        ? vi.spyOn(prScopeDeclaration, 'resolvePrScopeGuardApplicability').mockReturnValue({
+          repository, status: mode === 'guard-free-declaration' ? 'guard-free'
+            : mode === 'unverified-declaration' ? 'unverified' : 'guarded',
+        }) : null;
+      try {
       const before = getPackReviewRun(f.run.id, f.options)!;
       f.transports.pr.head.sha = HEAD;
+      if (guard) {
+        f.transports.files.push({ filename: `docs/declarations/${mode === 'wrong-issue-declaration' ? issueNumber + 1 : issueNumber}.pr-scope.json`,
+          sha: 'c'.repeat(40), status: 'modified', patch: '@@ -1 +1 @@\n-old declaration\n+regenerated declaration' });
+        f.transports.pr.changed_files = f.transports.files.length;
+      }
       const digest = createHash('sha256').update(stableJson(f.transports.files.map((file) => ({
         ...file, previous_filename: null,
-      })))).digest('hex');
+      })).sort((a, b) => a.filename.localeCompare(b.filename)))).digest('hex');
       f.transports.comment.body += `\nFix head: \`${mode === 'wrong-head' ? 'f'.repeat(40) : HEAD}\`\nFix diff: \`${mode === 'wrong-diff' ? '0'.repeat(64) : digest}\`\n`;
       if (mode === 'unauthorized') f.transports.comment.user.login = 'untrusted';
       if (mode === 'changed-behavior') f.transports.issue.body += 'New behavior requirement\n';
@@ -2973,8 +2992,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
         fixtureReviewCompareStatus: mode === 'not-descendant' ? 'diverged' : 'ahead',
         fixtureRequiredCiChecks: [{ name: 'CI', state: mode === 'red-ci' ? 'FAILURE' : 'SUCCESS' }],
       };
-      const positive = mode === 'scoped reconcile' || mode === 'PR-led start';
-      if (mode === 'PR-led start') {
+      const positive = mode === 'scoped reconcile' || mode === 'PR-led start'
+        || mode === 'guarded-declaration' || mode === 'guarded-declaration-start';
+      if (mode === 'PR-led start' || mode === 'guarded-declaration-start') {
         const result = await startPackReview({ ...target, headSha: HEAD, claimMode: 'acquire',
           fixtureRepoSlug: repository, fixturePostReviewHeadSha: HEAD,
           fixturePostReviewPrBody: 'Closes #' + issueNumber });
@@ -2994,6 +3014,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
         expect(again.results, JSON.stringify(again)).toContainEqual(expect.objectContaining({ settled: true }));
         expect(f.statuses.filter((status) => status.state === 'success')).toHaveLength(1);
       }
+      } finally { guard?.mockRestore(); }
     },
   );
 
@@ -3819,26 +3840,13 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       sourceRepoRoot: graph.checkout,
       settledSourceCount,
     });
-    const protection = vi.fn(async (request: Parameters<typeof runProcess>[0]) => {
-      expect(request.command).toContain('/scripts/gh');
-      expect(request.args).toEqual([
-        'api', 'repos/chetwerikoff/orchestrator-pack/branches/main/protection',
-      ]);
-      return {
-        ok: true, outcome: 'exit' as const, exitCode: 0,
-        stdout: JSON.stringify({
-          allow_force_pushes: { enabled: false }, allow_deletions: { enabled: false },
-        }), stderr: '', timedOut: false, cancelled: false, signal: null, durationMs: 1,
-      };
-    });
     const input: Parameters<typeof reconcileStalePackReviewRuns>[0] & { fixtureCurrentPrHeadSha: string } = {
       ...f.input, fixtureCurrentPrHeadSha: graph.h2,
       fixtureIssueBody: revisedBody, fixtureReviewCompareStatus: 'diverged',
       fixtureIssueNumber: issueNumber, fixtureIssueTitle: '[T3] Synthetic unchanged criteria',
       fixtureRebaseOriginRepository: repository,
-      fixtureRebaseProtectionRunner: protection as typeof runProcess,
     };
-    return { ...f, input, protection };
+    return { ...f, input };
   }
 
   type RebaseCase = ReturnType<typeof eligibleRebaseCase>;
@@ -3902,7 +3910,6 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       const result = await enterRebase(f, entry);
       expect(result).toMatchObject({ reason: 'final_cap_descendant_settled', headSha: g.h2 });
       expect('settled' in result ? result.settled : result.ok).toBe(true);
-      expect(f.protection).toHaveBeenCalledTimes(1);
       expect(reads).toContain(g.h2);
       expect(writes).toContainEqual(expect.objectContaining({ state: 'success', head: g.h2 }));
       expect(readPackReviewAuthority(prNumber, f.options)?.terminal).toEqual(f.authority.terminal);
@@ -3918,7 +3925,6 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       expect(reused).toMatchObject({ ok: true, created: false, reused: true, reason: 'review_stage_complete',
         publicationVerified: true, publicationHeadSha: g.h2, headSha: g.h2, httpStatus: 200 });
       expect(reused).not.toHaveProperty('requiredStatusState');
-      expect(f.protection).toHaveBeenCalledTimes(1);
     },
   );
 
@@ -3945,7 +3951,6 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
             expect(result.reason, JSON.stringify(result)).toBe('final_cap_descendant_settled');
             expect('settled' in result ? result.settled : result.ok).toBe(true);
           } else expectRebaseRefusal(f, result);
-          expect(f.protection).not.toHaveBeenCalled();
         }
       } finally { vi.mocked(runProcess).mockImplementation(actual.runProcess); }
     },
@@ -3961,11 +3966,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       const h3 = g.git(g.checkout, 'commit-tree', g.git(g.checkout, 'rev-parse', g.b2 + '^{tree}'),
         '-p', g.b2, '-m', 'later unequal-tree rewritten head');
       f.input.fixtureCurrentPrHeadSha = h3;
-      f.protection.mockClear();
       const result = await enterRebase(f, entry);
       expect('settled' in result ? result.settled : result.ok).toBe(true);
       if (entry === 'start') expect(result.reason).toBe('review_stage_complete');
-      expect(f.protection).not.toHaveBeenCalled();
       expect(readPackReviewAuthority(prNumber, f.options)?.terminal).toEqual(f.authority.terminal);
     },
   );
@@ -4083,7 +4086,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
   );
 
   it.each(['scoped', 'start'] as const)(
-    'Issue #2790: %s refuses unprotected oldbase.txt rewrite despite matching raw C and ancestry', async (entry) => {
+    'Issue #2815: %s uses commit ancestry rather than a protection policy for matching raw C', async (entry) => {
       const g = realRebasedGitGraph();
       const addOldbase = (parent: string, message: string) => {
         g.git(g.checkout, 'checkout', '--detach', parent);
@@ -4103,12 +4106,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       const raw = (from: string, to: string) => g.git(g.checkout, 'diff', '--raw', '-z', '--no-renames', '--abbrev=40', from, to);
       expect(raw(g.b1, h1)).toBe(raw(g.b2, c));
       const f = eligibleRebaseCase({ ...g, h1, c, h2 });
-      f.input.fixtureRebaseProtectionRunner = vi.fn(async () => ({
-        ok: true, outcome: 'exit' as const, exitCode: 0,
-        stdout: JSON.stringify({ allow_force_pushes: { enabled: true }, allow_deletions: { enabled: false } }),
-        stderr: '', timedOut: false, cancelled: false, signal: null, durationMs: 1,
-      }));
-      expectRebaseRefusal(f, await enterRebase(f, entry));
+      expect((await enterRebase(f, entry)).reason).toBe('final_cap_descendant_settled');
     },
   );
 
@@ -4182,15 +4180,14 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
   );
 
   it.each(['scoped', 'start'] as const)(
-    'Issue #2790: %s refuses failed Git/protection reads and truncated or malformed full raw records', async (entry) => {
+    'Issue #2790: %s refuses failed Git reads and truncated or malformed full raw records', async (entry) => {
       const g = realRebasedGitGraph();
       const actual = await vi.importActual<typeof import('./kernel/subprocess.ts')>('./kernel/subprocess.ts');
-      for (const command of ['ls-remote', 'merge-base', 'diff', 'protection']) {
+      for (const command of ['ls-remote', 'merge-base', 'diff']) {
         const f = eligibleRebaseCase(g);
         const failure = { ok: false, outcome: 'exit' as const, exitCode: 128, stdout: '', stderr: 'unavailable',
           timedOut: false, cancelled: false, signal: null, durationMs: 1 };
-        if (command === 'protection') f.input.fixtureRebaseProtectionRunner = async () => failure;
-        else if (command === 'diff') vi.mocked(runProcessSync).mockImplementation((request) =>
+        if (command === 'diff') vi.mocked(runProcessSync).mockImplementation((request) =>
           request.command === 'git' && request.args?.[0] === command ? failure : actual.runProcessSync(request));
         else vi.mocked(runProcess).mockImplementation(async (request) =>
           request.command === 'git' && request.args?.[0] === command ? failure : actual.runProcess(request));
@@ -4245,7 +4242,6 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
           try {
             expectRebaseRefusal(f, await enterRebase(f, entry));
             if (snapshot) expect(readFileSync(authorityFile)).toEqual(snapshot);
-            if (phase === 'entry') expect(f.protection).not.toHaveBeenCalled();
           } finally {
             g.git(g.checkout, 'remote', 'set-url', 'origin', g.remote);
             writeFileSync(cardPath, originalCard);
@@ -4276,7 +4272,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     },
   );
 
-  it('Issue #2790: actual tracked gh rest_direct executes only runner-constructed canonical protection GET', async () => {
+  it('Issue #2815: rebased C settles when the tracked protection GET would return 403', async () => {
     const g = realRebasedGitGraph();
     const f = eligibleRebaseCase(g);
     const preload = join(g.root, 'native-gh.cjs');
@@ -4285,28 +4281,27 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       "const fs = require('node:fs');",
       "if (process.argv[1] && /(?:^|\\/)api$/.test(process.argv[1])) {",
       "  fs.writeFileSync(process.env.TEST_NATIVE_ARGV, JSON.stringify(['api', ...process.argv.slice(2)]));",
-      "  process.stdout.write(JSON.stringify({allow_force_pushes:{enabled:false},allow_deletions:{enabled:false}}));",
-      "  process.exit(0);",
+      "  process.stderr.write('HTTP 403: Resource not accessible');",
+      "  process.exit(1);",
       "}",
     ].join('\n'));
     const actual = await vi.importActual<typeof import('./kernel/subprocess.ts')>('./kernel/subprocess.ts');
-    f.input.fixtureRebaseProtectionRunner = (request) => actual.runProcess({
+    vi.mocked(runProcess).mockImplementation((request) => actual.runProcess({
       ...request, env: { ...process.env, OPK_PROJECT_ID: '', OPK_SIDE_PROCESS_CHILD_ID: '',
         GH_REAL_BINARY: process.execPath, NODE_OPTIONS: '--require=' + preload,
         TEST_NATIVE_ARGV: audit, GH_WRAPPER_ACTIVE: '', GH_WRAPPER_AUDIT_FILE: '' },
-    });
-    const result = await enterRebase(f, 'scoped');
-    expect(result.reason).toBe('final_cap_descendant_settled');
-    expect(JSON.parse(readFileSync(audit, 'utf8'))).toEqual([
-      'api', 'repos/chetwerikoff/orchestrator-pack/branches/main/protection',
-    ]);
+    }));
+    try {
+      const result = await enterRebase(f, 'scoped');
+      expect(result.reason).toBe('final_cap_descendant_settled');
+      expect(existsSync(audit)).toBe(false);
+    } finally { vi.mocked(runProcess).mockImplementation(actual.runProcess); }
     // There is no caller-supplied protection argv: polluted base/repository
     // bindings fail before invoking the runner transport, not at a matcher.
     for (const baseRef of ['other', 'main -X POST', 'main --header unsafe', 'main/protection?extra=1']) {
       const bad = eligibleRebaseCase(g);
       bad.input.baseRef = baseRef;
       expectRebaseRefusal(bad, await enterRebase(bad, 'scoped'));
-      expect(bad.protection).not.toHaveBeenCalled();
     }
   });
 
@@ -4319,7 +4314,6 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       reason: 'final_cap_descendant_settled', publicationHeadSha: g.h2,
       statusPublished: true,
     }));
-    expect(f.protection).toHaveBeenCalledTimes(1);
     expect(f.statuses).toContainEqual(expect.objectContaining({
       state: 'success', context: 'orchestrator-pack/pack-review',
     }));
@@ -4336,28 +4330,24 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(readPackReviewAuthority(prNumber, f.options)?.terminal).toEqual(f.authority.terminal);
   });
 
-  it.each(['scoped', 'start'] as const)('Issue #2790: %s protected-base eligibility is fail-closed for force pushes, deletions and malformed policies', async (entry) => {
+  it.each(['scoped', 'start'] as const)('Issue #2815: %s failed reviewed-base ancestry requires a fresh normal review', async (entry) => {
     const g = realRebasedGitGraph();
-    for (const policy of [
-      { allow_force_pushes: { enabled: true }, allow_deletions: { enabled: false } },
-      { allow_force_pushes: { enabled: false }, allow_deletions: { enabled: true } },
-      { allow_force_pushes: { enabled: false } },
-      { allow_force_pushes: null, allow_deletions: { enabled: false } },
-      { allow_force_pushes: { enabled: 'false' }, allow_deletions: { enabled: false } },
-      {},
-    ]) {
-      const f = eligibleRebaseCase(g);
-      const read = async () => ({
-        ok: true, outcome: 'exit' as const, exitCode: 0, stdout: JSON.stringify(policy),
-        stderr: '', timedOut: false, cancelled: false, signal: null, durationMs: 1,
-      });
-      f.input.fixtureRebaseProtectionRunner = read;
+    const f = eligibleRebaseCase(g);
+    const actual = await vi.importActual<typeof import('./kernel/subprocess.ts')>('./kernel/subprocess.ts');
+    vi.mocked(runProcess).mockImplementation(async (request) => {
+      if (JSON.stringify(request.args) === JSON.stringify(['merge-base', '--is-ancestor', g.b1, g.b2])) {
+        return { ok: false, outcome: 'exit', exitCode: 1, stdout: '', stderr: '',
+          timedOut: false, cancelled: false, signal: null };
+      }
+      return actual.runProcess(request);
+    });
+    try {
       const result = await enterRebase(f, entry);
       expectRebaseRefusal(f, result);
       expect(result.reason).toBe('final_cap_strict_descendant_required');
-      expect(readPackReviewAuthority(prNumber, f.options)?.cycle?.reviewStageComplete).not.toBe(true);
-      expect(f.statuses.some((value) => value.state === 'success')).toBe(false);
-    }
+      expect(result.nextAction).toContain('base history was rewritten');
+      expect(result.nextAction).toContain('fresh normal review round');
+    } finally { vi.mocked(runProcess).mockImplementation(actual.runProcess); }
   });
 
   it.each(['scoped', 'start'] as const)('Issue #2790: %s selected bare remote fast-forward requires fresh local origin/main before C settlement', async (entry) => {

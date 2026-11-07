@@ -9,6 +9,7 @@ import {
   listPackReviewRuns,
   setPackReviewRunTerminal,
   updatePackReviewRun,
+  updatePackReviewRunIf,
   trimPackReviewValue as trim,
   type GithubCommentReviewReconciliation,
   type PackReviewRunRecord,
@@ -469,15 +470,36 @@ function normalizedState(run: PackReviewRunRecord): DurableGithubCommentReviewRe
 }
 
 function persistState(
+  runId: string, state: DurableGithubCommentReviewReconciliation,
+  options: PackReviewStoreOptions, electPost: true,
+): DurableGithubCommentReviewReconciliation | null;
+function persistState(
+  runId: string, state: DurableGithubCommentReviewReconciliation,
+  options: PackReviewStoreOptions,
+): DurableGithubCommentReviewReconciliation;
+function persistState(
   runId: string,
   state: DurableGithubCommentReviewReconciliation,
   options: PackReviewStoreOptions,
-): DurableGithubCommentReviewReconciliation {
+  electPost = false,
+): DurableGithubCommentReviewReconciliation | null {
   const next: DurableGithubCommentReviewReconciliation = {
     ...state,
     updatedAtUtc: new Date().toISOString(),
   };
-  updatePackReviewRun(runId, { githubReviewReconciliation: next }, options);
+  if (electPost) {
+    const elected = updatePackReviewRunIf(runId, (records) => {
+      const stored = records.find((run) => run.id === runId);
+      if (!stored) return false;
+      const prior = normalizedState(stored);
+      return !prior || (prior.phase === 'prepared'
+        && prior.commentBody === state.commentBody && prior.actorLogin === state.actorLogin
+        && ['not_attempted', 'definitely_rejected'].includes(prior.postOutcome ?? ''));
+    }, { githubReviewReconciliation: next }, options);
+    if (!elected) return null;
+  } else {
+    updatePackReviewRun(runId, { githubReviewReconciliation: next }, options);
+  }
   return next;
 }
 
@@ -526,7 +548,9 @@ export async function reconcileGithubCommentReview(
     const actorLogin = trim(await options.transport.resolveActorLogin());
     if (!actorLogin) throw new Error('GitHub authenticated actor lookup returned no login');
     const now = new Date().toISOString();
-    state = persistState(current.id, {
+    // Build locally: an unconditional initialization could overwrite another
+    // caller's ambiguous/accepted POST while actor lookup was awaiting.
+    state = {
       schemaVersion: 1,
       event: 'COMMENT',
       phase: 'prepared',
@@ -537,15 +561,27 @@ export async function reconcileGithubCommentReview(
       dismissedReviewIds: [],
       preparedAtUtc: now,
       updatedAtUtc: now,
-    }, storeOptions);
+    };
   } else if (state.commentBody !== options.body) {
     throw new Error(`GitHub review reconciliation body changed for ${current.id}`);
   }
 
   if (state.phase === 'prepared') {
     let posted: { id: number | string; url: string } | null = null;
+    let elected = false;
+    if (state.postOutcome !== 'ambiguous') {
+      const claimed = persistState(current.id, {
+        ...state, postOutcome: 'ambiguous', postAttemptedAtUtc: new Date().toISOString(),
+        lastError: undefined,
+      }, storeOptions, true);
+      elected = claimed !== null;
+      state = claimed ?? normalizedState(getPackReviewRun(current.id, storeOptions) ?? current)!;
+      if (!state || state.commentBody !== options.body) {
+        throw new Error(`GitHub review reconciliation changed for ${current.id}; observe the original run`);
+      }
+    }
 
-    if (state.postOutcome === 'ambiguous') {
+    if (!elected && state.phase === 'prepared') {
       const listed = await listReviewsForRecovery(
         options,
         current,
@@ -561,14 +597,7 @@ export async function reconcileGithubCommentReview(
         throw new Error(message);
       }
       posted = { id: observed.id, url: observed.url };
-    } else {
-      const attemptedAtUtc = new Date().toISOString();
-      state = persistState(current.id, {
-        ...state,
-        postOutcome: 'ambiguous',
-        postAttemptedAtUtc: attemptedAtUtc,
-        lastError: undefined,
-      }, storeOptions);
+    } else if (elected) {
       try {
         posted = await options.transport.postReview({
           event: 'COMMENT',
@@ -610,7 +639,7 @@ export async function reconcileGithubCommentReview(
       }
     }
 
-    state = persistState(current.id, {
+    if (posted) state = persistState(current.id, {
       ...state,
       phase: 'comment_posted',
       postOutcome: 'accepted',
@@ -653,7 +682,7 @@ export async function reconcileGithubCommentReview(
         throw error;
       }
       const dismissedReviewIds = uniqueIds([...state.dismissedReviewIds, reviewId]);
-      const pendingDismissalReviewIds = state.pendingDismissalReviewIds
+      const pendingDismissalReviewIds: Array<number | string> = state.pendingDismissalReviewIds
         .filter((value) => reviewIdKey(value) !== reviewIdKey(reviewId));
       state = persistState(current.id, {
         ...state,

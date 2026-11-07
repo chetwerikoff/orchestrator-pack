@@ -677,7 +677,7 @@ never let the child expand it to its own pane. Use the selected project card's p
 root, project and worktree, and a unique log path for this invocation.
 
 ```text
-orca terminal create --worktree path:<owned-worktree> --title "review-<PR_NUMBER>" --command "cd <PACK_ROOT> && OPK_PROJECT_ID=<PROJECT_ID> npm run --silent pack-gpt-review -- --project <PROJECT_ID> --pr-number <PR_NUMBER> > <review-log> 2>&1; review_exit=\$?; orca terminal send --terminal <caller-pane> --enter --text \"pack-review <PR_NUMBER> ended, exit \$review_exit, read <review-log>\"; exit"
+orca terminal create --worktree path:<owned-worktree> --title "review-<PR_NUMBER>" --command "cd <PACK_ROOT> && OPK_PROJECT_ID=<PROJECT_ID> npm run --silent pack-gpt-review -- --project <PROJECT_ID> --pr-number <PR_NUMBER> > <review-log> 2>&1; review_exit=\$?; orca terminal send --terminal <caller-pane> --enter --text \"pack-review <PR_NUMBER> ended, exit \$review_exit, read <review-log>\"; exit \"\$review_exit\""
 ```
 
 Add `--session-id <SESSION_ID>` only for an exact already-owned supervised session;

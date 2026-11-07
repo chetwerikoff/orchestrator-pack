@@ -1,4 +1,5 @@
 import './toolchain/native-entrypoint-preflight.ts';
+import { resolvePrScopeGuardApplicability } from './pr-scope-declaration.ts';
 import { randomUUID } from 'node:crypto';
 import {
   appendFileSync,
@@ -315,7 +316,6 @@ interface StartInput {
   fixtureChangedPaths?: string[];
   fixtureBoundIssueSnapshotBytes?: string;
   fixtureReviewCompareStatus?: string;
-  fixtureRebaseProtectionRunner?: typeof runProcess;
   fixtureRebasePrReader?: () => Promise<{
     prNumber: number; headSha: string; baseRef: string; body: string;
   }> | { prNumber: number; headSha: string; baseRef: string; body: string };
@@ -383,7 +383,6 @@ export interface ReconcileStalePackReviewRunsInput {
   fixtureChangedPaths?: string[];
   fixtureBoundIssueSnapshotBytes?: string;
   fixtureReviewCompareStatus?: string;
-  fixtureRebaseProtectionRunner?: typeof runProcess;
   fixtureRebasePrReader?: () => Promise<{
     prNumber: number; headSha: string; baseRef: string; body: string;
   }> | { prNumber: number; headSha: string; baseRef: string; body: string };
@@ -971,28 +970,6 @@ async function proveUniqueRebasedC(
     }
   };
   requirePr(pr);
-  const protectionResult = await (harness && input.fixtureRebaseProtectionRunner
-    ? input.fixtureRebaseProtectionRunner : runProcess)({
-      command: resolveTrackedGhWrapper(),
-      args: ['api', 'repos/' + selected.repository + '/branches/' + base + '/protection'],
-      cwd: root, inheritParentEnv: true, allowEmptyStdout: false, timeoutMs: 30_000,
-    });
-  if (!protectionResult.ok) throw new Error('branch protection GET unavailable or denied');
-  let policy: unknown;
-  try { policy = JSON.parse(protectionResult.stdout); }
-  catch { throw new Error('branch protection GET invalid JSON'); }
-  if (!policy || typeof policy !== 'object' || Array.isArray(policy)) {
-    throw new Error('branch protection GET invalid object');
-  }
-  const record = policy as Record<string, unknown>;
-  const disabled = (key: string) => {
-    const value = record[key];
-    return !!value && typeof value === 'object' && !Array.isArray(value)
-      && (value as Record<string, unknown>).enabled === false;
-  };
-  if (!disabled('allow_force_pushes') || !disabled('allow_deletions')) {
-    throw new Error('force pushes/deletions must both be explicitly disabled');
-  }
   if ((await runGit(root, ['rev-parse', '--show-object-format=storage'], 'object format')).trim() !== 'sha1') {
     throw new Error('unsupported non-SHA-1 object format');
   }
@@ -1014,6 +991,9 @@ async function proveUniqueRebasedC(
   const b = await liveBase();
   if (await localBase() !== b) throw new Error('stale local base; fetch origin ' + base + ' and rerun');
   const m1 = await rebaseUniqueMergeBase(root, h1, b);
+  if (!(await rebaseAncestor(root, m1, b))) {
+    throw new Error('base history was rewritten; a fresh normal review round is required');
+  }
   const m2 = await rebaseUniqueMergeBase(root, h2, b);
   if (!(await rebaseAncestor(root, m1, m2))) throw new Error('rewritten-base M1/M2 ancestry false');
   if (await rebaseAncestor(root, h1, h2)) throw new Error('H1 route is not rewritten');
@@ -5115,9 +5095,17 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
         for (const path of [file.filename, file.previous_filename].filter(Boolean)) {
           const normalized = normalizePath(String(path));
           if (!normalized.ok
-              || pathMatchesAnyPattern(normalized.path, [...REPOSITORY_DENYLIST, ...scope.denylist])
-              || !pathMatchesAnyPattern(normalized.path, scope.allowed_roots ?? [])) {
+              || pathMatchesAnyPattern(normalized.path, [...REPOSITORY_DENYLIST, ...scope.denylist])) {
             throw new Error('scope fix PR file is outside corrected Issue scope');
+          }
+          if (!pathMatchesAnyPattern(normalized.path, scope.allowed_roots ?? [])) {
+            const selectedArtifact = `docs/declarations/${round.issueNumber}.pr-scope.json`;
+            const applicability = normalized.path === selectedArtifact
+              ? resolvePrScopeGuardApplicability(input.sourceRepoRoot, { baseRef: target.baseRef }) : null;
+            if (applicability?.status !== 'guarded'
+                || applicability.repository?.toLowerCase() !== options.repoSlug.toLowerCase()) {
+              throw new Error('scope fix PR file is outside corrected Issue scope');
+            }
           }
         }
         files.push(file);
@@ -6372,7 +6360,9 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
             : detail.includes('base tip moved') || detail.includes('stale local')
               ? 'git fetch origin ' + String(input.baseRef || 'origin/main').replace(/^origin\//, '')
                 + ', then rerun the same reconcile'
-              : 'restore the selected protected base/PR identity and unique changed-tree C proof, then rerun scoped reconcile or seek architect/operator decision' };
+              : detail.includes('base history was rewritten')
+                ? 'base history was rewritten; start a fresh normal review round for the current PR head'
+                : 'restore the selected base/PR identity and unique changed-tree C proof, then rerun scoped reconcile or seek architect/operator decision' };
       }
     }
   }
@@ -9368,7 +9358,6 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         fixtureIssueNumber: input.fixtureIssueNumber,
         fixtureIssueBody: input.fixtureIssueBody, fixtureIssueTitle: input.fixtureIssueTitle,
         fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
-        fixtureRebaseProtectionRunner: input.fixtureRebaseProtectionRunner,
         fixtureRebasePrReader: input.fixtureRebasePrReader,
         fixtureRebaseOriginRepository: input.fixtureRebaseOriginRepository,
         fixtureBeforeRebaseSettlementRecheck: input.fixtureBeforeRebaseSettlementRecheck,

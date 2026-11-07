@@ -71,12 +71,86 @@ import type {
   GithubReviewSummary,
   GithubReviewTransport,
 } from './lib/github-review-reconciliation.js';
+import { reconcileGithubCommentReview } from './lib/github-review-reconciliation.js';
 
 const repoRoot = path.join(path.dirname(new URL(import.meta.url).pathname), '..');
 const HEAD_A = 'a'.repeat(40);
 const HEAD_B = 'b'.repeat(40);
 const tempRoots: string[] = [];
 const originalEnv = { ...process.env };
+
+describe('Issue #2815 single canonical REVIEW POST election', () => {
+  it('executes the documented recipe with review failure and successful wake without masking exit', () => {
+    const root = tempRoot('opk-review-recipe-exit-');
+    const recipe = readFileSync(path.join(repoRoot, 'docs/orchestration-runbook.md'), 'utf8')
+      .split('\n').find((line) => line.startsWith('orca terminal create --worktree path:<owned-worktree>'))!;
+    const command = recipe.match(/--command "(.*)"$/)![1]!
+      .replaceAll('\\$', '$').replaceAll('\\"', '"')
+      .replaceAll('<PACK_ROOT>', repoRoot).replaceAll('<PROJECT_ID>', 'fixture')
+      .replaceAll('<PR_NUMBER>', '2825').replaceAll('<review-log>', path.join(root, 'review.log'))
+      .replaceAll('<caller-pane>', 'fixture-caller');
+    const result = runProcessSync({ command: 'bash', args: ['-c',
+      `npm() { return 7; }; orca() { return 0; }; ${command}`], inheritParentEnv: false });
+    expect(result.exitCode, result.stderr).toBe(7);
+  });
+
+  it.each(['before-post', 'after-accepted', 'definitely-rejected'] as const)(
+    'concurrent deliveries elect one POST and the loser reads the same id: %s', async (mode) => {
+      const storeRoot = tempRoot('opk-single-review-post-');
+      harnessEnv(storeRoot, path.join(storeRoot, 'capture.json'));
+      const options = { projectId: 'orchestrator-pack', storeRoot };
+      const run = createPackReviewRun({ ...options, prNumber: 2825, headSha: HEAD_A,
+        linkedSessionId: '', startReason: 'fixture', surface: 'fixture',
+        trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
+        canonicalRepository: 'chetwerikoff/orchestrator-pack' }).run;
+      const body = `## Pack review — clean\nRun: \`${run.id}\`\nHead: \`${HEAD_A}\``;
+      if (mode === 'definitely-rejected') updatePackReviewRun(run.id, {
+        githubReviewReconciliation: { schemaVersion: 1, event: 'COMMENT', phase: 'prepared',
+          actorLogin: 'fixture', commentBody: body, ...{ postOutcome: 'definitely_rejected' as const },
+          pendingDismissalReviewIds: [], dismissedReviewIds: [],
+          preparedAtUtc: new Date().toISOString(), updatedAtUtc: new Date().toISOString() },
+      }, options);
+      let releaseSecondActor!: () => void;
+      const secondActorGate = new Promise<void>((resolve) => { releaseSecondActor = resolve; });
+      let postEntered!: () => void;
+      const posting = new Promise<void>((resolve) => { postEntered = resolve; });
+      let releasePost!: () => void;
+      const postGate = new Promise<void>((resolve) => { releasePost = resolve; });
+      let lookupEntered!: () => void;
+      const lookup = new Promise<void>((resolve) => { lookupEntered = resolve; });
+      let published!: () => void;
+      const accepted = new Promise<void>((resolve) => { published = resolve; });
+      const reviews: GithubReviewSummary[] = [];
+      let actors = 0;
+      const transport: GithubReviewTransport = {
+        resolveActorLogin: async () => { if (++actors === 2) await secondActorGate; return 'fixture'; },
+        listReviews: async () => { lookupEntered(); await accepted; return reviews; },
+        postReview: vi.fn(async (input) => {
+          postEntered(); await postGate;
+          const review = { id: 282501, url: 'https://github.com/fixture/repo/pull/2825#pullrequestreview-282501' };
+          reviews.push({ ...review, state: 'COMMENTED', userLogin: 'fixture',
+            submittedAt: new Date().toISOString(), body: input.body, commitId: input.commitId });
+          published(); return review;
+        }),
+        dismissReview: async () => undefined,
+      };
+      const invoke = () => reconcileGithubCommentReview({ ...options, run, body, transport });
+      const original = invoke();
+      const follower = invoke();
+      await posting;
+      if (mode === 'after-accepted') {
+        releasePost(); await original; releaseSecondActor();
+      } else {
+        releaseSecondActor(); await lookup; releasePost();
+      }
+      const results = await Promise.all([original, follower]);
+      expect(transport.postReview).toHaveBeenCalledTimes(1);
+      expect(results.map((result) => result.id)).toEqual([282501, 282501]);
+      expect(getPackReviewRun(run.id, options)?.githubReviewReconciliation)
+        .toMatchObject({ postOutcome: 'accepted', commentReviewId: 282501 });
+    },
+  );
+});
 
 function tempRoot(prefix: string): string {
   const root = mkdtempSync(path.join(tmpdir(), prefix));
