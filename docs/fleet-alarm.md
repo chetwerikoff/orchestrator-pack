@@ -30,6 +30,9 @@ The exact supported final park forms are:
   optional terminal `.`/`,`, trailing explanation such as `— waiting`, and
   `(self-wake armed)` do not enter its exact-match ID);
 - `PARKED on GPT turns inv-a, inv-b, inv-c` (exactly three distinct IDs);
+- `PARKED on review run prr-<32 lowercase hex>` (exact run ID, with optional
+  ` (self-wake armed)` suffix; a unique selected-project run in a terminal status
+  wakes with that status, PR and head for the pane to re-check, never a success claim);
 - `PARKED on pack-review PR #N head <sha40>`;
 - `PARKED on PR #N review #M head <sha40>`;
 - `PARKED on CI PR #N head <sha40>` and `PARKED on CI on <sha40>`;
@@ -44,6 +47,10 @@ The exact supported final park forms are:
   deadline with seconds and `Z`);
 - `PARKED on process pid <positive-PID> startticks <positive-decimal>`
   (read-only Linux proc and same namespace).
+
+A GitHub API quota wait parks as `PARKED on time <core reset UTC>` from
+`scripts/gh api rate_limit`; on wake, re-read, and if quota is still exhausted,
+re-park on the new reset.
 
 The former `PARKED until <UTC>` is **not** a time park and remains ordinarily
 STOPPED. Old `PARKED on PR #42`, `PARKED on ci:...` and filename-, path-,
