@@ -43,9 +43,11 @@ Untrusted surfaces include PR content, web pages, ChatGPT replies, and imported
 files; any shared resource can be reached by concurrent pack actors. A race is
 reachable when those actors can overlap on the same resource. A narrow window
 or low observed frequency does not disprove it: repeated ticks can encounter it.
-REJECT a race only with exact-reviewed-head file:line proof that overlap cannot
-occur (single writer, lock, strictly sequential caller, or exclusive resource).
-Otherwise choose FIX_NOW or DEFER by the concrete harm, not estimated probability.
+Dismiss a reported race as unreachable only with exact-reviewed-head file:line
+evidence that overlap cannot occur (single writer, lock, strictly sequential
+caller, or exclusive resource). Otherwise describe the reachable race and use
+proportionate blocking or non-blocking reviewer judgment based on concrete harm,
+not estimated probability.
 
 ## 6. Security and scope carve-out
 
