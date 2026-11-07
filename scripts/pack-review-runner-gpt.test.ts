@@ -7434,15 +7434,22 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
   });
 
 
-  it.each(['alive', 'fresh'] as const)(
-    'does not rebind a %s original runner despite a valid new start claim', async (mode) => {
+  it.each([
+    ['alive', '2', 2], ['fresh', '2', 2], ['fresh', '17', 17],
+    ['fresh', 'invalid', 10], ['fresh', '0', 2], ['fresh', '3.9', 3],
+  ] as const)(
+    'does not rebind a %s original runner and exposes grace with configuration %s', async (mode, configured, minutes) => {
       const f = await seedDeadIncumbent({ source02Comment: false, orphanedPair: true });
+      process.env.PACK_REVIEW_RUN_STALE_MINUTES = configured;
       updatePackReviewRun(f.runId, { runnerPid: mode === 'alive' ? process.pid : oldPid }, {
         ...f.options, now: new Date(mode === 'alive' ? staleAt : restartAt),
       });
       const before = getPackReviewRun(f.runId, f.options)!;
       const result = await startPackReview({ ...f.input, claimMode: 'acquire' });
       expect(result.reason).toBe('gpt_incumbent_owner_not_dead');
+      expect(result.graceEndsAtUtc).toBe(new Date(
+        Date.parse(before.heartbeatAtUtc || before.updatedAt) + minutes * 60_000,
+      ).toISOString());
       expect(result.ok).toBe(false);
       expect(result.nextAction).toMatch(/^node --experimental-strip-types scripts\/pack-review-runner\.ts list --project-id orchestrator-pack$/);
       expect(getPackReviewRun(f.runId, f.options)?.runnerPid).toBe(before.runnerPid);
