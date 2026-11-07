@@ -24,7 +24,8 @@ export const USER_MESSAGE_SELECTOR = `${USER_MESSAGE_UNIT_SELECTOR}, ${SELECTION
 export const ASSISTANT_MESSAGE_SELECTOR = `${ASSISTANT_REPLY_UNIT_SELECTOR}, ${SELECTION_MESSAGE_NODE_SELECTOR}:has([${MESSAGE_AUTHOR_ROLE_ATTR}="${ASSISTANT_MESSAGE_STYLE}"])`;
 export const TURN_START_MESSAGE_ATTR = 'data-turn-key';
 export const STOP_BUTTON_TESTID = 'stop-button';
-export const STOP_BUTTON_SELECTOR = `[data-testid="${STOP_BUTTON_TESTID}"], button[aria-label*="Stop"]`;
+// Sidebar menu labels can contain chat titles such as "Actions for Stopped ...".
+export const STOP_BUTTON_SELECTOR = `[data-testid="${STOP_BUTTON_TESTID}"], button[aria-label^="Stop"]`;
 export const REGENERATE_THREAD_ERROR_BUTTON_TESTID = 'regenerate-thread-error-button';
 export const REGENERATE_THREAD_ERROR_BUTTON_SELECTOR = `[data-testid="${REGENERATE_THREAD_ERROR_BUTTON_TESTID}"]`;
 export const CONTINUE_GENERATING_BUTTON_NAME = /continue generating/i;

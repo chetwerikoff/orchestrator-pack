@@ -280,6 +280,8 @@ export interface LaunchInput {
   readonly packRoot?: string;
   /** One-command merge Task creation; existing --task launches do not use this field. */
   readonly prNumber?: number;
+  readonly mergeInstruction?: string;
+  readonly mergeWaiverLine?: string;
   readonly issueNumber?: number;
   readonly delegatedIntegration?: DelegatedIntegrationMarker;
   readonly runId?: string;
@@ -895,7 +897,23 @@ export async function observeQuiescentRestoreCensus(
   return { status: 'ok', value: { terminalFingerprint: keys.sort().join('\\u0000') } };
 }
 
+function validateMergeTaskOptions(input: Pick<LaunchInput, 'workClass' | 'prNumber' | 'mergeInstruction' | 'mergeWaiverLine'>): void {
+  if (input.mergeInstruction === undefined && input.mergeWaiverLine === undefined) return;
+  if (input.workClass !== 'merge') throw new Error('--merge-instruction and --merge-waiver-line are merge-only');
+  if (input.prNumber === undefined) throw new Error('--merge-instruction and --merge-waiver-line require --pr N to create a merge Task spec');
+  if (input.mergeInstruction !== undefined
+    && input.mergeInstruction !== `смерж ${input.prNumber}`
+    && input.mergeInstruction !== `мерж ${input.prNumber} без ревью`) {
+    throw new Error(`--merge-instruction must be exactly «смерж ${input.prNumber}» or «мерж ${input.prNumber} без ревью»`);
+  }
+  if (input.mergeWaiverLine !== undefined && (!input.mergeWaiverLine.trim()
+    || input.mergeWaiverLine.length > 140 || /[\r\n\u2028\u2029]/u.test(input.mergeWaiverLine))) {
+    throw new Error('--merge-waiver-line must be one non-empty line of at most 140 characters');
+  }
+}
+
 export function buildMergeTaskSpec(input: LaunchInput, pr: MergePrSnapshot, orchHandle: string): string {
+  validateMergeTaskOptions(input);
   if (!input.projectId || !input.primaryRoot || !input.packRoot || !isAbsolute(input.packRoot)
     || !Number.isSafeInteger(input.prNumber) || input.prNumber !== pr.number
     || !/^[a-f0-9]{40}$/iu.test(pr.headSha) || !orchHandle.trim()) {
@@ -904,7 +922,8 @@ export function buildMergeTaskSpec(input: LaunchInput, pr: MergePrSnapshot, orch
   const skill = join(input.packRoot, '.cursor', 'skills', 'merge-with-local-adoption', 'SKILL.md');
   const scripts = join(input.packRoot, 'scripts');
   return [
-    `Read and execute ${skill} for PR ${pr.number}: «смерж ${pr.number}», orchestrator-issued Task mode`,
+    `Read and execute ${skill} for PR ${pr.number}: «${input.mergeInstruction ?? `смерж ${pr.number}`}», orchestrator-issued Task mode`,
+    ...(input.mergeWaiverLine !== undefined ? [input.mergeWaiverLine] : []),
     `Project: OPK_PROJECT_ID=${input.projectId}; --project ${input.projectId}; primary checkout ${input.primaryRoot}; put ${scripts} first on PATH; repository ${input.repository}.`,
     `REST-verified OPEN PR #${pr.number}: base ${pr.baseRepository}:${pr.baseRef}; exact head ${pr.headSha}.`,
     'Merge only this head; on drift, report to the coordinator. Recheck the exact PR head immediately before merge.',
@@ -3348,6 +3367,8 @@ const LAUNCH_CLI_OPTIONS = new Set([
   '--run',
   '--task',
   '--pr',
+  '--merge-instruction',
+  '--merge-waiver-line',
   '--manager-brief',
   '--worktree',
   '--worktree-name',
@@ -3415,6 +3436,9 @@ export function parseLaunchAssistantCli(
     prNumber = Number(prText);
   }
   if (prNumber !== undefined && workClass !== 'merge') throw new Error('--pr is merge-only');
+  const mergeInstruction = options.get('--merge-instruction');
+  const mergeWaiverLine = options.get('--merge-waiver-line');
+  validateMergeTaskOptions({ workClass: workClass as LaunchWorkClass, prNumber, mergeInstruction, mergeWaiverLine });
   const managerBrief = options.get('--manager-brief');
   const worktreeSelector = (options.get('--worktree') ?? '').trim();
   const worktreeName = (options.get('--worktree-name') ?? '').trim();
@@ -3485,6 +3509,8 @@ export function parseLaunchAssistantCli(
     projectId: target.projectId,
     primaryRoot: target.primaryRoot,
     ...(prNumber !== undefined ? { prNumber, packRoot: target.packRoot } : {}),
+    ...(mergeInstruction !== undefined ? { mergeInstruction } : {}),
+    ...(mergeWaiverLine !== undefined ? { mergeWaiverLine } : {}),
     workClass: workClass as LaunchWorkClass,
     ...(issueNumber ? { issueNumber } : {}),
     ...(delegatedIntegration ? { delegatedIntegration } : {}),
