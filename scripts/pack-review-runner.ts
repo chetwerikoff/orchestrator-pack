@@ -10251,6 +10251,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         : reason === 'gpt_incumbent_claim_not_owned'
           ? readOnlyClaimObservationAction()
           : `node --experimental-strip-types scripts/pack-review-runner.ts reconcile --source-repo-root ${JSON.stringify(target.sourceRepoRoot)} --repo-slug ${target.repoSlug} --pr-number ${target.prNumber} --immediate`;
+      const heartbeatMs = Date.parse(candidate.heartbeatAtUtc || candidate.updatedAt);
       return {
         ok: false, created: false, reused: true, reason,
         replacementEligible: false,
@@ -10259,6 +10260,10 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         reviewer,
         prNumber: target.prNumber, headSha: target.headSha,
         runId: candidate.id, status: candidate.status,
+        ...(reason === 'gpt_incumbent_owner_not_dead' ? {
+          graceEndsAtUtc: Number.isFinite(heartbeatMs)
+            ? new Date(heartbeatMs + packReviewRunStaleMinutes() * 60_000).toISOString() : null,
+        } : {}),
         coverage: derivePackReviewGptCoverage(candidate.reviewRound),
         ...extra,
         httpStatus: 409,

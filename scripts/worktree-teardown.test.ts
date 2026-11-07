@@ -9,6 +9,7 @@ import type { ProcessResult } from './kernel/subprocess.ts';
 import { WRAPPER_PATH } from './lib/gh-resolve-real-binary.mjs';
 import {
   parseDiscardEntries,
+  defaultProcessCensus,
   runPostMergeTeardown,
   validateForceRemovalHelp,
   type CommandInvocation,
@@ -22,6 +23,29 @@ const MERGE = 'd'.repeat(40);
 const MAIN = 'e'.repeat(40);
 const BRANCH = 'agent/issue-1328';
 const roots: string[] = [];
+
+describe('shared process census (Issue #2801)', () => {
+  it.each(['EACCES', 'EPERM'])('lists kernel-denied %s processes, keeps readable holders and skips exited pids', (code) => {
+    const denied = Object.assign(new Error(code), { code });
+    const gone = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    const rows = defaultProcessCensus('/work/target', {
+      readdirSync: (path) => path === '/proc' ? ['1368', '2000', '3000'] : ['1', '2'],
+      readFileSync: () => `1 (systemd --user) S 1 ${Array(17).fill('0').join(' ')} 777`,
+      readlinkSync: (path) => {
+        if (path.startsWith('/proc/1368/')) throw denied;
+        if (path.startsWith('/proc/3000/')) throw gone;
+        if (path.endsWith('/cwd')) return '/elsewhere';
+        if (path.endsWith('/1')) throw denied;
+        return '/work/target/held';
+      },
+    });
+    expect(rows).toMatchObject([
+      { pid: 1368, cwd: null, cwdDenied: true, fdDenied: true },
+      { pid: 2000, fd: '/work/target/held', fdDenied: true },
+    ]);
+    expect(rows).toHaveLength(2);
+  });
+});
 
 function result(input: Partial<ProcessResult> = {}): ProcessResult {
   return {
