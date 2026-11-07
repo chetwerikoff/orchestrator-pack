@@ -218,6 +218,79 @@ describe('runtime-neutral review delivery contract', () => {
     })).toMatchObject({ terminalStatus: 'changes_requested', requiredStatus: 'failure', blocking: true });
   });
 
+  it('Issue #2796 sends exactly six lines for the unfiltered original source union', async () => {
+    const storeRoot = tempRoot('opk-2796-plain-delivery-');
+    const run = createPackReviewRun({
+      projectId: 'orchestrator-pack', storeRoot, prNumber: 27961, headSha,
+      trustedPackRoot: process.cwd(), sourceRepoRoot: process.cwd(),
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+    }).run;
+    const findings = [
+      { title: 'Same defect', severity: 'blocking', sourceSlotId: 'source-01' },
+      { title: 'Same defect', severity: 'blocking', sourceSlotId: 'source-02' },
+      { title: 'Advisory', severity: 'warning', sourceSlotId: 'source-02' },
+    ];
+    const statuses: string[] = [];
+    const messages: string[] = [];
+    const result = await deliverPackReviewVerdict({
+      run, projectId: 'orchestrator-pack', storeRoot,
+      payload: { verdict: 'findings', findingCount: findings.length, findings },
+      postGithubComment: async () => ({ id: 2796101, url: 'https://example.test/reviews/2796101', event: 'COMMENT' }),
+      writeRequiredStatus: async (request) => { statuses.push(request.state); },
+      notifyWorker: async (request) => {
+        messages.push(request.message);
+        return { state: 'delivered' as const, reason: 'fixture' };
+      },
+    });
+    const journal = getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot });
+    expect(result.status).toBe('changes_requested');
+    expect(statuses).toEqual(['failure']);
+    expect(journal?.findings).toEqual(findings);
+    expect(journal?.findingCount).toBe(3);
+    expect(journal?.journalOutcome).toMatchObject({ state: 'persisted' });
+    expect(messages).toEqual([[
+      'Pack review completed for PR #27961.',
+      'Run: ' + run.id,
+      'Head: ' + headSha,
+      'Verdict: findings',
+      'Findings: 3',
+      'Pack-review status: failure',
+    ].join('\n')]);
+  });
+
+  it.each([
+    [1, { verdict: 'findings' as const, findingCount: 1,
+      findings: [{ severity: 'warning' }] }, 'commented', 'pending'],
+    [2, { verdict: 'clean' as const, findingCount: 0, findings: [] },
+      'up_to_date', 'success'],
+  ] as const)('Issue #2796 T3 round %i preserves local status vs aggregate status',
+    async (ordinal, payload, localStatus, status) => {
+      const storeRoot = tempRoot('opk-2796-round-status-');
+      const run = createPackReviewRun({
+        projectId: 'orchestrator-pack', storeRoot, prNumber: 27962, headSha,
+        trustedPackRoot: process.cwd(), sourceRepoRoot: process.cwd(),
+        canonicalRepository: 'chetwerikoff/orchestrator-pack',
+        accountingVersion: 'issue-1826-logical-rounds-1-1-2',
+        reviewCycleId: 'cycle-2796',
+        logicalRoundOrdinal: ordinal, logicalRoundCap: 2,
+      }).run;
+      const statuses: string[] = [];
+      const result = await deliverPackReviewVerdict({
+        run, projectId: 'orchestrator-pack', storeRoot, payload: {
+          ...payload, findings: [...payload.findings],
+        },
+        postGithubComment: async () => ({
+          id: 2796200 + ordinal, url: 'https://example.test/reviews/2796200',
+          event: 'COMMENT',
+        }),
+        writeRequiredStatus: async (request) => { statuses.push(request.state); },
+        notifyWorker: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+      });
+      expect(result.status).toBe(localStatus);
+      expect(statuses).toEqual([status]);
+    },
+  );
+
   it('keeps T3 round 1 pending and treats worker notification as best-effort', async () => {
     const repoRoot = process.cwd();
     const storeRoot = tempRoot('opk-review-logical-round-delivery-');
