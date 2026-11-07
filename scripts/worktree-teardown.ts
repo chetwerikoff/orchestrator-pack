@@ -6,8 +6,6 @@ import {
   existsSync,
   lstatSync,
   readFileSync,
-  readlinkSync,
-  readdirSync,
   realpathSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, posix, resolve } from 'node:path';
@@ -26,6 +24,7 @@ import {
   type RuntimeCommand,
 } from './worktree-teardown-runtime-profile.ts';
 import { removeIdenticalLaunchCopies, type LaunchCopyResult } from './worktree-lifecycle/launch-copies.ts';
+import { collectProcessSnapshots, type ProcIo } from './worktree-lifecycle/operations.ts';
 
 export type PostMergeTeardownOutcome =
   | 'cleanup_eligible'
@@ -866,80 +865,11 @@ function sameManifest(left: DiscardManifest, right: DiscardManifest): boolean {
     && left.entries.length === right.entries.length;
 }
 
-function isDeniedError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  return code === 'EACCES' || code === 'EPERM';
-}
-
 /** Filesystem reads the census uses; injectable so denied reads can be exercised without root. */
-export interface CensusIo {
-  readonly readdirSync: (path: string) => string[];
-  readonly readFileSync: (path: string, encoding: 'utf8') => string;
-  readonly readlinkSync: (path: string) => string;
-}
+export type CensusIo = ProcIo;
 
-const defaultCensusIo: CensusIo = {
-  readdirSync: (path) => readdirSync(path),
-  readFileSync: (path, encoding) => readFileSync(path, encoding),
-  readlinkSync: (path) => readlinkSync(path),
-};
-
-function readFdHolder(name: string, target: string, io: CensusIo): { fd?: string; denied: boolean } {
-  let entries: string[];
-  try {
-    entries = io.readdirSync(`/proc/${name}/fd`);
-  } catch (error) {
-    return { denied: isDeniedError(error) };
-  }
-  for (const entry of entries) {
-    try {
-      const link = normalizePath(io.readlinkSync(`/proc/${name}/fd/${entry}`).replace(/ \(deleted\)$/, ''));
-      if (link === target || link.startsWith(`${target}/`)) return { fd: link, denied: false };
-    } catch {
-      // fd closed between reads.
-    }
-  }
-  return { denied: false };
-}
-
-export function defaultProcessCensus(target?: string, io: CensusIo = defaultCensusIo): ProcessSnapshot[] {
-  const result: ProcessSnapshot[] = [];
-  for (const name of io.readdirSync('/proc').filter((value) => /^\d+$/.test(value))) {
-    const pid = Number.parseInt(name, 10);
-    if (!Number.isInteger(pid) || pid <= 1) continue;
-    let stat: string;
-    try {
-      stat = io.readFileSync(`/proc/${name}/stat`, 'utf8');
-    } catch {
-      continue;
-    }
-    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-    let cwd: string | null = null;
-    let cwdDenied = false;
-    try {
-      cwd = normalizePath(io.readlinkSync(`/proc/${name}/cwd`).replace(/ \(deleted\)$/, ''));
-    } catch (error) {
-      // Process may disappear or deny access between reads; a denial is counted, not a verdict.
-      cwdDenied = isDeniedError(error);
-    }
-    let fd: string | undefined;
-    let fdDenied = false;
-    if (target && !(cwd === target || cwd?.startsWith(`${target}/`))) {
-      const holder = readFdHolder(name, target, io);
-      fd = holder.fd;
-      fdDenied = holder.denied;
-    }
-    result.push({
-      pid,
-      ppid: Number.parseInt(fields[1] ?? '0', 10),
-      starttime: fields[19] ?? '',
-      cwd,
-      ...(cwdDenied ? { cwdDenied } : {}),
-      ...(fd ? { fd } : {}),
-      ...(fdDenied ? { fdDenied } : {}),
-    });
-  }
-  return result;
+export function defaultProcessCensus(target?: string, io?: CensusIo): ProcessSnapshot[] {
+  return collectProcessSnapshots(target, io);
 }
 
 function selectedProcesses(rows: readonly ProcessSnapshot[], target: string): ProcessSnapshot[] {

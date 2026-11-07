@@ -66,12 +66,15 @@ export interface ProcessEvidence {
   readonly cwd: string | null;
   /** First readable open file descriptor target under the worktree, when that (not the cwd) made the process a holder. */
   readonly fd?: string;
+  readonly cwdDenied?: boolean;
+  readonly fdDenied?: boolean;
 }
 
 /** Observations the census could not make; denied reads are counted, never treated as proof of absence. */
 export interface ProcessObservations {
   readonly unreadableCwd: number;
   readonly unreadableFd: number;
+  readonly unreadable?: readonly ProcessEvidence[];
 }
 
 export interface ProcessCensusResult {
@@ -287,19 +290,20 @@ function underTarget(path: string | null, target: string): boolean {
   return path !== null && (path === target || path.startsWith(`${target}/`));
 }
 
-/** First readable fd target of the process under `target`; denied or vanished reads are counted, not fatal. */
+/** First readable fd target; denied reads are diagnostic, vanished processes return null. */
 function readFdHolder(
   name: string,
   target: string,
-  counters: { unreadableFd: number },
+  denied: { fdDenied: boolean },
   io: ProcIo,
-): string | undefined {
+): string | null | undefined {
   let entries: string[];
   try {
     entries = io.readdirSync(`/proc/${name}/fd`);
   } catch (error) {
-    if (isDenied(error)) counters.unreadableFd += 1;
-    else if (!isGone(error)) {
+    if (isDenied(error)) denied.fdDenied = true;
+    else if (isGone(error)) return null;
+    else {
       throw new TypeError(`process census could not read /proc/${name}/fd: ${error instanceof Error ? error.message : String(error)}`);
     }
     return undefined;
@@ -308,7 +312,11 @@ function readFdHolder(
     let link: string;
     try {
       link = normalizeWorktreePath(io.readlinkSync(`/proc/${name}/fd/${entry}`).replace(/ \(deleted\)$/, ''));
-    } catch {
+    } catch (error) {
+      if (isDenied(error)) denied.fdDenied = true;
+      else if (!isGone(error)) {
+        throw new TypeError(`process census could not read /proc/${name}/fd/${entry}: ${error instanceof Error ? error.message : String(error)}`);
+      }
       continue;
     }
     if (underTarget(link, target)) return link;
@@ -318,8 +326,7 @@ function readFdHolder(
 
 function readProcessSnapshot(
   name: string,
-  target: string,
-  counters: { unreadableCwd: number; unreadableFd: number },
+  target: string | undefined,
   io: ProcIo,
 ): ProcessEvidence | null {
   const pid = Number.parseInt(name, 10);
@@ -338,30 +345,44 @@ function readProcessSnapshot(
     throw new TypeError(`process census received malformed /proc/${name}/stat`);
   }
   let cwd: string | null = null;
+  let cwdDenied = false;
   try {
     cwd = normalizeWorktreePath(io.readlinkSync(`/proc/${name}/cwd`).replace(/ \(deleted\)$/, ''));
   } catch (error) {
-    if (isDenied(error)) counters.unreadableCwd += 1;
-    else if (!isGone(error)) {
+    if (isDenied(error)) cwdDenied = true;
+    else if (isGone(error)) return null;
+    else {
       throw new TypeError(`process census could not read /proc/${name}/cwd: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  const fd = underTarget(cwd, target) ? undefined : readFdHolder(name, target, counters, io);
-  return { pid, ppid, starttime, cwd, ...(fd ? { fd } : {}) };
+  const denied = { fdDenied: false };
+  const fd = target && !underTarget(cwd, target) ? readFdHolder(name, target, denied, io) : undefined;
+  if (fd === null) return null;
+  return {
+    pid, ppid, starttime, cwd,
+    ...(fd ? { fd } : {}),
+    ...(cwdDenied ? { cwdDenied } : {}),
+    ...(denied.fdDenied ? { fdDenied: true } : {}),
+  };
 }
 
-export function collectProcessCensus(worktreePath: string, io: ProcIo = defaultProcIo): ProcessCensusResult {
-  const target = normalizeWorktreePath(worktreePath);
+/** Shared by lifecycle recovery and teardown: kernel denials are diagnostic, readable holders remain authoritative. */
+export function collectProcessSnapshots(worktreePath?: string, io: ProcIo = defaultProcIo): ProcessEvidence[] {
+  const target = worktreePath === undefined ? undefined : normalizeWorktreePath(worktreePath);
   let names: string[];
   try {
     names = io.readdirSync('/proc').filter((name) => /^\d+$/.test(name));
   } catch (error) {
     throw new TypeError(`process census could not enumerate /proc: ${error instanceof Error ? error.message : String(error)}`);
   }
-  const counters = { unreadableCwd: 0, unreadableFd: 0 };
-  const snapshots = names
-    .map((name) => readProcessSnapshot(name, target, counters, io))
+  return names
+    .map((name) => readProcessSnapshot(name, target, io))
     .filter((row): row is ProcessEvidence => row !== null);
+}
+
+export function collectProcessCensus(worktreePath: string, io: ProcIo = defaultProcIo): ProcessCensusResult {
+  const target = normalizeWorktreePath(worktreePath);
+  const snapshots = collectProcessSnapshots(target, io);
   const selected = new Set(
     snapshots
       .filter((row) => underTarget(row.cwd, target) || row.fd !== undefined)
@@ -381,7 +402,11 @@ export function collectProcessCensus(worktreePath: string, io: ProcIo = defaultP
     processes: snapshots
       .filter((row) => selected.has(row.pid))
       .sort((left, right) => left.pid - right.pid),
-    observations: counters,
+    observations: {
+      unreadableCwd: snapshots.filter((row) => row.cwdDenied).length,
+      unreadableFd: snapshots.filter((row) => row.fdDenied).length,
+      unreadable: snapshots.filter((row) => row.cwdDenied || row.fdDenied),
+    },
   };
 }
 
