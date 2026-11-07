@@ -7,10 +7,12 @@
     "scripts/fleet/fleet-sweep.ts",
     "scripts/fleet/fleet-wake.test.ts",
     "scripts/fleet/fleet-wake.ts",
+    "scripts/lib/operator-publication.test.ts",
     "scripts/orca-runtime/adapter.ts",
     "scripts/orca-runtime/send-receipt.test.ts",
     "scripts/orca-runtime/send-receipt.ts",
     "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/pr2-foundation/scheduler-process-integration.test.ts",
     "scripts/unit-watcher-wake.test.ts",
     "scripts/unit-watcher-wake.ts",
     "scripts/vitest-ci-lanes.config.json",
@@ -30,14 +32,16 @@
     "scripts/fleet/fleet-sweep.ts",
     "scripts/fleet/fleet-wake.test.ts",
     "scripts/fleet/fleet-wake.ts",
+    "scripts/lib/operator-publication.test.ts",
     "scripts/orca-runtime/adapter.ts",
     "scripts/orca-runtime/send-receipt.test.ts",
     "scripts/orca-runtime/send-receipt.ts",
     "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/pr2-foundation/scheduler-process-integration.test.ts",
     "scripts/unit-watcher-wake.test.ts",
     "scripts/unit-watcher-wake.ts",
     "scripts/vitest-ci-lanes.config.json",
     "scripts/worktree-lifecycle/merge-cleanup.ts"
   ],
-  "source_revision": "f0cd6500fe070573bea6cbdcce699741e57f1c1b"
+  "source_revision": "4de5a1e7f452e5fdf575074c56fe0d1af005a880"
 }

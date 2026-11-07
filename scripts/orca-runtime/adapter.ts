@@ -1644,10 +1644,11 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       if (response.outcomeCategory === 'process_launch_failed') {
         return { status: 'send_failed', reason: neutralFailureReason(response) };
       }
+      if (!response.ok) return { status: 'dispatch_unknown', reason: neutralFailureReason(response) };
       const receipt = classifyPromptSendReceipt(response, input.worker.id);
       return receipt.status === 'turn_started'
         ? { status: 'dispatched' }
-        : { status: 'dispatch_unknown', reason: receipt.reason };
+        : { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };
     }
     const args = ['terminal', 'send', '--terminal', input.worker.id];
     if (!input.submitOnly) args.push('--text', input.text ?? '');
