@@ -2,6 +2,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSy
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import type { ResolvedAllowlistedCommand } from './reverify-command-resolution.ts';
 
 export interface CommandRunResult {
@@ -249,12 +250,11 @@ function createDisposableWorktreeCopy(cwd: string, prHeadSha?: string): string |
     return dest;
   }
 
-  const archive = spawnSync('git', ['archive', prHeadSha ?? 'HEAD'], {
-    cwd,
-    shell: false,
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  if (archive.status !== 0 || !archive.stdout || !(archive.stdout as Buffer).length) {
+  // latin1 preserves every archive byte through the kernel's string result.
+  const archived = runProcessSync({ command: 'git', args: ['archive', prHeadSha ?? 'HEAD'],
+    cwd, inheritParentEnv: true, encoding: 'latin1' });
+  const archive = { stdout: Buffer.from(archived.stdout, 'latin1') };
+  if (!archived.ok || archive.stdout.length === 0) {
     rmSync(dest, { recursive: true, force: true });
     return null;
   }
