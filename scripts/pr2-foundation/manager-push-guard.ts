@@ -40,6 +40,7 @@ const PATCH_SOURCE_WINDOW = 500;
 const PATCH_SOURCE_PROBE_LIMIT = 2_048;
 const PATCH_APPLY_TRIAL_LIMIT = 1_024;
 const PATCH_PROOF_DEADLINE_MS = 20_000;
+const PUBLICATION_FALLBACK_DEADLINE_MS = 3_000;
 const PROOF_GIT = ['-c', 'core.autocrlf=false', '-c', 'core.safecrlf=false', '-c', 'core.fsmonitor=false'] as const;
 const ZERO_OID = /^0+$/u;
 const OID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u;
@@ -726,16 +727,31 @@ async function evaluateTuples(cwd: string, endpointUrl: string, stdin: string): 
   const patchProof = new PublishedPatchProof(cwd);
   const published = patchProof.selectPublished(remotes);
   const publication = new Map<string, boolean>();
+  let fallbackDeadline: number | undefined;
+  let fallbackStopped = false;
+  const fallbackHasTime = (): boolean => !fallbackStopped
+    && fallbackDeadline !== undefined && performance.now() < fallbackDeadline;
+  const fallbackPublished = (oid: string): boolean => {
+    fallbackDeadline ??= performance.now() + PUBLICATION_FALLBACK_DEADLINE_MS;
+    const tips = publishedCommitOids(cwd, remotes, (_operation, args) => {
+      if (!fallbackHasTime()) return null;
+      const result = git(cwd, args, undefined, undefined, undefined,
+        Math.max(1, Math.ceil(fallbackDeadline! - performance.now())));
+      if (result.timedOut) fallbackStopped = true;
+      return result.ok && fallbackHasTime() ? result : null;
+    }, fallbackHasTime, oid);
+    return tips !== null && fallbackHasTime() && tips.length > 0;
+  };
   const isPublished = (oid: string): boolean => {
     const cached = publication.get(oid);
     if (cached !== undefined) return cached;
     // The existing nonpatch proofs need only published ancestry, not patch.diff
     // discovery. On incomplete discovery query refs containing this exact commit
     // through the same endpoint/refspec eligibility rules. This neither resets
-    // nor supplies evidence to the exhausted exact-patch proof budget.
+    // nor supplies evidence to the exhausted exact-patch proof budget. All such
+    // fallback queries share one small deadline, never a new allowance per OID.
     const proven = published.some((tip) => git(cwd, ['merge-base', '--is-ancestor', oid, tip]).ok)
-      || (patchProof.incomplete() !== null && (publishedCommitOids(cwd, remotes,
-        (_operation, args) => git(cwd, args), () => true, oid)?.length ?? 0) > 0);
+      || (patchProof.incomplete() !== null && fallbackPublished(oid));
     publication.set(oid, proven);
     return proven;
   };

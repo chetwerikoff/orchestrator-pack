@@ -8144,6 +8144,62 @@ function assertB5SpecialRefusal(world: PushWorld, refusal: ReturnType<typeof run
 
 describe('manager push guard proof classes', () => {
   describe('published patch trees', () => {
+    it('fails closed when the invocation-wide publication fallback deadline expires',
+      withWorld({ python: true }, async (world) => {
+        write(world.manager, 'legacy.py', 'x = 1\nif x is None:\n    pass\n');
+        const candidate = commit(world.manager, 'otherwise reproducible Ruff output');
+        const savedEnv = { ...process.env };
+        process.env.PATH = fakeUv(world.base, 'fallback-expiry', { lock: '0.5.0', ruff: '0.5.0' })
+          + ':' + (savedEnv.PATH ?? '');
+        process.env.GIT_CONFIG_GLOBAL = GIT_ENV.GIT_CONFIG_GLOBAL;
+        process.env.GIT_CONFIG_NOSYSTEM = GIT_ENV.GIT_CONFIG_NOSYSTEM;
+        const realSync = subprocess.runProcessSync;
+        const realNow = performance.now.bind(performance);
+        let elapsed = 0;
+        const fallbackChildren: Array<{ args: readonly string[]; timeoutMs?: number }> = [];
+        const clock = vi.spyOn(performance, 'now').mockImplementation(() => realNow() + elapsed);
+        const childSpy = vi.spyOn(subprocess, 'runProcessSync').mockImplementation((options) => {
+          const args = options.args ?? [];
+          if (options.command === 'git' && args[0] === 'for-each-ref') {
+            if (!args.some((arg) => arg.startsWith('--contains='))) {
+              return { ok: false, outcome: 'timeout', exitCode: null, signal: null,
+                stdout: '', stderr: '', timedOut: true, cancelled: false };
+            }
+            fallbackChildren.push({ args, timeoutMs: options.timeoutMs });
+            // A real Git result arriving after the deadline is not proof. No
+            // wall-clock sleep: advancing the monotonic clock is deterministic.
+            const result = realSync(options);
+            elapsed += 3_001;
+            return result;
+          }
+          return realSync(options);
+        });
+        let stderr = '';
+        const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+          stderr += String(chunk);
+          return true;
+        });
+        try {
+          const tuples = ['first', 'second'].map((ref) =>
+            'HEAD ' + candidate + ' refs/heads/' + ref + ' ' + ZERO + '\n').join('');
+          expect(await runPrePush(['origin', world.bare], Buffer.from(tuples), world.manager)).toBe(1);
+          expect(stderr).toContain('exact-patch proof work exhausted');
+          expect(stderr).toContain('parent commit is not proven published on this endpoint');
+          // One shared deadline, including later parent queries and ref tuples;
+          // the second tuple reuses the cached failed publication observations.
+          expect(fallbackChildren).toHaveLength(1);
+          expect(fallbackChildren[0]!.timeoutMs).toBeGreaterThan(0);
+          expect(fallbackChildren[0]!.timeoutMs).toBeLessThanOrEqual(3_000);
+        } finally {
+          stderrSpy.mockRestore();
+          childSpy.mockRestore();
+          clock.mockRestore();
+          process.env = savedEnv;
+        }
+        expect(remoteRef(world, 'refs/heads/first')).toBe('');
+        expect(remoteRef(world, 'refs/heads/second')).toBe('');
+      }));
+
     it.each(['tracking', 'batch'] as const)('keeps independent formatter, pinned Ruff and automatic merge proofs after %s source discovery exhaustion',
       (timeoutChild) => withWorld({ python: true }, async (world) => {
         const publisher = otherClone(world);
