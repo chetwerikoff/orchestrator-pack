@@ -1,0 +1,23 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2810,
+  "declared_paths": [
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts"
+  ],
+  "denylist": [
+    ".github/workflows/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "tests/external-output-references/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts"
+  ],
+  "source_revision": "d48a23420a708d24787abbe02138a1e85f8fe790"
+}
