@@ -178,6 +178,22 @@ describe('Issue #926 delegated integration tracked procedure', () => {
     expect(skill).toContain('Delegated-integration mode must not enter this subsection.');
   });
 
+  it('limits standing-order Tasks to explicit permissions and routes refusals back to their orchestrator', () => {
+    const taskMode = skill.split('In orchestrator-issued Task mode,')[1]!.split('Delegated-integration mode exists')[0]!;
+    expect(taskMode).toContain('Task mode has no unconditional overrides');
+    expect(taskMode).toContain('exact gated PR/head');
+    expect(taskMode).toContain('re-read that head');
+    expect(taskMode).toContain('no implicit CI/review/smoke');
+    expect(taskMode).toContain('no Step 9b cleanup override');
+    expect(taskMode).toContain('orchestrator for fresh admission');
+    const override = skill.split('### 9b — Direct-user exact-target override')[1]!.split('### 9c')[0]!;
+    expect(override).toContain('Task mode must not enter');
+    expect(override).toContain('CLEANUP_BLOCKED');
+    expect(override).not.toContain('qualifying orchestrator-issued Task instruction authorizes it');
+    expect(skill).not.toContain('including repository-owned overrides');
+    expect(skill).not.toContain('direct-user or qualifying Task modes may use Step 9b');
+  });
+
   it('requires independent local adoption discovery and report-only operational outcomes', () => {
     expect(runbook).toContain('Local-adoption prose is a');
     expect(runbook).toContain('hint only');

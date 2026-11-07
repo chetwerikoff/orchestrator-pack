@@ -309,6 +309,96 @@ afterEach(() => {
 });
 
 describe('post-merge destructive teardown', () => {
+  it('cleans the explicitly bound local branch when the PR source branch has a different name', async () => {
+    const paths = fixture();
+    const state = defaultState(paths);
+    const deps = dependencies(paths, state);
+    const base = deps.runner;
+    const report = await runPostMergeTeardown({ ...paths.args, apply: true }, {
+      ...deps,
+      runner: (invocation) => {
+        const response = base(invocation);
+        if (invocation.args[0] === 'pr' && invocation.args[1] === 'view') {
+          return result({ stdout: JSON.stringify({ ...JSON.parse(response.stdout), headRefName: 'pushed/source-branch' }) });
+        }
+        return response;
+      },
+    });
+    expect(report).toMatchObject({ outcome: 'cleanup_complete', branchDeletion: { decision: 'deleted', expectedOid: H0 } });
+    expect(state.invocations).toContainEqual({ command: 'git', args: ['-C', paths.repo, 'update-ref', '-d', `refs/heads/${BRANCH}`, H0] });
+  });
+
+  it.each(['wrong head', 'unmerged PR', 'open PR owns local branch'])(
+    'preserves the bound tree when %s, even with a differently named PR source', async (failure) => {
+      const paths = fixture();
+      const state = defaultState(paths);
+      const deps = dependencies(paths, state);
+      const base = deps.runner;
+      const report = await runPostMergeTeardown({ ...paths.args, apply: true }, {
+        ...deps,
+        runner: (invocation) => {
+          const response = base(invocation);
+          if (invocation.args[0] === 'pr' && invocation.args[1] === 'view') {
+            return result({ stdout: JSON.stringify({
+              ...JSON.parse(response.stdout), headRefName: 'pushed/source-branch',
+              ...(failure === 'wrong head' ? { headRefOid: H2 } : {}),
+              ...(failure === 'unmerged PR' ? { state: 'OPEN' } : {}),
+            }) });
+          }
+          if (failure === 'open PR owns local branch' && invocation.args[0] === 'pr' && invocation.args[1] === 'list') {
+            return result({ stdout: JSON.stringify([{ number: 1330, headRefName: BRANCH }]) });
+          }
+          return response;
+        },
+      });
+      expect(report.outcome).toBe('cleanup_deferred');
+      expect(state.gitPresent).toBe(true);
+      expect(state.invocations.some((item) => item.args.includes('update-ref'))).toBe(false);
+    },
+  );
+
+  it.each(['addition', 'sibling commit', 'Orca activity', 'removed Git sibling', 'removed Orca sibling'])(
+    'checks sibling identity presence rather than full rows: %s', async (change) => {
+      const paths = fixture();
+      const state = defaultState(paths);
+      const deps = dependencies(paths, state);
+      const base = deps.runner;
+      const sibling = join(paths.root, 'sibling');
+      const added = join(paths.root, 'new-sibling');
+      const report = await runPostMergeTeardown({ ...paths.args, apply: true }, {
+        ...deps,
+        runner: (invocation) => {
+          const response = base(invocation);
+          const after = !state.gitPresent;
+          const args = invocation.args;
+          if (invocation.command === 'git' && args.includes('worktree') && args.includes('list')) {
+            const extra = after && change === 'removed Git sibling' ? ''
+              : `\nworktree ${sibling}\nHEAD ${after && change === 'sibling commit' ? H2 : H0}\nbranch refs/heads/sibling\n`;
+            return result({ stdout: response.stdout + extra + (after && change === 'addition'
+              ? `\nworktree ${added}\nHEAD ${H2}\nbranch refs/heads/added\n` : '') });
+          }
+          if (args[0] === 'worktree' && args[1] === 'list') {
+            const value = JSON.parse(response.stdout);
+            if (!(after && change === 'removed Orca sibling')) {
+              value.result.worktrees.push({ id: `repo::${sibling}`, path: sibling,
+                head: after && change === 'sibling commit' ? H2 : H0,
+                lastActivityAt: after && change === 'Orca activity' ? 'later' : 'earlier',
+                comment: after ? 'working' : '', isUnread: after });
+            }
+            if (after && change === 'addition') value.result.worktrees.push({ id: `repo::${added}`, path: added });
+            return result({ stdout: JSON.stringify(value) });
+          }
+          return response;
+        },
+      });
+      const missing = change.startsWith('removed');
+      expect(report.outcome).toBe(missing ? 'task_degraded' : 'cleanup_complete');
+      expect(report.readback).toMatchObject({ gitAbsent: true, orcaAbsent: true, unrelatedInventoryStable: !missing,
+        missingUnrelatedPaths: missing ? [sibling] : [] });
+      if (missing) expect(report.error).toContain(sibling);
+    },
+  );
+
   it('accepts H0 target, H1 merged PR, active agents, dirty files, and a moving main', async () => {
     const paths = fixture();
     const state = defaultState(paths);

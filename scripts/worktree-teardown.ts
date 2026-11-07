@@ -24,7 +24,7 @@ import {
   type RuntimeCommand,
 } from './worktree-teardown-runtime-profile.ts';
 import { removeIdenticalLaunchCopies, type LaunchCopyResult } from './worktree-lifecycle/launch-copies.ts';
-import { collectProcessSnapshots, type ProcIo } from './worktree-lifecycle/operations.ts';
+import { collectProcessSnapshots, unrelatedWorktreeIdentities, missingWorktreePaths, type ProcIo } from './worktree-lifecycle/operations.ts';
 
 export type PostMergeTeardownOutcome =
   | 'cleanup_eligible'
@@ -134,7 +134,7 @@ interface InventorySnapshot {
   readonly targetRuntimeRows: readonly RuntimeWorktree[];
   readonly targetAgentRows: readonly RuntimeWorktree[];
   readonly targetTerminals: readonly RuntimeTerminal[];
-  readonly unrelatedDigest: string;
+  readonly unrelatedIdentities: ReadonlyMap<string, string>;
 }
 
 interface TargetIdentity {
@@ -221,6 +221,7 @@ export interface PostMergeTeardownReport {
     readonly gitAbsent: boolean;
     readonly orcaAbsent: boolean;
     readonly unrelatedInventoryStable: boolean;
+    readonly missingUnrelatedPaths: readonly string[];
   };
   readonly effects: readonly string[];
   readonly error?: string;
@@ -453,10 +454,6 @@ function inventorySnapshot(
     runtimeJson<unknown>(runner, RUNTIME.terminals_all(), 'orca terminal list'),
     'orca terminal list',
   );
-  const gitUnrelated = gitWorktreeRows(gitRaw).filter((row) => row.path !== target);
-  const orcaUnrelated = runtimeWorktrees.filter(
-    (row) => typeof row.path !== 'string' || normalizePath(row.path) !== target,
-  );
   return {
     runtimeWorktrees,
     runtimeAgents,
@@ -465,7 +462,7 @@ function inventorySnapshot(
     targetRuntimeRows: targetRuntimeRows(runtimeWorktrees, target),
     targetAgentRows: targetRuntimeRows(runtimeAgents, target),
     targetTerminals: targetTerminals(runtimeTerminals, target),
-    unrelatedDigest: digest({ git: gitUnrelated, orca: orcaUnrelated }),
+    unrelatedIdentities: unrelatedWorktreeIdentities(gitWorktreeRows(gitRaw), runtimeWorktrees, target),
   };
 }
 
@@ -598,15 +595,12 @@ function proveMergedPr(
   runner: CommandRunner,
   repositoryRoot: string,
   pr: number,
-  expectedBranch: string | null,
-  detached: boolean,
   finalPrHead: string,
 ): PrInfo {
   const defaultBranch = selectedDefaultBranch();
   const info = readPr(runner, repositoryRoot, pr);
   if (info.state !== 'MERGED') throw new TypeError(`PR #${String(pr)} is ${info.state}, not MERGED`);
   if (info.headRefOid !== finalPrHead) throw new TypeError('live merged PR head differs from bound H1');
-  if (!detached && info.headRefName !== expectedBranch) throw new TypeError('live merged PR branch differs from bound branch');
   if (info.baseRefName !== undefined && info.baseRefName !== defaultBranch) throw new TypeError(`merged PR base is not selected default branch ${defaultBranch}`);
   const mergeOid = info.mergeCommit?.oid;
   if (typeof mergeOid !== 'string') throw new TypeError('merged PR omitted mergeCommit.oid');
@@ -749,8 +743,6 @@ function proveTarget(
     runner,
     input.repositoryRoot,
     input.pr,
-    input.expectedBranch,
-    input.detached,
     input.finalPrHead,
   );
   const inventory = inventorySnapshot(runner, input.repositoryRoot, input.target);
@@ -1068,8 +1060,6 @@ function branchDecision(
     runner,
     proof.identity.repositoryRoot,
     pr,
-    branch,
-    false,
     normalizeSha(proof.pr.headRefOid, 'final PR head'),
   );
   if (!proveBranchOwnership(runner, proof.identity.repositoryRoot, pr, prInfo, branch)) {
@@ -1124,7 +1114,7 @@ function readback(
   runner: CommandRunner,
   repositoryRoot: string,
   target: string,
-  unrelatedBefore: string,
+  unrelatedBefore: ReadonlyMap<string, string>,
 ): NonNullable<PostMergeTeardownReport['readback']> {
   const snapshot = inventorySnapshot(runner, repositoryRoot, target);
   const gitAbsent = gitWorktreeRows(snapshot.gitWorktreesRaw).every((row) => row.path !== target);
@@ -1132,7 +1122,8 @@ function readback(
   return {
     gitAbsent,
     orcaAbsent,
-    unrelatedInventoryStable: snapshot.unrelatedDigest === unrelatedBefore,
+    unrelatedInventoryStable: missingWorktreePaths(unrelatedBefore, snapshot.unrelatedIdentities).length === 0,
+    missingUnrelatedPaths: missingWorktreePaths(unrelatedBefore, snapshot.unrelatedIdentities),
   };
 }
 
@@ -1216,7 +1207,7 @@ export async function runPostMergeTeardown(
 
   if (!existsSync(target)) {
     try {
-      const rb = readback(runner, repositoryRoot, target, inventorySnapshot(runner, repositoryRoot, target).unrelatedDigest);
+      const rb = readback(runner, repositoryRoot, target, inventorySnapshot(runner, repositoryRoot, target).unrelatedIdentities);
       if (rb.gitAbsent && rb.orcaAbsent) {
         return { ...report, repositoryRoot, worktree: target, outcome: 'already_absent', readback: rb };
       }
@@ -1454,7 +1445,7 @@ export async function runPostMergeTeardown(
   effects.push(`${removal.method} worktree removal attempted`);
   const branchDeletion = branchDecision(runner, fresh, authorizedHeads, args.pr!);
   if (branchDeletion.decision === 'deleted') effects.push('local branch deleted by expected-OID CAS');
-  const rb = readback(runner, repositoryRoot, target, first.inventory.unrelatedDigest);
+  const rb = readback(runner, repositoryRoot, target, first.inventory.unrelatedIdentities);
   const complete = rb.gitAbsent && rb.orcaAbsent && rb.unrelatedInventoryStable;
   return {
     ...report,
@@ -1469,7 +1460,7 @@ export async function runPostMergeTeardown(
     branchDeletion,
     readback: rb,
     effects,
-    ...(!complete ? { error: 'dual post-effect read-back did not prove exact absence with unrelated inventory unchanged' } : {}),
+    ...(!complete ? { error: `dual post-effect read-back: ${!rb.gitAbsent || !rb.orcaAbsent ? 'selected target still present; ' : ''}missing pre-existing unrelated worktrees: ${rb.missingUnrelatedPaths.join(', ') || 'none'}` } : {}),
   };
 }
 

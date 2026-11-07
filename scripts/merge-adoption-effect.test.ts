@@ -950,6 +950,12 @@ describe('Issue #2145 merge adoption effect verification', () => {
     for (const command of ['rev-parse --show-toplevel', 'branch --show-current', 'status --short', 'diff --stat', 'diff --cached --stat', 'stash list', 'merge-base --is-ancestor "$MERGE_SHA" HEAD', 'log -1 --oneline']) {
       expect(skill).toContain('git -C "$PRIMARY_ROOT" ' + command);
     }
+    const readback = skill.split('## Step 6 — Adopt the merged selected default branch')[1]!.split('## Step 7')[0]!;
+    expect(readback).toContain('merge-base --is-ancestor "$MERGE_SHA" HEAD');
+    expect(readback).toContain('branch --show-current');
+    expect(readback).toContain('rev-list --left-right --count "HEAD...origin/$TARGET_DEFAULT_BRANCH"');
+    expect(readback).toContain('ahead=0 and behind=0');
+    expect(readback).toContain('not a fourth terminal fact');
   });
 });
 

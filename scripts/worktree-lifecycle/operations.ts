@@ -640,7 +640,6 @@ function checkMerged(
     pr.state !== 'MERGED'
     || pr.headRefOid !== finalHead
     || !pr.mergeCommitOid
-    || (expected.mode === 'branch-bound' && pr.headRefName !== expected.branchName)
     || (pr.baseRefName !== undefined && pr.baseRefName !== defaultBranch)
   ) {
     return false;
@@ -721,14 +720,35 @@ function relevantInventoryFingerprint(
   return digest({ git, orca, agents, terminals });
 }
 
-function nonTargetFingerprint(expected: ExpectedWorktreeIdentity, census: ReturnType<typeof collectCensus>): string {
+/** Stable identities only: ordinary sibling activity and additions are not cleanup damage. */
+export function unrelatedWorktreeIdentities(
+  git: readonly { readonly path: string }[],
+  orca: readonly { readonly id?: string; readonly path?: string }[],
+  target: string,
+): ReadonlyMap<string, string> {
+  const identities = new Map<string, string>();
+  for (const row of git) {
+    const path = normalizeWorktreePath(row.path);
+    if (path !== target) identities.set(JSON.stringify(['git', path]), path);
+  }
+  for (const row of orca) {
+    const path = row.path === undefined ? undefined : normalizeWorktreePath(row.path);
+    if (path !== target) identities.set(JSON.stringify(['orca', row.id, path]), path ?? row.id ?? '<unknown>');
+  }
+  return identities;
+}
+
+export function missingWorktreePaths(before: ReadonlyMap<string, string>, after: ReadonlyMap<string, string>): string[] {
+  return [...new Set([...before].filter(([identity]) => !after.has(identity)).map(([, path]) => path))].sort();
+}
+
+function nonTargetIdentities(expected: ExpectedWorktreeIdentity, census: ReturnType<typeof collectCensus>): ReadonlyMap<string, string> {
   const repositoryId = census.classification.expected.repositoryId ?? expected.repositoryId;
-  return digest({
-    git: census.classification.evidence.git.rows.filter((row) => row.path !== expected.path),
-    orca: census.classification.evidence.orca.rows.filter(
-      (row) => row.repoId === repositoryId && row.path !== expected.path,
-    ),
-  });
+  return unrelatedWorktreeIdentities(
+    census.classification.evidence.git.rows,
+    census.classification.evidence.orca.rows.filter((row) => row.repoId === repositoryId),
+    expected.path,
+  );
 }
 
 function deferred(
@@ -898,7 +918,7 @@ function recoverGitOnly(
       };
     }
 
-    const beforeNonTarget = nonTargetFingerprint(expected, fresh.census);
+    const beforeNonTarget = nonTargetIdentities(expected, fresh.census);
     const removalArgs = ['-C', expected.repositoryRoot, 'worktree', 'remove', expected.path];
     const removal = runner({ command: 'git', args: removalArgs });
     const effects = [removal.ok ? 'git worktree remove (non-force)' : 'git worktree remove attempted'];
@@ -953,7 +973,8 @@ function recoverGitOnly(
     }
     const post = collectCensus(expected, operations);
     const absent = post.classification.classification === 'absent';
-    const unrelatedStable = nonTargetFingerprint(expected, post) === beforeNonTarget;
+    const missing = missingWorktreePaths(beforeNonTarget, nonTargetIdentities(expected, post));
+    const unrelatedStable = missing.length === 0;
     return {
       schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1',
       context: 'explicit-recovery',
@@ -969,7 +990,7 @@ function recoverGitOnly(
       terminals: fresh.terminals,
       branchDeletion,
       ...(!absent || !unrelatedStable
-        ? { error: 'post-effect read-back did not prove exact absence with unrelated inventory unchanged' }
+        ? { error: `post-effect read-back: ${!absent ? 'selected target still present; ' : ''}missing pre-existing unrelated worktrees: ${missing.join(', ') || 'none'}` }
         : {}),
     };
   } finally {
@@ -1035,7 +1056,7 @@ function standardTeardown(
     }
 
     const runner = operations.runner ?? defaultRunner;
-    const beforeNonTarget = nonTargetFingerprint(expected, census);
+    const beforeNonTarget = nonTargetIdentities(expected, census);
     const args = [
       '--experimental-strip-types',
       join(dirname(WRAPPER_PATH), 'worktree-teardown.ts'),
@@ -1096,7 +1117,8 @@ function standardTeardown(
 
     const post = collectCensus(expected, operations);
     const absent = post.classification.classification === 'absent';
-    const unrelatedStable = nonTargetFingerprint(expected, post) === beforeNonTarget;
+    const missing = missingWorktreePaths(beforeNonTarget, nonTargetIdentities(expected, post));
+    const unrelatedStable = missing.length === 0;
     if (absent && unrelatedStable) {
       return {
         schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1',
@@ -1128,9 +1150,10 @@ function standardTeardown(
         : ['exact post-merge destructive teardown attempted'],
       postClassification: post.classification,
       standardTeardown: child,
-      error: result.ok
-        ? `post-merge teardown ended ${childStatus ?? 'without a readable outcome'} and dual read-back did not prove exact absence`
-        : `post-merge teardown outcome was unknown or failed and read-back remained disputed: ${commandError(result, process.execPath, args)}`,
+      error: (result.ok
+        ? `post-merge teardown ended ${childStatus ?? 'without a readable outcome'} and dual read-back did not prove exact absence with pre-existing unrelated worktrees retained`
+        : `post-merge teardown outcome was unknown or failed and read-back remained disputed: ${commandError(result, process.execPath, args)}`)
+        + (missing.length > 0 ? `; missing pre-existing unrelated worktrees: ${missing.join(', ')}` : ''),
     };
   } finally {
     releaseLifecycleExclusion(lockPath, lock);
