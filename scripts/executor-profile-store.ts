@@ -72,7 +72,7 @@ export function overlayExecutorProfileEnv(
   const overlaid: NodeJS.ProcessEnv = { ...env, ...stored };
   for (const key of EXPLICIT_MANAGER_OVERRIDE_KEYS) {
     const explicit = env[key];
-    if (typeof explicit === 'string' && explicit.trim() !== '') overlaid[key] = explicit;
+    if (typeof explicit === 'string') overlaid[key] = explicit;
   }
   return overlaid;
 }

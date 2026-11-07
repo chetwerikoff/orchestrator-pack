@@ -5264,6 +5264,46 @@ describe('machine-local executor profile store', () => {
     });
   });
 
+  it.each(['', ' \t '])('refuses explicit empty manager overrides instead of the stored manager profile (%j)', (explicit) => {
+    const options = {
+      storePath: '/operator/executor-profiles.env',
+      readFile: () => [
+        'PACK_EXECUTOR_MANAGER_AGENT=opencode',
+        'PACK_EXECUTOR_MANAGER_MODEL=openai/gpt-6-luna',
+        'PACK_EXECUTOR_MANAGER_EFFORT=medium',
+        'PACK_EXECUTOR_FF_LOCAL_AGENT=opencode',
+        'PACK_EXECUTOR_FF_LOCAL_MODEL=openai/gpt-6.1-sol',
+        'PACK_EXECUTOR_FF_LOCAL_EFFORT=medium',
+      ].join('\n'),
+    };
+    const env = {
+      PACK_EXECUTOR_MANAGER_AGENT: explicit,
+      PACK_EXECUTOR_MANAGER_MODEL: explicit,
+      PACK_EXECUTOR_MANAGER_EFFORT: explicit,
+    };
+    const effective = overlayExecutorProfileEnv(env, options);
+    expect(effective).toMatchObject(env);
+    expect(effective.PACK_EXECUTOR_MANAGER_MODEL).not.toBe('openai/gpt-6-luna');
+    const missingVariables = Object.keys(env);
+    expect(resolveExecutorProfile('manager', effective, 'exact_terminal_worktree')).toMatchObject({
+      status: 'continue',
+      cause: 'executor_profile_missing',
+      evidence: { missingVariables },
+      nextAction: {
+        kind: 'repair_executor_profile',
+        note: `export the required stable profile variables: ${missingVariables.join(',')}`,
+      },
+    });
+    expect(overlayExecutorProfileEnv({}, options)).toMatchObject({
+      PACK_EXECUTOR_MANAGER_AGENT: 'opencode',
+      PACK_EXECUTOR_MANAGER_MODEL: 'openai/gpt-6-luna',
+      PACK_EXECUTOR_MANAGER_EFFORT: 'medium',
+      PACK_EXECUTOR_FF_LOCAL_AGENT: 'opencode',
+      PACK_EXECUTOR_FF_LOCAL_MODEL: 'openai/gpt-6.1-sol',
+      PACK_EXECUTOR_FF_LOCAL_EFFORT: 'medium',
+    });
+  });
+
   it('rejects a foreign key before applying any store values and never changes PATH', () => {
     const env = { PATH: '/operator/bin', PACK_EXECUTOR_T2_MODEL: 'live-model' };
     expect(() => overlayExecutorProfileEnv(env, {
