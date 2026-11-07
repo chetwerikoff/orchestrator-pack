@@ -26,9 +26,7 @@ import {
   evaluateExecutorRouteAdmission,
   EXECUTOR_FAMILY_DESCRIPTORS,
   executorCatalogContains,
-  OPENCODE_PACK_AGENT,
   buildOpenCodeAgentOverlay,
-  OPENCODE_EXECUTABLE_VARIABLE,
   pinnedProbeCommand,
   openCodeAgentConfigFromInfo,
   openCodeAgentSemantics,
@@ -38,6 +36,7 @@ import {
   withOpenCodeFleetBrowserDenies,
   openCodeConfigPaths,
   openCodeEdgeCapabilities,
+  openCodeVariantCatalog,
   profileNamesForTask,
   resolveSemanticExecutorProfile,
   withMergeExecutorProfileDefaults,
@@ -303,11 +302,6 @@ export interface RestoreWorktreeIdentity {
   readonly path: string;
 }
 
-export interface RestoreQuiescenceWitness {
-  /** Sorted all-workspace terminal identities; changed snapshots require reconciliation. */
-  readonly terminalFingerprint: string;
-}
-
 export interface ManagerPushGuardRequest {
   readonly repository: string;
   readonly worktreePath: string;
@@ -346,8 +340,8 @@ export interface LaunchDependencies {
   readonly readUnnumberedAssignment?: (taskId: string, dispatchId: string) => WorkerAssignmentRecord | null;
   /** Read-only Orca worktree-show; never infer identity from --worktree text alone. */
   readonly resolveRestoreWorktree?: (selector: string) => Promise<EdgeResult<RestoreWorktreeIdentity>>;
-  /** Complete all-workspace native terminal list and Linux CWD/descendant census. */
-  readonly observeRestoreQuiescence?: (path: string) => Promise<EdgeResult<RestoreQuiescenceWitness>>;
+  /** Complete native terminal list, scoped to this worktree, and Linux CWD/descendant census. */
+  readonly observeRestoreQuiescence?: (path: string) => Promise<EdgeResult<true>>;
   /** Native exact-Dispatch/worker-absent witness, not an assignment/store guess. */
   readonly proveTerminalGone?: (assignment: WorkerAssignmentRecord) => Promise<TerminalGoneAssignmentEvidence | null>;
   readonly prepareWorktree: (input: WorktreePreparationRequest) => Promise<EdgeResult<PreparedWorktree>>;
@@ -766,6 +760,7 @@ function continued(
   // continuation. Keep a stage-specific retry/start command when one exists;
   // uncertain Dispatch/start outcomes must still be reconciled before a retry.
   const sameTaskCommand = input.workClass === 'merge' && input.prNumber !== undefined
+    && edge.evidence?.errorCode !== 'task_not_startable'
     && !input.taskId && resources.taskId && input.projectId && input.primaryRoot
     ? mergeSameTaskCommand(input, resources.taskId, resources.repository) : null;
   const nextAction: NextAction = sameTaskCommand ? {
@@ -850,17 +845,18 @@ export async function claudePaneProfileObserved(
   if (!family) return false;
   const modelLine = new RegExp(`\\b${family}(?:[- .]?5[- .]?5)\\b`, 'iu');
   const effortLine = new RegExp(`\\beffort\\s*[:=]\\s*${profile.effort}\\b|\\b${profile.effort}\\s+effort\\b`, 'iu');
-  return modelLine.test(footer) && effortLine.test(footer);
+  const modelEffortLine = new RegExp(`${modelLine.source}[ \\t]+${profile.effort}\\b`, 'iu');
+  return modelLine.test(footer) && (effortLine.test(footer) || modelEffortLine.test(footer));
 }
 
-/** Conservative native all-workspace terminal + Linux /proc process snapshot. */
+/** Reobserve selected-worktree terminals and Linux /proc processes, ignoring other fleets. */
 export async function observeQuiescentRestoreCensus(
   adapter: RuntimeAdapter,
   worktreePath: string,
   processCensus: (path: string) => readonly unknown[] = collectProcessEvidence,
   platform: string = process.platform,
-): Promise<EdgeResult<RestoreQuiescenceWitness>> {
-  const refusal = (cause: string, evidence: Readonly<Record<string, unknown>> = {}): EdgeResult<RestoreQuiescenceWitness> => ({
+): Promise<EdgeResult<true>> {
+  const refusal = (cause: string, evidence: Readonly<Record<string, unknown>> = {}): EdgeResult<true> => ({
     status: 'continue', cause, actor: 'operator', evidence,
     nextAction: { kind: 'reconcile_worktree_setup',
       note: 'inspect the exact orca terminal list, orchestration dispatch-show/worker-show and Linux /proc CWD/descendants; stop/abandon only the supported bound identity, quiesce execution and retry serially' },
@@ -873,20 +869,17 @@ export async function observeQuiescentRestoreCensus(
   catch { return refusal('worktree_restore_path_unavailable'); }
   const listed = await adapter.listWorkersAsync({ workspace: selected });
   if (listed.status !== 'ok') return refusal('worktree_restore_terminals_incomplete', { reason: listed.reason });
-  const keys: string[] = [];
-  const seen = new Set<string>();
   for (const item of listed.value) {
-    if (item.identity.runtime !== adapter.id || !item.identity.id.trim() || !item.identity.generation.trim()
-      || !isAbsolute(item.workspacePath)) return refusal('worktree_restore_terminal_identity_invalid');
+    if (!isAbsolute(item.workspacePath)) continue;
     let canonical: string;
     try { canonical = realpathSync(item.workspacePath); }
-    catch { return refusal('worktree_restore_terminal_path_unavailable'); }
-    const key = [item.identity.id, item.identity.generation, canonical].join(':');
-    if (seen.has(key)) return refusal('worktree_restore_terminal_identity_ambiguous');
-    seen.add(key);
-    if (canonical === selected) return refusal('worktree_restore_target_terminal_retained',
+    catch { continue; }
+    if (canonical !== selected) continue;
+    if (item.identity.runtime !== adapter.id || !item.identity.id.trim() || !item.identity.generation.trim()) {
+      return refusal('worktree_restore_terminal_identity_invalid');
+    }
+    return refusal('worktree_restore_target_terminal_retained',
       { terminalId: item.identity.id, terminalGeneration: item.identity.generation });
-    keys.push(key);
   }
   let processes: readonly unknown[];
   try { processes = processCensus(selected); }
@@ -894,7 +887,7 @@ export async function observeQuiescentRestoreCensus(
     { diagnostic: error instanceof Error ? error.message : String(error) }); }
   if (!Array.isArray(processes)) return refusal('worktree_restore_process_census_unavailable');
   if (processes.length !== 0) return refusal('worktree_restore_target_process_retained', { processCount: processes.length });
-  return { status: 'ok', value: { terminalFingerprint: keys.sort().join('\\u0000') } };
+  return { status: 'ok', value: true };
 }
 
 function validateMergeTaskOptions(input: Pick<LaunchInput, 'workClass' | 'prNumber' | 'mergeInstruction' | 'mergeWaiverLine'>): void {
@@ -1209,7 +1202,7 @@ export async function runSupervisedTaskLaunchAssistant(
   // predecessor. An --existing-terminal handoff is a different operation:
   // its retained terminal is never misrepresented as a zero-terminal census.
   const restoration = input.workClass !== 'merge' && Boolean(input.worktreeSelector && !input.existingTerminal && earlyCurrent);
-  let restoreBefore: { readonly selected: RestoreWorktreeIdentity; readonly census: RestoreQuiescenceWitness } | null = null;
+  let restoreBefore: { readonly selected: RestoreWorktreeIdentity } | null = null;
   if (restoration && earlyCurrent) {
     const refuse = (cause: string, extra: Readonly<Record<string, unknown>> = {}): Omit<Extract<EdgeResult<true>, { status: 'continue' }>, 'status'> => ({
       cause, actor: 'operator', evidence: extra,
@@ -1245,10 +1238,18 @@ export async function runSupervisedTaskLaunchAssistant(
       return continued(input, 'dispatch_admission_early', refuse('worktree_restore_old_dispatch_unproven'),
         resources, startedAtMs, timings, deps.now);
     }
+    if (earlyCurrent.taskId === taskId && oldDispatch.value.status === 'failed') {
+      return continued(input, 'dispatch_admission_early', {
+        cause: 'worktree_restore_task_not_startable', actor: 'orchestrator',
+        evidence: { taskId, dispatchId: earlyCurrent.bindingKey },
+        nextAction: { kind: 'reconcile_dispatch',
+          note: `Create a new Task in the same Run${input.runId ? ` ${input.runId}` : ''} for the same Issue ${input.issueNumber}; rerun the same launch with --task <new Task> and unchanged --worktree ${quote(input.worktreeSelector!)}. Preserve this checkout; the failed Task cannot start` },
+      }, resources, startedAtMs, timings, deps.now);
+    }
     const census = await deps.observeRestoreQuiescence(selected.value.path);
     if (census.status !== 'ok') return continued(input, 'dispatch_admission_early', census,
       resources, startedAtMs, timings, deps.now);
-    restoreBefore = { selected: selected.value, census: census.value };
+    restoreBefore = { selected: selected.value };
   }
 
   const providerMode = profile.route === 'provider_new_top_level';
@@ -1442,12 +1443,6 @@ export async function runSupervisedTaskLaunchAssistant(
     const finalCensus = await deps.observeRestoreQuiescence!(selected.value.path);
     if (finalCensus.status !== 'ok') return continued(input, 'dispatch_admission_final', finalCensus,
       resources, startedAtMs, timings, deps.now);
-    if (finalCensus.value.terminalFingerprint !== restoreBefore.census.terminalFingerprint) {
-      return continued(input, 'dispatch_admission_final', {
-        cause: 'worktree_restore_terminal_inventory_changed', actor: 'operator', evidence: {},
-        nextAction: { kind: 'reconcile_dispatch', note: 'reinspect the full all-workspace Orca inventory and /proc before a new operator-serialized attempt' },
-      }, resources, startedAtMs, timings, deps.now);
-    }
   }
   // Early admission rested on an owned terminal predecessor. If the final read no
   // longer shows that same exact proof (including an absent Dispatch after the
@@ -1688,7 +1683,18 @@ export async function runSupervisedTaskLaunchAssistant(
         ...(requestId ? { requestId } : {}),
         ...(safeDispatchId ? { dispatchId: safeDispatchId } : {}),
       },
-      nextAction: requestId ? {
+      nextAction: supervised.errorCode === 'task_not_startable' ? {
+        kind: 'reconcile_dispatch',
+        ...(!input.existingTerminal && terminal ? {
+          command: `orca terminal close --terminal ${quote(terminal.identity.id)} --json`,
+        } : {}),
+        note: [
+          !input.existingTerminal && terminal
+            ? `This attempt created Task-owned terminal ${terminal.identity.id}; close only it with orca terminal close --terminal ${quote(terminal.identity.id)} --json before restoring this worktree.`
+            : 'Inspect the exact native Task/Dispatch and its terminal; preserve any pre-existing terminal and reconcile its ownership before restoration.',
+          `Create a new startable Task in the same Run${input.runId ? ` ${input.runId}` : ''} for the same Issue${input.issueNumber ? ` ${input.issueNumber}` : ''}; rerun the launch with --task <new Task>${input.worktreeSelector ? ` and unchanged --worktree ${quote(input.worktreeSelector)}` : ''}. Preserve the checkout; do not retry the non-startable Task.`,
+        ].join(' '),
+      } : requestId ? {
         kind: 'retry_supervised_start', requestId, command: retry,
       } : {
         kind: 'reconcile_dispatch',
@@ -2029,14 +2035,12 @@ export async function resolveLiveExecutorProfile(
     const nativeHelp = await execute(pinnedProbeCommand(profile, descriptor.capabilityProbeCommands[0]!));
     if (!nativeHelp.ok) return routeRefusalEdge(profile, 'executor_route_unavailable');
     capabilities = claudeHelpEdgeCapabilities(`${nativeHelp.stdout}\n${nativeHelp.stderr ?? ''}`);
-  } else {
+  } else if (profile.family !== 'opencode') {
     const listed = await execute(pinnedProbeCommand(profile, descriptor.catalogCommand));
     if (!listed.ok) return {
       status: 'continue', cause: 'executor_profile_applicability_unproven', actor: 'operator',
       evidence: { executorFamily: profile.family, profileVariables: profile.names },
-      nextAction: { kind: 'repair_executor_profile', note: profile.opencodeExecutable
-        ? `the profile-pinned absolute opencode binary did not run; repair ${OPENCODE_EXECUTABLE_VARIABLE} to an installed executable named opencode`
-        : 'make the selected executor model catalog observable and select an available model' },
+      nextAction: { kind: 'repair_executor_profile', note: 'make the selected executor model catalog observable and select an available model' },
     };
     if (!executorCatalogContains(profile, listed.stdout)) return {
       status: 'continue', cause: 'executor_profile_model_unavailable', actor: 'operator',
@@ -2045,17 +2049,29 @@ export async function resolveLiveExecutorProfile(
     };
   }
   if (profile.family === 'opencode') {
-    const probeOutputs: string[] = [];
-    const inlineConfig = JSON.stringify({ agent: { [OPENCODE_PACK_AGENT]: { model: profile.model, variant: profile.effort } } });
-    for (const probe of descriptor.capabilityProbeCommands.slice(0, 2)) {
-      const isDebugProbe = probe[0] === 'opencode' && probe[1] === 'debug';
-      const observation = isDebugProbe
-        ? await execute(pinnedProbeCommand(profile, probe), undefined, { OPENCODE_CONFIG_CONTENT: inlineConfig })
-        : await execute(pinnedProbeCommand(profile, probe));
-      if (!observation.ok) return routeRefusalEdge(profile, 'executor_route_unavailable');
-      probeOutputs.push(`${observation.stdout}\n${observation.stderr}`);
+    const refuse = (cause: string): EdgeResult<ExecutorProfile> => ({
+      status: 'continue', cause, actor: 'operator',
+      evidence: { executorFamily: profile.family, profileVariables: profile.names },
+      nextAction: { kind: 'repair_executor_profile',
+        note: 'Rerun the same launch command once; if it repeats, select a model and effort listed by the profile-pinned opencode models --verbose, or repair that executable if the catalog command fails' },
+    });
+    let listed = await execute(pinnedProbeCommand(profile, descriptor.capabilityProbeCommands[1]!));
+    if (!listed.ok) return refuse('executor_profile_applicability_unproven');
+    let catalog = openCodeVariantCatalog(listed.stdout);
+    if (Object.keys(catalog).length === 0) return refuse('executor_profile_catalog_malformed');
+    if (!Object.hasOwn(catalog, profile.model)) {
+      // Some successful installed-CLI reads omit a provider transiently. One
+      // read-only re-observation precedes all launch effects; never retry start.
+      listed = await execute(pinnedProbeCommand(profile, descriptor.capabilityProbeCommands[1]!));
+      if (!listed.ok) return refuse('executor_profile_applicability_unproven');
+      catalog = openCodeVariantCatalog(listed.stdout);
+      if (Object.keys(catalog).length === 0) return refuse('executor_profile_catalog_malformed');
     }
-    capabilities = openCodeEdgeCapabilities(probeOutputs, profile);
+    if (!Object.hasOwn(catalog, profile.model)) return refuse('executor_profile_model_unavailable');
+    if (!catalog[profile.model]!.includes(profile.effort)) return refuse('executor_effort_channel_unavailable');
+    const help = await execute(pinnedProbeCommand(profile, descriptor.capabilityProbeCommands[0]!));
+    if (!help.ok) return refuse('executor_route_unavailable');
+    capabilities = openCodeEdgeCapabilities([`${help.stdout}\n${help.stderr ?? ''}`, listed.stdout], profile);
   }
 
   const verdict = evaluateExecutorRouteAdmission({
@@ -2517,7 +2533,10 @@ async function resumeManagerAtOpenPrHead(
     && text(pr.headRepository.nameWithOwner).toLowerCase() === request.repository.trim().toLowerCase()
     && typeof pr.body === 'string'
     && prBodyClosesIssue(pr.body, request.issueNumber!);
-  if (!matchesHead(candidate)) return refused('manager_pr_resume_head_mismatch', { prNumber });
+  if (!matchesHead(candidate)) return worktreeContinue('manager_pr_resume_head_mismatch', {
+    worktreeId: id, branch, head, originMain, prNumber,
+    headRefName: text(candidate.headRefName), headRefOid: text(candidate.headRefOid), baseRefName: text(candidate.baseRefName),
+  }, 'If the PR head branch equals this worktree branch, the worktree is clean, and after git fetch --no-tags origin <headRefName> the command git merge-base --is-ancestor HEAD <headRefOid> succeeds, run git merge --ff-only <headRefOid> in this worktree and rerun the same launch command; otherwise do not move the branch and reconcile the PR head with its owner');
 
   // The remote-tracking fetch and PR reads must not authorize a changed local HEAD/branch.
   const finalStatus = await execute(['git', 'status', '--porcelain=v1', '--untracked-files=all'], undefined, undefined, path);
