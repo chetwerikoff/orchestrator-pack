@@ -1127,13 +1127,15 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
     return opencodeProbeResult(args);
   }
 
-  it('#2794 one-command --pr reads OPEN REST head, creates one Task in the current Run and launches it on primary', async () => {
+  it.each([undefined, 'смерж 2794', 'мерж 2794 без ревью'])(
+    '#2805 one-command --pr carries instruction %s into the created Task on primary', async (mergeInstruction) => {
     const prNumber = 2794;
     const headSha = 'c'.repeat(40);
     const packRoot = '/opt/orchestrator-pack';
     const selected = mergeInput({
       prNumber, taskId: undefined, delegatedIntegration: undefined, issueNumber: undefined,
       projectId: 'orchestrator-pack', packRoot, defaultBranch: 'main', env: profileEnv(),
+      ...(mergeInstruction !== undefined ? { mergeInstruction, mergeWaiverLine: 'Review waiver authorized by order A.' } : {}),
     });
     const seen: { readonly specs: string[]; readonly tasks: string[]; readonly spawns: string[]; readonly starts: string[] } = {
       specs: [], tasks: [], spawns: [], starts: [],
@@ -1193,11 +1195,13 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
     expect(seen.specs).toHaveLength(1);
     const lines = seen.specs[0]!.split('\n');
     expect(lines[0]).toBe(
-      'Read and execute /opt/orchestrator-pack/.cursor/skills/merge-with-local-adoption/SKILL.md for PR 2794: «смерж 2794», orchestrator-issued Task mode',
+      `Read and execute /opt/orchestrator-pack/.cursor/skills/merge-with-local-adoption/SKILL.md for PR 2794: «${mergeInstruction ?? 'смерж 2794'}», orchestrator-issued Task mode`,
     );
-    expect(lines[1]).toContain('OPK_PROJECT_ID=orchestrator-pack; --project orchestrator-pack');
-    expect(lines[1]).toContain(`primary checkout ${primary}`);
-    expect(lines[1]).toContain('put /opt/orchestrator-pack/scripts first on PATH; repository chetwerikoff/orchestrator-pack');
+    if (mergeInstruction !== undefined) expect(lines[1]).toBe('Review waiver authorized by order A.');
+    const projectLine = lines[mergeInstruction !== undefined ? 2 : 1];
+    expect(projectLine).toContain('OPK_PROJECT_ID=orchestrator-pack; --project orchestrator-pack');
+    expect(projectLine).toContain(`primary checkout ${primary}`);
+    expect(projectLine).toContain('put /opt/orchestrator-pack/scripts first on PATH; repository chetwerikoff/orchestrator-pack');
     for (const required of [headSha, 'Merge only this head; on drift, report to the coordinator',
       'No Chrome', 'No bsk', 'GNU timeout accepts seconds', 'ADOPTION_STARTED_AT_UTC',
       'ORCH_HANDLE=orch-project', 'orca terminal send --terminal', 'merge-2794 done: <state>, primary at <sha>']) {
@@ -2090,6 +2094,42 @@ describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', 
     expect(parseLaunchAssistantCli(old, process.env, select)).toMatchObject({
       workClass: 'merge', taskId: 'task-existing', worktreeSelector: `path:${primary}`,
     });
+  });
+
+  it('#2805 validates exact PR-bound instructions and a single bounded waiver line', () => {
+    const select = () => ({
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      primaryRoot: primary, defaultBranch: 'main', packRoot: '/opt/orchestrator-pack',
+    } as ReturnType<typeof import('../lib/target-context.ts').resolveTargetContext>);
+    const args = [
+      '--project', 'orchestrator-pack', '--repository', 'chetwerikoff/orchestrator-pack',
+      '--work-class', 'merge', '--pr', '2794',
+    ];
+    const parse = (extra: string[]) => parseLaunchAssistantCli([...args, ...extra], process.env, select);
+    for (const mergeInstruction of ['смерж 2794', 'мерж 2794 без ревью']) {
+      expect(parse(['--merge-instruction', mergeInstruction, '--merge-waiver-line', 'Waiver: order A.']))
+        .toMatchObject({ mergeInstruction, mergeWaiverLine: 'Waiver: order A.' });
+    }
+    expect(parse([]).mergeInstruction).toBeUndefined();
+    expect(parse([]).mergeWaiverLine).toBeUndefined();
+    for (const invalid of ['смерж 2805', 'мерж 2805 без ревью', 'merge 2794', 'смерж 2794\nextra', ' смерж 2794']) {
+      expect(() => parse(['--merge-instruction', invalid]))
+        .toThrow('--merge-instruction must be exactly «смерж 2794» or «мерж 2794 без ревью»');
+    }
+    expect(parse(['--merge-waiver-line', 'x'.repeat(140)]).mergeWaiverLine).toHaveLength(140);
+    for (const invalid of ['x'.repeat(141), 'first\nsecond', 'first\rsecond', 'first\u2028second', 'first\u2029second']) {
+      expect(() => parse(['--merge-waiver-line', invalid])).toThrow(/one non-empty line of at most 140 characters/u);
+    }
+    for (const option of ['--merge-instruction', '--merge-waiver-line']) {
+      expect(() => parseLaunchAssistantCli([
+        '--project', 'orchestrator-pack', '--work-class', 't2', '--task', 'task-1',
+        '--worktree-name', 'fixture', option, 'смерж 2794',
+      ], process.env, select)).toThrow(/merge-only/u);
+      expect(() => parseLaunchAssistantCli([
+        '--project', 'orchestrator-pack', '--work-class', 'merge', '--task', 'task-1',
+        '--worktree', `path:${primary}`, option, 'смерж 2794',
+      ], process.env, select)).toThrow(/require --pr N/u);
+    }
   });
 
   it('#2739 requires an explicit primary path selector only for Task-mode merge', () => {
