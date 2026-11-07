@@ -16,7 +16,7 @@ import {
   type LifecycleOperations,
 } from './operations.ts';
 import type { ExpectedWorktreeIdentity } from './core.ts';
-import { closeSync, openSync, realpathSync } from 'node:fs';
+import { closeSync, openSync, realpathSync, readdirSync, readFileSync, readlinkSync } from 'node:fs';
 import { defaultProcessCensus } from '../worktree-teardown.ts';
 import {
   removeIdenticalLaunchCopies,
@@ -772,7 +772,7 @@ function stat(ppid: number): string {
 interface FakeProc {
   readonly ppid: number;
   readonly cwd: string | Error;
-  readonly fds?: readonly string[] | Error;
+  readonly fds?: readonly (string | Error)[] | Error;
 }
 
 function fakeIo(table: Record<string, FakeProc>): ProcIo {
@@ -799,7 +799,9 @@ function fakeIo(table: Record<string, FakeProc>): ProcIo {
         return value;
       }
       const fd = /^\/proc\/(\d+)\/fd\/(\d+)$/.exec(path)!;
-      return (table[fd[1]!]!.fds as readonly string[])[Number(fd[2])]!;
+      const value = (table[fd[1]!]!.fds as readonly (string | Error)[])[Number(fd[2])]!;
+      if (value instanceof Error) throw value;
+      return value;
     },
   };
 }
@@ -816,7 +818,8 @@ describe('process census with unreadable observations', () => {
 
   it('operations census counts denied cwd/fd reads and keeps real holders', () => {
     const result = collectProcessCensus(TARGET, fakeIo(table));
-    expect(result.observations).toEqual({ unreadableCwd: 2, unreadableFd: 1 });
+    expect(result.observations).toMatchObject({ unreadableCwd: 2, unreadableFd: 1 });
+    expect(result.observations.unreadable?.map((row) => row.pid)).toEqual([10, 11]);
     expect(result.processes.map((row) => row.pid)).toEqual([13, 14, 15]);
     expect(result.processes.find((row) => row.pid === 14)?.fd).toBe(`${TARGET}/file.log`);
   });
@@ -830,6 +833,46 @@ describe('process census with unreadable observations', () => {
     const result = collectProcessCensus(TARGET, fakeIo({ '10': table['10']! }));
     expect(result.processes).toEqual([]);
     expect(result.observations.unreadableCwd).toBe(1);
+  });
+
+  it.each(['EACCES', 'EPERM'])('reports kernel-denied %s reads without counting a holder, regardless of uid', (code) => {
+    const result = collectProcessCensus(TARGET, fakeIo({
+      '20': { ppid: 1, cwd: errno(code) },
+    }));
+    expect(result.processes).toEqual([]);
+    expect(result.observations.unreadable).toMatchObject([{ pid: 20, cwdDenied: true }]);
+  });
+
+  it('lists kernel-denied fd enumeration as unreadable', () => {
+    const result = collectProcessCensus(TARGET, fakeIo({
+      '20': { ppid: 1, cwd: '/elsewhere', fds: errno('EACCES') },
+    }));
+    expect(result.processes).toEqual([]);
+    expect(result.observations.unreadable).toMatchObject([{ pid: 20, fdDenied: true }]);
+  });
+
+  it.each(['ENOENT', 'ESRCH'])('skips a vanished pid (%s)', (code) => {
+    const io = fakeIo({ '20': { ppid: 1, cwd: errno(code) } });
+    expect(collectProcessCensus(TARGET, io).processes).toEqual([]);
+    expect(defaultProcessCensus(TARGET, io)).toEqual([]);
+  });
+
+  it('keeps readable fd holders and their descendants despite a denied cwd', () => {
+    const result = collectProcessCensus(TARGET, fakeIo({
+      '20': { ppid: 1, cwd: errno('EACCES'), fds: [`${TARGET}/held`] },
+      '21': { ppid: 20, cwd: '/elsewhere' },
+    }));
+    expect(result.processes.map((row) => row.pid)).toEqual([20, 21]);
+  });
+
+  it('reports denied individual fd links but still detects a later readable holder', () => {
+    const io = fakeIo({
+      '20': { ppid: 1, cwd: '/elsewhere', fds: [errno('EACCES'), `${TARGET}/held`] },
+    });
+    const result = collectProcessCensus(TARGET, io);
+    expect(result.processes).toMatchObject([{ pid: 20, fd: `${TARGET}/held` }]);
+    expect(result.observations.unreadable).toMatchObject([{ pid: 20, fdDenied: true }]);
+    expect(defaultProcessCensus(TARGET, io)).toMatchObject([{ pid: 20, fdDenied: true, fd: `${TARGET}/held` }]);
   });
 
   it('teardown census marks denied cwd/fd and keeps readable fd holders', () => {
@@ -847,9 +890,15 @@ describe('process census with unreadable observations', () => {
       const fd = openSync(join(dir, 'tree', 'held.txt'), 'w');
       try {
         const target = join(dir, 'tree');
-        const own = collectProcessCensus(target).processes.find((row) => row.pid === process.pid);
+        // Exercise real fd links without depending on access to unrelated host processes.
+        const io: ProcIo = {
+          readdirSync: (path) => path === '/proc' ? [String(process.pid)] : readdirSync(path),
+          readFileSync,
+          readlinkSync,
+        };
+        const own = collectProcessCensus(target, io).processes.find((row) => row.pid === process.pid);
         expect(own?.fd).toBe(join(target, 'held.txt'));
-        const teardown = defaultProcessCensus(target).find((row) => row.pid === process.pid);
+        const teardown = defaultProcessCensus(target, io).find((row) => row.pid === process.pid);
         expect(teardown?.fd).toBe(join(target, 'held.txt'));
       } finally {
         closeSync(fd);
@@ -942,6 +991,36 @@ function deps(fx: Fixture, overrides: Partial<MergeCleanupDeps> = {}, log: strin
 }
 
 describe('removeIdenticalLaunchCopies', () => {
+  const generated = 'APP_ENV=development\nCOMPOSE_PROJECT_NAME=leopoker_issue_333_abcdef12\nPOSTGRES_USER=leopoker\nPOSTGRES_PASSWORD=leopoker\nPOSTGRES_DB=leopoker\nPOSTGRES_HOST=localhost\nPOSTGRES_PORT=54321\nDATABASE_URL=postgresql+psycopg://leopoker:leopoker@localhost:54321/leopoker\nHERO_CONFIG__PLAYER_NAME=\n';
+
+  it.each([generated, 'APPLIEDIN_WEB_PORT=9123\n'])('removes exact setup-generated env with no primary copy', (content) => {
+    const fx = fixture();
+    rmSync(join(fx.primary, '.env'));
+    writeFileSync(join(fx.manager, '.env'), content);
+    const result = removeIdenticalLaunchCopies(fx.manager, fx.primary, fx.git);
+    expect(result.removed).toContain('.env');
+    expect(result.preserved).toEqual([]);
+    expect(existsSync(join(fx.manager, '.env'))).toBe(false);
+  });
+
+  it.each([
+    generated.replace('APP_ENV=development', 'APP_ENV=production'),
+    `${generated}USER_DATA=keep\n`,
+    generated.replace('localhost:54321/', 'localhost:54322/'),
+    generated.replace('POSTGRES_DB=leopoker\n', ''),
+    `${generated}\n`,
+    'APPLIEDIN_WEB_PORT=9123\nUSER_DATA=keep\n',
+    'APPLIEDIN_WEB_PORT=9123',
+    'APPLIEDIN_WEB_PORT=8788\n',
+  ])('preserves env with edited, extra or missing content', (content) => {
+    const fx = fixture();
+    rmSync(join(fx.primary, '.env'));
+    writeFileSync(join(fx.manager, '.env'), content);
+    expect(removeIdenticalLaunchCopies(fx.manager, fx.primary, fx.git).preserved)
+      .toEqual([{ path: '.env', reason: 'primary_copy_missing' }]);
+    expect(readFileSync(join(fx.manager, '.env'), 'utf8')).toBe(content);
+  });
+
   it('removes byte-identical ignored copies and preserves differing ones', () => {
     const fx = fixture();
     writeFileSync(join(fx.manager, '.env'), 'SECRET=changed\n');
