@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
 import { execFile } from 'node:child_process';
 import { runProcessSync } from '../kernel/subprocess.ts';
 import { promisify } from 'node:util';
@@ -1309,8 +1311,26 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (!complete && (requiresComplete || !metadataAbsent)) {
       return runtimeUnsupported('list_workers', 'runtime_worker_list_incomplete');
     }
+    let selectedPath: string | undefined;
+    if (_input.workspace !== undefined && isAbsolute(_input.workspace)) {
+      try { selectedPath = realpathSync(_input.workspace); }
+      catch { return runtimeUnsupported('list_workers', 'runtime_worker_workspace_unavailable'); }
+    }
     const workers: RuntimeWorker[] = [];
     for (const terminal of terminals) {
+      if (selectedPath !== undefined) {
+        const path = terminal.worktreePath?.trim();
+        if (!path || !isAbsolute(path)) {
+          return runtimeUnsupported('list_workers', 'runtime_worker_workspace_unproven');
+        }
+        try {
+          if (realpathSync(path) !== selectedPath) continue;
+        } catch (error) {
+          // A deleted foreign workspace cannot be the existing selected workspace.
+          if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) continue;
+          return runtimeUnsupported('list_workers', 'runtime_worker_workspace_unproven');
+        }
+      }
       const selector = terminal.worktreePath?.trim() || 'active';
       const normalized = this.#workerFromTerminal(terminal, selector, 'list_workers');
       if (normalized.status !== 'ok') return normalized;
