@@ -238,7 +238,7 @@ function reverseMap(spec: Refspec, tracking: string): string | null {
  */
 function publishedCommitOids(cwd: string, remotes: readonly string[],
   proofGit: (operation: string, args: readonly string[]) => GitResult | null,
-  hasTime: () => boolean): string[] | null {
+  hasTime: () => boolean, contains?: string): string[] | null {
   const oids = new Set<string>();
   const seen = new Set<string>();
   // Cache the same-endpoint fetch refspecs once. The AC4 resolver still reads live
@@ -258,7 +258,8 @@ function publishedCommitOids(cwd: string, remotes: readonly string[],
       const star = spec.dst.indexOf('*');
       const prefix = star < 0 ? spec.dst : spec.dst.slice(0, star);
       const listed = proofGit('eligible tracking ref enumeration',
-        ['for-each-ref', '--format=%(objectname) %(objecttype) %(refname)', prefix]);
+        ['for-each-ref', '--format=%(objectname) %(objecttype) %(refname)',
+          ...(contains ? ['--contains=' + contains] : []), prefix]);
       if (!listed || !listed.ok) return null;
       for (const line of listed.stdout.split('\n')) {
         if (!hasTime()) return null;
@@ -269,7 +270,10 @@ function publishedCommitOids(cwd: string, remotes: readonly string[],
         seen.add(name);
         const resolved = resolveTrackingRef(cwd, remotes, source, cached, hasTime);
         if (resolved === null) return null;
-        if (resolved.kind === 'ok' && resolved.tracking === name) oids.add(oid);
+        if (resolved.kind === 'ok' && resolved.tracking === name) {
+          oids.add(oid);
+          if (contains) return [...oids];
+        }
       }
     }
   }
@@ -562,11 +566,10 @@ const RUFF_PIN = /\[\[package\]\]\s*\n\s*name\s*=\s*"ruff"\s*\n\s*version\s*=\s*
  * parent. Ruff is never taken from PATH: uv installs exactly the parent's `uv.lock` requirement (with its recorded
  * artifact hashes) in an isolated environment. An empty cache may fetch the verified artifact; a same-version PATH shim cannot stand in.
  */
-function ruffReproductionFailure(cwd: string, parent: string, commit: string, published: readonly string[],
+function ruffReproductionFailure(cwd: string, parent: string, commit: string, isPublished: (oid: string) => boolean,
   changedPaths: readonly string[]): string | null {
   if (changedPaths.length === 0 || !changedPaths.every((path) => path.endsWith('.py'))) return 'the commit is not .py-only';
-  const parentPublished = published.some((tip) => git(cwd, ['merge-base', '--is-ancestor', parent, tip]).ok);
-  if (!parentPublished) return 'parent commit is not proven published on this endpoint';
+  if (!isPublished(parent)) return 'parent commit is not proven published on this endpoint';
   const lock = git(cwd, ['cat-file', 'blob', `${parent}:uv.lock`]);
   const versions = lock.ok ? [...lock.stdout.matchAll(RUFF_PIN)].map((match) => match[1]!) : [];
   if (versions.length !== 1) return 'parent commit has no single lock-pinned ruff version in uv.lock';
@@ -623,14 +626,14 @@ function ruffReproductionFailure(cwd: string, parent: string, commit: string, pu
 }
 
 async function classifyOrdinaryCommit(cwd: string, parent: string, commit: string,
-  published: readonly string[], patchProof: PublishedPatchProof): Promise<string | null> {
+  isPublished: (oid: string) => boolean, patchProof: PublishedPatchProof): Promise<string | null> {
   const typescript = await typescriptFormatterFailure(cwd, parent, commit);
   if (typescript === null) return null;
   const patch = patchProof.prove(parent, commit);
   if (patch === null) return null;
   const changed = parseRawDiff(git(cwd, ['diff-tree', '-r', '--raw', '--no-renames', '--no-abbrev', '-z', parent, commit]).stdout)
     .map((entry) => entry.path);
-  const ruff = ruffReproductionFailure(cwd, parent, commit, published, changed);
+  const ruff = ruffReproductionFailure(cwd, parent, commit, isPublished, changed);
   if (ruff === null) return null;
   return `${typescript}; patch.diff proof: ${patch}; Ruff proof: ${ruff}`;
 }
@@ -656,11 +659,10 @@ interface AccountingInput {
   readonly localOid: string;
   readonly baseOid: string;
   readonly published: readonly string[];
+  readonly isPublished: (oid: string) => boolean;
 }
 
 async function newCommitFailure(input: AccountingInput, patchProof: PublishedPatchProof): Promise<string | null> {
-  const incomplete = patchProof.incomplete();
-  if (incomplete) return `unpublished manager-local candidate ${input.localOid.slice(0, 12)}: ${incomplete}`;
   const listed = git(input.cwd, ['rev-list', '--parents', '--reverse', '--topo-order', '--stdin'],
     `${[input.localOid, ...[input.baseOid, ...input.published].map((oid) => `^${oid}`)].join('\n')}\n`);
   if (!listed.ok) return 'the outgoing commit range is unreadable';
@@ -668,10 +670,13 @@ async function newCommitFailure(input: AccountingInput, patchProof: PublishedPat
   if (rows.length > MAX_NEW_COMMITS) return `${rows.length} unpublished commits exceed the provable limit of ${MAX_NEW_COMMITS}`;
   for (const [commit, ...parents] of rows) {
     if (!commit) continue;
+    // An incomplete patch-source scan must not erase independently verified
+    // published ancestry (notably a clean merge's substantive sibling).
+    if (patchProof.incomplete() && input.isPublished(commit)) continue;
     const short = commit.slice(0, 12);
     let failure: string | null;
     if (parents.length === 0) failure = 'root commit has no parent to compare';
-    else if (parents.length === 1) failure = await classifyOrdinaryCommit(input.cwd, parents[0]!, commit, input.published, patchProof);
+    else if (parents.length === 1) failure = await classifyOrdinaryCommit(input.cwd, parents[0]!, commit, input.isPublished, patchProof);
     else failure = classifyMergeCommit(input.cwd, commit, parents);
     if (failure) return `unpublished manager-local commit ${short}: ${failure}`;
   }
@@ -720,6 +725,20 @@ async function evaluateTuples(cwd: string, endpointUrl: string, stdin: string): 
   const remotes = verifiedFetchRemotes(cwd, endpoint);
   const patchProof = new PublishedPatchProof(cwd);
   const published = patchProof.selectPublished(remotes);
+  const publication = new Map<string, boolean>();
+  const isPublished = (oid: string): boolean => {
+    const cached = publication.get(oid);
+    if (cached !== undefined) return cached;
+    // The existing nonpatch proofs need only published ancestry, not patch.diff
+    // discovery. On incomplete discovery query refs containing this exact commit
+    // through the same endpoint/refspec eligibility rules. This neither resets
+    // nor supplies evidence to the exhausted exact-patch proof budget.
+    const proven = published.some((tip) => git(cwd, ['merge-base', '--is-ancestor', oid, tip]).ok)
+      || (patchProof.incomplete() !== null && (publishedCommitOids(cwd, remotes,
+        (_operation, args) => git(cwd, args), () => true, oid)?.length ?? 0) > 0);
+    publication.set(oid, proven);
+    return proven;
+  };
   const seedOid = worktreeConfig(cwd, KEY.seedOid);
   const seedEndpoint = worktreeConfig(cwd, KEY.seedEndpoint);
   const denials: Denial[] = [];
@@ -801,7 +820,7 @@ async function evaluateTuples(cwd: string, endpointUrl: string, stdin: string): 
       }
       baseOid = seedOid;
     }
-    const failure = await newCommitFailure({ cwd, localOid: tuple.localOid, baseOid, published }, patchProof);
+    const failure = await newCommitFailure({ cwd, localOid: tuple.localOid, baseOid, published, isPublished }, patchProof);
     if (failure) {
       const recovery = failure.includes('exact-patch proof work exhausted')
         ? '; have GPT republish the exact unchanged patch.diff at an eligible same-endpoint mapped tracking tip and fetch/retry, '
@@ -849,11 +868,12 @@ function candidateInspection(cwd: string, oid: string): { command: string; missi
     return { command: "git for-each-ref --format='%(refname) %(objectname)' refs/heads refs/remotes",
       missing: 'candidate OID is zero' };
   }
-  if (!objectType(cwd, oid)) {
+  const type = objectType(cwd, oid);
+  if (!type) {
     return { command: "git for-each-ref --format='%(refname) %(objectname)' refs/heads refs/remotes",
       missing: 'candidate OID does not resolve to a local Git object' };
   }
-  return { command: 'git show --no-patch --format=fuller ' + oid };
+  return { command: (type === 'commit' ? 'git show --no-patch --format=fuller ' : 'git cat-file -t ') + oid };
 }
 
 export async function runPrePush(args: readonly string[], stdin: Buffer, cwd: string): Promise<number> {
@@ -861,21 +881,18 @@ export async function runPrePush(args: readonly string[], stdin: Buffer, cwd: st
   const shown = redactEndpoint(endpointUrl);
   const denials = await evaluateTuples(cwd, endpointUrl, stdin.toString('utf8'));
   if (denials.length > 0) {
+    process.stderr.write('[manager-push-guard] push to ' + shown
+      + ' aborted for every ref update of this invocation (' + denials.map((d) => d.cls).join(', ') + ').\n');
     for (const denial of denials) {
       const evidence = denial.cls === 'AC2' && denial.localOid !== undefined
         ? candidateInspection(cwd, denial.localOid) : null;
       process.stderr.write('[manager-push-guard] ' + denial.cls + ' denied ' + denial.ref + ' -> '
         + shown + ': ' + denial.reason + (evidence?.missing ? '; unavailable candidate-OID evidence: ' + evidence.missing : '')
         + '\n  next: ' + denial.nextStep + '\n');
-    }
-    process.stderr.write('[manager-push-guard] push to ' + shown
-      + ' aborted for every ref update of this invocation (' + denials.map((d) => d.cls).join(', ') + ').\n');
-    // AC3 is categorical: never suggest the separate owner route alongside a default-target denial.
-    const special = denials.some((d) => d.cls === 'AC3') ? undefined
-      : denials.find((d) => d.cls === 'AC2' && d.localOid !== undefined);
-    if (special?.localOid !== undefined) {
-      process.stderr.write(candidateInspection(cwd, special.localOid).command + '\n');
-      process.stderr.write(LOCAL_ROUTE_EXPLANATION + '\n');
+      if (evidence) {
+        process.stderr.write(evidence.command + '\n');
+        process.stderr.write(LOCAL_ROUTE_EXPLANATION + '\n');
+      }
     }
     return 1;
   }
