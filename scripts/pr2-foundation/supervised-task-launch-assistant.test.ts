@@ -21,6 +21,7 @@ import {
 import {
   createManagerTaskWithOrca,
   createProductionLaunchDependencies,
+  captureLaunchShells,
   cleanupLaunchShells,
   launchShellIsIdle,
   claudePaneProfileObserved,
@@ -630,9 +631,10 @@ describe('Issue #2802 creation-owned idle shells', () => {
     'logs tails and closes only the pre-unit idle snapshot (%s setup receipt, close failure %s)', async (setupState, closeFailure) => {
     const fixture = freshRepoFixture({ setupState });
     const events: string[] = [];
-    const shells = ['initial-shell', 'setup-shell'].map((handle) => ({ handle,
+    const shells = ['initial-shell'].map((handle) => ({ handle,
       incarnationId: `generation-${handle}`, worktreeId: 'repo::wt', worktreePath: '/tmp/wt', orphaned: false }));
     let lists = 0;
+    let admissions = 0;
     const log = vi.spyOn(console, 'warn').mockImplementation((message) => { events.push(String(message)); });
     const execute: Parameters<typeof prepareWorktreeWithOrca>[1] = async (args, ...rest) => {
       const op = args.slice(0, 3).join(' ');
@@ -656,7 +658,15 @@ describe('Issue #2802 creation-owned idle shells', () => {
         ...deps({ adapter: runtimeAdapter({ worker: { ...worker, workspacePath: '/tmp/wt' },
           onSpawn: () => { events.push('unit-start'); shells.push({ ...shells[0]!, handle: 'later-user-shell' }); } }),
         onSupervised: () => { events.push('assignment-bound'); } }),
+        observeDispatch: async () => {
+          if (++admissions === 2) {
+            events.push('late-setup-created');
+            shells.push({ ...shells[0]!, handle: 'setup-shell', incarnationId: 'generation-setup-shell' });
+          }
+          return { status: 'ok', value: { kind: 'absent' } };
+        },
         prepareWorktree: (request) => prepareWorktreeWithOrca(request, execute),
+        captureLaunchShells: (worktree) => captureLaunchShells(worktree, execute),
         cleanupLaunchShells: (worktree, unit) => cleanupLaunchShells(worktree, unit, execute, () => true),
       });
       expect(result).toMatchObject({ outcome: 'ready' });
@@ -695,6 +705,13 @@ describe('Issue #2802 creation-owned idle shells', () => {
           worktreeId: prepared.id, worktreePath: prepared.path, orphaned: false } }) };
       }, (handle) => handle !== 'busy');
       expect(close).not.toHaveBeenCalled();
+      if (setupWitness === 'same_invocation_complete') expect(log).toHaveBeenCalledWith(
+        '[launch-shell-cleanup] kept busy or unproven: busy');
+      if (setupWitness === 'proven_reuse') {
+        const census = vi.fn();
+        expect(await captureLaunchShells(prepared, census)).toEqual([]);
+        expect(census).not.toHaveBeenCalled();
+      }
     } finally { log.mockRestore(); }
   });
 
@@ -4305,7 +4322,7 @@ The words Firefighter universal appear here only as prose.`;
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', issueNumber: 1479,
     }, fixture.execute);
     expect(result).toMatchObject({ status: 'ok', value: { id: 'repo::wt', setupWitness: 'same_invocation_complete' } });
-    expect(fixture.calls.map((call) => call.argv[0])).toEqual(['orca', 'git', 'git', 'git', 'orca', 'orca', 'git']);
+    expect(fixture.calls.map((call) => call.argv[0])).toEqual(['orca', 'git', 'git', 'git', 'orca', 'git']);
   });
 
   it('skips native repository-wide prune on an ordinary fresh worktree launch', async () => {

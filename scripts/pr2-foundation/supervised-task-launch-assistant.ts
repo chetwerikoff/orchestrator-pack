@@ -349,6 +349,7 @@ export interface LaunchDependencies {
   /** Native exact-Dispatch/worker-absent witness, not an assignment/store guess. */
   readonly proveTerminalGone?: (assignment: WorkerAssignmentRecord) => Promise<TerminalGoneAssignmentEvidence | null>;
   readonly prepareWorktree: (input: WorktreePreparationRequest) => Promise<EdgeResult<PreparedWorktree>>;
+  readonly captureLaunchShells?: (worktree: PreparedWorktree) => Promise<readonly CreationTerminal[]>;
   readonly cleanupLaunchShells?: (worktree: PreparedWorktree, unitTerminalId: string) => Promise<void>;
   /** Non-Claude manager push guard; a resolved Claude-family manager is the local route. */
   readonly installManagerPushGuard?: (input: ManagerPushGuardRequest) => Promise<EdgeResult<true>> | EdgeResult<true>;
@@ -1464,6 +1465,11 @@ export async function runSupervisedTaskLaunchAssistant(
     }
   }
 
+  let creationTerminals: readonly CreationTerminal[] = [];
+  if (!providerMode && !input.existingTerminal && prepared.value.setupWitness === 'same_invocation_complete'
+    && deps.captureLaunchShells) {
+    creationTerminals = await deps.captureLaunchShells(prepared.value);
+  }
   let terminal: RuntimeWorker | undefined;
   if (providerMode) {
     const terminalStartedAt = deps.now();
@@ -1716,8 +1722,8 @@ export async function runSupervisedTaskLaunchAssistant(
       ...(runtime && generation ? { terminal: { runtime, id: terminalId, generation } } : {}) };
   }
   resources = { ...resources, dispatchId };
-  if (prepared.value.creationTerminals?.length && deps.cleanupLaunchShells) {
-    try { await deps.cleanupLaunchShells(prepared.value, resources.terminal?.id ?? resources.providerAgentTerminalId ?? ''); }
+  if (creationTerminals.length && deps.cleanupLaunchShells) {
+    try { await deps.cleanupLaunchShells({ ...prepared.value, creationTerminals }, resources.terminal?.id ?? resources.providerAgentTerminalId ?? ''); }
     catch (error) { console.warn('[launch-shell-cleanup]', error instanceof Error ? error.message : String(error)); }
   }
   const readyResources: ReadyResult['resources'] = {
@@ -1745,6 +1751,21 @@ export async function runSupervisedTaskLaunchAssistant(
 interface ChildResult { readonly ok: boolean; readonly stdout: string; readonly stderr?: string }
 type ChildExecutor = (args: readonly string[], timeoutMs?: number, env?: Readonly<NodeJS.ProcessEnv>, cwd?: string) => Promise<ChildResult>;
 type OpenCodeNoWriteProof = (worktreePath: string) => Promise<boolean> | boolean;
+
+export async function captureLaunchShells(worktree: PreparedWorktree, execute: ChildExecutor): Promise<readonly CreationTerminal[]> {
+  if (worktree.setupWitness !== 'same_invocation_complete') return [];
+  try {
+    const listed = resultRecord(envelope(await execute(['orca', 'terminal', 'list', '--worktree', worktree.selector, '--json'])));
+    if (listed?.truncated === false && Array.isArray(listed.terminals)) {
+      return listed.terminals.filter((item) => record(item)
+        && text(item.worktreeId) === worktree.id && text(item.worktreePath) === worktree.path
+        && text(item.handle) && text(item.incarnationId))
+        .map((item) => ({ handle: text(item.handle), incarnationId: text(item.incarnationId) }));
+    }
+  } catch { /* A census failure must not change the launch outcome. */ }
+  console.warn('[launch-shell-cleanup] creation terminal census unavailable');
+  return [];
+}
 
 /** Read only the terminal-handle variable; never expose process environments. */
 export function launchShellIsIdle(handle: string, procRoot = '/proc'): boolean {
@@ -1775,7 +1796,11 @@ export async function cleanupLaunchShells(
       const live = shown && record(shown.terminal) ? shown.terminal : null;
       if (text(live?.handle) !== terminal.handle || text(live?.incarnationId) !== terminal.incarnationId
         || text(live?.worktreeId) !== worktree.id || text(live?.worktreePath) !== worktree.path
-        || live?.orphaned !== false || live?.agentIdentity || !isIdle(terminal.handle)) continue;
+        || live?.orphaned !== false || live?.agentIdentity) continue;
+      if (!isIdle(terminal.handle)) {
+        console.warn(`[launch-shell-cleanup] kept busy or unproven: ${terminal.handle}`);
+        continue;
+      }
       const read = resultRecord(envelope(await execute([
         'orca', 'terminal', 'read', '--terminal', terminal.handle, '--limit', '200', '--json',
       ])));
@@ -1786,7 +1811,10 @@ export async function cleanupLaunchShells(
         continue;
       }
       console.warn(`[launch-shell-cleanup] ${terminal.handle} tail: ${JSON.stringify(output.tail)}`);
-      if (!isIdle(terminal.handle)) continue;
+      if (!isIdle(terminal.handle)) {
+        console.warn(`[launch-shell-cleanup] kept busy or unproven: ${terminal.handle}`);
+        continue;
+      }
       const closed = await execute(['orca', 'terminal', 'close', '--terminal', terminal.handle, '--json']);
       if (!closed.ok || !envelope(closed)?.ok) console.warn(`[launch-shell-cleanup] close failed: ${terminal.handle}`);
     } catch { console.warn(`[launch-shell-cleanup] close failed: ${terminal.handle}`); }
@@ -2856,18 +2884,6 @@ export async function prepareWorktreeWithOrca(
   const freshReady = async (
     setupEvidence: Readonly<Record<string, unknown>>,
   ): Promise<EdgeResult<PreparedWorktree>> => {
-    // Only this call created the checkout. Capture before unit spawn, never on
-    // reuse/restore, and never discover additional terminals during cleanup.
-    let creationTerminals: CreationTerminal[] = [];
-    try {
-      const listed = resultRecord(envelope(await execute(['orca', 'terminal', 'list', '--worktree', `id:${id}`, '--json'])));
-      if (listed?.truncated === false && Array.isArray(listed.terminals)) {
-        creationTerminals = listed.terminals.filter((item) => record(item)
-          && text(item.worktreeId) === id && text(item.worktreePath) === path
-          && text(item.handle) && text(item.incarnationId))
-          .map((item) => ({ handle: text(item.handle), incarnationId: text(item.incarnationId) }));
-      }
-    } catch { console.warn('[launch-shell-cleanup] creation terminal census unavailable'); }
     if (prBase?.status === 'ok') {
       const identity = await observeManagerWorktreeIdentity(request, id, path, execute);
       if (identity.status !== 'ok') return identity;
@@ -2903,7 +2919,6 @@ export async function prepareWorktreeWithOrca(
       return {
         status: 'ok',
         value: { id, selector: `id:${id}`, path, setupWitness: 'same_invocation_complete',
-          ...(creationTerminals.length ? { creationTerminals } : {}),
           ...(placementSeedOid ? { placementSeedOid } : {}) },
         evidence: { ...baseEvidence, ...setupEvidence, branch: identity.value.branch },
       };
@@ -2915,8 +2930,7 @@ export async function prepareWorktreeWithOrca(
       'preserve newly created worktree bytes; clean fresh setup is required before launch');
     return {
       status: 'ok',
-      value: { id, selector: `id:${id}`, path, setupWitness: 'same_invocation_complete',
-        ...(creationTerminals.length ? { creationTerminals } : {}) },
+      value: { id, selector: `id:${id}`, path, setupWitness: 'same_invocation_complete' },
       evidence: { ...baseEvidence, ...setupEvidence },
     };
   };
@@ -2981,6 +2995,8 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
   return {
     now: Date.now,
     adapter,
+    captureLaunchShells: (worktree) => captureLaunchShells(worktree,
+      (args, timeoutMs) => child(args, cwd, env, timeoutMs)),
     cleanupLaunchShells: (worktree, unitTerminalId) => cleanupLaunchShells(worktree, unitTerminalId,
       (args, timeoutMs) => child(args, cwd, env, timeoutMs)),
     runSupervisedStart: runSupervisedWorkerStart,
