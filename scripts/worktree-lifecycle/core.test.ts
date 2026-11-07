@@ -333,7 +333,7 @@ describe('continuation policy', () => {
 describe('current PR-head effect binding', () => {
   const prExpected = expected({ bindingKind: 'pr', bindingNumber: 1300 });
 
-  it('rejects a different PR head, branch, or non-merged state', () => {
+  it('rejects a different PR head or non-merged state but accepts a differently named bound local branch', () => {
     expect(validateExpectedPrBinding(prExpected, {
       headRefName: BRANCH,
       headRefOid: OTHER_HEAD,
@@ -343,7 +343,7 @@ describe('current PR-head effect binding', () => {
       headRefName: 'agent/other',
       headRefOid: HEAD,
       state: 'MERGED',
-    })).toMatch(/head branch/);
+    })).toBeNull();
     expect(validateExpectedPrBinding(prExpected, {
       headRefName: BRANCH,
       headRefOid: HEAD,

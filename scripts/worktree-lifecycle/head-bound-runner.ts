@@ -105,12 +105,6 @@ export function validateExpectedPrBinding(
   if (live.state !== 'MERGED') {
     return `PR #${String(expected.bindingNumber)} is ${live.state || 'UNKNOWN'}, not MERGED`;
   }
-  if (expected.mode === 'branch-bound') {
-    const expectedBranch = normalizeBranchName(expected.branchName);
-    if (!expectedBranch || live.headRefName !== expectedBranch) {
-      return `expected branch ${expectedBranch ?? '<missing>'} does not match PR #${String(expected.bindingNumber)} head branch ${live.headRefName || '<missing>'}`;
-    }
-  }
   if (context === 'post-merge-cleanup') {
     const finalHead = normalizedFinalHead(expected);
     if (!finalHead) return 'post-merge cleanup requires a bound finalPrHeadSha';
