@@ -190,7 +190,11 @@ export function classifyHeavyFiles(repoRoot = defaultRepoRoot) {
   }
   return {
     heavy: [...heavy].sort(),
-    classification: config.classification,
+    // Bind report admission to discovery, including implicit-heavy tests, never
+    // stale manifest entries or arbitrary paths named by a report.
+    classification: Object.fromEntries(discovered.map((file) => [
+      file, heavy.includes(file) ? 'heavy' : config.classification[file],
+    ])),
     heavyShardCount: topologyResult.topology.heavyShardCount,
   };
 }
