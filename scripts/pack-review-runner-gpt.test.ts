@@ -7876,6 +7876,20 @@ describe('Issue #2796 plain source union after Opus removal', () => {
     const notifications: string[] = [];
     const fence = String.fromCharCode(96).repeat(3);
     const tier = options.clean || options.advisoryOnly ? 'T3' : 'T2';
+    const blocker = {
+      type: 'quality', code: 'quality:duplicate', severity: 'blocking',
+      path: 'scripts/pack-review-runner.ts', summary: 'Original duplicate blocker',
+      details: 'Original blocking explanation and location must reach the fixer.',
+      source: 'gpt-browser',
+    };
+    const advisory = {
+      type: 'quality', code: 'quality:cosmetic', severity: 'non-blocking',
+      path: 'scripts/lib/pack-review-delivery.ts', summary: 'Original cosmetic advisory',
+      details: 'Original advisory detail must remain visible.', source: 'gpt-browser',
+    };
+    const sourcePayload = (invocationId: string, findings: unknown[]) =>
+      terminalTurnPayload({ state: 'ok', cause: 'completed_page_only', sendCount: 1, invocationId })
+      + '\n' + JSON.stringify({ verdict: 'findings', findingCount: findings.length, findings });
     const output = await startPackReview({
       projectId: 'orchestrator-pack', storeRoot,
       sourceRepoRoot: repoRoot, prNumber: 2796, headSha: HEAD_A,
@@ -7894,13 +7908,8 @@ describe('Issue #2796 plain source union after Opus removal', () => {
         'source-02': [{ stdout: findingsPayload('advice-02', 'info') }],
         'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
       } : {
-        'source-01': [{ stdout: findingsPayload('duplicate') }],
-        'source-02': [{ stdout: terminalTurnPayload({
-          state: 'ok', cause: 'completed_page_only', sendCount: 1, invocationId: 'inv-duplicate-02',
-        }) + '\n' + JSON.stringify({ verdict: 'findings', findingCount: 2, findings: [
-          { title: 'duplicate', body: 'body-duplicate', severity: 'blocking' },
-          { title: 'cosmetic', body: 'body-cosmetic', severity: 'warning' },
-        ] }) }],
+        'source-01': [{ stdout: sourcePayload('inv-duplicate-01', [blocker]) }],
+        'source-02': [{ stdout: sourcePayload('inv-duplicate-02', [blocker, advisory]) }],
       },
       fixtureRequiredStatusWriter: async (request) => { statuses.push(request.state); },
       fixtureWorkerNotifier: async (request) => {
@@ -7910,7 +7919,7 @@ describe('Issue #2796 plain source union after Opus removal', () => {
     });
     const run = getPackReviewRun(String(output.runId),
       { projectId: 'orchestrator-pack', storeRoot });
-    return { output, run, statuses, notifications, storeRoot, capture, invoked };
+    return { output, run, statuses, notifications, storeRoot, capture, invoked, blocker, advisory };
   }
 
   it('plain union after Opus removal', async () => {
@@ -7918,19 +7927,20 @@ describe('Issue #2796 plain source union after Opus removal', () => {
     expect(result.output, JSON.stringify(result.output)).toMatchObject({ ok: true });
     expect(result.run?.reviewVerdict).toBe('findings');
     expect(result.run?.status).toBe('changes_requested');
-    const occurrences = result.run?.findings as Array<{
-      title: string; severity: string; sourceSlotId: string;
-    }>;
-    expect(occurrences.map((row) => ({
-      title: row.title, severity: row.severity, sourceSlotId: row.sourceSlotId,
-    }))).toEqual([
-      { title: 'duplicate', severity: 'blocking', sourceSlotId: 'source-01' },
-      { title: 'duplicate', severity: 'blocking', sourceSlotId: 'source-02' },
-      { title: 'cosmetic', severity: 'warning', sourceSlotId: 'source-02' },
+    expect(result.run?.findings).toEqual([
+      { ...result.blocker, sourceSlotId: 'source-01' },
+      { ...result.blocker, sourceSlotId: 'source-02' },
+      { ...result.advisory, sourceSlotId: 'source-02' },
     ]);
     expect(result.run?.findingCount).toBe(3);
     const posted = (JSON.parse(readFileSync(result.capture, 'utf8')) as { body: string }).body;
-    expect((posted.match(/### duplicate/g) ?? [])).toHaveLength(2);
+    expect((posted.match(/### quality:duplicate/g) ?? [])).toHaveLength(2);
+    const occurrences = posted.split('### ').slice(1);
+    for (const [index, original] of [result.blocker, result.blocker, result.advisory].entries()) {
+      const occurrence = occurrences[index]!;
+      for (const field of [original.code, original.summary, original.path,
+        original.details, original.severity]) expect(occurrence).toContain(field);
+    }
     const sourceLine = (id: string) => 'Source slot: ' + String.fromCharCode(96) + id + String.fromCharCode(96);
     const first = posted.indexOf(sourceLine('source-01'));
     const second = posted.indexOf(sourceLine('source-02'));
@@ -7939,7 +7949,7 @@ describe('Issue #2796 plain source union after Opus removal', () => {
     expect(second).toBeGreaterThan(first);
     expect(third).toBeGreaterThan(second);
     expect(posted).toContain('Severity: ' + String.fromCharCode(96) + 'blocking' + String.fromCharCode(96));
-    expect(posted).toContain('Severity: ' + String.fromCharCode(96) + 'warning' + String.fromCharCode(96));
+    expect(posted).toContain('Severity: ' + String.fromCharCode(96) + 'non-blocking' + String.fromCharCode(96));
     expect(posted).not.toMatch(/FIX_NOW fixer packet|ORIGINAL_BLOCKER|effective-finding groups/);
     expect(result.statuses.at(-1)).toBe('failure');
     expect(result.notifications).toEqual([[

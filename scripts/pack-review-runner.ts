@@ -445,6 +445,10 @@ const OPERATOR_START_FIELDS = [
 interface ReviewPayloadFinding {
   title?: string;
   body?: string;
+  code?: string;
+  summary?: string;
+  details?: string;
+  path?: string;
   severity?: string;
   filePath?: string;
   sourceSlotId?: string;
@@ -2035,8 +2039,12 @@ function formatGithubReviewBody(run: PackReviewRunRecord, payload: ReviewPayload
         lines.push('The reviewer emitted a non-object finding; it was treated as blocking.', '');
         return;
       }
-      lines.push(`### ${finding.title || `Finding ${index + 1}`}`, '');
+      lines.push(`### ${finding.title || finding.code || `Finding ${index + 1}`}`, '');
+      if (finding.code) lines.push(`Code: \`${finding.code}\``, '');
+      if (finding.summary) lines.push(finding.summary, '');
       if (finding.body) lines.push(finding.body, '');
+      if (finding.details) lines.push(finding.details, '');
+      if (finding.path) lines.push(`Path: \`${finding.path}\``, '');
       if (finding.filePath) lines.push(`Path: \`${finding.filePath}\``, '');
       if (finding.severity) lines.push(`Severity: \`${finding.severity}\``, '');
       if (finding.sourceSlotId) lines.push(`Source slot: \`${finding.sourceSlotId}\``, '');
