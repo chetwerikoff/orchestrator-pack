@@ -18,6 +18,7 @@ export const MANAGER_EXTERNAL_PAUSE_CAUSES = [
   'external:github_unavailable',
   'external:permission_denied',
   'external:quota_exhausted',
+  'external:smoke_precondition_unavailable',
   'external:waiting_on_issue',
   'external:waiting_on_pr',
   'external:content_authority_conflict',

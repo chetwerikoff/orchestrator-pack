@@ -296,6 +296,7 @@ function runTrustedCommand(command: string, options: {
   timeoutMs: number;
   forceUnreachable?: boolean;
   sandboxMode: 'trusted-base' | 'pr-head-new';
+  prHeadSha?: string | null;
   selectedContext?: TargetContext;
 }): CommandRunResult {
   const resolutionRoot = options.resolutionRoot ?? options.cwd;
@@ -320,6 +321,7 @@ function runTrustedCommand(command: string, options: {
     dependencyRoot: options.dependencyRoot ?? options.cwd,
     timeoutMs: options.timeoutMs,
     sandboxMode: options.sandboxMode,
+    prHeadSha: options.prHeadSha ?? undefined,
     forceUnreachable: options.forceUnreachable,
   });
 }
@@ -804,6 +806,7 @@ function findProducerEmissionForRow(markdown: string, acNumber: number, row: Rec
 }
 
 function evaluateNewRow(input: {
+  prHeadSha?: string | null;
   rowIndex: number;
   row: Record<string, string>;
   markdown: string;
@@ -878,6 +881,7 @@ function evaluateNewRow(input: {
     timeoutMs,
     forceUnreachable: forceProducerUnreachable,
     sandboxMode: 'pr-head-new',
+    prHeadSha: input.prHeadSha,
   });
   if (run.blocked) {
     return buildUnverified(rowIndex, row, blockedUnverifiedReason(run));
@@ -895,6 +899,7 @@ function evaluateNewRow(input: {
     timeoutMs,
     forceUnreachable: forceProducerUnreachable,
     sandboxMode: 'pr-head-new',
+    prHeadSha: input.prHeadSha,
     selectedContext,
   });
   if (independentRun.blocked) {
@@ -1197,6 +1202,7 @@ export function runContractEvidenceReverify(input: ReverifyRunInput): ReverifyRu
     if (/^NEW\(produced-by AC#\d+\)$/i.test(evidence)) {
       rows.push(
         evaluateNewRow({
+          prHeadSha: input.prHeadSha,
           rowIndex: index,
           row,
           markdown: input.boundSnapshotBody,

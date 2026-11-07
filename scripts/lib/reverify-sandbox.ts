@@ -234,8 +234,13 @@ function copyDirectoryTree(sourceRoot: string, dest: string): boolean {
   }
 }
 
-function createDisposableWorktreeCopy(cwd: string): string | null {
+function createDisposableWorktreeCopy(cwd: string, prHeadSha?: string): string | null {
   const dest = mkdtempSync(path.join(tmpdir(), 'reverify-sandbox-wt-'));
+  if (prHeadSha !== undefined && (!/^[0-9a-f]{40}$/.test(prHeadSha)
+      || !existsSync(path.join(cwd, '.git')))) {
+    rmSync(dest, { recursive: true, force: true });
+    return null;
+  }
   if (!existsSync(path.join(cwd, '.git'))) {
     if (!copyDirectoryTree(cwd, dest)) {
       rmSync(dest, { recursive: true, force: true });
@@ -244,7 +249,7 @@ function createDisposableWorktreeCopy(cwd: string): string | null {
     return dest;
   }
 
-  const archive = spawnSync('git', ['archive', 'HEAD'], {
+  const archive = spawnSync('git', ['archive', prHeadSha ?? 'HEAD'], {
     cwd,
     shell: false,
     maxBuffer: 64 * 1024 * 1024,
@@ -564,13 +569,14 @@ function spawnPrHeadIsolated(
     baseEnv: Record<string, string>;
     binDirs: string[];
     npmVitestProof?: boolean;
+    prHeadSha?: string;
   },
 ): SpawnSyncReturns<string> {
   if (process.platform !== 'linux' || !bwrapAvailable()) {
     return sandboxUnavailableResult(NETWORK_SANDBOX_UNAVAILABLE);
   }
 
-  const disposable = createDisposableWorktreeCopy(options.cwd);
+  const disposable = createDisposableWorktreeCopy(options.cwd, options.prHeadSha);
   if (!disposable) {
     return sandboxUnavailableResult(PR_HEAD_SANDBOX_UNAVAILABLE);
   }
@@ -623,6 +629,7 @@ function spawnIsolated(
     binDirs: string[];
     networkRestricted: boolean;
     npmVitestProof?: boolean;
+    prHeadSha?: string;
   },
 ): SpawnSyncReturns<string> {
   if (options.networkRestricted) {
@@ -654,6 +661,7 @@ export function runSandboxedAllowlistedCommand(
     dependencyRoot?: string;
     timeoutMs: number;
     sandboxMode: SandboxMode;
+    prHeadSha?: string;
     forceUnreachable?: boolean;
   },
 ): CommandRunResult {
@@ -683,6 +691,7 @@ export function runSandboxedAllowlistedCommand(
     binDirs,
     networkRestricted,
     npmVitestProof,
+    prHeadSha: options.prHeadSha,
   });
 
   const stderr = result.stderr ?? '';

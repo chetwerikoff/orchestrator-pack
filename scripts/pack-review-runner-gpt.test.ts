@@ -54,7 +54,7 @@ import {
   type PackReviewRunRecord,
   type PackReviewGptRoundRecord,
 } from './lib/pack-review-run-store.js';
-import { acquireReviewStartClaim, testReviewStartClaimOwnership } from './lib/review-start-claim-store.js';
+import { acquireReviewStartClaim, bindReviewStartClaimToVisibleRun, testReviewStartClaimOwnership } from './lib/review-start-claim-store.js';
 import type { StateLightTurnObservationRecord } from './chatgpt-browser-turn/state-light-turn-observation.js';
 import { PACK_REVIEW_BOUND_REVIEWER_ENV } from './lib/resolve-pack-reviewer.js';
 import { captureBoundIssueSnapshot, computeBoundIssueSnapshotHash } from './lib/reverify-bound-issue-snapshot.js';
@@ -5018,7 +5018,7 @@ describe('Issue #2496 r03 genuine GPT source delivery and status observation', (
       fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
     };
     return {
-      input, statuses, storeRoot,
+      input, statuses, storeRoot, reviews,
       setObserved: (value: string | undefined) => { observed = value; },
       getObserved: () => observed,
     };
@@ -5057,6 +5057,40 @@ describe('Issue #2496 r03 genuine GPT source delivery and status observation', (
     expect(run?.deliveryOutcomes.workerNotification?.state).toBe('failed');
     expect(f.statuses).toEqual(['pending', 'success']);
     expect(reader).toHaveBeenCalledWith(HEAD_A);
+  });
+
+  it('Issue #2815: yielded concurrent delivery resumes the terminal journal without source resend', async () => {
+    const f = fixture(281511);
+    const sourceLaunch = vi.fn();
+    const first = await startPackReview({ ...f.input,
+      fixtureAfterGptInvocationBound: sourceLaunch,
+      fixtureBeforeGptAggregateSettlement: async ({ runId }) => {
+        await reconcileStalePackReviewRuns({ ...f.input, repoSlug: f.input.fixtureRepoSlug,
+           runId, immediate: true, recoverActiveGptSources: true,
+           fixtureGithubReviewTransport: { ...f.input.fixtureGithubReviewTransport,
+             resolveActorLogin: async () => { throw new Error('synthetic reconciler exits before REVIEW preparation'); } },
+        });
+      },
+    });
+    expect(first).toMatchObject({ reason: 'concurrent_reconcile_owns_delivery', publicationVerified: false });
+    expect(f.reviews).toHaveLength(0);
+    const before = getPackReviewRun(String(first.runId), { projectId: f.input.projectId, storeRoot: f.storeRoot })!;
+    expect(before).toMatchObject({ status: 'up_to_date', journalOutcome: { state: 'persisted' } });
+    const sourceCount = sourceLaunch.mock.calls.length;
+    const resume = await reconcileStalePackReviewRuns({ ...f.input, repoSlug: f.input.fixtureRepoSlug,
+      runId: before.id, immediate: true });
+    expect(resume.results, JSON.stringify(resume)).toContainEqual(expect.objectContaining({
+      runId: before.id, reason: 'gpt_journaled_delivery_resumed', statusReconciled: true,
+    }));
+    expect(f.reviews).toHaveLength(1);
+    expect(f.reviews[0]!.body).toContain('Run: `' + before.id + '`');
+    expect(f.reviews[0]!.commitId).toBe(HEAD_A);
+    expect(getPackReviewRun(before.id, { projectId: f.input.projectId, storeRoot: f.storeRoot })?.reviewRound)
+      .toEqual(before.reviewRound);
+    expect(sourceLaunch).toHaveBeenCalledTimes(sourceCount);
+    expect(listPackReviewRuns({ projectId: f.input.projectId, storeRoot: f.storeRoot })).toHaveLength(1);
+    await reconcileStalePackReviewRuns({ ...f.input, repoSlug: f.input.fixtureRepoSlug, immediate: true });
+    expect(f.reviews).toHaveLength(1);
   });
 
   it('status-post-late-ack-restores-or-unresolved for genuine GPT', async () => {
@@ -5381,6 +5415,33 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
     return replacement.run.id;
   }
 
+  it.each(['alive', 'fresh', 'stale'] as const)(
+    'Issue #2815: incomplete sources give owner-aware recovery advice for %s owner', async (owner) => {
+      const f = seed(1);
+      if (owner !== 'fresh') f.expireGrace();
+      // Do not refresh the persisted heartbeat while choosing a live owner.
+      if (owner === 'alive') {
+        const file = path.join(f.storeRoot, 'runs', f.runId + '.json');
+        const saved = JSON.parse(readFileSync(file, 'utf8'));
+        saved.runnerPid = process.pid;
+        writeFileSync(file, JSON.stringify(saved));
+      }
+      const result = await reconcileStalePackReviewRuns(f.input);
+      const row = result.results.find((entry) => entry.runId === f.runId)!;
+      expect(row, JSON.stringify(result)).toBeDefined();
+      if (owner !== 'stale') {
+        expect(row.nextAction).toContain('observe the original run');
+        const persisted = getPackReviewRun(f.runId, f.options)!;
+        const graceEnd = new Date(Date.parse(persisted.heartbeatAtUtc || persisted.updatedAt) + 2 * 60_000).toISOString();
+        expect(row.nextAction).toContain(`graceEndsAtUtc=${graceEnd}`);
+        expect(row.nextAction).not.toContain('retry the missing');
+      } else {
+        expect(row.nextAction).toContain('reconcile');
+      }
+      expect(f.reviewBodies).toEqual([]);
+    },
+  );
+
   it('settles 3/3 later credentialed comments after three persisted first-attempt zero-sends', async () => {
     const f = seed(3);
     const before = getPackReviewRun(f.runId, f.options)!;
@@ -5409,6 +5470,32 @@ describe('Issue #2523 persisted zero-send and credentialed source recovery', () 
     await reconcileStalePackReviewRuns(f.input);
     expect(f.reviewBodies).toHaveLength(1);
     expect(f.statusStates).toEqual(['success']);
+  });
+
+  it('Issue #2815: recovered R1 releases its initiating claim before the first same-head R2 start', async () => {
+    const f = seed(3, {}, 'T3');
+    f.input.fixtureRequiredStatusReader = async () => f.statusStates.at(-1);
+    const claim = acquireReviewStartClaim({ projectId, prNumber, headSha: HEAD_A,
+      surface: 'fixture-recovered-r1', startReason: 'fixture-r1', reviewRuns: [] });
+    expect(claim.acquired).toBe(true);
+    expect(bindReviewStartClaimToVisibleRun(claim, listPackReviewRuns(f.options))).toMatchObject({
+      ok: true, boundRunId: f.runId,
+    });
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results, JSON.stringify(result)).toContainEqual(expect.objectContaining({
+      runId: f.runId, statusReconciled: true,
+    }));
+    const cycle = readPackReviewAuthority(prNumber, { storeRoot: f.storeRoot })?.cycle;
+    expect(cycle?.consumedRoundOrdinals).toEqual([1]);
+    expect(cycle?.reviewStageComplete).not.toBe(true);
+    expect(testReviewStartClaimOwnership(claim)).toBe(false);
+    const r2 = acquireReviewStartClaim({ projectId, prNumber, headSha: HEAD_A,
+      surface: 'fixture-required-r2', startReason: 'fixture-r2', reviewRuns: listPackReviewRuns(f.options) });
+    expect(r2, JSON.stringify(r2)).toMatchObject({ acquired: true });
+    const before = readFileSync(r2.path!, 'utf8');
+    await reconcileStalePackReviewRuns(f.input);
+    expect(readFileSync(r2.path!, 'utf8')).toBe(before);
+    expect(f.reviewBodies).toHaveLength(1);
   });
 
   it('Issue #2748: ordinary verdict read retries two transient exact-head 409s without another source send', async () => {

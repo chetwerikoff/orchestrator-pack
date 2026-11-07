@@ -104,8 +104,9 @@ The shared review phase invokes only the canonical
 `npm run --silent pack-gpt-review -- --project <PROJECT_ID> --session-id <MANAGER_SESSION_ID> --pr-number <PR_NUMBER>`
 runner when the supervised manager will park on review completion. The session id is the manager's
 exact already-owned supervised identity; never infer it from branch/worktree/title/PID. If that
-binding is unavailable, omit `--session-id`, keep the runner foregrounded/observed, consume its
-terminal result directly, and do not park waiting for `workerNotification`. Required
+binding is unavailable, omit `--session-id`. For every start or delivery resume use the
+[Long-review recipe](../../../docs/orchestration-runbook.md#long-review-recipe), including
+its dedicated terminal, output log and exit wake; do not wait for an unbound `workerNotification`. Required
 reviewer sources are fresh project chats owned by that runner. A logical round gets one fresh GPT fixer conversation distinct from implementation
 and source reviewers only when the published original source union contains blocking
 findings. Give the fixer every original blocking source occurrence individually,

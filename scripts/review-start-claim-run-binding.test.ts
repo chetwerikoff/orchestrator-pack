@@ -7,8 +7,28 @@ import {
   bindReviewStartClaimToVisibleRun,
   completeReviewStartClaim,
 } from './lib/review-start-claim-store.ts';
+import { releaseForTerminalizedRun } from './lib/review-start-claim-cli.ts';
 
 describe('review-start claim run binding through the TypeScript store', () => {
+  it.each(['unbound', 'newer-run'] as const)('terminal recovery cannot retire a live %s claim', (mode) => {
+    const namespace = mkdtempSync(path.join(os.tmpdir(), 'opk-recovered-claim-'));
+    try {
+      const headSha = 'c'.repeat(40);
+      const claim = acquireReviewStartClaim({ projectId: 'orchestrator-pack', prNumber: 2815,
+        headSha, surface: 'fixture-r2', startReason: 'fixture-new-owner', namespace, reviewRuns: [] });
+      expect(claim.acquired).toBe(true);
+      if (mode === 'newer-run') {
+        expect(bindReviewStartClaimToVisibleRun(claim, [{ runId: 'prr-newer', prNumber: 2815,
+          targetSha: headSha, status: 'reviewing' }])).toMatchObject({ ok: true });
+      }
+      const before = readFileSync(claim.path!, 'utf8');
+      const result = releaseForTerminalizedRun({ projectId: 'orchestrator-pack', prNumber: 2815,
+        namespace, headSha, runId: 'prr-recovered', reviewRuns: [{ runId: 'prr-recovered',
+          prNumber: 2815, targetSha: headSha, status: 'up_to_date' }] });
+      expect(result).toMatchObject({ ok: false, reason: 'superseded_claim' });
+      expect(readFileSync(claim.path!, 'utf8')).toBe(before);
+    } finally { rmSync(namespace, { recursive: true, force: true }); }
+  });
   it('binds only the visible exact PR/head run and then terminalizes it', () => {
     const namespace = mkdtempSync(path.join(os.tmpdir(), 'opk-claim-binding-'));
     try {

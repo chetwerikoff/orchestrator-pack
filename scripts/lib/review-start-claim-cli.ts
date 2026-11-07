@@ -1049,6 +1049,21 @@ export function completeReviewStartClaim(
   const lock = claimLockDir(required.namespace, required.claim.prNumber, required.claim.headSha);
   return withMutex(lock, () => {
     const read = readClaimRecord(required.path);
+    if ((!read.ok || !read.record || !sameGeneration(read.record, required.claim))
+        && (outcome === 'run_started' || outcome === 'released_after_run_terminalized')) {
+      // Concurrent recovery can retire this exact generation before its original
+      // caller returns. Acknowledge it without touching any newer active claim.
+      for (const name of readdirSync(terminalDir(required.namespace))) {
+        const terminalPath = join(terminalDir(required.namespace), name);
+        const prior = readClaimRecord(terminalPath);
+        if (prior.ok && prior.record && sameGeneration(prior.record, required.claim)
+            && prior.record.outcome === 'released_after_run_terminalized'
+            && asString(prior.record.boundRunId) === asString(required.claim.boundRunId)
+            && asString(prior.record.boundRunId)) {
+          return { ok: true, outcome: prior.record.outcome, terminalPath };
+        }
+      }
+    }
     if (!read.ok || !read.record) return { ok: false, reason: 'ambiguous_claim', detail: read.reason };
     if (read.record.state !== 'active' || !sameGeneration(read.record, required.claim)) {
       return { ok: false, reason: 'lost_ownership', holder: read.record.holder };
@@ -1463,7 +1478,7 @@ function reclaimOrphan(input: { namespace: string; path: string; record: unknown
   return { reclaimed: false, decision };
 }
 
-function releaseForTerminalizedRun(payload: UnknownRecord): UnknownRecord {
+export function releaseForTerminalizedRun(payload: UnknownRecord): UnknownRecord {
   const runId = asString(payload.runId ?? payload.RunId);
   if (!runId) return { ok: false, reason: 'missing_run_id' };
   const projectId = asString(payload.projectId ?? payload.ProjectId) || DEFAULT_PROJECT_ID;
@@ -1479,9 +1494,8 @@ function releaseForTerminalizedRun(payload: UnknownRecord): UnknownRecord {
     if (read.record.state !== 'active') return { ok: false, reason: 'not_active' };
     const bound = asString(read.record.boundRunId);
     if (bound && bound !== runId) return { ok: false, reason: 'superseded_claim', boundRunId: bound, holder: read.record.holder };
-    if (!bound && visibleRun(asArray(payload.reviewRuns ?? payload.ReviewRuns), prNumber, headSha, projectId)) {
-      return terminalizeDecision({ namespace, path, expected: read.record, decision: { action: 'terminalize', outcome: 'orphan_covered_run_unbound', reason: 'recovery_unbound_covering_run', warn: true, coveredRunId: runId }, decisionSource: 'run_recovery', reviewRuns: asArray(payload.reviewRuns ?? payload.ReviewRuns), mutexAlreadyHeld: true });
-    }
+    // An unbound claim may belong to a newly acquired concurrent start. Only
+    // the initiating run's explicit binding authorizes terminal recovery release.
     if (!bound) return { ok: false, reason: 'superseded_claim', boundRunId: '', holder: read.record.holder };
     const terminalPath = moveToTerminal(namespace, path, read.record, 'released_after_run_terminalized', { runId });
     return { ok: true, terminalPath, key: read.record.key };

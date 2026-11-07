@@ -71,8 +71,9 @@ export function packGptReviewUsage(): string {
     '',
     'The command resolves the selected project card and live OPEN PR head. Reviewer priority:',
     'explicit --reviewer > explicit PACK_REVIEW_BOUND_REVIEWER > saved preference > PACK_REVIEWER.',
-    'The route name does not select GPT. It stays foregrounded until the runner returns,',
-    'and leaves GitHub publication to that runner. It does not accept a caller-supplied head SHA.',
+    'The route name does not select GPT. Use the dedicated-terminal Long-review recipe',
+    'in docs/orchestration-runbook.md for starts and journaled-delivery resumes;',
+    'leave GitHub publication to that runner. It does not accept a caller-supplied head SHA.',
   ].join('\n');
 }
 

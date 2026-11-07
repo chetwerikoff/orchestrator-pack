@@ -2,7 +2,7 @@
 // @vitest-pre-topology-seconds 60
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runProcess, runProcessSync } from '../kernel/subprocess.ts';
 import { resolvePackWorkerReportRequest, type ReportDeps } from '../pack-worker-report.ts';
@@ -819,6 +819,114 @@ describe('target context', () => {
       candidateOnly: true, neverBlocks: true, runOutcome: 'rows-evaluated',
     });
     expect(JSON.parse(verifiedCli.stdout).rows[0].status).toBe(candidate.rows[0]!.status);
+
+    // Run the actual prompt commands, not a second hand-maintained argv recipe.
+    const prompt = readFileSync(join(packRoot, 'prompts/codex_review_prompt.md'), 'utf8');
+    const checkpoint = prompt.slice(prompt.indexOf('SnapshotFile="$(node'), prompt.indexOf('\n```', prompt.indexOf('SnapshotFile="$(node')));
+    const issueFile = join(target.root, 'issue.md');
+    const prFile = join(target.root, 'pr.md');
+    writeFileSync(issueFile, body);
+    writeFileSync(prFile, 'Closes #2790');
+    const substitutions: Record<string, string> = {
+      '<trusted-pack-root>': packRoot, '<trusted-base-root>': p, '<pr-worktree-path>': w,
+      '<project-id>': card.projectId, '<pr-number>': '2798', '<issue-number>': '2790',
+      '<sha>': prSha, '<issue-body>': issueFile, '<pr-body>': prFile, '<changed-paths>': modifiedFile,
+    };
+    const promptRun = (head: string) => runProcessSync({
+      command: 'bash', args: ['-e', '-c', Object.entries({ ...substitutions, '<sha>': head })
+        .reduce((command, [key, value]) => command.replaceAll(key, value), checkpoint)],
+      env: { ...target.env, OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR: snapshotDir }, inheritParentEnv: false,
+    });
+    const promptResult = promptRun(prSha);
+    expect(promptResult.exitCode, promptResult.stderr).toBe(0);
+    expect(promptResult.stdout).toContain('(candidate evidence only)');
+    expect(promptResult.stdout).toContain('never-blocks: true');
+    expect(promptResult.stdout).toContain('run-outcome: rows-evaluated');
+    expect(promptRun('f'.repeat(40)).exitCode).not.toBe(0);
+
+    if (isPrHeadNetworkSandboxAvailable()) {
+      // Deterministically switch the real clean W after admission, either before
+      // proof's archive or between proof and independent producer. The preload
+      // observes native git archive in subprocesses; production gets no test hook.
+      for (const route of ['library', 'cli'] as const) {
+        for (const switchAt of [1, 2]) {
+          git(w, 'checkout', '--detach', prSha);
+          const hook = join(target.root, `archive-${route}-${switchAt}.mjs`);
+          const observed = join(target.root, `archive-${route}-${switchAt}.jsonl`);
+          writeFileSync(hook, `import cp from 'node:child_process';
+import { appendFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const original = cp.spawnSync;
+let count = 0;
+cp.spawnSync = function(command, args, options) {
+  if (command === 'git' && args?.[0] === 'archive' && options?.cwd === ${JSON.stringify(w)}) {
+    if (++count === ${switchAt}) {
+      const changed = original('git', ['checkout', '--detach', ${JSON.stringify(pSha)}], { cwd: options.cwd });
+      if (changed.status !== 0) throw new Error('fixture checkout failed');
+    }
+    appendFileSync(${JSON.stringify(observed)}, JSON.stringify(args) + '\\n');
+  }
+  return original.apply(this, arguments);
+};
+syncBuiltinESMExports();
+`);
+          const args = route === 'cli'
+            ? ['--experimental-strip-types', join(packRoot, 'scripts/invoke-contract-evidence-reverify.ts'),
+              '--repo-root', packRoot, '--trusted-base-root', p, '--review-target-root', w,
+              '--manifest-path', manifestPath, '--snapshot-file', captured.snapshotPath,
+              '--bound-snapshot-pr-number', '2798', '--project-id', card.projectId,
+              '--explicit-issue', '2790', '--pr-head-sha', prSha, '--changed-paths-file', modifiedFile]
+            : ['--experimental-strip-types', '--input-type=module', '--eval',
+              `import { runContractEvidenceReverify } from ${JSON.stringify(join(packRoot, 'scripts/lib/contract-evidence-reverify.ts'))};
+console.log(JSON.stringify(runContractEvidenceReverify(${JSON.stringify({
+  repoRoot: packRoot, trustedBaseRoot: p, reviewTargetRoot: w, manifestPath,
+  projectId: card.projectId, env: target.env, boundSnapshotBody: body,
+  explicitIssueNumber: 2790, prHeadSha: prSha, prModifiedPaths: [proofPath],
+})})));`];
+          const output = runProcessSync({ command: process.execPath, args: ['--import', hook, ...args],
+            env: { ...target.env, OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR: snapshotDir }, inheritParentEnv: false });
+          expect(output.exitCode, output.stderr).toBe(0);
+          expect(JSON.parse(output.stdout).rows[0], `${route} switch ${switchAt}`)
+            .toMatchObject({ status: 'verified', verificationMode: 'live', producerVerified: true });
+          expect(readFileSync(observed, 'utf8').trim().split('\n').map((line) => JSON.parse(line)))
+            .toEqual([['archive', prSha], ['archive', prSha]]);
+        }
+      }
+      git(w, 'checkout', '--detach', prSha);
+      const objectRef = runProcessSync({ command: 'git', cwd: w, inheritParentEnv: true,
+        args: ['rev-parse', '--git-path', `objects/${prSha.slice(0, 2)}/${prSha.slice(2)}`] });
+      expect(objectRef.ok).toBe(true);
+      const objectPath = resolve(w, objectRef.stdout.trim());
+      const objectBytes = readFileSync(objectPath);
+      const missingHook = join(target.root, 'archive-object-disappears.mjs');
+      const missingLog = join(target.root, 'archive-object-disappears.jsonl');
+      writeFileSync(missingHook, `import cp from 'node:child_process';
+import { appendFileSync, unlinkSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const original = cp.spawnSync;
+cp.spawnSync = function(command, args, options) {
+  if (command === 'git' && args?.[0] === 'archive' && options?.cwd === ${JSON.stringify(w)}) {
+    unlinkSync(${JSON.stringify(objectPath)});
+    appendFileSync(${JSON.stringify(missingLog)}, JSON.stringify(args) + '\\n');
+  }
+  return original.apply(this, arguments);
+};
+syncBuiltinESMExports();
+`);
+      try {
+        const missing = runProcessSync({ command: process.execPath,
+          args: ['--import', missingHook, '--experimental-strip-types',
+            join(packRoot, 'scripts/invoke-contract-evidence-reverify.ts'),
+            '--repo-root', packRoot, '--trusted-base-root', p, '--review-target-root', w,
+            '--manifest-path', manifestPath, '--snapshot-file', captured.snapshotPath,
+            '--bound-snapshot-pr-number', '2798', '--project-id', card.projectId,
+            '--explicit-issue', '2790', '--pr-head-sha', prSha, '--changed-paths-file', modifiedFile],
+          env: { ...target.env, OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR: snapshotDir }, inheritParentEnv: false });
+        expect(missing.exitCode, missing.stderr).toBe(0);
+        expect(JSON.parse(missing.stdout).rows[0]).toMatchObject({ status: 'unverified' });
+        expect(readFileSync(missingLog, 'utf8').trim()).toBe(JSON.stringify(['archive', prSha]));
+      } finally { writeFileSync(objectPath, objectBytes); }
+    }
     const unverified = (row: { status?: string; producerVerified?: boolean } | undefined) => {
       expect(row?.status).toBe('unverified');
       expect(row?.producerVerified).not.toBe(true);
