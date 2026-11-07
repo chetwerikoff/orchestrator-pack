@@ -1645,7 +1645,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
         return { status: 'send_failed', reason: neutralFailureReason(response) };
       }
       if (!response.ok) return { status: 'dispatch_unknown', reason: neutralFailureReason(response) };
-      const receipt = classifyPromptSendReceipt(response, input.worker.id);
+      const receipt = classifyPromptSendReceipt(response, input.worker.id, input.worker.generation);
       return receipt.status === 'turn_started'
         ? { status: 'dispatched' }
         : { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };

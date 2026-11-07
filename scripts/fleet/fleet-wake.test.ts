@@ -115,10 +115,10 @@ function commandResult(stdout = '', ok = true): OrcaCommandResult {
 const primary = '/home/user/project';
 const workerBase = '/home/user/.local/share/orca/workspaces/project';
 const terminals: FleetTerminal[] = [
-  { handle: 'coord', title: 'Cursor coordinator', worktreePath: primary },
-  { handle: 'one', title: 'OpenCode manager one', worktreePath: `${workerBase}/one` },
-  { handle: 'two', title: 'Claude manager two', worktreePath: `${workerBase}/two` },
-  { handle: 'shell', title: 'zsh', worktreePath: `${workerBase}/shell` },
+  { handle: 'coord', title: 'Cursor coordinator', worktreePath: primary, incarnationId: 'fixture-incarnation' },
+  { handle: 'one', title: 'OpenCode manager one', worktreePath: `${workerBase}/one`, incarnationId: 'fixture-incarnation' },
+  { handle: 'two', title: 'Claude manager two', worktreePath: `${workerBase}/two`, incarnationId: 'fixture-incarnation' },
+  { handle: 'shell', title: 'zsh', worktreePath: `${workerBase}/shell`, incarnationId: 'fixture-incarnation' },
 ];
 
 function config(overrides: Partial<FleetWakeConfig> = {}): FleetWakeConfig {
@@ -143,7 +143,7 @@ function fakeOrca(
     if (args[0] === 'terminal' && args[1] === 'list') {
       return commandResult(JSON.stringify({
         ok: true,
-        result: { terminals: customTerminals, totalCount: customTerminals.length, truncated: false },
+        result: { terminals: customTerminals.map((pane) => ({ incarnationId: 'fixture-incarnation', ...pane })), totalCount: customTerminals.length, truncated: false },
       }));
     }
     if (args[0] === 'terminal' && args[1] === 'read') {
@@ -153,7 +153,7 @@ function fakeOrca(
     if (args[0] === 'terminal' && args[1] === 'send') return commandResult(JSON.stringify({
       ok: true, result: {
         send: { handle: args[args.indexOf('--terminal') + 1], accepted: true,
-          prompt: { requestId: 'fixture-request', processIncarnation: 'fixture-incarnation',
+          prompt: { requestId: 'fixture-request', processIncarnation: customTerminals.find((pane) => pane.handle === args[args.indexOf('--terminal') + 1])?.incarnationId ?? 'fixture-incarnation',
             provider: 'claude', observation: 'supported', stages: ['input_accepted', 'turn_started'] } },
         mutation: { requestId: 'fixture-request', replayed: false },
       },
@@ -249,7 +249,7 @@ function realOpenCodePane(kind: 'ack' | 'tool'): string {
 }
 
 describe('fleet alarm', () => {
-  it.each(['accepted-only', 'malformed', 'failed'])(
+  it.each(['accepted-only', 'malformed', 'failed', 'replacement-incarnation'])(
     'Issue #2808: an unverified unit wake (%s) retains its attempt and never clears the wait or replays', async (kind) => {
       const store = new MemoryWakeStore();
       const screens = { coord: 'idle', one: 'PARKED on GPT turn receipt-test' };
@@ -258,7 +258,8 @@ describe('fleet alarm', () => {
       const executor: OrcaExecutor = (args) => args[1] === 'send'
         ? commandResult(kind === 'malformed' ? '{' : JSON.stringify({ ok: kind !== 'failed', result: {
           send: { handle: 'one', accepted: true, prompt: { requestId: 'r', processIncarnation: 'i',
-            provider: 'opencode', observation: 'supported', stages: ['input_accepted'] } },
+            provider: 'opencode', observation: 'supported', stages: kind === 'replacement-incarnation'
+              ? ['input_accepted', 'turn_started'] : ['input_accepted'] } },
           mutation: { requestId: 'r', replayed: false },
         } }), kind !== 'failed') : base(args);
       const clear = vi.fn();
@@ -277,13 +278,16 @@ describe('fleet alarm', () => {
     },
   );
 
-  it('Issue #2808: ordinary coordinator alarms retain unverified attempts across later ticks', async () => {
+  it.each(['accepted-only', 'replacement-incarnation'])('Issue #2808: ordinary coordinator alarms retain %s attempts across later ticks', async (kind) => {
     const store = new MemoryWakeStore();
     const screens = { coord: 'idle', one: 'done' };
     const rows = terminals.slice(0, 2);
     const base = fakeOrca(screens, [], rows);
     const executor: OrcaExecutor = (args) => args[1] === 'send'
-      ? commandResult(JSON.stringify({ ok: true, result: { send: { handle: 'coord', accepted: true } } })) : base(args);
+      ? commandResult(JSON.stringify({ ok: true, result: { send: { handle: 'coord', accepted: true,
+        ...(kind === 'replacement-incarnation' ? { prompt: { requestId: 'r', processIncarnation: 'replacement-process',
+          provider: 'claude', observation: 'supported', stages: ['input_accepted', 'turn_started'] } } : {}),
+      }, mutation: { requestId: 'r', replayed: false } } })) : base(args);
     const input = { store, screens, terminals: rows, executor, now: () => 0 };
     const first = await tick(input);
     expect(first.result.state).toBe('send_failed');
@@ -423,12 +427,13 @@ describe('fleet alarm', () => {
   it('r05: final park line is accepted without a Task or receipt and stays coordinator-quiet', async () => {
     const store = new MemoryWakeStore();
     const parked = { coord: 'idle', one: 'work\nPARKED on GPT turn unknown-event' };
-    const first = await tick({ terminals: [terminals[0]!, terminals[1]!], screens: parked, store });
+    const rows = [terminals[0]!, { ...terminals[1]!, incarnationId: undefined }];
+    const first = await tick({ terminals: rows, screens: parked, store });
     expect(first.result.state).toBe('nothing_stopped');
     expect(sends(first.calls)).toHaveLength(0);
     expect(first.calls.filter((args) => args[0] === 'orchestration'
       && ['worker-list', 'worker-show'].includes(args[1] ?? ''))).toHaveLength(0);
-    const repeated = await tick({ terminals: [terminals[0]!, terminals[1]!], screens: parked, store });
+    const repeated = await tick({ terminals: rows, screens: parked, store });
     expect(sends(repeated.calls)).toHaveLength(0);
   });
 

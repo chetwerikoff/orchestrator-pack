@@ -274,9 +274,15 @@ export function defaultMergeCleanupDeps(repoRoot: string): MergeCleanupDeps {
       return { ok: viaGit.ok, detail: viaGit.ok ? 'git worktree remove' : viaGit.stderr };
     },
     send: (handle, text) => {
-      const sent = spawn(resolveOrcaExecutable(), promptSendArgv(handle, text));
       try {
-        const receipt = classifyPromptSendReceipt(sent.ok ? JSON.parse(sent.stdout) : null, handle);
+        const executable = resolveOrcaExecutable();
+        const shown = spawn(executable, ['terminal', 'show', '--terminal', handle, '--json']);
+        const observed = shown.ok ? JSON.parse(shown.stdout) : null;
+        const terminal = observed?.ok === true ? observed.result?.terminal : null;
+        const incarnation = terminal?.handle === handle && typeof terminal.incarnationId === 'string'
+          ? terminal.incarnationId : undefined;
+        const sent = spawn(executable, promptSendArgv(handle, text));
+        const receipt = classifyPromptSendReceipt(sent.ok ? JSON.parse(sent.stdout) : null, handle, incarnation);
         if (receipt.status === 'turn_started') return { ok: true, detail: 'sent' };
       } catch { /* Malformed output cannot prove submission. */ }
       return { ok: false, detail: 'delivery unverified; next: owner reads the exact orchestrator pane; do not resend' };

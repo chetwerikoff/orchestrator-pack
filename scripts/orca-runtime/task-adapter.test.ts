@@ -108,7 +108,7 @@ describe('Orca async transport envelope classification', () => {
 });
 
 describe('Orca terminal-show metadata', () => {
-  it.each(['turn_started', 'accepted_only', 'launch_failed', 'submitOnly', 'writeOnly'] as const)(
+  it.each(['turn_started', 'replacement_incarnation', 'accepted_only', 'launch_failed', 'submitOnly', 'writeOnly'] as const)(
     'Issue #2808: unbound OpenCode native prompt delivery: %s', (mode) => {
       const terminal = { handle: 'term-native-prompt', incarnationId: 'inc-native-prompt',
         worktreePath: process.cwd(), agentIdentity: 'opencode', status: 'running' };
@@ -120,9 +120,9 @@ describe('Orca terminal-show metadata', () => {
           if (mode === 'launch_failed') return { ok: false, outcomeCategory: 'process_launch_failed',
             error: { code: 'orca_process_launch_failed', message: 'synthetic executable absent' } };
           return { ok: true, result: { send: { handle: terminal.handle, accepted: true, prompt: {
-            requestId: 'native-request', processIncarnation: terminal.incarnationId,
+            requestId: 'native-request', processIncarnation: mode === 'replacement_incarnation' ? 'replacement-process' : terminal.incarnationId,
             provider: 'opencode', observation: 'supported',
-            stages: mode === 'turn_started' ? ['input_accepted', 'turn_started'] : ['input_accepted'],
+            stages: mode === 'turn_started' || mode === 'replacement_incarnation' ? ['input_accepted', 'turn_started'] : ['input_accepted'],
           } }, mutation: { requestId: 'native-request', replayed: false } } };
         }
         return { ok: false, error: { code: 'unexpected', message: args.join(' ') } };
@@ -132,7 +132,7 @@ describe('Orca terminal-show metadata', () => {
         ...(mode === 'submitOnly' ? { submitOnly: true } : { text: 'wake', ...(mode === 'writeOnly' ? { writeOnly: true } : {}) }),
       });
       expect(result).toMatchObject(mode === 'turn_started' ? { status: 'dispatched' }
-        : mode === 'accepted_only' ? { status: 'dispatch_unknown' }
+        : mode === 'accepted_only' || mode === 'replacement_incarnation' ? { status: 'dispatch_unknown' }
           : mode === 'launch_failed' ? { status: 'send_failed' }
             : { status: 'send_failed', reason: 'opencode_control_unbound' });
       const sends = calls.filter((args) => args[1] === 'send');

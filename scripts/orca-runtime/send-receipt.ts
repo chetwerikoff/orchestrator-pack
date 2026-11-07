@@ -16,7 +16,7 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 
 /** Orca's additive input_accepted -> turn_started stages are the submit witness. */
-export function classifyPromptSendReceipt(value: unknown, handle: string): PromptSendReceipt {
+export function classifyPromptSendReceipt(value: unknown, handle: string, incarnation: string | undefined): PromptSendReceipt {
   const unverified = (reason: string): PromptSendReceipt => ({ status: 'unverified', reason });
   const envelope = record(value);
   if (envelope?.ok !== true) return unverified('native_send_failed');
@@ -32,6 +32,11 @@ export function classifyPromptSendReceipt(value: unknown, handle: string): Promp
     || mutation?.requestId !== prompt.requestId
     || typeof prompt.processIncarnation !== 'string' || !prompt.processIncarnation.trim()) {
     return unverified('send_identity_unverified');
+  }
+  // Native terminal.incarnationId and prompt.processIncarnation identify the
+  // same process. A matching handle alone cannot credential a replacement.
+  if (!incarnation?.trim() || prompt.processIncarnation !== incarnation) {
+    return unverified('recipient_incarnation_unverified');
   }
   const stages = prompt.stages;
   if (!Array.isArray(stages) || stages.length !== 2

@@ -23,8 +23,9 @@ const recorded = {
 
 describe('native prompt receipt', () => {
   const handle = recorded.result.send.handle;
+  const incarnation = recorded.result.send.prompt.processIncarnation;
   it('confirms the recorded turn-started receipt and builds one bounded observing send', () => {
-    expect(classifyPromptSendReceipt(recorded, handle)).toEqual({ status: 'turn_started' });
+    expect(classifyPromptSendReceipt(recorded, handle, incarnation)).toEqual({ status: 'turn_started' });
     expect(promptSendArgv(handle, 'wake')).toEqual([
       'terminal', 'send', '--terminal', handle, '--text', 'wake', '--enter', '--json',
       '--wait-submit', String(PROMPT_SEND_WAIT_SECONDS),
@@ -43,18 +44,24 @@ describe('native prompt receipt', () => {
     ['not accepted', (r: typeof recorded) => { r.result.send.accepted = false; }],
     ['contradictory request', (r: typeof recorded) => { r.result.mutation.requestId = 'different-request'; }],
     ['missing incarnation', (r: typeof recorded) => { r.result.send.prompt.processIncarnation = ''; }],
+    ['replacement incarnation', (r: typeof recorded) => { r.result.send.prompt.processIncarnation = 'replacement-process'; }],
     ['failed', (r: typeof recorded) => { r.ok = false; }],
     ['reversed stages', (r: typeof recorded) => { r.result.send.prompt.stages.reverse(); }],
     ['contradictory stage', (r: typeof recorded) => { r.result.send.prompt.stages.push('queued'); }],
   ])('keeps %s unverified even if other fields look successful', (_name, change) => {
     const receipt = structuredClone(recorded);
     change(receipt);
-    expect(classifyPromptSendReceipt(receipt, handle).status).toBe('unverified');
+    expect(classifyPromptSendReceipt(receipt, handle, incarnation).status).toBe('unverified');
   });
 
   it.each([null, [], 'not-json', {}, { ok: true }, { ok: true, result: { send: { accepted: true } } }])(
     'does not promote malformed or legacy output %j', (receipt) => {
-      expect(classifyPromptSendReceipt(receipt, handle).status).toBe('unverified');
+      expect(classifyPromptSendReceipt(receipt, handle, incarnation).status).toBe('unverified');
     },
   );
+  it.each([undefined, '', ' '])('does not confirm without a selected incarnation: %j', (expected) => {
+    expect(classifyPromptSendReceipt(recorded, handle, expected)).toEqual({
+      status: 'unverified', reason: 'recipient_incarnation_unverified',
+    });
+  });
 });
