@@ -1,0 +1,48 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2796,
+  "declared_paths": [
+    ".cursor/skills/execute-issue-with-gpt/SKILL.md",
+    "docs/chatgpt-task-execution-runbook.md",
+    "prompts/pack_pr_review_contract.md",
+    "scripts/lib/pack-review-delivery.ts",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/pack-pr-review-contract.test.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.test.ts",
+    "scripts/review-delivery.test.ts"
+  ],
+  "denylist": [
+    ".github/workflows/",
+    "credentials/",
+    "docs/merge-triage-gate.d.mts",
+    "docs/merge-triage-gate.mjs",
+    "docs/merge-triage-primary-paths.v1.json",
+    "packages/core/",
+    "scripts/executor-profile-policy.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/merge-triage-evidence.ts",
+    "scripts/pack-review-state.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "secrets/",
+    "tests/external-output-references/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/skills/execute-issue-with-gpt/SKILL.md",
+    "docs/chatgpt-task-execution-runbook.md",
+    "prompts/pack_pr_review_contract.md",
+    "scripts/lib/execute-issue-manager-boundary.test.ts",
+    "scripts/lib/pack-gpt-source-comment-runner.cases.ts",
+    "scripts/lib/pack-review-delivery.ts",
+    "scripts/lib/pack-review-run-store.ts",
+    "scripts/pack-pr-review-contract.test.ts",
+    "scripts/pack-review-runner-gpt.test.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.test.ts",
+    "scripts/review-delivery.test.ts"
+  ],
+  "source_revision": "12fc9ffa5ed961facac166371292d776e5771e01"
+}

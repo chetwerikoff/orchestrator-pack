@@ -748,22 +748,16 @@ For every required logical round:
   state are the progression authority. The manager observes/consumes them and
   never republishes or paraphrases them into a replacement review authority.
 
-Only when the canonical exact-PR/head effective-findings projection contains
-blocking actionable entries, open one **fresh GPT fixer conversation** for
-that logical round. If a valid triage was persisted, this means blocking
-`FIX_NOW` groups only; a findings-only verdict consisting of `DEFER`,
-evidence-proven `REJECT` and/or advisory groups launches no fixer.
-If triage was missing, invalid or unsafe, the same projection is `plain`:
-**original source blocking rows remain actionable** and still launch a fixer,
-using the published `ORIGINAL_BLOCKER` packet one entry per original occurrence.
-Plain fallback must not wait for a non-existent persisted triage group packet.
-The fixer differs from implementation and each reviewer chat. Give it the exact
-Issue URL, PR URL, 40-hex reviewed head and the bound published packet:
-deduplicated one-entry-per-`FIX_NOW`-group only in validated triaged mode,
-or unmodified original blocker occurrences in plain mode. No `DEFER`,
-`REJECT` or advisory-only rows become fixer work. The manager rereads
-current CI, original source comments and published packet before acting;
-a stale copied summary has no authority.
+Only when the canonical exact-PR/head original source union contains blocking
+findings, open one **fresh GPT fixer conversation** for that logical round.
+Give the fixer the exact Issue URL, PR URL, 40-hex reviewed head and **every
+original blocking source occurrence individually**, using the published GitHub
+COMMENT and source-slot provenance without grouping, filtering or deduplication.
+Advisory-only findings do not launch a fixer. The six-line worker notification
+reports the count and status; it is not a per-finding fixer packet.
+The fixer differs from implementation and each reviewer chat. The manager
+rereads current CI and original source comments before acting; a stale copied
+summary has no authority.
 One fixer conversation
 may continue for concrete CI/fix gaps in that same correction episode. Required
 code corrections advance the PR to a Git strict descendant of the findings-reviewed

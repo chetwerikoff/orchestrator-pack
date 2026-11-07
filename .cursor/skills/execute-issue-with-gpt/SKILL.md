@@ -107,15 +107,12 @@ exact already-owned supervised identity; never infer it from branch/worktree/tit
 binding is unavailable, omit `--session-id`, keep the runner foregrounded/observed, consume its
 terminal result directly, and do not park waiting for `workerNotification`. Required
 reviewer sources are fresh project chats owned by that runner. A logical round gets one fresh GPT fixer conversation distinct from implementation
-and source reviewers only for blocking findings in the canonical exact-PR/head
-effective projection. In validated triaged mode this means one or more blocking
-`FIX_NOW` groups: give the fixer the published one-entry-per-group
-`FIX_NOW` packet, never raw duplicate rows or DEFER/REJECT/advisory rows.
-When triage is absent, unsafe, invalid, or uncertain, the projection is
-`plain`: a blocking original source union still launches a fixer with the
-published `ORIGINAL_BLOCKER` source-occurrence packet (no deduplication or
-false group decisions). Neither mode launches a fixer when effective blocking
-count is zero. Do not require a persisted triage result for plain fallback.
+and source reviewers only when the published original source union contains blocking
+findings. Give the fixer every original blocking source occurrence individually,
+including source-slot provenance; never deduplicate or downgrade blockers. Advisory-only
+findings do not launch a fixer. The original GitHub COMMENT and durable journal are
+the source of findings, while the worker notification remains a six-line count/status
+summary, not a fixer packet.
 A code-required
 findings fix advances to a proven strict-descendant head with green required CI;
 an independently credentialed final-cap Issue-only scope correction can instead
