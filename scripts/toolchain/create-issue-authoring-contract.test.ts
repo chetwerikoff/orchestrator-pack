@@ -113,15 +113,11 @@ describe('Issue #1195 downstream test-task authoring floor', () => {
     expect(authoringFloor).toContain('recursive `.test.ts`');
     expect(authoringFloor).toContain('under `plugins/` and `scripts/`');
     expect(authoringFloor).toContain('`tests/agents-md-*.test.ts`');
-    expect(authoringFloor).toContain('every discovered path requires a');
-    expect(authoringFloor).toContain('classification entry');
+    expect(normalizedFloor).toContain('Unlisted discovered tests default to heavy');
+    expect(normalizedFloor).toContain('entries for absent files do not affect planning');
     for (const condition of [
-      'new, renamed, or deleted',
-      'stale entry',
-      'needs a different lane classification',
-      'classification entry intentionally changes',
-      'existing classification remains valid',
-      'outside the discovery boundary',
+      'only when the final plan intentionally changes a lane override',
+      'Adding, renaming or deleting a test alone does not select the classification output',
     ]) {
       expect(normalizedFloor).toContain(condition);
     }
@@ -146,11 +142,8 @@ describe('Issue #1195 downstream test-task authoring floor', () => {
   it('covers the decision matrix and unresolved return-to-author branch', () => {
     expect(authoringFloor).toContain('| Final-plan fact observed before handoff |');
     for (const row of [
-      'New lane-discovered `.test.ts` or new `tests/agents-md-*.test.ts`',
-      'Renamed or deleted lane-discovered Vitest test',
-      'Modified discovered test needs a classification change',
-      'Modified discovered test remains valid under its existing classification',
-      'Unchanged discovered test has an intentional classification-only change',
+      'New, renamed or deleted discovered test without an intentional lane override',
+      'Intentional lane override changes',
       'Existing mechanism measures a changed test without measurement changes',
       'Author cannot observe whether classification or measurement changes',
       'No new, renamed, or modified artifact and no mechanism change',

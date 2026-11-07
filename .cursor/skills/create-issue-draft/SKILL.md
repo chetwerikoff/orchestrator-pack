@@ -239,25 +239,11 @@ does not guess from test status.
 
 The existing Vitest lane-discovery boundary is the recursive `.test.ts`
 discovery under `plugins/` and `scripts/`, plus the separate
-`tests/agents-md-*.test.ts` discovery. The classification inventory is
-`scripts/vitest-ci-lanes.config.json`, and every discovered path requires a
-classification entry.
-
-Select `scripts/vitest-ci-lanes.config.json` when any of these observed
-conditions holds:
-
-- a lane-discovered Vitest test file is new, renamed, or deleted;
-- a stale entry for a missing, renamed, or deleted discovered file must be
-  cleaned up;
-- a modified discovered test needs a different lane classification; or
-- an unchanged discovered test's classification entry intentionally changes.
-
-A modified discovered test may omit the classification output only when its
-existing classification remains valid. Merely running or inspecting an
-existing correctly classified test is not a classification need. A changed
-ancillary fixture, snapshot, golden file, or generated artifact outside the
-discovery boundary does not select the classification output solely because it
-changed.
+`tests/agents-md-*.test.ts` discovery. Unlisted discovered tests default to heavy;
+entries for absent files do not affect planning. Select
+`scripts/vitest-ci-lanes.config.json` only when the final plan intentionally
+changes a lane override. Adding, renaming or deleting a test alone does not
+select the classification output.
 
 Select `scripts/lib/vitest-pre-topology-measurement.mjs` independently only
 when the plan changes the pre-topology measurement mechanism: its logic,
@@ -277,12 +263,9 @@ authoring.
 | Final-plan fact observed before handoff | `adds-tests` | Classification output | Measurement output |
 | --- | --- | --- | --- |
 | Existing test is only run or re-run; no artifact or mechanism change | false | neither | neither |
-| New lane-discovered `.test.ts` or new `tests/agents-md-*.test.ts` | true | `scripts/vitest-ci-lanes.config.json` | only if mechanism changes |
-| Renamed or deleted lane-discovered Vitest test | true for rename; false for delete-only | `scripts/vitest-ci-lanes.config.json` | only if mechanism changes |
+| New, renamed or deleted discovered test without an intentional lane override | true for new/rename; false for delete-only | neither | only if mechanism changes |
 | New, renamed, deleted, or modified ancillary artifact outside discovery | according to artifact plan | neither solely for that artifact | only if mechanism changes |
-| Modified discovered test needs a classification change | true | `scripts/vitest-ci-lanes.config.json` | only if mechanism changes |
-| Modified discovered test remains valid under its existing classification | true | neither | only if mechanism changes |
-| Unchanged discovered test has an intentional classification-only change | false | `scripts/vitest-ci-lanes.config.json` | only if mechanism changes |
+| Intentional lane override changes | according to artifact plan | `scripts/vitest-ci-lanes.config.json` | only if mechanism changes |
 | Existing mechanism measures a changed test without measurement changes | according to artifact plan | according to discovery facts | neither |
 | Measurement logic, estimate, threshold, unresolved handling, or stale data changes | according to artifact plan | according to discovery facts | `scripts/lib/vitest-pre-topology-measurement.mjs` |
 | Author cannot observe whether classification or measurement changes | unresolved | no guessed output | no guessed output |
@@ -294,8 +277,8 @@ The author and flow-manager reconcile the final plan, `adds-tests`, both
 independent conditions, and the exact downstream Issue entries before handoff.
 If a required output is missing, the handoff report names each concrete
 normalized path and its observed reason, for example:
-`classification output missing: scripts/vitest-ci-lanes.config.json — renamed
-test leaves stale lane entry`. Report classification and measurement omissions
+`classification output missing: scripts/vitest-ci-lanes.config.json — intentional
+heavy-to-light override`. Report classification and measurement omissions
 separately when both are missing.
 
 An unresolved observation returns the task to authoring with no guessed output,

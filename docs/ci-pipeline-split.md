@@ -33,14 +33,16 @@ with **runtime-weighted heavy shards** plus a **bounded-parallel light lane**.
 
 ## Heavy vs light classification
 
-Every discovered Vitest file must be explicitly classified in
-`scripts/vitest-ci-lanes.config.json`:
+Discovered Vitest files default to the serial **heavy** lane. Entries in
+`scripts/vitest-ci-lanes.config.json` override that default; adding, renaming or
+deleting a test does not require a manifest edit. Entries for absent files are
+ignored by planning. Invalid explicit lane values remain errors.
 
 | Lane | Execution | Criteria |
 | --- | --- | --- |
 | **light** | Runtime-weighted 2-way matrix sharding with bounded in-process parallelism (`lightMaxWorkers`, currently **2**) | Pure unit/static tests without subprocess/git/tmux/legacy-shell integration |
 | **heavy** | Serial in-runner on one GitHub Actions shard | Subprocess, git, filesystem, tmux, or legacy-shell integration tests |
-| **unclassified** | Blocks CI | New, renamed, or missing manifest entries fail `classification-required` |
+| **unlisted** | Existing serial heavy lane | Safe default for new or renamed tests without an explicit override |
 
 ### Reclassifying a test
 
@@ -66,7 +68,8 @@ policy math). Shard count is:
 clamp(ceil(heavyLaneTotalWeightSeconds / targetShardSeconds), minShardCount, maxShardCount)
 ```
 
-`heavyLaneTotalWeightSeconds` sums resolved weights for files **classified heavy** only.
+`heavyLaneTotalWeightSeconds` sums resolved weights for **effective-heavy** files,
+including unlisted discovered tests.
 The oversized-file floor guard evaluates **every discovered** Vitest file.
 
 Current budget (see `heavyTopology` in `scripts/vitest-ci-lanes.config.json`):

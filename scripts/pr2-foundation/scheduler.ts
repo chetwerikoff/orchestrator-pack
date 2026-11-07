@@ -714,7 +714,7 @@ function productionFleetObserverSnapshotPath(env: NodeJS.ProcessEnv): string {
     : path.join(operatorHome(env), '.local', 'state', 'orchestrator-pack', 'fleet-observer', 'snapshot.json');
 }
 
-async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; cadence: number }> {
+export async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; cadence: number }> {
   const parsed = parseFoundationConfig({}); if (!parsed.ok) throw new Error(`${parsed.reason}:${parsed.path}`);
   const cadence = parsed.config.scheduler.pollIntervalMs; const env = process.env;
   const selectedProjectId = String(env.OPK_PROJECT_ID ?? '').trim();
