@@ -16,6 +16,17 @@ describe('pack PR review canonical contract (Issue #1031)', () => {
     }
   });
 
+  it('Issue #2796 keeps native-Linux concurrent race evaluation in reviewer prose', () => {
+    const contract = loadCanonicalReviewContract();
+    expect(contract).toContain('native Linux workstation');
+    expect(contract).toContain('moderate local concurrency');
+    expect(contract).toContain('shared Browser-GPT panes');
+    expect(contract).toContain('exact-reviewed-head file:line');
+    expect(contract).toContain('proportionate blocking or non-blocking reviewer judgment');
+    expect(contract).not.toContain('REJECT a race');
+    expect(contract).not.toContain('Otherwise choose FIX_NOW or DEFER');
+  });
+
   it('composes GPT and Codex prompts from the same canonical contract', () => {
     const gptPrompt = buildGptReviewPrompt({
       prUrl: 'https://github.com/example/repo/pull/1',
