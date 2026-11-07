@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { parseEnv } from 'node:util';
 import * as targetContext from '../lib/target-context.ts';
 import { describe, expect, it, vi } from 'vitest';
+import { promptSendArgv } from '../orca-runtime/send-receipt.ts';
 import {
   FileFleetWakeStateStore,
   bannerOwnerPane,
@@ -149,7 +150,14 @@ function fakeOrca(
       const handle = args[args.indexOf('--terminal') + 1] ?? '';
       return handle in screens ? commandResult(screens[handle] ?? '') : commandResult('', false);
     }
-    if (args[0] === 'terminal' && args[1] === 'send') return commandResult('');
+    if (args[0] === 'terminal' && args[1] === 'send') return commandResult(JSON.stringify({
+      ok: true, result: {
+        send: { handle: args[args.indexOf('--terminal') + 1], accepted: true,
+          prompt: { requestId: 'fixture-request', processIncarnation: 'fixture-incarnation',
+            provider: 'claude', observation: 'supported', stages: ['input_accepted', 'turn_started'] } },
+        mutation: { requestId: 'fixture-request', replayed: false },
+      },
+    }));
     return commandResult('', false);
   };
 }
@@ -241,6 +249,49 @@ function realOpenCodePane(kind: 'ack' | 'tool'): string {
 }
 
 describe('fleet alarm', () => {
+  it.each(['accepted-only', 'malformed', 'failed'])(
+    'Issue #2808: an unverified unit wake (%s) retains its attempt and never clears the wait or replays', async (kind) => {
+      const store = new MemoryWakeStore();
+      const screens = { coord: 'idle', one: 'PARKED on GPT turn receipt-test' };
+      const rows = [terminals[0]!, { ...terminals[1]!, incarnationId: 'receipt-test-incarnation' }];
+      const base = fakeOrca(screens, [], rows);
+      const executor: OrcaExecutor = (args) => args[1] === 'send'
+        ? commandResult(kind === 'malformed' ? '{' : JSON.stringify({ ok: kind !== 'failed', result: {
+          send: { handle: 'one', accepted: true, prompt: { requestId: 'r', processIncarnation: 'i',
+            provider: 'opencode', observation: 'supported', stages: ['input_accepted'] } },
+          mutation: { requestId: 'r', replayed: false },
+        } }), kind !== 'failed') : base(args);
+      const clear = vi.fn();
+      Object.assign(store, { clearPaneWait: clear });
+      const input = { store, screens, terminals: rows, executor, now: () => 0,
+        listTerminalEnvelopes: () => [{ path: '/tmp/opencode/receipt-test-terminal.json',
+          invocationId: 'receipt-test', observedInvocationId: 'receipt-test', turnResultState: 'ok' }],
+      };
+      const first = await tick(input);
+      expect(sendsTo(first.calls, 'one')).toHaveLength(1);
+      expect(sendsTo(first.calls, 'one')[0]).toContain('--wait-submit');
+      expect([...store.eventStatus.values()].every((status) => status === 'attempted_unverified')).toBe(true);
+      expect(clear).not.toHaveBeenCalled();
+      expect(sends((await tick(input)).calls)).toHaveLength(0);
+      expect(first.logs.join(' ')).toContain('next: owner reads the exact pane');
+    },
+  );
+
+  it('Issue #2808: ordinary coordinator alarms retain unverified attempts across later ticks', async () => {
+    const store = new MemoryWakeStore();
+    const screens = { coord: 'idle', one: 'done' };
+    const rows = terminals.slice(0, 2);
+    const base = fakeOrca(screens, [], rows);
+    const executor: OrcaExecutor = (args) => args[1] === 'send'
+      ? commandResult(JSON.stringify({ ok: true, result: { send: { handle: 'coord', accepted: true } } })) : base(args);
+    const input = { store, screens, terminals: rows, executor, now: () => 0 };
+    const first = await tick(input);
+    expect(first.result.state).toBe('send_failed');
+    expect(sends(first.calls)).toHaveLength(1);
+    expect(JSON.parse(store.signature!).panes.one).toMatchObject({ sent: false, attempted: true });
+    expect(sends((await tick(input)).calls)).toHaveLength(0);
+  });
+
   // Incident identity on synthetic screens only; all Orca effects are intercepted.
   const architectHandle = 'term_721dce76-e932-460a-8ebe-e9f80da9f056';
   // #2422 tests explicit architect exclusion for an otherwise eligible workspace
@@ -389,7 +440,7 @@ describe('fleet alarm', () => {
     screens.one = 'May I deploy to staging?';
     expect((await tick({ screens, store })).result.state).toBe('same_stopped_set');
   });
-  it('throttles an unchanged idle alarm while preserving the two-Enter send', async () => {
+  it('throttles an unchanged idle alarm with one receipt-observed send', async () => {
     const store = new MemoryWakeStore();
     const screens = {
       coord: 'idle prompt',
@@ -398,10 +449,10 @@ describe('fleet alarm', () => {
     };
     const first = await tick({ screens, store });
     expect(first.result).toMatchObject({ state: 'sent', coordinatorState: 'idle', count: 1 });
-    expect(sends(first.calls)).toHaveLength(2);
+    expect(sends(first.calls)).toHaveLength(1);
     expect(sends(first.calls)[0]).toEqual(expect.arrayContaining(['--terminal', 'coord', '--text', '--enter']));
-    expect(sends(first.calls)[1]).toEqual(['terminal', 'send', '--terminal', 'coord', '--enter']);
-    expect(first.sleeps).toEqual([4_000]);
+    expect(sends(first.calls)[0]).toContain('--wait-submit');
+    expect(first.sleeps).toEqual([]);
     const message = sends(first.calls)[0]![sends(first.calls)[0]!.indexOf('--text') + 1]!;
     expect(message).toContain('Fleet alarm (idle): 1 pane(s) need a step: STOPPED one OpenCode manager one');
     expect(message).not.toContain('manager two');
@@ -476,7 +527,7 @@ describe('fleet alarm', () => {
       store,
     });
     expect(replacement.result).toMatchObject({ state: 'sent', coordinator: 'coord-b', count: 1 });
-    expect(sendsTo(replacement.calls, 'coord-b')).toHaveLength(2);
+    expect(sendsTo(replacement.calls, 'coord-b')).toHaveLength(1);
     const stable = await tick({
       terminals: [{ handle: 'coord-b', title: 'Cursor coordinator', worktreePath: primary }, ...workers],
       screens: { 'coord-b': 'working\nctrl+c to stop', one: 'done', two: 'working\nesc to interrupt' },
@@ -494,7 +545,7 @@ describe('fleet alarm', () => {
     const newer = { ...coordinator, incarnationId: 'coord-inc-b' };
     const replaced = await tick({ ...shared, terminals: [newer, terminals[1]!] });
     expect(replaced.result).toMatchObject({ state: 'sent', count: 1 });
-    expect(sendsTo(replaced.calls, 'coord')).toHaveLength(2);
+    expect(sendsTo(replaced.calls, 'coord')).toHaveLength(1);
     expect(sendsTo((await tick({ ...shared, terminals: [newer, terminals[1]!] })).calls, 'coord')).toHaveLength(0);
   });
 
@@ -595,11 +646,9 @@ describe('fleet alarm', () => {
       ...selected, screens: { coord: 'idle', one: 'done and ready for new Task', two: 'working\nesc interrupt' },
       store, listTerminalEnvelopes,
     });
-    expect(sendsTo(idle.calls, 'one')).toEqual([[
-      'terminal', 'send', '--terminal', 'one',
-      '--text', 'Wake: GPT turn ' + invocationId + ' ended, read ' + envelope.path,
-      '--enter',
-    ]]);
+    expect(sendsTo(idle.calls, 'one')).toEqual([
+      promptSendArgv('one', 'Wake: GPT turn ' + invocationId + ' ended, read ' + envelope.path),
+    ]);
 
     const repeated = await tick({
       ...selected, screens: { coord: 'idle', one: 'done and ready for new Task', two: 'working\nesc interrupt' },
@@ -638,10 +687,9 @@ describe('fleet alarm', () => {
     expect(sendsTo(busy.calls, owner.handle)).toHaveLength(0);
 
     const positive = await tick({ ...input, listTerminalEnvelopes: () => [...history, matching] });
-    expect(sendsTo(positive.calls, owner.handle)).toEqual([[
-      'terminal', 'send', '--terminal', owner.handle,
-      '--text', 'Wake: GPT turn current-id ended, read ' + matching.path, '--enter',
-    ]]);
+    expect(sendsTo(positive.calls, owner.handle)).toEqual([
+      promptSendArgv(owner.handle, 'Wake: GPT turn current-id ended, read ' + matching.path),
+    ]);
     expect(positive.calls.some((call) => call.includes('git'))).toBe(false);
   });
 
@@ -1135,7 +1183,6 @@ describe('fleet alarm', () => {
       expect(alarmText(zero.calls)).not.toMatch(/eligible unread Run messages?/u);
       expect(sendsTo(zero.calls, 'term_coord_new')).toEqual([
         expect.arrayContaining(['--text', '--enter']),
-        ['terminal', 'send', '--terminal', 'term_coord_new', '--enter'],
       ]);
 
       inboxMessages = [firstRow];
@@ -1293,7 +1340,7 @@ describe('Issue #2510 URL-bound-only saved chat alarms', () => {
     }
   }
   const sentText = (calls: readonly string[][], handle: string): string =>
-    sendsTo(calls, handle).find((call) => call.includes('--text'))?.at(-2) ?? '';
+    sendsTo(calls, handle).map((call) => call[call.indexOf('--text') + 1]).join(' ');
   function patchBinding(home: string, changes: Record<string, unknown>): void {
     const id = saved.split('/c/').at(-1)!;
     const path = join(home, '.local', 'state', 'orchestrator-fleet', 'chat-bindings', id + '.json');
@@ -1418,7 +1465,7 @@ describe('Issue #2471 local-chatgpt coordinator-only and one-attempt routing', (
     }], ...extra,
   });
   const textTo = (calls: readonly string[][], target: string): string =>
-    sendsTo(calls, target).find((call) => call.includes('--text'))?.at(-2) ?? '';
+    sendsTo(calls, target).map((call) => call[call.indexOf('--text') + 1]).join(' ');
 
   it('rejects local ownership even with a convincing live launcher, branch, PR or Issue fallback', () => {
     const manager = { ...terminals[1]!, worktreePath: `${workerBase}/one-2471`,
@@ -1451,7 +1498,7 @@ describe('Issue #2471 local-chatgpt coordinator-only and one-attempt routing', (
     expect(first.result.state).toBe('sent');
     expect(sendsTo(first.calls, 'one')).toHaveLength(0);
     expect(sendsTo(first.calls, 'two')).toHaveLength(0);
-    expect(sendsTo(first.calls, 'coord')).toHaveLength(2);
+    expect(sendsTo(first.calls, 'coord')).toHaveLength(1);
     const message = textTo(first.calls, 'coord');
     expect(message).toContain(local);
     expect(message).toContain('Owner, workflow role and latest-turn invocation are unproven');
@@ -1558,7 +1605,7 @@ describe('Issue #2471 local-chatgpt coordinator-only and one-attempt routing', (
 
     const first = await step(0);
     expect(first.result.state).toBe('sent');
-    expect(sendsTo(first.calls, 'coord')).toHaveLength(2);
+    expect(sendsTo(first.calls, 'coord')).toHaveLength(1);
     expect(textTo(first.calls, 'coord')).toContain('STOPPED one');
     expect(textTo(first.calls, 'coord')).not.toContain('local-chatgpt:');
     expect(store.parkedWakeEvents.size).toBe(0);
@@ -1618,36 +1665,33 @@ describe('Issue #2471 local-chatgpt coordinator-only and one-attempt routing', (
     expect(store.parkedWakeEvents.size).toBe(1);
   });
 
-  it.each(['before-first', 'between-enters', 'failed-second', 'thrown-first'])(
+  it.each(['before-first', 'unverified', 'thrown-first'])(
     'does not replay uncertain effects when coordinator changes or send fails: %s', async (caseName) => {
       const store = new MemoryWakeStore();
       const initial = [{ ...terminals[0]!, incarnationId: 'coordinator-1', status: 'running' },
         terminals[1]!, terminals[2]!];
       const replacement = [{ ...initial[0]!, incarnationId: 'coordinator-2' }, ...initial.slice(1)];
       let censusCount = 0;
-      let coordinatorTextSent = false;
       const executor: OrcaExecutor = (args) => {
         if (args[0] === 'terminal' && args[1] === 'list') censusCount++;
         if (args[0] === 'terminal' && args[1] === 'send') {
           if (caseName === 'thrown-first' && args.includes('--text')) throw Error('unknown delivery');
-          if (caseName === 'failed-second' && !args.includes('--text')) return commandResult('', false);
-          if (caseName === 'between-enters' && args.includes('--text')) coordinatorTextSent = true;
+          if (caseName === 'unverified') return commandResult(JSON.stringify({ ok: true,
+            result: { send: { accepted: true } } }));
         }
-        const changed = caseName === 'before-first' && censusCount >= 2
-          || caseName === 'between-enters' && coordinatorTextSent;
+        const changed = caseName === 'before-first' && censusCount >= 2;
         return fakeOrca(idle, [], changed ? replacement : initial)(args);
       };
       const first = await tick({ config: settings, store, executor, screens: idle,
         readChats: async () => [row(local)] });
       expect(first.result.state).toBe('send_failed');
       const firstSend = sendsTo(first.calls, 'coord');
-      expect(firstSend).toHaveLength(caseName === 'before-first' ? 0 : caseName === 'failed-second' ? 2 : 1);
+      expect(firstSend).toHaveLength(caseName === 'before-first' ? 0 : 1);
       if (firstSend.length > 0) expect(firstSend[0]).toContain('--text');
-      if (caseName === 'failed-second') expect(firstSend[1]).not.toContain('--text');
       const statuses = [...store.parkedWakeEvents].map((key) => store.readParkedWakeEventStatus(key));
       expect(statuses).toEqual(caseName === 'before-first' ? [] : ['attempted_unverified']);
       const recovery = await tick({ config: settings, store, screens: idle, readChats: async () => [row(local)] });
-      expect(sendsTo(recovery.calls, 'coord')).toHaveLength(caseName === 'before-first' ? 2 : 0);
+      expect(sendsTo(recovery.calls, 'coord')).toHaveLength(caseName === 'before-first' ? 1 : 0);
       if (caseName !== 'before-first') expect([...store.parkedWakeEvents].map((key) =>
         store.readParkedWakeEventStatus(key))).toEqual(['attempted_unverified']);
     },
@@ -1850,7 +1894,7 @@ describe('Issue #2441 read-only diagnostic tick non-interference', () => {
     expect(output.logs.some((line) => line.includes('reason=agent_unverified'))).toBe(true);
     expect(output.logs.some((line) => line.includes('reason=diagnostic_unreadable'))).toBe(false);
     expect(output.result.state).toBe('sent');
-    expect(sendsTo(output.calls, 'coord')).toHaveLength(2);
+    expect(sendsTo(output.calls, 'coord')).toHaveLength(1);
     // The diagnostic failure itself never routes or calls terminal send; old dispatch still owns it.
   }));
 
@@ -2407,7 +2451,7 @@ describe('Issue #2484 visible OpenCode permission (genuine capture; synthetic ne
       const step = (at: number) => tick({ screens, store, terminals: fleet, now: () => at });
       const first = await step(0);
       expect(first.result.state).toBe('sent');
-      expect(sendsTo(first.calls, 'coord')).toHaveLength(2);
+      expect(sendsTo(first.calls, 'coord')).toHaveLength(1);
       expect(sendsTo(first.calls, 'one')).toHaveLength(0);
       expect(msg(first.calls)).toContain('Verify this visible OpenCode prompt');
       expect(msg(first.calls)).toContain('UNTRUSTED PANE OBSERVATION');
@@ -2423,7 +2467,7 @@ describe('Issue #2484 visible OpenCode permission (genuine capture; synthetic ne
         expect(sendsTo(repeat.calls, 'coord')).toHaveLength(0);
       }
       screens.one = modal.replaceAll('permission-probe.txt', 'another-probe.txt');
-      expect(sendsTo((await step(3_600_001)).calls, 'coord')).toHaveLength(2);
+      expect(sendsTo((await step(3_600_001)).calls, 'coord')).toHaveLength(1);
       screens.one = modal;
       expect(sendsTo((await step(3_600_002)).calls, 'coord')).toHaveLength(0);
       // An incomplete modal's "→ Read" is not evidence of completed work:
@@ -2441,7 +2485,7 @@ describe('Issue #2484 visible OpenCode permission (genuine capture; synthetic ne
       const clear = await step(3_600_005);
       expect(msg(clear.calls)).not.toContain('visible OpenCode permission UI');
       screens.one = modal;
-      expect(sendsTo((await step(3_600_006)).calls, 'coord')).toHaveLength(2);
+      expect(sendsTo((await step(3_600_006)).calls, 'coord')).toHaveLength(1);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -2480,9 +2524,9 @@ describe('Issue #2484 visible OpenCode permission (genuine capture; synthetic ne
         connected: true, incarnationId,
       } } })) : base(args);
     const step = () => tick({ screens, store, terminals: listed, executor, now: () => 0 });
-    expect(sendsTo((await step()).calls, 'coord')).toHaveLength(2);
+    expect(sendsTo((await step()).calls, 'coord')).toHaveLength(1);
     incarnationId = 'inc-show-second';
-    expect(sendsTo((await step()).calls, 'coord')).toHaveLength(2);
+    expect(sendsTo((await step()).calls, 'coord')).toHaveLength(1);
     expect(sendsTo((await step()).calls, 'coord')).toHaveLength(0);
   });
 
@@ -2532,13 +2576,13 @@ describe('Issue #2484 visible OpenCode permission (genuine capture; synthetic ne
     const step = (row: FleetTerminal) => tick({
       screens, store, terminals: [terminals[0]!, row], now: () => 0,
     });
-    expect(sendsTo((await step(unit)).calls, 'coord')).toHaveLength(2);
-    expect(sendsTo((await step({ ...unit, incarnationId: 'inc-2484-new' })).calls, 'coord')).toHaveLength(2);
-    expect(sendsTo((await step({ ...unit, incarnationId: undefined })).calls, 'coord')).toHaveLength(2);
+    expect(sendsTo((await step(unit)).calls, 'coord')).toHaveLength(1);
+    expect(sendsTo((await step({ ...unit, incarnationId: 'inc-2484-new' })).calls, 'coord')).toHaveLength(1);
+    expect(sendsTo((await step({ ...unit, incarnationId: undefined })).calls, 'coord')).toHaveLength(1);
     expect(sendsTo((await step({ ...unit, incarnationId: undefined })).calls, 'coord')).toHaveLength(0);
   });
 
-  it('pre-mark failure blocks only permission, and failed second Enter leaves an unreplayed attempt', async () => {
+  it('pre-mark failure blocks only permission, and an unverified receipt leaves an unreplayed attempt', async () => {
     const screens = { coord: 'busy\nctrl+c to stop', one: modal, two: 'finished ordinary task' };
     class BrokenStore extends MemoryWakeStore {
       override markParkedWakeEvent(key: string, status: 'sent' | 'attempted_unverified' = 'sent'): void {
@@ -2551,14 +2595,14 @@ describe('Issue #2484 visible OpenCode permission (genuine capture; synthetic ne
     expect(sendsTo(blocked.calls, 'coord')).toHaveLength(0);
     const mixed = await tick({ screens, terminals: [terminals[0]!, unit, terminals[2]!],
       store: new BrokenStore() });
-    expect(sendsTo(mixed.calls, 'coord')).toHaveLength(2);
+    expect(sendsTo(mixed.calls, 'coord')).toHaveLength(1);
     expect(msg(mixed.calls)).not.toContain('visible OpenCode permission UI');
     const store = new MemoryWakeStore();
     const base = fakeOrca(screens, [], [terminals[0]!, unit]);
     let fail = true;
     const executor: OrcaExecutor = (args) =>
       args[0] === 'terminal' && args[1] === 'send'
-        && args.includes('coord') && !args.includes('--text') && fail
+        && args.includes('coord') && fail
         ? commandResult('', false) : base(args);
     const first = await tick({ screens, terminals: [terminals[0]!, unit], store, executor });
     expect(first.result.state).toBe('send_failed');
@@ -2681,7 +2725,7 @@ interface StartupFrame {
   readonly screens: Readonly<Record<string, string>>;
   readonly unreadableList?: boolean;
   readonly textFailure?: 'false' | 'throw';
-  readonly submitFailure?: 'false' | 'throw';
+  readonly unverified?: boolean;
 }
 
 // Stop only at the existing interval sleep: every iteration runs its full ordinary tick.
@@ -2697,7 +2741,6 @@ async function boundedStartupWake(input: {
   const logs: string[] = [];
   const sleeps: number[] = [];
   let poll = 0;
-  let awaitingStartupEnter = false;
   const executor: OrcaExecutor = (args) => {
     calls.push([...args]);
     const frame = input.frames[poll]!;
@@ -2709,11 +2752,7 @@ async function boundedStartupWake(input: {
       if (message === startupWakeText) {
         if (frame.textFailure === 'throw') throw new Error('synthetic startup text send error');
         if (frame.textFailure === 'false') return commandResult('', false);
-        awaitingStartupEnter = true;
-      } else if (!message && awaitingStartupEnter) {
-        awaitingStartupEnter = false;
-        if (frame.submitFailure === 'throw') throw new Error('synthetic startup Enter error');
-        if (frame.submitFailure === 'false') return commandResult('', false);
+        if (frame.unverified) return commandResult(JSON.stringify({ ok: true, result: { send: { accepted: true } } }));
       }
     }
     return fakeOrca(frame.screens, [], frame.terminals)(args);
@@ -2745,8 +2784,7 @@ function startupTextSends(calls: readonly string[][]): string[][] {
 describe('Issue #2575 process-local startup wake', () => {
   const coordinator = terminals[0]!;
   const readable: StartupFrame = { terminals: [coordinator], screens: { coord: 'idle' } };
-  const startupTextCommand = ['terminal', 'send', '--terminal', 'coord', '--text', startupWakeText, '--enter'];
-  const startupEnterCommand = ['terminal', 'send', '--terminal', 'coord', '--enter'];
+  const startupTextCommand = promptSendArgv('coord', startupWakeText);
 
   it('preserves off-primary, non-file-backed legacy ORCH_HANDLE for ordinary alarms and pending startup Wake', async () => {
     const pinned: FleetTerminal = {
@@ -2769,7 +2807,7 @@ describe('Issue #2575 process-local startup wake', () => {
     expect(sendsTo(ordinary.calls, coordinator.handle)).toHaveLength(0);
     const startup = await boundedStartupWake({ settings, frames: [frame, frame] });
     expect(startupTextSends(startup.calls)).toEqual([
-      ['terminal', 'send', '--terminal', pinned.handle, '--text', startupWakeText, '--enter'],
+      promptSendArgv(pinned.handle, startupWakeText),
     ]);
     expect(sendsTo(startup.calls, coordinator.handle)).toHaveLength(0);
   });
@@ -2782,13 +2820,13 @@ describe('Issue #2575 process-local startup wake', () => {
       { terminals: [replacement], screens: { 'coord-new': 'idle' } },
     ] });
     expect(observed.logs.filter((line) => line === 'nothing stopped')).toHaveLength(3);
-    expect(sends(observed.calls)).toEqual([startupTextCommand, startupEnterCommand]);
+    expect(sends(observed.calls)).toEqual([startupTextCommand]);
     expect(startupTextSends(observed.calls)).toHaveLength(1);
     const firstSend = observed.calls.findIndex((call) => call.includes(startupWakeText));
     expect(firstSend).toBeGreaterThan(0);
     expect(observed.calls.slice(0, firstSend).some((call) =>
       call[0] === 'terminal' && call[1] === 'read' && call.includes('--screen') && call.includes('coord'))).toBe(true);
-    expect(observed.sleeps.filter((ms) => ms === 4_000)).toHaveLength(1);
+    expect(observed.sleeps).toEqual([300_000, 300_000, 300_000]);
     expect(startupTextSends((await boundedStartupWake({ frames: [readable] })).calls)).toHaveLength(1);
   });
 
@@ -2808,11 +2846,10 @@ describe('Issue #2575 process-local startup wake', () => {
     expect(observed.logs).toContain('normal fleet result: no orchestrator pane found');
     expect(sendsTo(observed.calls, 'coord')).toHaveLength(0);
     expect(startupTextSends(observed.calls)).toEqual([
-      ['terminal', 'send', '--terminal', 'pinned', '--text', startupWakeText, '--enter'],
+      promptSendArgv('pinned', startupWakeText),
     ]);
     expect(sendsTo(observed.calls, 'pinned')).toEqual([
-      ['terminal', 'send', '--terminal', 'pinned', '--text', startupWakeText, '--enter'],
-      ['terminal', 'send', '--terminal', 'pinned', '--enter'],
+      promptSendArgv('pinned', startupWakeText),
     ]);
   });
 
@@ -2824,19 +2861,19 @@ describe('Issue #2575 process-local startup wake', () => {
     ] });
     expect(observed.logs).toContain('terminal list unreadable');
     expect(startupTextSends(observed.calls)).toEqual([startupTextCommand]);
-    expect(sends(observed.calls)).toEqual([startupTextCommand, startupEnterCommand]);
+    expect(sends(observed.calls)).toEqual([startupTextCommand]);
   });
 
   it('startup wake failed submit consumes the text attempt and ordinary ticks continue', async () => {
     const observed = await boundedStartupWake({ frames: [
-      { ...readable, submitFailure: 'false' },
+      { ...readable, unverified: true },
       readable,
       readable,
     ] });
     expect(observed.logs.filter((line) => line === 'nothing stopped')).toHaveLength(3);
-    expect(observed.logs).toContain('startup wake delivery unverified: coord');
+    expect(observed.logs.join(' ')).toContain('startup wake delivery unverified: coord; next: owner reads');
     expect(startupTextSends(observed.calls)).toEqual([startupTextCommand]);
-    expect(sends(observed.calls)).toEqual([startupTextCommand, startupEnterCommand]);
+    expect(sends(observed.calls)).toEqual([startupTextCommand]);
   });
 
   it.each(['false', 'throw'] as const)(
@@ -2878,8 +2915,8 @@ describe('Issue #2575 process-local startup wake', () => {
     const startupAt = actual.findIndex((call) => call.includes(startupWakeText));
     expect(startupAt).toBe(sends(first.calls).length);
     expect(actual.slice(0, startupAt)).toEqual(sends(first.calls));
-    expect(actual.slice(startupAt, startupAt + 2)).toEqual([startupTextCommand, startupEnterCommand]);
-    expect(actual.slice(startupAt + 2)).toEqual(sends(second.calls));
+    expect(actual.slice(startupAt, startupAt + 1)).toEqual([startupTextCommand]);
+    expect(actual.slice(startupAt + 1)).toEqual(sends(second.calls));
     expect(observed.store.signature).toEqual(baselineStore.signature);
     expect(observed.store.sentAt).toEqual(baselineStore.sentAt);
     expect([...observed.store.marks]).toEqual([...baselineStore.marks]);
@@ -3569,8 +3606,7 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     // Named Wake is independent of the ordinary coordinator STOPPED alarm result.
     // Require the single text+Enter send, with no replay.
     expect(sendsTo(first.calls, manager.handle)).toEqual([
-      ['terminal', 'send', '--terminal', manager.handle, '--text',
-        expect.stringContaining('ended state ok'), '--enter'],
+      promptSendArgv(manager.handle, expect.stringContaining('ended state ok')),
     ]);
     expect(sendsTo(repeat.calls, manager.handle)).toHaveLength(0);
     expect(first.result).toEqual({ state: 'nothing_stopped' });
@@ -3600,8 +3636,7 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     // Named Wake is independent of the ordinary coordinator STOPPED alarm result.
     // Require the single text+Enter send, with no replay.
     expect(sendsTo(first.calls, manager.handle)).toEqual([
-      ['terminal', 'send', '--terminal', manager.handle, '--text',
-        expect.stringContaining('ended state checks-completed'), '--enter'],
+      promptSendArgv(manager.handle, expect.stringContaining('ended state checks-completed')),
     ]);
     expect(sendsTo(repeat.calls, manager.handle)).toHaveLength(0);
     expect(first.result).toEqual({ state: 'nothing_stopped' });
@@ -4194,7 +4229,7 @@ describe('Issue #2687 r04: file-backed coordinator pin, quotes and startup', () 
           screens: { 'coord-old': 'idle', 'coord-new': 'idle' } }],
       });
       expect(startupTextSends(startup.calls)).toEqual([
-        ['terminal', 'send', '--terminal', 'coord-new', '--text', startupWakeText, '--enter'],
+        promptSendArgv('coord-new', startupWakeText),
       ]);
 
       // An attractive native handle from another repository is not a coordinator.
@@ -4652,7 +4687,7 @@ describe('Issue #2687 authorized review correction: one fresh recipient check', 
       config: wakeConfig, store, terminals: [coordinator, worker],
       screens: { coord: 'working\nesc interrupt', one: 'done' }, ...emptyFacts,
     });
-    expect(sendsTo(safe.calls, coordinator.handle)).toHaveLength(2);
+    expect(sendsTo(safe.calls, coordinator.handle)).toHaveLength(1);
     const repeated = await tick({
       config: wakeConfig, store, terminals: [coordinator, worker],
       screens: { coord: 'working\nesc interrupt', one: 'done' }, ...emptyFacts,
@@ -4660,7 +4695,7 @@ describe('Issue #2687 authorized review correction: one fresh recipient check', 
     expect(sendsTo(repeated.calls, coordinator.handle)).toHaveLength(0);
   });
 
-  it('startup rechecks between text and Enter and retries only a positively refused Enter', async () => {
+  it('startup never sends a second Enter or replays after a post-send recipient change', async () => {
     const calls: string[][] = [];
     const logs: string[] = [];
     const store = new MemoryWakeStore();
@@ -4684,9 +4719,8 @@ describe('Issue #2687 authorized review correction: one fresh recipient check', 
         if (tickNumber >= 3) throw new Error('bounded correction startup');
       },
     })).rejects.toThrow('bounded correction startup');
-    expect(startupTextSends(calls)).toHaveLength(2);
-    expect(sendsTo(calls, coordinator.handle).filter((row) => !row.includes('--text'))).toHaveLength(1);
-    expect(logs.join(' ')).toContain('unsafe before Enter; queued');
+    expect(startupTextSends(calls)).toHaveLength(1);
+    expect(sendsTo(calls, coordinator.handle).filter((row) => !row.includes('--text'))).toHaveLength(0);
   });
 
   it('startup Wake skips a shell pin, then sends on a later safe tick exactly once', async () => {
@@ -4699,7 +4733,7 @@ describe('Issue #2687 authorized review correction: one fresh recipient check', 
       ],
     });
     expect(startupTextSends(observed.calls)).toHaveLength(1);
-    expect(sendsTo(observed.calls, coordinator.handle).filter((row) => !row.includes('--text'))).toHaveLength(1);
+    expect(sendsTo(observed.calls, coordinator.handle).filter((row) => !row.includes('--text'))).toHaveLength(0);
     expect(observed.logs.join(' ')).toContain('queued');
   });
 

@@ -295,9 +295,9 @@ describe('unit watcher wake', () => {
     });
 
     expect(output.exitCode).toBe(1);
-    expect(output.stderr).toContain('delivery-unknown: submit_witness_unavailable');
+    expect(output.stderr).toContain('delivery-unknown: send_acceptance_unverified');
     expect(output.stderr).toContain(
-      '{"status":"dispatch_unknown","reason":"submit_witness_unavailable"}',
+      '{"status":"dispatch_unknown","reason":"send_acceptance_unverified"}',
     );
     const sends = runJson.mock.calls
       .filter((call) => call[0]?.[0] === 'terminal' && call[0]?.[1] === 'send');
@@ -307,10 +307,11 @@ describe('unit watcher wake', () => {
       '--terminal', identity.id,
       '--text', config.wakeText,
       '--enter',
+      '--json', '--wait-submit', '5',
     ]);
   });
 
-  it('refuses an OpenCode target with no persisted control binding before waiting or dispatching', async () => {
+  it('waits then wakes an OpenCode target without persisted control through the native receipt', async () => {
     const stateRoot = mkdtempSync(join(tmpdir(), 'opk-unit-watcher-unbound-control-'));
     const waitCalls: RunProcessSyncOptions[] = [];
     const terminal: OrcaTerminalSummary = {
@@ -324,6 +325,12 @@ describe('unit watcher wake', () => {
       const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
       if (operation === 'terminal show') return { ok: true, result: { terminal } };
       if (operation === 'terminal list') return { ok: true, result: { terminals: [terminal] } };
+      if (operation === 'terminal send') return { ok: true, result: {
+        send: { handle: identity.id, accepted: true, prompt: {
+          requestId: 'watcher-request', processIncarnation: identity.generation,
+          provider: 'opencode', observation: 'supported', stages: ['input_accepted', 'turn_started'],
+        } }, mutation: { requestId: 'watcher-request', replayed: false },
+      } };
       return {
         ok: false,
         outcomeCategory: 'supported_operation_failure',
@@ -334,20 +341,19 @@ describe('unit watcher wake', () => {
     try {
       const output = await runUnitWatcherWake(config, {
         executable: 'orca',
-        run: runner([], waitCalls),
+        run: runner([waitConfirmed], waitCalls),
         adapter: new OrcaTaskRuntimeAdapter({
           runJson: runJson as never,
           env: { OPK_WAKE_SUPERVISOR_STATE_DIR: stateRoot },
         }),
       });
 
-      expect(output.exitCode).toBe(1);
-      expect(output.stderr).toContain('OpenCode target control is unbound');
-      expect(output.stderr).toContain('opencode_control_unbound');
-      expect(waitCalls).toEqual([]);
-      expect(runJson.mock.calls.some(
+      expect(output.exitCode).toBe(0);
+      expect(output.stdout).toContain('dispatch=dispatched');
+      expect(waitCalls).toHaveLength(1);
+      expect(runJson.mock.calls.filter(
         (call) => call[0]?.[0] === 'terminal' && call[0]?.[1] === 'send',
-      )).toBe(false);
+      )).toHaveLength(1);
     } finally {
       rmSync(stateRoot, { recursive: true, force: true });
     }

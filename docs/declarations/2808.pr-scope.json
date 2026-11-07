@@ -1,0 +1,41 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2808,
+  "declared_paths": [
+    "docs/unit-watcher-wake.md",
+    "scripts/fleet/fleet-sweep.test.ts",
+    "scripts/fleet/fleet-sweep.ts",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/send-receipt.test.ts",
+    "scripts/orca-runtime/send-receipt.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/unit-watcher-wake.test.ts",
+    "scripts/unit-watcher-wake.ts",
+    "scripts/worktree-lifecycle/merge-cleanup.ts"
+  ],
+  "denylist": [
+    ".github/workflows/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "tests/external-output-references/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/unit-watcher-wake.md",
+    "scripts/fleet/fleet-sweep.test.ts",
+    "scripts/fleet/fleet-sweep.ts",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/send-receipt.test.ts",
+    "scripts/orca-runtime/send-receipt.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/unit-watcher-wake.test.ts",
+    "scripts/unit-watcher-wake.ts",
+    "scripts/worktree-lifecycle/merge-cleanup.ts"
+  ],
+  "source_revision": "dc7ce15ddf7363ea6bc43b37b0b8799162c9a6cf"
+}
