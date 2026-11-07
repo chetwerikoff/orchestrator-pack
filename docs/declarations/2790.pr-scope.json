@@ -33,5 +33,5 @@
     "scripts/pack-review-state.ts",
     "scripts/tier-gate-guard.test.ts"
   ],
-  "source_revision": "5db7b33cc2619b5a34e3dd3cce3fc992f474f75f"
+  "source_revision": "4a48451fb025f80f74f138bac8193f1e8a49f6c8"
 }

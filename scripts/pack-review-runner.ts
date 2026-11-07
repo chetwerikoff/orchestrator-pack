@@ -962,7 +962,16 @@ async function proveUniqueRebasedC(
       return { prNumber, headSha: input.fixtureCurrentPrHeadSha,
         baseRef: base, body: input.fixturePrBody };
     }
-    return { prNumber, ...await resolveCurrentPrTarget(root, options.repoSlug, prNumber) };
+    const boundRunner: typeof runProcess = async (request) => {
+      const result = await runProcess(request);
+      const row = githubEvidenceObject(JSON.parse(await requireProcess(result, 'rebased PR identity read')) as unknown);
+      if (row.number !== prNumber || trim(row.url).toLowerCase()
+          !== `https://api.github.com/repos/${selected.repository}/pulls/${prNumber}`.toLowerCase()) {
+        throw new Error('live PR repository/number identity mismatch');
+      }
+      return result;
+    };
+    return { prNumber, ...await resolveCurrentPrTarget(root, options.repoSlug, prNumber, boundRunner) };
   };
   const pr = await readPr();
   const requirePr = (next: Awaited<ReturnType<typeof readPr>>) => {
@@ -5651,9 +5660,9 @@ async function ensurePromotedRoundPublicPending(input: {
 }
 
 
-/** Recredential the original GitHub evidence for an ordinary required GPT
+/** Recredential the original GitHub evidence for a required
  * success. Journal delivery flags or a public status alone are never proof. */
-async function verifyOriginalGptGithubSourcesAndReview(
+async function verifyOriginalGithubSourcesAndReview(
   run: PackReviewRunRecord,
   input: {
     fixtureGptSourceCommentTransport?: PackGptSourceCommentTransport;
@@ -5663,13 +5672,15 @@ async function verifyOriginalGptGithubSourcesAndReview(
   sourceRepoRoot: string,
 ): Promise<boolean> {
   const round = run.reviewRound;
-  if (!round || round.reviewer !== 'gpt') return true;
-  if (!hasCredentialedGptSourceAuthority(run)
+  if (!round && (!['codex', 'claude'].includes(run.resolvedReviewer ?? '')
+      || !hasPersistedPackReviewVerdict(run)
+      || run.deliveryOutcomes.githubComment?.state !== 'succeeded')) return false;
+  if (round && (round.reviewer !== 'gpt' || !hasCredentialedGptSourceAuthority(run)
       || (round.settledSourceCount !== undefined
         && (!Number.isInteger(round.settledSourceCount)
           || round.settledSourceCount < (round.cardinality === 3 ? 2 : round.cardinality)
           || round.settledSourceCount > round.cardinality))
-      || gptUsableSourceCount(round) !== (round.settledSourceCount ?? round.cardinality)) return false;
+       || gptUsableSourceCount(round) !== (round.settledSourceCount ?? round.cardinality))) return false;
   // Tests must model both authenticated GitHub evidence surfaces explicitly.
   // Setting a harness environment variable cannot substitute for either one.
   const sourceTransport = process.env.OPK_VITEST_HARNESS === '1'
@@ -5682,16 +5693,16 @@ async function verifyOriginalGptGithubSourcesAndReview(
     : createGithubReviewTransport({
         repoRoot: sourceRepoRoot, repoSlug, prNumber: run.prNumber,
       });
-  if (!sourceTransport || !reviewTransport) return false;
-  const complete = round.sourceSlots.filter((slot) =>
-    slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings');
-  if (complete.length < Number(round.settledSourceCount)) return false;
+  if (!reviewTransport || (round && !sourceTransport)) return false;
+  const complete = round?.sourceSlots.filter((slot) =>
+    slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings') ?? [];
+  if (round && complete.length < Number(round.settledSourceCount)) return false;
   for (const slot of complete) {
     const identity = gptSourceIdentity({
       repoSlug, prNumber: run.prNumber, headSha: run.targetSha,
       runId: run.id, slotId: slot.slotId, invocationId: trim(slot.invocationId),
     });
-    const observed = await resolvePackGptSourceComment({ identity, transport: sourceTransport });
+    const observed = await resolvePackGptSourceComment({ identity, transport: sourceTransport! });
     const terminal = slot.terminalResult && typeof slot.terminalResult === 'object'
       && !Array.isArray(slot.terminalResult)
       ? slot.terminalResult as Record<string, unknown> : null;
@@ -5720,7 +5731,7 @@ async function verifyOriginalGptGithubSourcesAndReview(
     && reviewRuns.length === 1 && reviewRuns[0]![1] === run.id
     && reviewHeads.length === 1 && reviewHeads[0]![1] === run.targetSha
     && review.body.startsWith(requiredHeading)
-    && !(round.cardinality === 3 && round.settledSourceCount === 2
+    && !(round?.cardinality === 3 && round.settledSourceCount === 2
       && !/^Sources: 2\/3 \(degraded after timeout\)$/m.test(review.body))
     && !review.body.includes('Mode: supplemental advisory review')
     && (!run.githubReviewReconciliation?.commentBody
@@ -5769,7 +5780,7 @@ async function verifyOrdinaryRequiredSuccessBinding(
       ? input.fixtureIssueBody
       : (await resolveCurrentIssueFields(options.sourceRepoRoot, options.repoSlug, issueNumber)).body;
     if (typeof body !== 'string' || computeBoundIssueSnapshotHash(body) !== digest) return false;
-    return await verifyOriginalGptGithubSourcesAndReview(
+    return !round || await verifyOriginalGithubSourcesAndReview(
       run, input, options.repoSlug, options.sourceRepoRoot,
     );
   } catch { return false; }
@@ -6958,6 +6969,28 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
     }
   }
 
+  if (logicalAccounting && currentHead !== priorRun.targetSha
+      && (process.env.OPK_VITEST_HARNESS !== '1' || rebasedC
+        || input.fixtureGithubReviewTransport)) {
+    // Legacy test-only ancestry fixtures have no GitHub transport. Production,
+    // the C route and evidence-bearing fixtures always refresh original REVIEW
+    // and mode-correct source authority plus exact-current-head CI before close.
+    try {
+      if (!await verifyOriginalGithubSourcesAndReview(priorRun, input,
+        options.repoSlug, input.sourceRepoRoot)) throw new Error('original source/REVIEW evidence unverified');
+      const context = resolveTargetContext({ projectId: options.projectId });
+      if (!await manualPackReviewRequiredCiGreen({ startInput: input, targetContext: context,
+        target: { prNumber, headSha: currentHead, repoSlug: options.repoSlug,
+          sourceRepoRoot: input.sourceRepoRoot, prBaseRef: context.defaultBranch } })) {
+        throw new Error('current-head required CI not green');
+      }
+    } catch (error) {
+      return { prNumber, headSha: currentHead, finalCapSettlement: true, settled: false,
+        reason: 'final_cap_review_binding_unverified', detail: describeError(error),
+        nextAction: 'restore original credentialed sources, native delivery and terminal REVIEW plus current-head CI; rerun scoped reconcile without another round' };
+    }
+  }
+
   // Observe H2 only after proving the original terminal and current Issue
   // binding. A refusal above retains B0/B1 quorum and historical evidence.
   if (unobservedDescendant) {
@@ -7178,9 +7211,12 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
           prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
           settled: false, reason: `final_cap_settlement_incomplete:${describeError(error)}`,
           nextAction: rebasedC
-            ? 'revalidate selected PR and authoritative live/local base tip; git fetch origin '
-              + String(input.baseRef || 'origin/main').replace(/^origin\//, '')
-              + ', then rerun the same reconcile (or rerun when the remote is reachable on network failure)'
+            ? describeError(error).includes('ls-remote unavailable')
+              ? 'rerun when the remote is reachable'
+              : describeError(error).includes('base tip moved')
+                ? 'git fetch origin ' + String(input.baseRef || 'origin/main').replace(/^origin\//, '')
+                  + ', then rerun the same reconcile'
+                : 'correct the selected remote/ref and PR/card/origin identity, then rerun scoped reconcile or seek architect/operator decision'
             : 'rerun scoped reconcile after confirming the current PR head',
         };
       }
@@ -7189,7 +7225,9 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       rebasedC
         ? 'Review settled on H1 ' + reviewedHeadSha.slice(0, 8)
           + '; rebased descendant H2 ' + authority.currentHeadSha.slice(0, 8) + '.'
-        : 'Required pack-review stage completed; strict descendant of reviewed findings.',
+        : completedFinalFindings
+          ? 'Required pack-review stage already completed; current-head status revalidated.'
+          : 'Required pack-review stage completed; strict descendant of reviewed findings.',
       sameHeadPublicationDigest ?? sha256Bytes(stableJson({
         runId: priorRun.id, reviewedHeadSha, publicationHead: authority.currentHeadSha,
         settlementKind: 'strict_descendant',
@@ -9691,8 +9729,10 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
           && authority.terminal.targetSha !== target.headSha));
     // Completed final-cap stages still require verified Issue binding on
     // rewritten/diverged heads; ancestry is decided inside reconciliation.
+    let completedFinalCapVerified = false;
     if (finalFindings && authority.terminal!.targetSha !== target.headSha
         && !supplementalMode && !completedScopeOnlyReplayCandidate) {
+      const alreadyComplete = authority.cycle?.reviewStageComplete === true;
       const result = await reconcileFinalCapSettlement({
         projectId, storeRoot, prNumber: target.prNumber,
         repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
@@ -9724,7 +9764,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
       await releaseEarlyClaim(result?.settled === true ? 'final_cap_descendant_settled' : 'final_cap_settlement_refused');
       // reconcileFinalCapSettlement settles only after current-head required
       // status success readback; keep that exact publication head visible.
-      return result?.settled === true
+      if (!alreadyComplete || result?.settled !== true) return result?.settled === true
         ? { ok: true, created: false, reused: true, prNumber: target.prNumber,
             headSha: target.headSha, reason: result.reason,
             statusPublished: true, publicationVerified: true,
@@ -9736,6 +9776,10 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
             ...(result?.detail ? { detail: result.detail } : {}),
             nextAction: result?.nextAction ?? 'restore verified final-cap binding and retry scoped reconcile',
             httpStatus: 409 };
+      // Revalidate original evidence above, then use the incumbent completed-
+      // stage projection below. Only a first settlement has the descendant reason.
+      authority = readPackReviewAuthority(target.prNumber, authorityOptions) ?? authority;
+      completedFinalCapVerified = true;
     }
     if (authority.cycle?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
         && authority.terminal?.reviewVerdict === 'findings'
@@ -9786,7 +9830,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
               || original.canonicalRepository?.toLowerCase() !== target.repoSlug.toLowerCase()
               || original.reviewCycleId !== cycleId
               || original.targetSha !== authority.terminal.targetSha
-              || !hasPersistedPackReviewVerdict(original)) return false;
+              || (!hasPersistedPackReviewVerdict(original) && !completedFinalCapVerified)) return false;
           const bound = original.boundIssueSnapshotDigest
             ?? original.reviewRound?.boundIssueSnapshotDigest
             ?? authoritative.snapshotDigest;
@@ -9806,6 +9850,11 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
               target.sourceRepoRoot, target.repoSlug, target.issueNumber,
             )).body;
           if (body === undefined) return false;
+          // The scoped reconciler above has just revalidated the original
+          // full-body authority (including named exceptions), sources and REVIEW.
+          // Keep its accepted current body stable across this status projection.
+          if (completedFinalCapVerified
+              && computeBoundIssueSnapshotHash(body) === authoritative.snapshotDigest) return true;
           // A completed #2428 same-head correction accepted B1, not its B0
           // review-preflight body. Reverting to B0 must never use this shortcut.
           if (authority.cycle?.settlementKind !== 'same_head_issue_resolution'

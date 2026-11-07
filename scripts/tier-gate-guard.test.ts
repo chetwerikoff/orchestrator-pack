@@ -1,7 +1,7 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
 import { fileURLToPath } from 'node:url';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -180,12 +180,15 @@ describe('current substantive Issue floor', () => {
       // Both trusted scripts read checkout-local input; only W's read-only
       // input is modified, not the P/W executable/dependency closure.
       const observedProducer = [
-        "import { readFileSync } from 'node:fs';",
-        "process.stdout.write(readFileSync('inputs/proof.json', 'utf8'));",
+        "import { readProof } from './proof-input.mjs';",
+        "process.stdout.write(readProof());",
         '',
       ].join('\n');
+      const dependency = "import { readFileSync } from 'node:fs';\nexport const readProof = () => readFileSync('inputs/proof.json', 'utf8');\n";
       writeFileSync(join(targetRoot, 'scripts', 'verify-boundary.mjs'), observedProducer);
       writeFileSync(join(targetRoot, producerDir, 'emit-reverify-status.mjs'), observedProducer);
+      writeFileSync(join(targetRoot, 'scripts', 'proof-input.mjs'), dependency);
+      writeFileSync(join(targetRoot, producerDir, 'proof-input.mjs'), dependency);
       mkdirSync(join(targetRoot, 'inputs'), { recursive: true });
       writeFileSync(join(targetRoot, 'inputs', 'proof.json'), JSON.stringify({ 'reverify-status': 'primary-only' }));
       const manifestPath = 'tests/external-output-references/capture-manifest.json';
@@ -296,15 +299,15 @@ describe('current substantive Issue floor', () => {
       writeFileSync(changedPathsFile, '', 'utf8');
       const cliEnv: NodeJS.ProcessEnv = { ...env, OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR: snapshotStore };
       delete cliEnv.OPK_PROJECT_ID;
-      const invokeCli = (sha: string | null = prHeadSha) => runProcessSync({
+      const invokeCli = (sha: string | null = prHeadSha, snapshotPath = captured.snapshotPath, extraArgs: string[] = []) => runProcessSync({
         command: process.execPath,
         args: ['--experimental-strip-types', join(packRoot, 'scripts', 'invoke-contract-evidence-reverify.ts'),
           '--repo-root', packRoot, '--trusted-base-root', targetRoot, '--review-target-root', reviewRoot,
-          '--manifest-path', manifestPath, '--snapshot-file', captured.snapshotPath,
+          '--manifest-path', manifestPath, '--snapshot-file', snapshotPath,
           '--bound-snapshot-pr-number', '2769', '--bound-snapshot-issue-number', '2751',
           '--project-id', projectId, '--explicit-issue', '2751',
           ...(sha === null ? [] : ['--pr-head-sha', sha]),
-          '--changed-paths-file', changedPathsFile],
+          '--changed-paths-file', changedPathsFile, ...extraArgs],
         env: cliEnv, inheritParentEnv: false,
       });
       const cliReverify = invokeCli();
@@ -322,6 +325,21 @@ describe('current substantive Issue floor', () => {
       const assertUnverified = (row: ReturnType<typeof reverify>['rows'][number]) => {
         expect(row?.status).toBe('unverified');
         expect(row?.producerVerified).not.toBe(true);
+      };
+      const assertBothUnverified = (body = targetIssue) => {
+        // Each independent Issue-body fixture gets a distinct real bound head;
+        // never replace an immutable snapshot for the same PR/head identity.
+        gitW('-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.test',
+          'commit', '--allow-empty', '-m', 'independent negative snapshot');
+        const sha = headW();
+        assertUnverified(reverify(body, { prHeadSha: sha }).rows[0]);
+        const snapshot = captureBoundIssueSnapshot({ projectId, prNumber: 2769, prHeadSha: sha,
+          issueNumber: 2751, issueBody: body, storeDirOverride: snapshotStore });
+        const output = invokeCli(sha, snapshot.snapshotPath);
+        expect(output.exitCode, output.stderr).toBe(0);
+        const result = JSON.parse(output.stdout);
+        expect(result).toMatchObject({ candidateOnly: true, neverBlocks: true });
+        assertUnverified(result.rows[0]);
       };
       assertUnverified(reverify(targetIssue, { prModifiedPaths: ['scripts/verify-boundary.mjs'] }).rows[0]);
       writeFileSync(changedPathsFile, 'scripts/verify-boundary.mjs\n');
@@ -342,6 +360,19 @@ describe('current substantive Issue floor', () => {
       expect(invokeCli('f'.repeat(40)).exitCode).toBe(2);
       expect(reverify(targetIssue, { prHeadSha: 'invalid' }).rows[0])
         .toMatchObject({ status: 'unverified', reason: 'producer-unreachable' });
+      expect(invokeCli('invalid').exitCode).toBe(2);
+      renameSync(join(reviewRoot, '.git'), join(reviewRoot, '.git.saved'));
+      try {
+        assertUnverified(reverify(targetIssue).rows[0]);
+        const unavailableHead = invokeCli();
+        expect(unavailableHead.exitCode, unavailableHead.stderr).toBe(0);
+        assertUnverified(JSON.parse(unavailableHead.stdout).rows[0]);
+      } finally { renameSync(join(reviewRoot, '.git.saved'), join(reviewRoot, '.git')); }
+
+      assertUnverified(reverify(targetIssue, { forceProducerUnreachable: true }).rows[0]);
+      const unavailableSandbox = invokeCli(prHeadSha, captured.snapshotPath, ['--force-producer-unreachable']);
+      expect(unavailableSandbox.exitCode, unavailableSandbox.stderr).toBe(0);
+      assertUnverified(JSON.parse(unavailableSandbox.stdout).rows[0]);
 
       writeFileSync(join(reviewRoot, 'scripts', 'verify-boundary.mjs'), 'process.exit(77);\n');
       assertUnverified(reverify(targetIssue).rows[0]);
@@ -349,6 +380,13 @@ describe('current substantive Issue floor', () => {
       expect(dirtyCli.exitCode, dirtyCli.stderr).toBe(0);
       assertUnverified(JSON.parse(dirtyCli.stdout).rows[0]);
       gitW('checkout', '--', 'scripts/verify-boundary.mjs');
+
+      writeFileSync(join(reviewRoot, 'scripts', 'proof-input.mjs'), dependency + '\nthrow new Error("untrusted dependency executed");\n');
+      assertBothUnverified();
+      gitW('add', 'scripts/proof-input.mjs');
+      gitW('-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.test', 'commit', '-m', 'PR-modified producer dependency');
+      assertBothUnverified();
+      gitW('checkout', '--detach', prHeadSha);
 
       gitW('remote', 'set-url', 'origin', 'https://github.com/example/wrong-origin.git');
       assertUnverified(reverify(targetIssue).rows[0]);
@@ -371,6 +409,7 @@ describe('current substantive Issue floor', () => {
       gitW('add', 'scripts/verify-boundary.mjs');
       gitW('-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.test', 'commit', '-m', 'unsafe link');
       assertUnverified(reverify(targetIssue, { prHeadSha: headW() }).rows[0]);
+      assertBothUnverified();
       gitW('checkout', '--detach', prHeadSha);
 
       writeFileSync(join(reviewRoot, 'scripts', 'w-only.mjs'), observedProducer);
@@ -381,15 +420,29 @@ describe('current substantive Issue floor', () => {
       } });
       assertUnverified(reverify(makeIssue('target-status', 'node scripts/w-only.mjs'),
         { prHeadSha: headW() }).rows[0]);
+      assertBothUnverified(makeIssue('target-status', 'node scripts/w-only.mjs'));
       gitW('checkout', '--detach', prHeadSha);
       putCard(card);
+
+      rmSync(join(reviewRoot, 'scripts', 'verify-boundary.mjs'));
+      assertBothUnverified(); // P and pack must never replace missing W input.
+      gitW('checkout', '--', 'scripts/verify-boundary.mjs');
+
+      putCard({ ...card, contractEvidenceProducer: {
+        name: 'target-status', boundaryCommand: 'node scripts/different.mjs',
+      } });
+      assertBothUnverified();
+      putCard(card);
+      assertBothUnverified(makeIssue('target-status', boundaryCommand + ' --unapproved'));
 
       putCard({ ...card, contractEvidenceProducer: undefined });
       expect(checkTierGateGuard(targetIssue, floorOptions).errors.join('\n')).toContain('not declared by the selected project card');
       expect(checkContractEvidence(targetIssue, floorOptions).errors.join('\n'))
         .toContain('not declared by the selected project card');
       expect(reverify(targetIssue).rows[0]).toMatchObject({ status: 'unverified', reason: 'unsupported-producer' });
+      assertBothUnverified();
       putCard(card);
+      gitW('checkout', '--detach', prHeadSha);
 
       const badBinding = targetIssue.replace('binding-id: target-status:', 'binding-id: other-producer:');
       expect(checkTierGateGuard(badBinding, floorOptions).errors.join('\n')).toContain('does not match binding-id');
