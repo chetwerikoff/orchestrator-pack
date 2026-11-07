@@ -681,6 +681,43 @@ const chromeExecutable = [
 const requireRealCdp = process.env.OPK_REQUIRE_REAL_CDP_TEST === '1';
 
 it.skipIf(!requireRealCdp && (!liveChromium || !chromeExecutable))(
+  'Issue #2799 detects generation controls without matching Stop in sidebar chat titles',
+  async () => {
+    if (!liveChromium || !chromeExecutable) throw new Error('selector regression requires Playwright and Chrome');
+    const { STOP_BUTTON_SELECTOR, RENDERED_STOP_BUTTON_SELECTOR } = await import('./product-page-selectors.ts');
+    const { readPageObservation } = await import('./state-light-turn-base.ts');
+    const { HARVEST_EXPRESSION } = await import('../browser-gpt-page-probe.ts');
+    const browser = await liveChromium.launch({
+      executablePath: chromeExecutable,
+      headless: true,
+      args: ['--no-sandbox', '--disable-dev-shm-usage'],
+    });
+    try {
+      const page = await browser.newPage();
+      await page.route('https://selector-fixture.test/', (route: any) => route.fulfill({ body: '<html></html>', contentType: 'text/html' }));
+      await page.goto('https://selector-fixture.test/');
+      await page.setContent('<aside><button aria-label="Actions for Stopped issue drift verification">Menu</button></aside><div data-chatgpt-selection-message-id="fixture-user"><div data-markdown-text-style="user-message">Fixture prompt</div></div><main></main>');
+      expect(await page.locator(STOP_BUTTON_SELECTOR).count()).toBe(0);
+      expect(await page.locator(RENDERED_STOP_BUTTON_SELECTOR).count()).toBe(0);
+      expect((await readPageObservation(page)).pageTurnEvidence?.generationInProgress).toBe(false);
+      expect(await page.evaluate(HARVEST_EXPRESSION)).toMatchObject({ status: 'ok', generation_in_progress: false });
+      for (const control of [
+        '<button aria-label="Stop generating">Stop</button>',
+        '<button data-testid="stop-button" aria-label="End response">Stop</button>',
+      ]) {
+        await page.locator('main').evaluate((main: Element, html: string) => { main.innerHTML = html; }, control);
+        expect(await page.locator(STOP_BUTTON_SELECTOR).count()).toBe(1);
+        expect(await page.locator(RENDERED_STOP_BUTTON_SELECTOR).count()).toBe(1);
+        expect((await readPageObservation(page)).pageTurnEvidence?.generationInProgress).toBe(true);
+        expect(await page.evaluate(HARVEST_EXPRESSION)).toMatchObject({ status: 'ok', generation_in_progress: true });
+      }
+    } finally {
+      await browser.close();
+    }
+  },
+);
+
+it.skipIf(!requireRealCdp && (!liveChromium || !chromeExecutable))(
   'uses real Playwright against the proxy while an independent client runs foreign JavaScript',
   async () => {
     if (!liveChromium || !chromeExecutable) {

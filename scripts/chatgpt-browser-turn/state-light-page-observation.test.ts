@@ -499,7 +499,7 @@ describe('DOM observation boundary', () => {
       };
     });
     const querySelectorAll = vi.fn((selector: string) => {
-      if (selector !== '[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]') return [];
+      if (selector !== '[data-testid="stop-button"], button[aria-label^="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]') return [];
       const match = generationQuery();
       return match ? [match] : [];
     });
@@ -551,7 +551,7 @@ describe('DOM observation boundary', () => {
       completed.result.pageTurnEvidence!.observedAssistantNodes,
     )).toBe('completed');
     expect(completed.querySelectorAll).toHaveBeenCalledWith(
-      '[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]',
+      '[data-testid="stop-button"], button[aria-label^="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]',
     );
   });
 
