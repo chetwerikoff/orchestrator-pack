@@ -21,6 +21,7 @@ import type {
 } from '../runtime/contracts.ts';
 import {
   publishFleetReconciliationHandoff,
+  readFleetReconciliationHandoff,
   type FleetReconciliationHandoff,
   type FleetReconciliationReason,
 } from './fleet-reconciliation-handoff.ts';
@@ -372,6 +373,56 @@ function schedulerEscalationBoundary(
 }
 
 describe('fleet escalation delivery', () => {
+  it.each(['legacy', 'empty', 'multiple', 'overflow'] as const)(
+    'delivers committed %s scheduler handoffs through the real S3 consumer', async (mode) => {
+      const root = tempRoot();
+      const store = await operatorAssignment(root);
+      const fixture = adapterFixture({ dispatch: { status: 'dispatched' } });
+      const rows = mode === 'legacy' ? undefined : Array.from({ length: mode === 'empty' ? 0 : mode === 'overflow' ? 300 : 3 }, (_, index) => ({
+        assignmentId: `assignment-${index}`, assignmentGeneration: 1,
+        issueNumber: 2814 + index, taskId: `task-${index}`, reason: 'target_unresolved' as const,
+      }));
+      const file = path.join(root, 'scheduler-handoff.json');
+      const boundary: SchedulerBoundary = {
+        ...schedulerEscalationBoundary(root, store, fixture.adapter),
+        publishHandoff: ({ reason, tickSequence, schedulerGeneration: generation }) => {
+          const result = publishFleetReconciliationHandoff({ file, projectId, repository,
+            activationLineage, schedulerGeneration: generation, tickSequence, reason,
+            role: 'worker', issueNumber: 2814, taskId: 'task-0', assignmentId: 'assignment-0',
+            assignmentGeneration: 1, ...(rows ? { reconciliations: rows } : {}) });
+          if (!result.ok) return result;
+          const record = readFleetReconciliationHandoff(file);
+          if (!record) throw new Error('committed_handoff_readback_failed');
+          return { ok: true, record };
+        },
+      };
+      const result = await runSchedulerTick(boundary, epochEnv(root));
+      expect(result.fleetEscalation).toMatchObject({ publication: 'submitted', attemptCount: 1, diagnostics: [] });
+      expect(fixture.calls.dispatch).toBe(1);
+      const record = readFleetReconciliationHandoff(file)!;
+      if (rows) {
+        expect(record.reconciliationCount).toBe(rows.length);
+        expect(record.reconciliations).toEqual(rows.slice(0, record.reconciliations!.length));
+        const alteredRecords = [
+          { ...record, reconciliationCount: rows.length + 1 },
+          ...(record.reconciliations!.length ? [{ ...record, reconciliations: record.reconciliations!.map((row, index) =>
+            index === 0 ? { ...row, taskId: 'altered-task' } : row) }] : []),
+        ];
+        for (const altered of alteredRecords) {
+          const rejected = await runFleetEscalationDelivery(invocation(altered, store, fixture.adapter));
+          expect(rejected).toMatchObject({ decision: 'invalid_evidence', diagnostics: ['evidence_digest_invalid'] });
+        }
+        expect(fixture.calls.dispatch).toBe(1);
+      } else {
+        expect(record.reconciliations).toBeUndefined();
+        // Legacy canonical bytes retain their exact original field order and digest.
+        const { payloadDigest, ...legacyPayload } = record;
+        const { createHash } = await import('node:crypto');
+        expect(payloadDigest).toBe(createHash('sha256').update(JSON.stringify(legacyPayload)).digest('hex'));
+      }
+    },
+  );
+
   it('derives byte-identical canonical content from equivalent durable evidence', () => {
     const root = tempRoot();
     const first = canonicalFleetEscalationContent(handoff(root, 'target_unresolved', 1, '2026-08-24T00:00:00.000Z'));

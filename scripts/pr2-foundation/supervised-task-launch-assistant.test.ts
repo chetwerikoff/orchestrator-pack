@@ -68,6 +68,44 @@ import {
 import { overlayExecutorProfileEnv, readExecutorProfileStore } from '../executor-profile-store.ts';
 
 describe('Issue #2754 AC5 serialized worktree restoration', () => {
+  it('Issue #2810 filters foreign native rows before actual adapter identity normalization, retaining complete-list and target proof', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2810-native-census-'));
+    const target = join(root, 'target');
+    const foreign = join(root, 'foreign');
+    mkdirSync(target);
+    mkdirSync(foreign);
+    const roster = join(root, 'roster.json');
+    const executable = join(root, 'orca-fixture.mjs');
+    writeFileSync(executable, `#!/usr/bin/env node\nimport { readFileSync } from 'node:fs';\nprocess.stdout.write(readFileSync(${JSON.stringify(roster)}, 'utf8'));\n`);
+    chmodSync(executable, 0o755);
+    const adapter = new OrcaTaskRuntimeAdapter({ executable });
+    const foreignRows = [
+      { handle: 'term-foreign', worktreePath: foreign },
+      { handle: 'term-deleted', worktreePath: join(root, 'deleted') },
+    ];
+    const setRows = (terminals: readonly unknown[], metadata = { totalCount: terminals.length, truncated: false }) =>
+      writeFileSync(roster, JSON.stringify({ ok: true, result: { terminals, ...metadata } }));
+    try {
+      setRows(foreignRows);
+      expect(await observeQuiescentRestoreCensus(adapter, target, () => [], 'linux'))
+        .toEqual({ status: 'ok', value: true });
+      // Unscoped enumeration still validates every native identity, as before.
+      expect(await adapter.listWorkersAsync()).toMatchObject({ status: 'unsupported', reason: 'runtime_worker_generation_missing' });
+      setRows(foreignRows, { totalCount: 3, truncated: true });
+      expect(await observeQuiescentRestoreCensus(adapter, target, () => [], 'linux'))
+        .toMatchObject({ status: 'continue', cause: 'worktree_restore_terminals_incomplete', evidence: { reason: 'runtime_worker_list_incomplete' } });
+      setRows([...foreignRows, { handle: 'term-target', worktreePath: target }]);
+      expect(await observeQuiescentRestoreCensus(adapter, target, () => [], 'linux'))
+        .toMatchObject({ status: 'continue', cause: 'worktree_restore_terminals_incomplete', evidence: { reason: 'runtime_worker_generation_missing' } });
+      setRows([...foreignRows, { handle: 'term-target', worktreePath: target, incarnationId: 'target-generation' }]);
+      expect(await observeQuiescentRestoreCensus(adapter, target, () => [], 'linux'))
+        .toMatchObject({ status: 'continue', cause: 'worktree_restore_target_terminal_retained' });
+      setRows([{ handle: 'unknown-path' }]);
+      expect(await observeQuiescentRestoreCensus(adapter, target, () => [], 'linux'))
+        .toMatchObject({ status: 'continue', cause: 'worktree_restore_terminals_incomplete', evidence: { reason: 'runtime_worker_workspace_unproven' } });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('requires complete native census and empty Linux process descendants; retained terminal fails even if exited', async () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-2754-restore-'));
     const foreign = join(root, 'foreign');
@@ -80,9 +118,15 @@ describe('Issue #2754 AC5 serialized worktree restoration', () => {
     const atTarget: RuntimeWorker = { ...worker, workspacePath: root };
     try {
       const empty = await observeQuiescentRestoreCensus(native([]), root, () => [], 'linux');
-      expect(empty).toMatchObject({ status: 'ok', value: { terminalFingerprint: '' } });
+      expect(empty).toEqual({ status: 'ok', value: true });
       const foreignOnly = await observeQuiescentRestoreCensus(native([foreignWorker]), root, () => [], 'linux');
       expect(foreignOnly.status).toBe('ok');
+      const foreignInvalid = { ...foreignWorker, identity: { ...worker.identity, generation: '' } };
+      const deleted = { ...foreignInvalid, workspacePath: join(root, 'deleted-foreign-worktree') };
+      expect(await observeQuiescentRestoreCensus(native([foreignInvalid, deleted]), root, () => [], 'linux'))
+        .toEqual({ status: 'ok', value: true });
+      expect(await observeQuiescentRestoreCensus(native([{ ...foreignInvalid, workspacePath: root }]), root, () => [], 'linux'))
+        .toMatchObject({ status: 'continue', cause: 'worktree_restore_terminal_identity_invalid' });
       const retained = await observeQuiescentRestoreCensus(native([atTarget]), root, () => [], 'linux');
       expect(retained).toMatchObject({ status: 'continue', cause: 'worktree_restore_target_terminal_retained' });
       const process = await observeQuiescentRestoreCensus(native([]), root,
@@ -98,8 +142,9 @@ describe('Issue #2754 AC5 serialized worktree restoration', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it.each(['same-task', 'new-task'] as const)('admits only a twice-observed exact gone Dispatch and unchanged quiescence: %s', async (mode) => {
-    const oldTask = mode === 'same-task' ? 'task-1' : 'task-old';
+  it.each(['same-task', 'new-task', 'failed-same-task'] as const)('Issue #2810 restoration admission before effects: %s', async (mode) => {
+    const oldTask = mode === 'new-task' ? 'task-old' : 'task-1';
+    const state = mode === 'same-task' ? 'abandoned' : 'failed';
     const prior: WorkerAssignment = {
       schema: 'orchestrator-pack/worker-assignment/v1',
       projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
@@ -107,33 +152,46 @@ describe('Issue #2754 AC5 serialized worktree restoration', () => {
       generation: 1, kind: 'local', provider: 'orca', bindingKey: 'dispatch-old',
       role: 'orchestrator', createdAtUtc: '2026-11-02T00:00:00.000Z',
     };
-    const observations: DispatchObservation[] = mode === 'same-task'
-      ? [{ kind: 'present', dispatchId: 'dispatch-old', status: 'failed' },
-        { kind: 'present', dispatchId: 'dispatch-old', status: 'failed' }]
+    const observations: DispatchObservation[] = mode !== 'new-task'
+      ? [{ kind: 'present', dispatchId: 'dispatch-old', status: state },
+        { kind: 'present', dispatchId: 'dispatch-old', status: state }]
       : [{ kind: 'absent' }, { kind: 'present', dispatchId: 'dispatch-old', status: 'failed' },
         { kind: 'absent' }, { kind: 'present', dispatchId: 'dispatch-old', status: 'failed' }];
     let started = 0;
     let censuses = 0;
+    let prepared = 0;
+    let spawned = 0;
     const result = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), issueNumber: 2754 }, {
       ...deps({ currentAssignment: prior, dispatch: observations,
+        adapter: runtimeAdapter({ onSpawn: () => { spawned += 1; } }),
         onSupervised: () => { started += 1; } }),
       proveManagerTaskMembership: async (_runId, taskId) => ({ status: 'ok', value: { taskId } }),
       proveTerminalGone: async (assignment) => ({
         taskId: assignment.taskId, dispatchId: assignment.bindingKey,
-        dispatchState: 'failed', worktreeId: 'repo::exact-worktree', workerAbsent: true,
+        dispatchState: state, worktreeId: 'repo::exact-worktree', workerAbsent: true,
       }),
       resolveRestoreWorktree: async () => ({ status: 'ok', value: {
         id: 'repo::exact-worktree', path: '/tmp/exact-worktree',
       } }),
       observeRestoreQuiescence: async () => {
         censuses += 1;
-        return { status: 'ok', value: { terminalFingerprint: 'same foreign inventory' } };
+        return { status: 'ok', value: true };
       },
-      prepareWorktree: async () => ({ status: 'ok', value: {
+      prepareWorktree: async () => { prepared += 1; return { status: 'ok', value: {
         id: 'repo::exact-worktree', selector: 'id:manager-worktree',
         path: '/tmp/exact-worktree', setupWitness: 'proven_reuse',
-      } }),
+      } }; },
     });
+    if (mode === 'failed-same-task') {
+      expect(result).toMatchObject({ outcome: 'continue', stage: 'dispatch_admission_early',
+        observedCause: 'worktree_restore_task_not_startable', nextAction: { kind: 'reconcile_dispatch' } });
+      if (result.outcome !== 'continue') throw new Error('expected early refusal');
+      expect(result.nextAction.note).toContain('new Task in the same Run run-1');
+      expect(result.nextAction.note).toContain('--task <new Task>');
+      expect(result.nextAction.note).toContain("--worktree 'id:manager-worktree'");
+      expect([prepared, spawned, started, censuses]).toEqual([0, 0, 0, 0]);
+      return;
+    }
     expect(result.outcome).toBe('ready');
     expect(censuses).toBe(2);
     expect(started).toBe(1);
@@ -158,7 +216,7 @@ describe('Issue #2754 AC5 serialized worktree restoration', () => {
         generation: 1, kind: 'local', provider: 'orca', bindingKey: 'dispatch-old',
         role: 'orchestrator', createdAtUtc: '2026-11-02T00:00:00.000Z',
       };
-      const first = phase === 'early' ? state : 'failed';
+      const first = phase === 'early' ? state : 'abandoned';
       const old = (status: string): DispatchObservation =>
         ({ kind: 'present', dispatchId: 'dispatch-old', status });
       const observations: DispatchObservation[] = mode === 'same-task'
@@ -187,7 +245,7 @@ describe('Issue #2754 AC5 serialized worktree restoration', () => {
           id: 'repo::exact-worktree', path: '/tmp/exact-worktree',
         } }),
         observeRestoreQuiescence: async () => ({
-          status: 'ok', value: { terminalFingerprint: 'stable foreign inventory' },
+          status: 'ok', value: true,
         }),
         prepareWorktree: async () => ({ status: 'ok', value: {
           id: 'repo::exact-worktree', selector: 'id:manager-worktree',
@@ -205,7 +263,10 @@ describe('Issue #2754 AC5 serialized worktree restoration', () => {
     },
   );
 
-  it('rejects changed all-workspace census after preparation without any terminal spawn', async () => {
+  it.each(['appearance', 'disappearance', 'deleted-path'] as const)('Issue #2810 admits unrelated-terminal %s between censuses', async (churn) => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2810-churn-'));
+    const foreign = join(root, 'foreign');
+    mkdirSync(foreign);
     const prior: WorkerAssignment = {
       schema: 'orchestrator-pack/worker-assignment/v1',
       projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
@@ -216,7 +277,8 @@ describe('Issue #2754 AC5 serialized worktree restoration', () => {
     let census = 0;
     let spawned = 0;
     const result = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), issueNumber: 2754 }, {
-      ...deps({ currentAssignment: prior, adapter: runtimeAdapter({ onSpawn: () => { spawned += 1; } }),
+      ...deps({ currentAssignment: prior, adapter: runtimeAdapter({ worker: { ...worker, workspacePath: root },
+        onSpawn: () => { spawned += 1; } }),
         dispatch: [{ kind: 'absent' }, { kind: 'present', dispatchId: 'dispatch-old', status: 'failed' },
           { kind: 'absent' }, { kind: 'present', dispatchId: 'dispatch-old', status: 'failed' }] }),
       proveManagerTaskMembership: async (_runId, taskId) => ({ status: 'ok', value: { taskId } }),
@@ -225,24 +287,31 @@ describe('Issue #2754 AC5 serialized worktree restoration', () => {
         dispatchState: 'failed', worktreeId: 'repo::exact-worktree', workerAbsent: true,
       }),
       resolveRestoreWorktree: async () => ({ status: 'ok', value: {
-        id: 'repo::exact-worktree', path: '/tmp/exact-worktree',
+        id: 'repo::exact-worktree', path: root,
       } }),
-      observeRestoreQuiescence: async () => ({ status: 'ok', value: {
-        terminalFingerprint: ++census === 1 ? 'before' : 'changed',
-      } }),
+      observeRestoreQuiescence: async () => {
+        census += 1;
+        const other = { ...worker, workspacePath: foreign };
+        if (churn === 'deleted-path' && census === 2) rmSync(foreign, { recursive: true });
+        const workers = churn === 'appearance' ? (census === 1 ? [] : [other])
+          : churn === 'disappearance' ? (census === 1 ? [other] : []) : [other];
+        return observeQuiescentRestoreCensus({ ...runtimeAdapter(),
+          listWorkersAsync: async () => ({ status: 'ok', value: workers }),
+        }, root, () => [], 'linux');
+      },
       prepareWorktree: async () => ({ status: 'ok', value: {
         id: 'repo::exact-worktree', selector: 'id:manager-worktree',
-        path: '/tmp/exact-worktree', setupWitness: 'proven_reuse',
+        path: root, setupWitness: 'proven_reuse',
       } }),
     });
-    expect(result).toMatchObject({ outcome: 'continue',
-      stage: 'dispatch_admission_final', observedCause: 'worktree_restore_terminal_inventory_changed' });
+    rmSync(root, { recursive: true, force: true });
+    expect(result).toMatchObject({ outcome: 'ready' });
     expect(census).toBe(2);
-    expect(spawned).toBe(0);
+    expect(spawned).toBe(1);
   });
   it.each([
-    ['changed-final-census', false],
-    ['same-final-census', true],
+    ['target-terminal-retained', false],
+    ['target-quiescent', true],
   ] as const)('retains B5 on refused Claude manager restore and retires it only before admitted spawn: %s', async (_case, stable) => {
     const prior: WorkerAssignment = {
       schema: 'orchestrator-pack/worker-assignment/v1',
@@ -264,24 +333,24 @@ describe('Issue #2754 AC5 serialized worktree restoration', () => {
       ...deps({
         currentAssignment: prior,
         dispatch: [
-          { kind: 'present', dispatchId: 'dispatch-old', status: 'failed' },
-          { kind: 'present', dispatchId: 'dispatch-old', status: 'failed' },
+          { kind: 'present', dispatchId: 'dispatch-old', status: 'abandoned' },
+          { kind: 'present', dispatchId: 'dispatch-old', status: 'abandoned' },
         ],
         adapter: runtimeAdapter({ onSpawn: () => { events.push('native-spawn'); } }),
         onSupervised: () => { events.push('native-start'); },
       }),
       proveTerminalGone: async (assignment) => ({
         taskId: assignment.taskId, dispatchId: assignment.bindingKey,
-        dispatchState: 'failed', worktreeId: 'repo::exact-worktree', workerAbsent: true,
+        dispatchState: 'abandoned', worktreeId: 'repo::exact-worktree', workerAbsent: true,
       }),
       resolveRestoreWorktree: async () => ({ status: 'ok', value: {
         id: 'repo::exact-worktree', path: '/tmp/exact-worktree',
       } }),
       observeRestoreQuiescence: async () => {
         censuses += 1;
-        return { status: 'ok', value: {
-          terminalFingerprint: stable || censuses === 1 ? 'same inventory' : 'changed inventory',
-        } };
+        return stable || censuses === 1 ? { status: 'ok', value: true }
+          : { status: 'continue', cause: 'worktree_restore_target_terminal_retained', actor: 'operator',
+            nextAction: { kind: 'reconcile_worktree_setup', note: 'quiesce the selected worktree' } };
       },
       prepareWorktree: async () => ({ status: 'ok', value: {
         id: 'repo::exact-worktree', selector: 'id:manager-worktree',
@@ -296,7 +365,7 @@ describe('Issue #2754 AC5 serialized worktree restoration', () => {
     if (!stable) {
       expect(result).toMatchObject({
         outcome: 'continue', stage: 'dispatch_admission_final',
-        observedCause: 'worktree_restore_terminal_inventory_changed',
+        observedCause: 'worktree_restore_target_terminal_retained',
       });
       expect(events).toEqual([]);
     } else {
@@ -1133,6 +1202,71 @@ function opencodeProbeResult(args: readonly string[], variant = true): { ok: boo
   if (args[0] === process.execPath) return { ok: true, stdout: '', stderr: '' };
   return { ok: false, stdout: '', stderr: '' };
 }
+
+describe('Issue #2810 recoverable launch refusals', () => {
+  it.each([
+    ['transient omission', 'transient', 'ready', undefined, 2],
+    ['persistent omission', 'missing', 'continue', 'executor_profile_model_unavailable', 2],
+    ['unsupported effort', 'effort', 'continue', 'executor_effort_channel_unavailable', 1],
+    ['malformed catalog', 'malformed', 'continue', 'executor_profile_catalog_malformed', 1],
+    ['catalog command failure', 'failure', 'continue', 'executor_profile_applicability_unproven', 1],
+  ] as const)('uses one verbose catalog snapshot: %s', async (_name, mode, outcome, cause, reads) => {
+    let catalogs = 0;
+    const effects: string[] = [];
+    const calls: string[][] = [];
+    const result = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), env: opencodeProfileEnv('manager') }, {
+      ...deps({
+        onManagerCreate: () => { effects.push('task'); },
+        onWorktree: () => { effects.push('worktree'); },
+        adapter: runtimeAdapter({ onSpawn: () => { effects.push('terminal'); } }),
+        onSupervised: () => { effects.push('start'); },
+      }),
+      resolveProfile: (workClass, env, startMode) => resolveLiveExecutorProfile(workClass, env, startMode, async (args) => {
+        calls.push([...args]);
+        if (args[1] === 'models' && args.includes('--verbose')) {
+          catalogs += 1;
+          if (mode === 'failure') return { ok: false, stdout: '', stderr: 'catalog failed' };
+          if (mode === 'malformed') return { ok: true, stdout: 'fixture-opencode-model\n{ malformed', stderr: '' };
+          if (mode === 'missing' || (mode === 'transient' && catalogs === 1)) {
+            return { ok: true, stdout: 'other-model\n{"variants":{"medium":{}}}', stderr: '' };
+          }
+          if (mode === 'effort') return { ok: true, stdout: 'fixture-opencode-model\n{"variants":{"other-effort":{}}}', stderr: '' };
+        }
+        return opencodeProbeResult(args);
+      }),
+    });
+    expect(result.outcome).toBe(outcome);
+    expect(catalogs).toBe(reads);
+    expect(calls.filter((args) => args[1] === 'models').every((args) => args.includes('--verbose'))).toBe(true);
+    if (result.outcome === 'continue') {
+      expect(result.observedCause).toBe(cause);
+      expect(result.nextAction.note).toContain('Rerun the same launch command once');
+      expect(result.nextAction.note).toContain('opencode models --verbose');
+      expect(effects).toEqual([]);
+    } else expect(effects).toEqual(['worktree', 'terminal', 'start']);
+  });
+
+  it.each(['manager', 't2', 'merge'] as const)('task_not_startable names the terminal and new Task, never retries: %s', async (workClass) => {
+    const input = { ...launchInput(workClass), env: opencodeProfileEnv(workClass),
+      ...(workClass === 'merge' ? { issueNumber: undefined, primaryRoot: '/tmp/exact-worktree',
+        worktreeName: undefined, worktreeSelector: 'path:/tmp/exact-worktree' } : {}),
+    };
+    const result = await runSupervisedTaskLaunchAssistant(input, {
+      ...deps({
+      supervised: { ok: false, reason: 'supervised_start_envelope_error', errorCode: 'task_not_startable',
+        errorMessage: 'Task is failed', recovery: { requestId: 'request-not-startable' } },
+      }),
+      resolveProfile: (role, env, mode) => resolveLiveExecutorProfile(role, env, mode, async (args) => opencodeProbeResult(args)),
+    });
+    expect(result).toMatchObject({ outcome: 'continue', stage: 'supervised_start',
+      evidence: { errorCode: 'task_not_startable', requestId: 'request-not-startable' },
+      nextAction: { kind: 'reconcile_dispatch', command: `orca terminal close --terminal '${worker.identity.id}' --json` } });
+    if (result.outcome !== 'continue') throw new Error('expected native refusal');
+    expect(result.nextAction.note).toContain('new startable Task in the same Run');
+    expect(JSON.stringify(result.nextAction)).not.toContain('--retry-request');
+    expect(result.nextAction.note).not.toContain('continue the existing Task');
+  });
+});
 
 describe('Issue #2646 OpenCode merge on primary and mandatory browser overlay', () => {
 
@@ -2594,7 +2728,8 @@ describe('supervised Task launch assistant', () => {
     });
     expect(launchConfig.permission).toMatchObject({ skill: { 'browser-skill': 'deny' } });
     expect(launchConfig.permission?.bash).toHaveProperty('bsk *', 'deny');
-    expect(admittedCalls[0]).toEqual([FIXTURE_OPENCODE_BIN, 'models']);
+    expect(admittedCalls[0]).toEqual([FIXTURE_OPENCODE_BIN, 'models', '--verbose']);
+    expect(admittedCalls).not.toContainEqual([FIXTURE_OPENCODE_BIN, 'models']);
     expect(admittedCalls).toContainEqual([FIXTURE_OPENCODE_BIN, '--help']);
     expect(admittedCalls).toContainEqual([FIXTURE_OPENCODE_BIN, 'models', '--verbose']);
     expect(admittedCalls.some((args) => args[0] === FIXTURE_OPENCODE_BIN && args[1] === 'debug')).toBe(false);
@@ -2626,7 +2761,7 @@ describe('supervised Task launch assistant', () => {
     expect(calls.length).toBeGreaterThan(0);
     // Only the node env-variable presence check is not an opencode invocation.
     expect(calls.filter((args) => args[0] !== pinned && args[0] !== process.execPath)).toEqual([]);
-    expect(calls.filter((args) => args[0] === pinned).length).toBeGreaterThanOrEqual(3);
+    expect(calls.filter((args) => args[0] === pinned)).toHaveLength(2);
 
     const overlay = buildOpenCodeAgentOverlay({
       executable: pinned, agentName: 'pack-opk-c3', model: 'fixture-opencode-model', effort: 'fixture-opencode-effort',
@@ -4688,6 +4823,26 @@ The words Firefighter universal appear here only as prose.`;
       worktreeSelector: 'id:repo::existing', defaultBranch: 'main',
     }, fixture.execute);
     expect(result).toMatchObject({ status: 'continue', cause });
+    if (cause === 'manager_pr_resume_head_mismatch') {
+      expect(result).toMatchObject({ evidence: {
+        headRefName: options.prOverrides?.headRefName ?? 'manager-2024',
+        headRefOid: options.prOverrides?.headRefOid ?? '1'.repeat(40),
+        baseRefName: options.prOverrides?.baseRefName ?? 'main',
+      } });
+      if (result.status !== 'continue') throw new Error('expected refusal');
+      expect(result).toMatchObject({ evidence: {
+        headRepository: options.prOverrides?.headRepository?.nameWithOwner ?? 'chetwerikoff/orchestrator-pack',
+      } });
+      if (options.prOverrides && 'headRefOid' in options.prOverrides) {
+        expect(result.nextAction.note).toContain('git fetch --no-tags origin <headRefName>');
+        expect(result.nextAction.note).toContain('git merge-base --is-ancestor HEAD <headRefOid>');
+        expect(result.nextAction.note).toContain('git merge --ff-only <headRefOid>');
+        expect(result.nextAction.note).toContain('worktree is clean');
+      } else {
+        expect(result.nextAction.note).not.toContain('git merge --ff-only');
+        expect(result.nextAction.note).toContain('Do not move the branch');
+      }
+    }
     expect(fixture.head()).toBe('1'.repeat(40));
     expect(fixture.mergeTransitions()).toBe(0);
     expect(fixture.calls.some((args) => args[0] === 'git' && args[1] === 'merge')).toBe(false);
@@ -7006,6 +7161,29 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
     expect(reads).toBe(4);
     expect(elapsedMs).toBe(LAUNCH_STARTUP_OBSERVATION_WINDOW_MS);
     expect(starts).toBe(0);
+  });
+
+  it('Issue #2810 accepts a case-insensitive selected model-line effort footer', async () => {
+    const profile = resolveExecutorProfile('manager', claudeEnv('claude-sonnet-5-5', 'high'), 'exact_terminal_worktree');
+    if (profile.status !== 'ok') throw new Error('Claude fixture profile refused');
+    const native = observedClaudeAdapter(profile.value.launchCommand, 'Sonnet', 'high');
+    for (const [footer, accepted] of [
+      ['sOnNeT 5.5 HiGh', true],
+      ['Sonnet 5.5 Medium', false],
+      ['Opus 5.5 High', false],
+      ['Sonnet 5.5\nHigh', false],
+      ['Use Sonnet 5.5 High\nSonnet 5.5 Medium', false],
+      ['Sonnet 5.5 High\nSonnet 5.5 Medium', false],
+      ['Use Sonnet 5.5 High\nOpus 5.5 High', false],
+      ['Sonnet 5.5 · effort: high', true],
+      ['Sonnet 5.5 · high effort', true],
+    ] as const) {
+      const adapter: RuntimeAdapter = { ...native, readBoundedOutputAsync: async (input) => {
+        const output = await native.readBoundedOutputAsync!(input);
+        return output.status === 'ok' ? { ...output, value: { ...output.value, lines: ['Claude Code', footer] } } : output;
+      } };
+      expect(await claudePaneProfileObserved(profile.value, worker, adapter)).toBe(accepted);
+    }
   });
 
   it('admits exact native Claude identity without a command, but refuses foreign or missing identity', async () => {

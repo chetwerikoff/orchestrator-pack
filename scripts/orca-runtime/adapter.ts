@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
 import { execFile } from 'node:child_process';
 import { runProcessSync } from '../kernel/subprocess.ts';
 import { promisify } from 'node:util';
+import { classifyPromptSendReceipt, promptSendArgv } from './send-receipt.ts';
 import {
   runtimeFailure,
   runtimeUnsupported,
@@ -1309,8 +1312,26 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (!complete && (requiresComplete || !metadataAbsent)) {
       return runtimeUnsupported('list_workers', 'runtime_worker_list_incomplete');
     }
+    let selectedPath: string | undefined;
+    if (_input.workspace !== undefined && isAbsolute(_input.workspace)) {
+      try { selectedPath = realpathSync(_input.workspace); }
+      catch { return runtimeUnsupported('list_workers', 'runtime_worker_workspace_unavailable'); }
+    }
     const workers: RuntimeWorker[] = [];
     for (const terminal of terminals) {
+      if (selectedPath !== undefined) {
+        const path = terminal.worktreePath?.trim();
+        if (!path || !isAbsolute(path)) {
+          return runtimeUnsupported('list_workers', 'runtime_worker_workspace_unproven');
+        }
+        try {
+          if (realpathSync(path) !== selectedPath) continue;
+        } catch (error) {
+          // A deleted foreign workspace cannot be the existing selected workspace.
+          if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) continue;
+          return runtimeUnsupported('list_workers', 'runtime_worker_workspace_unproven');
+        }
+      }
       const selector = terminal.worktreePath?.trim() || 'active';
       const normalized = this.#workerFromTerminal(terminal, selector, 'list_workers');
       if (normalized.status !== 'ok') return normalized;
@@ -1613,16 +1634,20 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     const family = this.observeComposerFamily(input.worker, options);
     if (family.status === 'known' && family.family === 'opencode') {
       if (control?.kind !== 'opencode-http') {
-        return { status: 'send_failed', reason: 'opencode_control_unbound' };
-      }
-      if (input.writeOnly || input.submitOnly || input.text !== undefined) {
+        if (input.writeOnly || input.submitOnly || input.text === undefined) {
+          return { status: 'send_failed', reason: 'opencode_control_unbound' };
+        }
+        // Full prompts can use the native submit witness without HTTP ownership.
+        // Partial composer operations still require bound HTTP control.
+      } else if (input.writeOnly || input.submitOnly || input.text !== undefined) {
         return control.dispatch({
           worker: input.worker,
           action: input.writeOnly ? 'append-prompt' : 'submit-prompt',
           ...(input.text !== undefined ? { text: input.text } : {}),
         }, options);
+      } else {
+        return { status: 'send_failed', reason: 'opencode_control_action_required' };
       }
-      return { status: 'send_failed', reason: 'opencode_control_action_required' };
     }
     if (input.submitOnly && family.status === 'unbound') {
       return { status: 'send_failed', reason: family.reason };
@@ -1633,6 +1658,17 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
         action: input.writeOnly ? 'append-prompt' : 'submit-prompt',
         ...(input.text !== undefined ? { text: input.text } : {}),
       }, options);
+    }
+    if (!input.submitOnly && !input.writeOnly) {
+      const response = this.#run(promptSendArgv(input.worker.id, input.text ?? ''), options);
+      if (response.outcomeCategory === 'process_launch_failed') {
+        return { status: 'send_failed', reason: neutralFailureReason(response) };
+      }
+      if (!response.ok) return { status: 'dispatch_unknown', reason: neutralFailureReason(response) };
+      const receipt = classifyPromptSendReceipt(response, input.worker.id, input.worker.generation);
+      return receipt.status === 'turn_started'
+        ? { status: 'dispatched' }
+        : { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };
     }
     const args = ['terminal', 'send', '--terminal', input.worker.id];
     if (!input.submitOnly) args.push('--text', input.text ?? '');

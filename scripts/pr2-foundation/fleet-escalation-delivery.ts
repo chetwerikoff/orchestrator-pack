@@ -50,6 +50,8 @@ const HANDOFF_KEYS = new Set([
   'taskId',
   'assignmentId',
   'assignmentGeneration',
+  'reconciliations',
+  'reconciliationCount',
   'recordedAtUtc',
   'payloadDigest',
 ]);
@@ -181,6 +183,8 @@ function canonicalHandoffPayload(record: FleetReconciliationHandoff): object {
     ...(record.taskId !== undefined ? { taskId: record.taskId } : {}),
     ...(record.assignmentId !== undefined ? { assignmentId: record.assignmentId } : {}),
     ...(record.assignmentGeneration !== undefined ? { assignmentGeneration: record.assignmentGeneration } : {}),
+    ...(record.reconciliations !== undefined ? { reconciliations: record.reconciliations } : {}),
+    ...(record.reconciliationCount !== undefined ? { reconciliationCount: record.reconciliationCount } : {}),
     recordedAtUtc: record.recordedAtUtc,
   };
 }
@@ -225,6 +229,22 @@ function validateEvidence(
   }
   if (evidence.assignmentGeneration !== undefined
     && (!Number.isInteger(evidence.assignmentGeneration) || evidence.assignmentGeneration <= 0)) {
+    return { ok: false, diagnostic: 'evidence_shape_invalid' };
+  }
+  if (evidence.reconciliations !== undefined) {
+    const rowKeys = new Set(['assignmentId', 'assignmentGeneration', 'issueNumber', 'taskId', 'reason']);
+    if (!Array.isArray(evidence.reconciliations) || evidence.reconciliations.some((row) =>
+      !row || typeof row !== 'object' || Array.isArray(row)
+      || Object.keys(row).some((key) => !rowKeys.has(key))
+      || !boundedText(row.assignmentId, 256) || !boundedText(row.taskId, 256)
+      || !Number.isInteger(row.assignmentGeneration) || row.assignmentGeneration <= 0
+      || !Number.isInteger(row.issueNumber) || row.issueNumber <= 0 || !REASONS.has(row.reason))) {
+      return { ok: false, diagnostic: 'evidence_shape_invalid' };
+    }
+  }
+  if (evidence.reconciliationCount !== undefined
+    && (!Array.isArray(evidence.reconciliations) || !Number.isInteger(evidence.reconciliationCount)
+      || evidence.reconciliationCount < evidence.reconciliations.length)) {
     return { ok: false, diagnostic: 'evidence_shape_invalid' };
   }
   const digest = createHash('sha256')

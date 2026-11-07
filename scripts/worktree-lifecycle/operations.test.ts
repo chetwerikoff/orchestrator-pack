@@ -367,6 +367,120 @@ describe('dual census authority', () => {
 });
 
 describe('guarded Git-only recovery', () => {
+  it.each(['fork/source', 'upstream/base', 'another/fork'])(
+    'preserves local B when an upstream open PR from %s may own it', (source) => {
+      const paths = fixture();
+      const value = state();
+      const opts = operations(paths, value);
+      const base = opts.runner!;
+      const report = runLifecycle({ expected: { ...paths.expected, finalPrHeadSha: HEAD }, context: 'explicit-recovery', apply: true,
+        operations: { ...opts, runner: (invocation) => {
+          const response = base(invocation);
+          if (invocation.args[0] === 'pr' && invocation.args[1] === 'view') {
+            return result({ stdout: JSON.stringify({ ...JSON.parse(response.stdout),
+              headRefName: 'fork/source-A', headRepository: { nameWithOwner: 'fork/source' } }) });
+          }
+          if (invocation.args[0] === 'pr' && invocation.args[1] === 'list') {
+            if (invocation.args.includes('--repo')) return result({ stdout: '[]' });
+            expect(invocation.cwd).toBe(paths.repo);
+            return result({ stdout: JSON.stringify([{ number: 1301, headRefName: BRANCH,
+              headRepository: { nameWithOwner: source } }]) });
+          }
+          return response;
+        } },
+      });
+      expect(report).toMatchObject({ outcome: 'cleanup_deferred', gates: { branchOwnership: false } });
+      expect(value.removeCount).toBe(0);
+      expect(value.invocations.some((item) => item.args.includes('update-ref') || item.args.includes('-d'))).toBe(false);
+    },
+  );
+
+  it('accepts an explicitly bound local branch whose name differs from the merged PR source', () => {
+    const paths = fixture();
+    const value = state();
+    const opts = operations(paths, value);
+    const base = opts.runner!;
+    const report = runLifecycle({ expected: { ...paths.expected, finalPrHeadSha: HEAD }, context: 'explicit-recovery', apply: true,
+      operations: { ...opts, runner: (invocation) => {
+        const response = base(invocation);
+        if (invocation.args[0] === 'pr' && invocation.args[1] === 'view') {
+          return result({ stdout: JSON.stringify({ ...JSON.parse(response.stdout), headRefName: 'pushed/other-name',
+            headRepository: { nameWithOwner: 'fork/source' } }) });
+        }
+        return response;
+      } },
+    });
+    expect(report).toMatchObject({ outcome: 'git_only_recovered', gates: { merged: true, branchOwnership: true } });
+  });
+
+  it.each(['wrong head', 'unmerged PR', 'open PR owns local branch'])(
+    'preserves the bound tree on %s with a differently named PR branch', (failure) => {
+      const paths = fixture();
+      const value = state({ ...(failure === 'open PR owns local branch' ? { openPrs: [{ number: 1301, headRefName: BRANCH }] } : {}) });
+      const opts = operations(paths, value);
+      const base = opts.runner!;
+      const report = runLifecycle({ expected: { ...paths.expected, finalPrHeadSha: HEAD }, context: 'explicit-recovery', apply: true,
+        operations: { ...opts, runner: (invocation) => {
+          const response = base(invocation);
+          if (invocation.args[0] === 'pr' && invocation.args[1] === 'view') {
+            return result({ stdout: JSON.stringify({ ...JSON.parse(response.stdout), headRefName: 'pushed/other-name',
+              ...(failure === 'wrong head' ? { headRefOid: OTHER_HEAD } : {}),
+              ...(failure === 'unmerged PR' ? { state: 'OPEN' } : {}),
+            }) });
+          }
+          return response;
+        } },
+      });
+      expect(report.outcome).toBe('cleanup_deferred');
+      expect(value.removeCount).toBe(0);
+    },
+  );
+
+  it.each(['explicit-recovery', 'post-merge-cleanup'] as const)(
+    'compares pre-existing sibling identities only in %s', (context) => {
+      for (const change of ['addition', 'sibling commit', 'Orca activity', 'removed Git sibling', 'removed Orca sibling']) {
+        const paths = fixture();
+        const value = state({ standardTeardownEffect: 'both-absent',
+          standardTeardownResult: result({ stdout: JSON.stringify({ outcome: 'cleanup_complete' }) }) });
+        const opts = operations(paths, value);
+        const base = opts.runner!;
+        const sibling = join(paths.root, 'sibling');
+        const added = join(paths.root, 'added');
+        const report = runLifecycle({ expected: { ...paths.expected, finalPrHeadSha: HEAD }, context, apply: true,
+          operations: { ...opts, runner: (invocation) => {
+            const response = base(invocation);
+            const after = !value.gitPresent;
+            const args = invocation.args;
+            if (invocation.command === 'git' && args.includes('worktree') && args.includes('list')) {
+              const extra = after && change === 'removed Git sibling' ? ''
+                : `\nworktree ${sibling}\nHEAD ${after && change === 'sibling commit' ? 'c'.repeat(40) : OTHER_HEAD}\nbranch refs/heads/${after && change === 'sibling commit' ? 'sibling-next' : 'sibling'}\n`;
+              return result({ stdout: response.stdout + extra + (after && change === 'addition'
+                ? `\nworktree ${added}\nHEAD ${OTHER_HEAD}\nbranch refs/heads/added\n` : '') });
+            }
+            if (args[0] === 'worktree' && (args[1] === 'list' || args[1] === 'ps')) {
+              const payload = JSON.parse(response.stdout);
+              if (!(after && change === 'removed Orca sibling')) payload.result.worktrees.push({
+                id: `${REPOSITORY_ID}::${sibling}`, path: sibling, head: after && change === 'sibling commit' ? 'c'.repeat(40) : OTHER_HEAD,
+                branch: `refs/heads/${after && change === 'sibling commit' ? 'sibling-next' : 'sibling'}`,
+                lastActivityAt: after && change === 'Orca activity' ? 'later' : 'earlier',
+                isMainWorktree: false, isArchived: false, agents: [],
+              });
+              if (after && change === 'addition') payload.result.worktrees.push({
+                id: `${REPOSITORY_ID}::${added}`, path: added, head: OTHER_HEAD,
+                branch: 'refs/heads/added', isMainWorktree: false, isArchived: false, agents: [],
+              });
+              return result({ stdout: JSON.stringify(payload) });
+            }
+            return response;
+          } },
+        });
+        expect(report.outcome, change).toBe(change.startsWith('removed') ? 'task_degraded'
+          : context === 'explicit-recovery' ? 'git_only_recovered' : 'cleanup_complete');
+        if (change.startsWith('removed')) expect(report.error).toContain(sibling);
+      }
+    },
+  );
+
   it('runs every gate twice and reports dry-run eligibility', () => {
     const paths = fixture();
     const value = state();
@@ -674,7 +788,7 @@ describe('pack-owned lifecycle tool paths', () => {
         command: WRAPPER_PATH,
         args: [
           'pr', 'list', '--state', 'open', '--json',
-          'number,headRefName,headRepository', '--repo', 'chetwerikoff/orchestrator-pack',
+          'number,headRefName,headRepository',
         ],
         cwd: paths.repo,
       },

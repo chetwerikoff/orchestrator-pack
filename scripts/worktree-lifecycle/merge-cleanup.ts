@@ -5,6 +5,8 @@ import { parseGitWorktreePorcelain, normalizeWorktreePath } from './core.ts';
 import { removeIdenticalLaunchCopies, type GitResult, type GitRunner, type LaunchCopyResult } from './launch-copies.ts';
 import { runProcessSync } from '../kernel/subprocess.ts';
 import { collectProcessCensus } from './operations.ts';
+import { classifyPromptSendReceipt, promptSendArgv } from '../orca-runtime/send-receipt.ts';
+import { resolveOrcaExecutable } from '../orca-runtime/native.ts';
 
 export { LAUNCH_COPY_PATHS, removeIdenticalLaunchCopies } from './launch-copies.ts';
 export type { GitResult, GitRunner, LaunchCopyResult } from './launch-copies.ts';
@@ -272,8 +274,18 @@ export function defaultMergeCleanupDeps(repoRoot: string): MergeCleanupDeps {
       return { ok: viaGit.ok, detail: viaGit.ok ? 'git worktree remove' : viaGit.stderr };
     },
     send: (handle, text) => {
-      const sent = spawn('orca', ['terminal', 'send', '--terminal', handle, '--enter', '--text', text]);
-      return { ok: sent.ok, detail: sent.ok ? 'sent' : sent.stderr.trim() || 'orca terminal send failed' };
+      try {
+        const executable = resolveOrcaExecutable();
+        const shown = spawn(executable, ['terminal', 'show', '--terminal', handle, '--json']);
+        const observed = shown.ok ? JSON.parse(shown.stdout) : null;
+        const terminal = observed?.ok === true ? observed.result?.terminal : null;
+        const incarnation = terminal?.handle === handle && typeof terminal.incarnationId === 'string'
+          ? terminal.incarnationId : undefined;
+        const sent = spawn(executable, promptSendArgv(handle, text));
+        const receipt = classifyPromptSendReceipt(sent.ok ? JSON.parse(sent.stdout) : null, handle, incarnation);
+        if (receipt.status === 'turn_started') return { ok: true, detail: 'sent' };
+      } catch { /* Malformed output cannot prove submission. */ }
+      return { ok: false, detail: 'delivery unverified; next: owner reads the exact orchestrator pane; do not resend' };
     },
   };
 }
