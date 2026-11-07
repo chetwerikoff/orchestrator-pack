@@ -3027,7 +3027,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(originalRun?.reviewRound?.sourceSlots).toHaveLength(3);
     expect(originalRun?.githubReviewId).toBe(f.transports.review.id);
     expect(f.transports.comment.body).toContain(
-      'Reviewed Issue digest: ' + computeBoundIssueSnapshotHash(f.frozenBody),
+      'Reviewed Issue digest: `' + computeBoundIssueSnapshotHash(f.frozenBody) + '`',
     );
     expect(f.transports.comment.body).toContain('source signature');
     const observedArgv: string[][] = [];
@@ -3078,7 +3078,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       }));
       expect(observedArgv.filter((args) =>
         args.join(' ') === 'api repos/' + targetRepository + '/issues/' + issueNumber,
-      )).toHaveLength(2);
+      )).toHaveLength(3);
       expect(observedArgv.some((args) =>
         args.includes('repos/' + targetRepository + '/issues/' + prNumber + '/comments'),
       )).toBe(true);
