@@ -2624,6 +2624,122 @@ describe('Issue #2484 visible OpenCode permission (genuine capture; synthetic ne
   });
 });
 
+describe('Issue #2821 exact review-run park wake', () => {
+  const repository = 'test/project';
+  const id = 'prr-fc9b0b60d0074575aaf8516355e247cd';
+  const wait = 'PARKED on review run ' + id;
+  const unit: FleetTerminal = { ...terminals[1]!, agentIdentity: 'opencode', title: 'OpenCode GPT-6.1 Sol' };
+  const screens = { one: wait };
+  const makeRun = (overrides: Partial<PackReviewRunRecord> = {}): PackReviewRunRecord => ({
+    id, runId: id, projectId: 'orchestrator-pack', canonicalRepository: repository,
+    sourceRepoRoot: primary, prNumber: 2812, targetSha: 'a'.repeat(40),
+    status: 'changes_requested', ...overrides,
+  } as PackReviewRunRecord);
+  const input = (records: readonly PackReviewRunRecord[]) => ({
+    screens, terminals: [unit], config: config({ selectedRepository: repository }),
+    resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack', repository, primaryRoot: primary }),
+    readPackReviewRuns: () => records, readCurrentAssignments: () => [], listOpenPulls: () => [], now: () => 0,
+    readNamedPull: vi.fn(() => undefined),
+    reconcilePackReview: vi.fn(async () => ({ ok: true as const, results: [] })),
+  });
+
+  it.each(['', ' (self-wake armed)'])('parses the captured exact full run ID with suffix %s', (suffix) => {
+    expect(parseNamedParkedProducer(wait + suffix)).toEqual({ kind: 'review-run', label: 'review-run-' + id, id });
+  });
+
+  it.each([
+    'prr-fc9b0b60', id.toUpperCase(), id.slice(0, -1), id + '0',
+    id + ' waiting', id + '.', id + ' (self-wake armed) extra',
+  ])('rejects incomplete or non-exact run identity %s', (token) => {
+    expect(parseNamedParkedProducer('PARKED on review run ' + token)).toBeUndefined();
+  });
+
+  it.each<PackReviewRunRecord['status']>([
+    'up_to_date', 'commented', 'changes_requested', 'failed', 'timed_out', 'cancelled',
+  ])('wakes the unassigned native pane once for an already terminal %s run', async (status) => {
+    const store = new MemoryWakeStore();
+    const options = { ...input([makeRun({ status })]), store };
+    const first = await tick(options);
+    const sent = sendsTo(first.calls, unit.handle);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toEqual(expect.arrayContaining(['--enter', '--wait-submit']));
+    const text = sent[0]![sent[0]!.indexOf('--text') + 1]!;
+    expect(text).toContain(id);
+    expect(text).toContain('ended state ' + status);
+    expect(text).toContain('PR-2812');
+    expect(text).toContain('a'.repeat(40));
+    expect(text).toContain('re-check the producer yourself');
+    expect(store.eventStatus.get('event:one:review-run:' + id + ':' + status)).toBe('sent');
+    expect(sendsTo((await tick(options)).calls, unit.handle)).toHaveLength(0);
+    expect(options.readNamedPull).not.toHaveBeenCalled();
+    expect(options.reconcilePackReview).not.toHaveBeenCalled();
+  });
+
+  it('wakes only when the same active run becomes terminal on a later tick', async () => {
+    const run = makeRun({ status: 'reviewing' });
+    const options = { ...input([run]), store: new MemoryWakeStore() };
+    expect(sendsTo((await tick(options)).calls, unit.handle)).toHaveLength(0);
+    run.status = 'changes_requested';
+    expect(sendsTo((await tick(options)).calls, unit.handle)).toHaveLength(1);
+    expect(sendsTo((await tick(options)).calls, unit.handle)).toHaveLength(0);
+    expect(options.reconcilePackReview).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'missing', 'queued', 'preparing', 'running', 'reviewing', 'duplicate',
+    'foreign-project', 'foreign-repository', 'foreign-root', 'different-id',
+  ])('leaves %s run evidence pending with the existing reminder', async (kind) => {
+    const run = makeRun();
+    let records = [run];
+    if (kind === 'missing') records = [];
+    else if (kind === 'duplicate') records = [run, { ...run }];
+    else if (kind === 'foreign-project') run.projectId = 'foreign';
+    else if (kind === 'foreign-repository') run.canonicalRepository = 'foreign/repo';
+    else if (kind === 'foreign-root') run.sourceRepoRoot = '/foreign/root';
+    else if (kind === 'different-id') run.id = 'prr-' + 'b'.repeat(32);
+    else run.status = kind as PackReviewRunRecord['status'];
+    const options = { ...input(records), store: new MemoryWakeStore() };
+    expect(sendsTo((await tick(options)).calls, unit.handle)).toHaveLength(0);
+    const reminder = sendsTo((await tick({ ...options, now: () => 30 * 60 * 1_000 })).calls, unit.handle);
+    expect(reminder).toHaveLength(1);
+    expect(reminder[0]![reminder[0]!.indexOf('--text') + 1]).toContain('Reminder:');
+    expect(options.reconcilePackReview).not.toHaveBeenCalled();
+  });
+
+  it('never replays an unverified receipt for the terminal run', async () => {
+    const store = new MemoryWakeStore();
+    const base = fakeOrca(screens, [], [unit]);
+    const executor: OrcaExecutor = (args) => args[0] === 'terminal' && args[1] === 'send'
+      ? commandResult(JSON.stringify({ ok: true, result: { send: { handle: unit.handle, accepted: true } } }))
+      : base(args);
+    const options = { ...input([makeRun()]), store, executor };
+    expect(sendsTo((await tick(options)).calls, unit.handle)).toHaveLength(1);
+    expect(store.eventStatus.get('event:one:review-run:' + id + ':changes_requested')).toBe('attempted_unverified');
+    expect(sendsTo((await tick(options)).calls, unit.handle)).toHaveLength(0);
+  });
+
+  it('isolates an unreadable run store while an unrelated time wake and the run reminder remain deliverable', async () => {
+    const other = { ...terminals[2]!, agentIdentity: 'opencode' };
+    const options = { ...input([]), store: new MemoryWakeStore(), terminals: [unit, other],
+      screens: { ...screens, two: 'PARKED on time 1970-01-01T00:00:00Z' },
+      readPackReviewRuns: () => { throw new Error('store_lock_timeout'); },
+    };
+    const first = await tick(options);
+    expect(sendsTo(first.calls, unit.handle)).toHaveLength(0);
+    expect(sendsTo(first.calls, other.handle)).toHaveLength(1);
+    expect(first.logs).toEqual(expect.arrayContaining([
+      expect.stringContaining('review-run Wake pending/unverified for ' + id),
+    ]));
+    const later = await tick({ ...options, now: () => 30 * 60 * 1_000 });
+    const reminder = sendsTo(later.calls, unit.handle);
+    expect(reminder).toHaveLength(1);
+    expect(reminder[0]![reminder[0]!.indexOf('--text') + 1]).toContain('Reminder:');
+    expect(sendsTo(later.calls, other.handle).some((call) =>
+      call[call.indexOf('--text') + 1]?.startsWith('Wake:'))).toBe(false);
+    expect(options.reconcilePackReview).not.toHaveBeenCalled();
+  });
+});
+
 describe('Issue #2556 stale-only selected-project pack-review fleet backstop', () => {
   const repository = 'chetwerikoff/orchestrator-pack';
   const selected = () => ({

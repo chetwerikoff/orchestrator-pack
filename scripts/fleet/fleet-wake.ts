@@ -8,6 +8,7 @@ import { basename, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTargetContext, type TargetContext } from '../lib/target-context.ts';
 import {
+  PACK_REVIEW_TERMINAL_STATUSES,
   isPackReviewRunStale,
   listPackReviewRunRecordsRaw,
   resolvePackReviewRunStoreRoot,
@@ -927,7 +928,7 @@ const REMINDER_INTERVAL_MS = 30 * 60 * 1_000;
 const SHA40 = /^[0-9a-f]{40}$/u;
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 
-type ProducerKind = 'gpt' | 'gpt-multi' | 'time' | 'process' | 'pack-review' | 'review' | 'ci' | 'merge' | 'terminal';
+type ProducerKind = 'gpt' | 'gpt-multi' | 'time' | 'process' | 'pack-review' | 'review-run' | 'review' | 'ci' | 'merge' | 'terminal';
 interface NamedProducer {
   readonly kind: ProducerKind;
   readonly label: string;
@@ -988,7 +989,9 @@ export function parseNamedParkedProducer(wait: string): NamedProducer | undefine
   }
   const source = wait.endsWith(' (self-wake armed)')
     ? wait.slice(0, -' (self-wake armed)'.length) : wait;
-  let match = /^PARKED on pack-review PR #([1-9]\d*) head ([0-9a-f]{40})$/u.exec(source);
+  let match = /^PARKED on review run (prr-[0-9a-f]{32})$/u.exec(source);
+  if (match) return { kind: 'review-run', label: 'review-run-' + match[1], id: match[1] };
+  match = /^PARKED on pack-review PR #([1-9]\d*) head ([0-9a-f]{40})$/u.exec(source);
   if (match) return { kind: 'pack-review', label: 'pack-review-PR-' + match[1], number: Number(match[1]), sha: match[2] };
   match = /^PARKED on PR #([1-9]\d*) review #([1-9]\d*) head ([0-9a-f]{40})$/u.exec(source);
   if (match) return { kind: 'review', label: 'review-' + match[2] + '-PR-' + match[1], number: Number(match[1]), reviewId: Number(match[2]), sha: match[3] };
@@ -1358,6 +1361,7 @@ function resolveParkEvent(
   wait: string,
   terminals: readonly FleetTerminal[],
   options: FleetAlarmTickOptions,
+  log: (line: string) => void,
 ): ProducerResolution | undefined {
   const producer = parseNamedParkedProducer(wait);
   if (!producer || producer.kind === 'gpt' || producer.kind === 'gpt-multi'
@@ -1373,6 +1377,20 @@ function resolveParkEvent(
       : undefined;
   }
   if (!repo) return undefined;
+  if (producer.kind === 'review-run') {
+    let matches: readonly PackReviewRunRecord[];
+    try {
+      matches = readSelectedProjectReviewRuns(options)?.records.filter((run) => run.id === producer.id) ?? [];
+    } catch {
+      log('review-run Wake pending/unverified for ' + producer.id
+        + ': selected-project run store unreadable - re-check the store before the next normal tick');
+      return undefined;
+    }
+    const run = matches.length === 1 ? matches[0] : undefined;
+    return run && PACK_REVIEW_TERMINAL_STATUSES.has(run.status)
+      ? resolved(run.status, 'PR-' + run.prNumber + '-head-' + run.targetSha,
+        'review-run:' + run.id + ':' + run.status) : undefined;
+  }
   if (producer.kind === 'merge' && producer.number) {
     const pull = (options.readNamedPull ?? readNativePull)(repo, producer.number);
     return pull?.merged === true ? resolved('merged', 'PR-' + producer.number, 'merge:' + producer.number) : undefined;
@@ -1866,7 +1884,7 @@ async function wakeNamedParkedProducers(
         uncertainty = 'process provenance unverified';
       }
     } else if (producer) {
-      match = resolveParkEvent(pane.wait, terminals, options);
+      match = resolveParkEvent(pane.wait, terminals, options, log);
       if (!match && (producer.kind === 'ci' || producer.kind === 'pack-review') && producer.number) {
         log('named PR Wake pending/unverified for ' + pane.handle
           + ': re-check exact PR #' + producer.number + ' open/current head and its current-head producer');
@@ -2283,9 +2301,11 @@ function observedPermissionWarnings(
   return warnings;
 }
 
-async function reconcileSelectedProjectStaleReviews(
-  options: FleetAlarmTickOptions, log: (line: string) => void,
-): Promise<void> {
+function readSelectedProjectReviewRuns(options: FleetAlarmTickOptions): {
+  readonly target: Pick<TargetContext, 'projectId' | 'repository' | 'primaryRoot'>;
+  readonly storeRoot: string;
+  readonly records: readonly PackReviewRunRecord[];
+} | undefined {
   const { config } = options;
   // Read-only banner fallback is never a repository mutation identity.
   if (!config.selectedRepository) return;
@@ -2294,7 +2314,7 @@ async function reconcileSelectedProjectStaleReviews(
     target = options.resolveSelectedReviewProject?.()
       ?? resolveTargetContext({ projectId: config.projectId });
   } catch {
-    return; // Missing, stale or contradictory project registration has no write authority.
+    return; // Missing, stale or contradictory project registration has no selected-run authority.
   }
   if (target.projectId !== config.projectId
     || target.repository.toLowerCase() !== config.selectedRepository.toLowerCase()
@@ -2302,11 +2322,19 @@ async function reconcileSelectedProjectStaleReviews(
   const storeRoot = resolvePackReviewRunStoreRoot({ projectId: target.projectId });
   const records = options.readPackReviewRuns?.()
     ?? listPackReviewRunRecordsRaw({ projectId: target.projectId, storeRoot });
-  const eligible = records.filter((record) =>
+  return { target, storeRoot, records: records.filter((record) =>
     record.projectId === target.projectId
     && record.canonicalRepository?.toLowerCase() === target.repository.toLowerCase()
-    && resolve(record.sourceRepoRoot) === resolve(target.primaryRoot)
-    && record.reviewRound?.reviewer === 'gpt'
+    && resolve(record.sourceRepoRoot) === resolve(target.primaryRoot)) };
+}
+
+async function reconcileSelectedProjectStaleReviews(
+  options: FleetAlarmTickOptions, log: (line: string) => void,
+): Promise<void> {
+  const selected = readSelectedProjectReviewRuns(options);
+  if (!selected) return;
+  const { target, storeRoot, records } = selected;
+  const eligible = records.filter((record) => record.reviewRound?.reviewer === 'gpt'
     && isPackReviewRunStale(record));
   for (const run of eligible) {
     // Reconcile will independently re-check stale PID + heartbeat grace,
