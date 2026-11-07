@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runProcessSync } from './kernel/subprocess.ts';
 import { resolveTargetContext, type TargetContext } from './lib/target-context.ts';
+import { parseRemoteSlug } from './lib/git-origin-slug.mjs';
 
 export interface FormatterFixResult {
   readonly outcome: 'published' | 'clean' | 'refused';
@@ -88,13 +89,28 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
         }
         const changed = requiredGit(checkout, ['status', '--porcelain', '--untracked-files=all']);
         changedFiles = changed || '(none)';
-        if (!changed) {
+        nextStep = 'repair the reported staging or commit hook failure and retry';
+        // Checkout hooks and tool commands may have staged or created local artifacts.
+        // Reset only this disposable index, then stage modifications to existing files.
+        requiredGit(checkout, ['reset', '--quiet', sha]);
+        const untracked = requiredGit(checkout, ['ls-files', '--others', '--exclude-standard']);
+        if (untracked) diagnostic(`Untracked tool outputs excluded from publication and removed during cleanup:\n${untracked}`);
+        requiredGit(checkout, ['add', '--update']);
+        const staged = requiredGit(checkout, ['diff', '--cached', '--name-only']);
+        if (!staged) {
           result = { outcome: 'clean', message: `formatter clean on ${sha}; next step: route the CI failure to GPT with its error lines` };
         } else {
-          nextStep = 'repair the reported staging or commit hook failure and retry';
-          requiredGit(checkout, ['add', '--all']);
           requiredGit(checkout, ['commit', '-m', 'Apply formatter']);
           const published = requiredGit(checkout, ['rev-parse', 'HEAD']);
+          nextStep = `configure exactly one origin push URL for ${context.repository} and run the command again`;
+          const destinations = requiredGit(checkout, ['remote', 'get-url', '--push', '--all', 'origin'])
+            .split(/\r?\n/u).filter(Boolean);
+          if (destinations.length !== 1
+            || parseRemoteSlug(destinations[0]!)?.toLowerCase() !== context.repository.toLowerCase()) {
+            // Remotes can contain credentials; never print their values in diagnostics.
+            failingOutput = 'Origin push destination is ambiguous or does not match the project repository (URLs omitted).';
+            throw new Error('formatter commit was not published: origin push destination does not uniquely match the project repository');
+          }
           nextStep = 'repair the reported push failure and retry';
           const pushed = git(checkout, ['push', 'origin', `HEAD:refs/heads/${branch}`]);
           if (!pushed.ok) {

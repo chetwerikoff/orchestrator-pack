@@ -55,12 +55,19 @@ function fixture() {
     run: (options: RunProcessSyncOptions) => {
       calls.push(options);
       beforeRun?.(options);
-      // Fake gh only at the pack's REST transport boundary; Git and shell commands are real.
+      // Fake gh at the REST boundary; Git and shell commands use a real local bare remote.
       if (options.command === join(context.packRoot, 'scripts', 'gh')) {
         expect(options.args).toEqual(['api', 'repos/example/formatter/pulls/42']);
         return { ...run({ command: process.execPath, args: ['-e', ''], inheritParentEnv: true }), stdout: JSON.stringify(pull) };
       }
-      return run(options);
+      const result = run(options);
+      if (options.command === 'git' && options.args?.join(' ') === 'remote get-url --push --all origin') {
+        // Give only our local fixture remote the selected GitHub identity. Other
+        // push URLs and multi-destination results remain visible to validation.
+        return { ...result, stdout: result.stdout.split(/\r?\n/u)
+          .map((url) => url === remote ? 'https://github.com/example/formatter.git' : url).join('\n') };
+      }
+      return result;
     },
   };
   const snapshot = () => ({
@@ -127,6 +134,64 @@ describe('manager formatter fix', () => {
     expect(runManagerFormatterFix(context, 42, world.deps)).toEqual({ outcome: 'clean',
       message: `formatter clean on ${world.head}; next step: route the CI failure to GPT with its error lines` });
     expect(world.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+    world.expectRemoved();
+  });
+
+  it.each(['fix', 'check', 'checkout hook'] as const)('excludes untracked output from a %s while publishing only tracked formatting', (producer) => {
+    const world = fixture();
+    const artifact = node('require("node:fs").mkdirSync(".venv"); require("node:fs").writeFileSync(".venv/local-report", "fixture artifact")');
+    if (producer === 'checkout hook') {
+      const hook = join(world.primary, '.git', 'hooks', 'post-checkout');
+      // Also cover an artifact staged by a checkout hook before the formatter runs.
+      writeFileSync(hook, `#!/bin/sh\n${artifact}\ngit add .venv\n`);
+      chmodSync(hook, 0o755);
+    }
+    const context = { ...world.context, verification: { formatter: {
+      fix: producer === 'fix' ? [fix, artifact] : [fix],
+      check: producer === 'check' ? `${check} && ${artifact}` : check,
+    } } };
+    expect(runManagerFormatterFix(context, 42, world.deps).outcome).toBe('published');
+    const published = world.git(world.remote, 'rev-parse', 'refs/heads/fix/format');
+    expect(world.git(world.remote, 'diff', '--name-only', world.head, published)).toBe('source.ts');
+    expect(world.git(world.remote, 'ls-tree', '-r', '--name-only', published)).toBe('source.ts');
+    expect(world.diagnostics.join('\n')).toContain('.venv/local-report');
+    world.expectRemoved();
+  });
+
+  it('does not create a formatter commit when the only output is an untracked artifact', () => {
+    const world = fixture();
+    const context = { ...world.context, verification: { formatter: {
+      fix: [node('require("node:fs").writeFileSync("local-report", "fixture artifact")')], check: 'true',
+    } } };
+    expect(runManagerFormatterFix(context, 42, world.deps).outcome).toBe('clean');
+    expect(world.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+    expect(world.git(world.remote, 'rev-parse', 'refs/heads/fix/format')).toBe(world.head);
+    expect(world.diagnostics.join('\n')).toContain('local-report');
+    world.expectRemoved();
+  });
+
+  it.each(['divergent', 'multiple'] as const)('refuses %s effective push destinations without touching either remote', (scenario) => {
+    const world = fixture();
+    const alternate = join(world.root, 'alternate.git');
+    world.git(world.root, 'init', '--bare', '--initial-branch=main', alternate);
+    if (scenario === 'multiple') world.git(world.primary, 'remote', 'set-url', '--add', '--push', 'origin', world.remote);
+    world.git(world.primary, 'remote', 'set-url', '--add', '--push', 'origin', alternate);
+    const result = runManagerFormatterFix(world.context, 42, world.deps);
+    expect(result.outcome).toBe('refused');
+    expect(result.message).toContain('configure exactly one origin push URL for example/formatter');
+    expect(world.calls.some((call) => call.args?.[0] === 'push')).toBe(false);
+    expect(world.git(world.remote, 'rev-parse', 'refs/heads/fix/format')).toBe(world.head);
+    expect(world.git(alternate, 'for-each-ref', '--format=%(refname)')).toBe('');
+    expect(world.diagnostics.join('\n')).not.toContain(alternate);
+    world.expectRemoved();
+  });
+
+  it('refuses a foreign GitHub push URL even with the correct fetch remote', () => {
+    const world = fixture();
+    world.git(world.primary, 'remote', 'set-url', '--push', 'origin', 'https://github.com/other/formatter.git');
+    expect(runManagerFormatterFix(world.context, 42, world.deps).outcome).toBe('refused');
+    expect(world.calls.some((call) => call.args?.[0] === 'push')).toBe(false);
+    expect(world.git(world.remote, 'rev-parse', 'refs/heads/fix/format')).toBe(world.head);
     world.expectRemoved();
   });
 
