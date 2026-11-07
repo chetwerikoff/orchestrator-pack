@@ -8169,8 +8169,13 @@ describe('manager push guard proof classes', () => {
         const unproved = commit(world.manager, 'no independent proof');
 
         const pinned = fakeUv(world.base, 'independent-uv', { lock: '0.5.0', ruff: '0.5.0' });
-        const oldPath = process.env.PATH;
-        process.env.PATH = pinned + ':' + oldPath;
+        const savedEnv = { ...process.env };
+        process.env.PATH = pinned + ':' + (savedEnv.PATH ?? '');
+        // Direct runPrePush calls inherit this process, unlike gitTry/runHook
+        // which already use GIT_ENV. Keep the same disposable-Git isolation:
+        // CI's global Git LFS filters are not part of this clean-merge fixture.
+        process.env.GIT_CONFIG_GLOBAL = GIT_ENV.GIT_CONFIG_GLOBAL;
+        process.env.GIT_CONFIG_NOSYSTEM = GIT_ENV.GIT_CONFIG_NOSYSTEM;
         const realSync = subprocess.runProcessSync;
         let timeouts = 0;
         const childSpy = vi.spyOn(subprocess, 'runProcessSync').mockImplementation((options) => {
@@ -8209,7 +8214,7 @@ describe('manager push guard proof classes', () => {
         } finally {
           stderrSpy.mockRestore();
           childSpy.mockRestore();
-          if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath;
+          process.env = savedEnv;
         }
         expect(remoteRef(world, 'refs/heads/unproved')).toBe('');
       })(), 60_000);
