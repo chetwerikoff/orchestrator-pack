@@ -21,6 +21,8 @@ import {
 import {
   createManagerTaskWithOrca,
   createProductionLaunchDependencies,
+  cleanupLaunchShells,
+  launchShellIsIdle,
   claudePaneProfileObserved,
   readManagerBriefTemplateFromDisk,
   parseLaunchAssistantCli,
@@ -622,6 +624,99 @@ function launchInput(workClass: LaunchInput['workClass'] = 't2'): LaunchInput {
     ...(workClass === 'manager' ? { runId: 'run-1', defaultBranch: 'main', worktreeSelector: 'id:manager-worktree' } : { worktreeName: 'issue-1479' }),
   };
 }
+
+describe('Issue #2802 creation-owned idle shells', () => {
+  it.each([['absent', false], ['running', false], ['absent', true]] as const)(
+    'logs tails and closes only the pre-unit idle snapshot (%s setup receipt, close failure %s)', async (setupState, closeFailure) => {
+    const fixture = freshRepoFixture({ setupState });
+    const events: string[] = [];
+    const shells = ['initial-shell', 'setup-shell'].map((handle) => ({ handle,
+      incarnationId: `generation-${handle}`, worktreeId: 'repo::wt', worktreePath: '/tmp/wt', orphaned: false }));
+    let lists = 0;
+    const log = vi.spyOn(console, 'warn').mockImplementation((message) => { events.push(String(message)); });
+    const execute: Parameters<typeof prepareWorktreeWithOrca>[1] = async (args, ...rest) => {
+      const op = args.slice(0, 3).join(' ');
+      if (op === 'orca terminal list') {
+        lists += 1;
+        return { ok: true, stdout: okEnvelope({ terminals: shells, truncated: false }) };
+      }
+      const handle = args[args.indexOf('--terminal') + 1]!;
+      if (op === 'orca terminal show') return { ok: true,
+        stdout: okEnvelope({ terminal: shells.find((shell) => shell.handle === handle) }) };
+      if (op === 'orca terminal read') return { ok: true,
+        stdout: okEnvelope({ terminal: { handle, tail: ['setup output, including failures'] } }) };
+      if (op === 'orca terminal close') {
+        events.push(`close:${handle}`);
+        return { ok: !closeFailure, stdout: closeFailure ? '' : okEnvelope({}) };
+      }
+      return fixture.execute(args, ...rest);
+    };
+    try {
+      const result = await runSupervisedTaskLaunchAssistant(launchInput(), {
+        ...deps({ adapter: runtimeAdapter({ worker: { ...worker, workspacePath: '/tmp/wt' },
+          onSpawn: () => { events.push('unit-start'); shells.push({ ...shells[0]!, handle: 'later-user-shell' }); } }),
+        onSupervised: () => { events.push('assignment-bound'); } }),
+        prepareWorktree: (request) => prepareWorktreeWithOrca(request, execute),
+        cleanupLaunchShells: (worktree, unit) => cleanupLaunchShells(worktree, unit, execute, () => true),
+      });
+      expect(result).toMatchObject({ outcome: 'ready' });
+      expect(lists).toBe(1);
+      if (closeFailure) expect(events.filter((event) => event.includes('close failed:'))).toHaveLength(2);
+      expect(events.filter((event) => event.startsWith('close:'))).toEqual(['close:initial-shell', 'close:setup-shell']);
+      for (const handle of ['initial-shell', 'setup-shell']) {
+        expect(events.indexOf('assignment-bound')).toBeLessThan(events.indexOf(`close:${handle}`));
+        expect(events.findIndex((event) => event.includes(`${handle} tail:`))).toBeLessThan(events.indexOf(`close:${handle}`));
+      }
+    } finally { log.mockRestore(); }
+  });
+
+  it('closes nothing when setup explicitly fails', async () => {
+    const fixture = freshRepoFixture({ setupState: 'running', waitExitCode: 1 });
+    const cleanup = vi.fn();
+    const result = await runSupervisedTaskLaunchAssistant(launchInput(), {
+      ...deps(), prepareWorktree: (request) => prepareWorktreeWithOrca(request, fixture.execute),
+      cleanupLaunchShells: cleanup,
+    });
+    expect(result).toMatchObject({ outcome: 'continue', observedCause: 'worktree_setup_wait_not_successful' });
+    expect(cleanup).not.toHaveBeenCalled();
+    expect(fixture.calls.some((call) => call.argv.slice(0, 3).join(' ') === 'orca terminal list')).toBe(false);
+  });
+
+  it.each(['proven_reuse', 'same_invocation_complete'] as const)('preserves reused, busy, replaced and unreadable terminals (%s)', async (setupWitness) => {
+    const close = vi.fn();
+    const log = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const prepared = { id: 'repo::wt', path: '/tmp/wt', selector: 'id:repo::wt', setupWitness,
+      creationTerminals: ['busy', 'replaced', 'unreadable', 'unit'].map((handle) => ({ handle, incarnationId: 'original' })) };
+    try {
+      await cleanupLaunchShells(prepared, 'unit', async (args) => {
+        const handle = args[args.indexOf('--terminal') + 1]!;
+        if (args[2] === 'close') { close(handle); return { ok: true, stdout: okEnvelope({}) }; }
+        return { ok: true, stdout: okEnvelope({ terminal: { handle, incarnationId: handle === 'replaced' ? 'new' : 'original',
+          worktreeId: prepared.id, worktreePath: prepared.path, orphaned: false } }) };
+      }, (handle) => handle !== 'busy');
+      expect(close).not.toHaveBeenCalled();
+    } finally { log.mockRestore(); }
+  });
+
+  it('requires one identified shell with readable empty children, preserving live children and unknown processes', () => {
+    const proc = mkdtempSync(join(tmpdir(), 'issue-2802-proc-'));
+    const root = join(proc, '123');
+    mkdirSync(join(root, 'task', '123'), { recursive: true });
+    writeFileSync(join(root, 'comm'), 'bash\n');
+    writeFileSync(join(root, 'environ'), 'OTHER=ignored\0ORCA_TERMINAL_HANDLE=owned\0');
+    writeFileSync(join(root, 'task', '123', 'children'), '');
+    try {
+      expect(launchShellIsIdle('owned', proc)).toBe(true);
+      expect(launchShellIsIdle('foreign', proc)).toBe(false);
+      writeFileSync(join(root, 'task', '123', 'children'), '456 ');
+      expect(launchShellIsIdle('owned', proc)).toBe(false);
+      rmSync(join(root, 'task', '123', 'children'));
+      expect(launchShellIsIdle('owned', proc)).toBe(false);
+      writeFileSync(join(root, 'comm'), 'opencode\n');
+      expect(launchShellIsIdle('owned', proc)).toBe(false);
+    } finally { rmSync(proc, { recursive: true, force: true }); }
+  });
+});
 
 describe('Issue #2788 explicit selected-project native command', () => {
   it.each(['orchestrator-pack', 'target-project'] as const)('delivers %s to the executable process for manager and worker commands', async (projectId) => {
@@ -4210,7 +4305,7 @@ The words Firefighter universal appear here only as prose.`;
       repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', worktreeName: 'wt', issueNumber: 1479,
     }, fixture.execute);
     expect(result).toMatchObject({ status: 'ok', value: { id: 'repo::wt', setupWitness: 'same_invocation_complete' } });
-    expect(fixture.calls.map((call) => call.argv[0])).toEqual(['orca', 'git', 'git', 'git', 'orca', 'git']);
+    expect(fixture.calls.map((call) => call.argv[0])).toEqual(['orca', 'git', 'git', 'git', 'orca', 'orca', 'git']);
   });
 
   it('skips native repository-wide prune on an ordinary fresh worktree launch', async () => {
