@@ -1,0 +1,31 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2814,
+  "declared_paths": [
+    "scripts/orca-runtime/task-adapter-assignment-lifecycle.test.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/orca-runtime/task-adapter.ts",
+    "scripts/pr2-foundation/fleet-reconciliation-handoff.test.ts",
+    "scripts/pr2-foundation/fleet-reconciliation-handoff.ts",
+    "scripts/pr2-foundation/scheduler-assignment-lifecycle.test.ts",
+    "scripts/pr2-foundation/scheduler.ts"
+  ],
+  "denylist": [
+    ".github/workflows/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "tests/external-output-references/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/orca-runtime/task-adapter-assignment-lifecycle.test.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/orca-runtime/task-adapter.ts",
+    "scripts/pr2-foundation/fleet-reconciliation-handoff.test.ts",
+    "scripts/pr2-foundation/fleet-reconciliation-handoff.ts",
+    "scripts/pr2-foundation/scheduler-assignment-lifecycle.test.ts",
+    "scripts/pr2-foundation/scheduler.ts"
+  ],
+  "source_revision": "dc7ce15ddf7363ea6bc43b37b0b8799162c9a6cf"
+}

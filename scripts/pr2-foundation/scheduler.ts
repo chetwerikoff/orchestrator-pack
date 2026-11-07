@@ -752,6 +752,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   let fleetObserver: FleetObserver; let fleetNudgeActuator: SchedulerFleetNudgeActuator = createTargetUnresolvedFleetNudgeActuator();
   let unresolvedReason: FleetReconciliationReason = storedAssignments === null ? 'assignment_untrusted' : 'target_unresolved';
   let assignmentReconciliation: SchedulerAssignmentReconciliation | undefined;
+  let assignmentReconciliations: WorkerAssignmentLifecycleSweepResult['reconciliations'] = [];
   let assignmentLifecycleSweep: WorkerAssignmentLifecycleSweepResult | undefined;
   let fleetBindings: readonly FleetAssignmentBinding[] = [];
   let mailReconcileLoop: { stop: () => Promise<void> } | undefined;
@@ -776,7 +777,7 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
     if (assignmentLifecycleSweep.status === 'ok' && built) {
       mailWorkers = assignmentLifecycleSweep.bindings.map(({ worker }) => worker);
       fleetBindings = built;
-      assignmentReconciliation = assignmentLifecycleSweep.reconciliations[0];
+      assignmentReconciliations = assignmentLifecycleSweep.reconciliations;
       fleetObserver = new FleetObserver({
         source: productionFleetObserverSource(runtime, fleetBindings),
         activationLineage,
@@ -822,6 +823,9 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
     await mailReconcileLoop?.stop();
   }
   const handoffPath = resolveFleetReconciliationHandoffPath(projectId, env);
+  // Keep the primary binding for existing escalation consumers; the durable
+  // handoff also carries every reconciliation, rather than hiding later rows.
+  assignmentReconciliation ??= assignmentReconciliations.at(0);
   const publishHandoff: NonNullable<SchedulerBoundary['publishHandoff']> = ({ reason, schedulerGeneration, tickSequence, unitRef }) => {
     if (!repository) return { ok: false, reason: 'repository_identity_unresolved' };
     const binding = unitRef ? fleetBindings.find((candidate) => candidate.unitRef === unitRef) : undefined;
@@ -854,6 +858,13 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
       tickSequence,
       reason,
       ...assignmentMetadata,
+      reconciliations: assignmentReconciliations.map(({ assignment, reason: reconciliationReason }) => ({
+        assignmentId: assignment.assignmentId,
+        assignmentGeneration: assignment.generation,
+        issueNumber: assignment.issueNumber,
+        taskId: assignment.taskId,
+        reason: reconciliationReason,
+      })),
     });
     return result.ok ? { ok: true, record: result.record } : { ok: false, reason: result.reason };
   };
