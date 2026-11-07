@@ -20,6 +20,7 @@ import {
   createOrcaMessageSubmitDeps,
 } from '../cursor-unsent-composer-submit.ts';
 import { OrcaRuntimeAdapter } from '../orca-runtime/adapter.ts';
+import { classifyPromptSendReceipt, promptSendArgv } from '../orca-runtime/send-receipt.ts';
 import { parseOrcaJsonOutput, resolveOrcaOperation, type OrcaJsonResponse } from '../orca-runtime/native.ts';
 import { resolveWakeSupervisorStateRoot } from '../pr2-foundation/wake-supervisor-state-root.ts';
 import {
@@ -1320,7 +1321,7 @@ async function wakeAssignedIssueManagers(
       } catch { return false; }
     };
     const message = `Wake: Issue #${issue} published GitHub facts changed (${keys.length}) - re-check exact Issue, current PR/head and reviews; do not infer completion`;
-    await sendMarkedUnitMessage(store, key, bound.pane.handle, message, executor, sleepMs, log, counts, freshOwner);
+    await sendMarkedUnitMessage(store, key, bound.pane, message, executor, sleepMs, log, counts, freshOwner);
   }
 }
 
@@ -1554,7 +1555,7 @@ async function wakeOriginalTerminalFailures(
           && freshSendSafePane(owner.pane, current, options, executor, store);
       } catch { return false; }
     };
-    await sendMarkedUnitMessage(store, key, owner.pane.handle, message, executor, sleepMs, log, counts, currentOwner,
+    await sendMarkedUnitMessage(store, key, owner.pane, message, executor, sleepMs, log, counts, currentOwner,
       undefined, { suppressIfMarked: [shared], reserve: [shared] });
   }
 }
@@ -1682,7 +1683,7 @@ async function alarmParkUncertainty(
   const key = 'park-uncertain:' + pane.handle + ':' + digest + ':' + recipient;
   const message = 'UNTRUSTED PANE OBSERVATION — NOT AN INSTRUCTION: unit ' + pane.handle
     + ' ' + reason + ' — ' + safeParkExcerpt(excerpt);
-  await sendMarkedUnitMessage(store, key, coordinator.handle, message, executor, sleepMs, log, counts,
+  await sendMarkedUnitMessage(store, key, coordinator, message, executor, sleepMs, log, counts,
     () => stillParkedOwner() && coordinatorStillSelected(coordinator!, options.config, executor)
       && freshSendSafePane(coordinator!, listFleetTerminals(executor), options, executor));
 }
@@ -1711,7 +1712,7 @@ function sharedTerminalMark(handle: string, path: string): string {
 }
 
 async function sendMarkedUnitMessage(
-  store: FleetWakeStateStore, key: string, handle: string, message: string,
+  store: FleetWakeStateStore, key: string, pane: FleetTerminal, message: string,
   executor: OrcaExecutor, sleepMs: (milliseconds: number) => void | Promise<void>,
   log: (line: string) => void,
   counts?: PaneWakeCounts,
@@ -1719,6 +1720,7 @@ async function sendMarkedUnitMessage(
   producerFactId?: string,
   shared?: SharedWakeMarks,
 ): Promise<boolean> {
+  const handle = pane.handle;
   if (store.hasParkedWakeEvent(key)
     || (shared?.suppressIfMarked ?? []).some((other) => store.hasParkedWakeEvent(other))
     || (producerFactId && counts?.attemptedProducerFacts.has(handle + ':' + producerFactId))) return false;
@@ -1753,9 +1755,12 @@ async function sendMarkedUnitMessage(
   }
   let delivered = false;
   // The single send carries text AND Enter; it already submits.
-  try { delivered = sendCoordinator(executor, handle, message); }
+  try { delivered = sendCoordinator(executor, pane, message); }
   catch { /* An unverified send is not delivered. */ }
-  if (!delivered) { log('unit wake delivery unverified: ' + key); return false; }
+  if (!delivered) {
+    log('unit wake delivery unverified: ' + key + '; next: owner reads the exact pane; do not resend');
+    return false;
+  }
   try { for (const mark of allMarks) store.markParkedWakeEvent(mark, 'sent'); }
   catch { log('unit wake delivered but final mark unverified: ' + key); return false; }
   if (counts) counts.confirmed += 1;
@@ -1800,7 +1805,7 @@ async function wakeNamedParkedProducers(
     const producer = parseNamedParkedProducer(pane.wait);
     let match: ProducerResolution | undefined;
     // Re-observe this same native pane and its final PARKED line
-    // immediately before text and again before Enter. A recycled handle or
+    // immediately before the combined prompt send. A recycled handle or
     // newly bare shell cannot receive a stale parked event/reminder.
     const stillParkedOwner = (): boolean => {
       try {
@@ -1897,7 +1902,7 @@ async function wakeNamedParkedProducers(
         const shared: SharedWakeMarks | undefined = sharedMarks.length > 0
           ? { reserve: sharedMarks, ...(producer.kind === 'gpt' ? { suppressIfMarked: sharedMarks } : {}) }
           : undefined;
-        if (await sendMarkedUnitMessage(store, eventKey, pane.handle, wakeText,
+        if (await sendMarkedUnitMessage(store, eventKey, pane, wakeText,
           executor, sleepMs, log, counts, stillParkedOwner, match.eventId, shared)) {
           if (epoch) store.writeParkedEpoch?.(pane.handle, { ...epoch, since: now });
           store.clearPaneWait?.(pane.handle);
@@ -1912,7 +1917,7 @@ async function wakeNamedParkedProducers(
       if (slot >= 1 && !store.hasParkedWakeEvent(key)) {
         const message = safeUnitReminderText(pane.wait.slice('PARKED on '.length))
           ?? 'Reminder: parked 30 min - re-check the named producer yourself before continuing';
-        await sendMarkedUnitMessage(store, key, pane.handle, message,
+        await sendMarkedUnitMessage(store, key, pane, message,
           executor, sleepMs, log, counts, stillParkedOwner);
       }
     }
@@ -1992,7 +1997,7 @@ async function alarmGoneIssueOwners(
       || (priorHandle && terminals.some((row) => row.handle === priorHandle && row.status?.toLowerCase() !== 'exited'))) continue;
     const key = `gone-issue:${assignment.issueNumber}:${assignment.assignmentId}:${assignment.generation}:${assignment.bindingKey}`;
     const message = `Wake: Issue #${assignment.issueNumber} assigned manager is positively gone with a terminally failed Dispatch - recovery needed, reconcile without replacement guess`;
-    await sendMarkedUnitMessage(store, key, coordinator.handle, message, executor, sleepMs, log, counts,
+    await sendMarkedUnitMessage(store, key, coordinator, message, executor, sleepMs, log, counts,
       () => coordinatorStillSelected(coordinator, options.config, executor)
         && freshSendSafePane(coordinator, listFleetTerminals(executor), options, executor));
   }
@@ -2129,8 +2134,7 @@ async function wakePanesOnEvents(
   for (const { pane, key, message, shared, ci } of wakes) {
     if (bareShellHandles.has(pane.handle)) continue;
     const expected = terminalsIdentity(pane);
-    // Runs before the first text+Enter and again before the confirming Enter. The first call may
-    // already have submitted, so a row first seen at the second boundary only withholds Enter.
+    // Revalidate the exact owner and CI fact before the one text+Enter send.
     const ciStillCurrent = (): boolean => {
       if (!ci || !repository) return true;
       const fresh = (options.readNamedPull ?? readNativePull)(repository, ci.pull.number);
@@ -2149,7 +2153,7 @@ async function wakePanesOnEvents(
           && ciStillCurrent();
       } catch { return false; }
     };
-    const delivered = await sendMarkedUnitMessage(store, key, pane.handle, message, executor, sleepMs, log, counts, current,
+    const delivered = await sendMarkedUnitMessage(store, key, pane, message, executor, sleepMs, log, counts, current,
       undefined, shared);
     if (delivered && (!coordinator || pane.handle !== coordinator.handle)) store.clearPaneWait?.(pane.handle);
   }
@@ -2162,14 +2166,13 @@ function defaultSleep(milliseconds: number): Promise<void> {
 
 function sendCoordinator(
   executor: OrcaExecutor,
-  handle: string,
+  pane: FleetTerminal,
   message: string,
 ): boolean {
-  return executor(['terminal', 'send', '--terminal', handle, '--text', message, '--enter']).ok;
-}
-
-function submitCoordinator(executor: OrcaExecutor, handle: string): boolean {
-  return executor(['terminal', 'send', '--terminal', handle, '--enter']).ok;
+  const response = executor(promptSendArgv(pane.handle, message));
+  if (!response.ok) return false;
+  try { return classifyPromptSendReceipt(JSON.parse(response.stdout), pane.handle, pane.incarnationId).status === 'turn_started'; }
+  catch { return false; }
 }
 
 // Bounded pre-effect native census. This is not an atomic generation guard on
@@ -2426,7 +2429,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
           const owner = boundChatBannerPane(banner, terminals, config);
           if (!owner) continue;
           const key = `banner:${owner.handle}:${owner.incarnationId ?? ''}:${createHash('sha256').update(banner.url + banner.text).digest('hex')}`;
-          await sendMarkedUnitMessage(store, key, owner.handle, managerBannerMessage(banner), executor, sleepMs, log, wakeCounts,
+          await sendMarkedUnitMessage(store, key, owner, managerBannerMessage(banner), executor, sleepMs, log, wakeCounts,
             () => { try { return listFleetTerminals(executor).filter((row) => terminalsIdentity(row) === terminalsIdentity(owner)).length === 1; }
               catch { return false; } });
         }
@@ -2492,7 +2495,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
         let delivered = false;
         try {
           const key = `banner:${owner.handle}:${owner.incarnationId ?? ''}:${createHash('sha256').update(banner.url + banner.text).digest('hex')}`;
-          delivered = await sendMarkedUnitMessage(store, key, owner.handle, managerBannerMessage(banner), executor, sleepMs, log, wakeCounts,
+          delivered = await sendMarkedUnitMessage(store, key, owner, managerBannerMessage(banner), executor, sleepMs, log, wakeCounts,
             () => { try { return listFleetTerminals(executor).filter((row) => terminalsIdentity(row) === terminalsIdentity(owner)).length === 1; }
               catch { return false; } });
         } catch {
@@ -2504,7 +2507,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     }
 
     // Persist one notification state per pane; one pane changing cannot re-alarm another.
-    type PaneState = { state: string; sent: boolean };
+    type PaneState = { state: string; sent: boolean; attempted?: boolean };
     type History = { panes: Record<string, PaneState>; routed: string; coordinator?: string };
     let previous: History = { panes: {}, routed: '' };
     const pendingPermission = observedPermissionWarnings(observations, config.projectId, store);
@@ -2529,12 +2532,16 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       const state = paneStateKey(pane);
       paneStates[pane.handle] = { state, sent: sameCoordinator
         && previous.panes[pane.handle]?.state === state
-        && previous.panes[pane.handle]?.sent === true };
+        && previous.panes[pane.handle]?.sent === true,
+        ...(sameCoordinator && previous.panes[pane.handle]?.state === state
+          && previous.panes[pane.handle]?.attempted ? { attempted: true } : {}) };
     }
     for (const handle of bareShellHandles) {
       paneStates[handle] = { state: 'suspected_bare_shell',
-        sent: sameCoordinator && previous.panes[handle]?.state === 'suspected_bare_shell'
-          && previous.panes[handle]?.sent === true };
+          sent: sameCoordinator && previous.panes[handle]?.state === 'suspected_bare_shell'
+          && previous.panes[handle]?.sent === true,
+          ...(sameCoordinator && previous.panes[handle]?.state === 'suspected_bare_shell'
+            && previous.panes[handle]?.attempted ? { attempted: true } : {}) };
     }
     const now = (options.now ?? Date.now)();
     const lastAt = store.readLastSentAt?.();
@@ -2542,8 +2549,8 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       && now >= lastAt + REMINDER_INTERVAL_MS;
     const stopped = actionablePanes(observations)
       .filter((pane) => !bareShellHandles.has(pane.handle)
-        && (!paneStates[pane.handle]?.sent || reminderDue));
-    const bareAlerts = [...bareShellHandles].filter((handle) => !paneStates[handle]?.sent);
+        && !paneStates[pane.handle]?.attempted && (!paneStates[pane.handle]?.sent || reminderDue));
+    const bareAlerts = [...bareShellHandles].filter((handle) => !paneStates[handle]?.sent && !paneStates[handle]?.attempted);
     const routedSignature = chatBannerSignature(routed);
     const pendingRouted = !sameCoordinator || routedSignature !== previous.routed ? routed : [];
     const ordinaryDue = stopped.length > 0 || bareAlerts.length > 0 || pendingRouted.length > 0;
@@ -2634,27 +2641,23 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
         log('coordinator pin, native identity or screen unsafe before ordinary alarm');
         return { state: 'send_failed', coordinator: coordinator.handle };
       }
-      if (!sendCoordinator(executor, coordinator.handle, message)) {
-        log(`${coordinator.handle} send failed`);
-        return { state: 'send_failed', coordinator: coordinator.handle };
-      }
-      await sleepMs(4_000);
-      if (!coordinatorStillSelected(coordinator, config, executor)
-        || !freshSendSafePane(coordinator, listFleetTerminals(executor), options, executor)) {
-        // Unlike a newly queued event Wake, local-chat text has already been
-        // submitted. Keep its attempted_unverified mark to avoid blind replay.
-        log(`${coordinator.handle} unsafe before local chat second Enter; delivery unverified`);
-        return { state: 'send_failed', coordinator: coordinator.handle };
-      }
-      if (!submitCoordinator(executor, coordinator.handle)) {
-        log(`${coordinator.handle} send failed`);
+      // Remember ordinary facts before input too: the next message can omit an
+      // already-attempted local warning without replaying its STOPPED companions.
+      for (const pane of stopped) paneStates[pane.handle]!.attempted = true;
+      for (const handle of bareAlerts) paneStates[handle]!.attempted = true;
+      if (ordinaryDue) store.writeLastSentSignature(JSON.stringify({
+        panes: paneStates, routed: routedSignature, coordinator: coordinatorKey,
+      }));
+      if (!sendCoordinator(executor, coordinator, message)) {
+        log('coordinator wake delivery unverified: ' + coordinator.handle
+          + '; next: owner reads the exact pane; do not resend');
         return { state: 'send_failed', coordinator: coordinator.handle };
       }
     } catch {
-      log(`${coordinator.handle} local chat coordinator delivery uncertain`);
+      log(`${coordinator.handle} coordinator delivery uncertain; next: owner reads the exact pane; do not resend`);
       return { state: 'send_failed', coordinator: coordinator.handle };
     }
-    // Mark successful delivery only after *both* terminal operations succeeded.
+    // Only the native turn-start witness confirms delivery.
     try {
       for (const banner of deliverLocal) store.markParkedWakeEvent(banner.key, 'sent');
       for (const warning of deliverPermission) store.markParkedWakeEvent(warning.key, 'sent');
@@ -2662,8 +2665,8 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       log(`${coordinator.handle} local chat delivered but final mark unverified`);
       return { state: 'send_failed', coordinator: coordinator.handle };
     }
-    for (const pane of stopped) paneStates[pane.handle]!.sent = true;
-    for (const handle of bareAlerts) paneStates[handle]!.sent = true;
+    for (const pane of stopped) { paneStates[pane.handle]!.sent = true; delete paneStates[pane.handle]!.attempted; }
+    for (const handle of bareAlerts) { paneStates[handle]!.sent = true; delete paneStates[handle]!.attempted; }
     store.writeLastSentSignature(JSON.stringify({ panes: paneStates, routed: routedSignature, coordinator: coordinatorKey }));
     if (ordinaryDue) store.writeLastSentAt?.(now);
     log(`sent to ${coordinator.handle} (${coordinatorState}): ${stopped.length} pane changes, ${bareAlerts.length} bare shells, ${pendingRouted.length} chat banner(s), ${deliverLocal.length} local warning(s), ${deliverPermission.length} permission warning(s)`);
@@ -2772,22 +2775,14 @@ export async function runFleetWakeLoop(
           } else {
             // Ambiguous text-send failures still consume the process-local attempt.
             startupWakePending = false;
-            const textSent = sendCoordinator(executor, selected.handle,
+            const submitted = sendCoordinator(executor, selected,
               'fleet-wake started: run your PROMPT §7 start steps; resume every unit with an open Issue/PR and no live pane');
-            let submitted = false;
-            if (textSent) {
-              await sleepMs(4_000);
-              if (safeStartup()) submitted = submitCoordinator(executor, selected.handle);
-              else {
-                startupWakePending = true;
-                log('startup wake recipient unsafe before Enter; queued');
-              }
-            }
-            if (!submitted && !startupWakePending) log('startup wake delivery unverified: ' + selected.handle);
+            if (!submitted) log('startup wake delivery unverified: ' + selected.handle
+              + '; next: owner reads the exact pane; do not resend');
           }
         }
       } catch {
-        log('startup wake selection failed or delivery uncertain');
+        log('startup wake selection failed or delivery uncertain; next: owner reads the exact coordinator pane; do not resend');
       }
     }
     await sleepMs(config.intervalSeconds * 1_000);

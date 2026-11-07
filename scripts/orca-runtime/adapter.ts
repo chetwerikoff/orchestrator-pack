@@ -4,6 +4,7 @@ import { isAbsolute } from 'node:path';
 import { execFile } from 'node:child_process';
 import { runProcessSync } from '../kernel/subprocess.ts';
 import { promisify } from 'node:util';
+import { classifyPromptSendReceipt, promptSendArgv } from './send-receipt.ts';
 import {
   runtimeFailure,
   runtimeUnsupported,
@@ -1633,16 +1634,20 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     const family = this.observeComposerFamily(input.worker, options);
     if (family.status === 'known' && family.family === 'opencode') {
       if (control?.kind !== 'opencode-http') {
-        return { status: 'send_failed', reason: 'opencode_control_unbound' };
-      }
-      if (input.writeOnly || input.submitOnly || input.text !== undefined) {
+        if (input.writeOnly || input.submitOnly || input.text === undefined) {
+          return { status: 'send_failed', reason: 'opencode_control_unbound' };
+        }
+        // Full prompts can use the native submit witness without HTTP ownership.
+        // Partial composer operations still require bound HTTP control.
+      } else if (input.writeOnly || input.submitOnly || input.text !== undefined) {
         return control.dispatch({
           worker: input.worker,
           action: input.writeOnly ? 'append-prompt' : 'submit-prompt',
           ...(input.text !== undefined ? { text: input.text } : {}),
         }, options);
+      } else {
+        return { status: 'send_failed', reason: 'opencode_control_action_required' };
       }
-      return { status: 'send_failed', reason: 'opencode_control_action_required' };
     }
     if (input.submitOnly && family.status === 'unbound') {
       return { status: 'send_failed', reason: family.reason };
@@ -1653,6 +1658,17 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
         action: input.writeOnly ? 'append-prompt' : 'submit-prompt',
         ...(input.text !== undefined ? { text: input.text } : {}),
       }, options);
+    }
+    if (!input.submitOnly && !input.writeOnly) {
+      const response = this.#run(promptSendArgv(input.worker.id, input.text ?? ''), options);
+      if (response.outcomeCategory === 'process_launch_failed') {
+        return { status: 'send_failed', reason: neutralFailureReason(response) };
+      }
+      if (!response.ok) return { status: 'dispatch_unknown', reason: neutralFailureReason(response) };
+      const receipt = classifyPromptSendReceipt(response, input.worker.id, input.worker.generation);
+      return receipt.status === 'turn_started'
+        ? { status: 'dispatched' }
+        : { status: 'dispatch_unknown', reason: 'submit_witness_unavailable' };
     }
     const args = ['terminal', 'send', '--terminal', input.worker.id];
     if (!input.submitOnly) args.push('--text', input.text ?? '');

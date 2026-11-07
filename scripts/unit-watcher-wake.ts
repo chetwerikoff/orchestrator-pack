@@ -237,16 +237,6 @@ function targetBindingFailure(
       'target composer binding cannot be proven',
     );
   }
-  if (family.family === 'opencode') {
-    const control = adapter.composerControl?.(identity, { timeoutMs: RUNTIME_TIMEOUT_MS });
-    if (control?.kind !== 'opencode-http') {
-      return failedAdapter(
-        'runtime composer control',
-        { kind: control?.kind ?? null, reason: 'opencode_control_unbound' },
-        'OpenCode target control is unbound',
-      );
-    }
-  }
   return null;
 }
 
@@ -269,7 +259,7 @@ function confirmedDispatch(
     return failedAdapter(
       'runtime dispatch result',
       dispatch,
-      'delivery-unknown: ' + dispatch.reason,
+      'delivery-unknown: ' + dispatch.reason + '; next: owner reads the exact target pane and detached result; do not resend',
     );
   }
   if (dispatch.status === 'send_failed') {

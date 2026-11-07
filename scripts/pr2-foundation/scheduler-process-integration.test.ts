@@ -626,8 +626,15 @@ describe('scheduler bounded-child production composition', () => {
     const second = await runTick(env);
     const secondMail = schedulerResult(second).orchestrationMailReconcile as Record<string, unknown>;
     expect(secondMail.nudged).toBe(0);
-    expect(fixture(fixturePath).enterDispatches ?? 0).toBe(0);
+    // S2 may send one full prompt; mail reconciliation must never send bare Enter.
+    expect(fixture(fixturePath).enterDispatches).toBe(1);
+    expect(fixture(fixturePath).dispatches).toEqual([{ workerId: target, message: expect.stringMatching(/\S/u) }]);
     expect(fixture(fixturePath).dispatches?.filter(({ message }) => message === '')).toHaveLength(0);
+    expect(fixture(fixturePath).workers[0]?.lines).toContain(pointer);
+    expect(schedulerResult(second).fleetNudge).toMatchObject({ sendAttempts: 1, dispatched: 0 });
+    await runTick(env);
+    expect(fixture(fixturePath).enterDispatches).toBe(1);
+    expect(fixture(fixturePath).dispatches).toHaveLength(1);
   });
 
   it.each(observedConsumerFencedResponses)(
@@ -661,8 +668,15 @@ describe('scheduler bounded-child production composition', () => {
       const second = await runTick(env);
       const secondMail = schedulerResult(second).orchestrationMailReconcile as Record<string, unknown>;
       expect(secondMail.nudged).toBe(0);
-      expect(fixture(fixturePath).enterDispatches ?? 0).toBe(0);
+      // S2 full prompts are allowed; the fenced mail's partial submission is not.
+      expect(fixture(fixturePath).enterDispatches).toBe(1);
+      expect(fixture(fixturePath).dispatches).toEqual([{ workerId: target, message: expect.stringMatching(/\S/u) }]);
       expect(fixture(fixturePath).dispatches?.filter(({ message }) => message === '')).toHaveLength(0);
+      expect(fixture(fixturePath).workers[0]?.lines).toContain(pointer);
+      expect(schedulerResult(second).fleetNudge).toMatchObject({ sendAttempts: 1, dispatched: 0 });
+      await runTick(env);
+      expect(fixture(fixturePath).enterDispatches).toBe(1);
+      expect(fixture(fixturePath).dispatches).toHaveLength(1);
     },
   );
 

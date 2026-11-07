@@ -1,0 +1,47 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2808,
+  "declared_paths": [
+    "docs/unit-watcher-wake.md",
+    "scripts/fleet/fleet-sweep.test.ts",
+    "scripts/fleet/fleet-sweep.ts",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts",
+    "scripts/lib/operator-publication.test.ts",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/send-receipt.test.ts",
+    "scripts/orca-runtime/send-receipt.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/pr2-foundation/scheduler-process-integration.test.ts",
+    "scripts/unit-watcher-wake.test.ts",
+    "scripts/unit-watcher-wake.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/worktree-lifecycle/merge-cleanup.ts"
+  ],
+  "denylist": [
+    ".github/workflows/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "tests/external-output-references/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/unit-watcher-wake.md",
+    "scripts/fleet/fleet-sweep.test.ts",
+    "scripts/fleet/fleet-sweep.ts",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts",
+    "scripts/lib/operator-publication.test.ts",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/send-receipt.test.ts",
+    "scripts/orca-runtime/send-receipt.ts",
+    "scripts/orca-runtime/task-adapter.test.ts",
+    "scripts/pr2-foundation/scheduler-process-integration.test.ts",
+    "scripts/unit-watcher-wake.test.ts",
+    "scripts/unit-watcher-wake.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/worktree-lifecycle/merge-cleanup.ts"
+  ],
+  "source_revision": "4de5a1e7f452e5fdf575074c56fe0d1af005a880"
+}

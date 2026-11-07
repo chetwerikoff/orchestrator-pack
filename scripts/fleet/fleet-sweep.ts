@@ -82,6 +82,7 @@ export interface FleetDiagnosticHistory {
 }
 
 export type FleetDiagnosticReason =
+  | 'primary_binding_missing'
   | 'terminal_exited'
   | 'suspected_bare_shell'
   | 'suspected_hung'
@@ -93,6 +94,7 @@ export interface FleetDiagnostic {
   readonly handle?: string;
   readonly incarnationId?: string;
   readonly title?: string;
+  readonly worktreePath?: string;
   readonly state?: FleetPaneState;
   readonly reason: FleetDiagnosticReason;
   readonly evidence: string;
@@ -169,6 +171,11 @@ export function compileRegex(raw: string | undefined, fallback: RegExp): RegExp 
 
 export function looksLikeAgentPane(title: string): boolean {
   return DEFAULT_AGENT_TITLE_RE.test(title);
+}
+
+function isAgentTerminal(terminal: FleetTerminal): boolean {
+  return terminal.agentIdentity !== undefined
+    ? Boolean(terminal.agentIdentity.trim()) : looksLikeAgentPane(terminal.title);
 }
 
 // Every supported TUI renders its running-turn marker in the bottom status region. Scrollback
@@ -440,7 +447,7 @@ export function selectAgentTerminals(
     // The exact current worker-list/worker-show/run-show binding wins for every
     // primary pane; non-primary workspace selection is unchanged.
     if (isPrimary) return primaryBindings.has(terminal.handle);
-    return inWorkspace && looksLikeAgentPane(terminal.title);
+    return inWorkspace && isAgentTerminal(terminal);
   });
 }
 
@@ -838,7 +845,7 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
     for (const terminal of terminals) {
       if (!terminal.worktreePath || normalizedPath(terminal.worktreePath) !== root
         || terminal.handle === coordinatorHandle || terminal.handle === architectHandle
-        || !looksLikeAgentPane(terminal.title) || primaryBindings.has(terminal.handle)
+        || !isAgentTerminal(terminal) || primaryBindings.has(terminal.handle)
         || reported.has(terminal.handle)) continue;
       reported.add(terminal.handle);
       options.onMissingPrimaryBinding(terminal);
@@ -1005,7 +1012,16 @@ export function collectFleetDiagnostics(options: FleetDiagnosticOptions): FleetD
     const boundPrimary = primaryBindings.has(listed.handle);
     // Primary-root evidence is Dispatch/Run-only even when the workspace regex
     // also happens to match the primary checkout.
-    if (normalizedPath(listed.worktreePath) === primary ? !boundPrimary : !inWorkspace) continue;
+    if (normalizedPath(listed.worktreePath) === primary && !boundPrimary) {
+      if (isAgentTerminal(listed)) diagnostics.push({
+        handle: listed.handle, title: listed.title, worktreePath: listed.worktreePath,
+        ...(listed.incarnationId ? { incarnationId: listed.incarnationId } : {}),
+        reason: 'primary_binding_missing',
+        evidence: 'next: owner reports the exact Dispatch, or the orchestrator reads the pane',
+      });
+      continue;
+    }
+    if (!boundPrimary && !inWorkspace) continue;
     const old = store.readDiagnosticHistory?.(listed.handle);
     // Never-agent shells without exact historical designation are not diagnostic candidates.
     if (!boundPrimary && !listed.agentIdentity && !looksLikeAgentPane(listed.title)
@@ -1089,6 +1105,24 @@ export function formatFleetDiagnostics(rows: readonly FleetDiagnostic[]): string
   return rows.map((row) =>
     `DIAG handle=${row.handle ?? 'none'} incarnation=${row.incarnationId ?? 'unknown'} state=${row.state ?? 'unverified'} reason=${row.reason} evidence=${row.evidence}`,
   ).join('\n');
+}
+
+/** Diagnostic-only rows deliberately have no operational state. */
+export function fleetSweepJsonRows(
+  observations: readonly FleetPaneObservation[], diagnostics: readonly FleetDiagnostic[],
+  terminals: readonly FleetTerminal[],
+): unknown[] {
+  const reported = observations.map((pane) => {
+    const diagnostic = diagnostics.find((row) => row.handle === pane.handle);
+    return diagnostic ? { ...pane, diagnostic: { reason: diagnostic.reason, evidence: diagnostic.evidence } } : pane;
+  });
+  const observed = new Set(observations.map((pane) => pane.handle));
+  return [...reported, ...diagnostics.filter((row) => !observed.has(row.handle ?? '')).map((row) => {
+    const terminal = terminals.find((pane) => pane.handle === row.handle);
+    return { handle: row.handle, title: row.title ?? terminal?.title,
+      worktreePath: row.worktreePath ?? terminal?.worktreePath,
+      diagnostic: { reason: row.reason, evidence: row.evidence } };
+  })];
 }
 
 export function formatFleetSweep(observations: readonly FleetPaneObservation[]): string {
@@ -1196,12 +1230,8 @@ if (isDirectExecution()) {
       // Advisory store failure must not suppress the pre-existing operational sweep.
       process.stderr.write('fleet-sweep: diagnostic projection unverified\n');
     }
-    const reported = observations.map((pane) => {
-      const diagnostic = diagnostics.find((row) => row.handle === pane.handle);
-      return diagnostic ? { ...pane, diagnostic: { reason: diagnostic.reason, evidence: diagnostic.evidence } } : pane;
-    });
     process.stdout.write(options.json
-      ? `${JSON.stringify(reported, null, 2)}\n`
+      ? `${JSON.stringify(fleetSweepJsonRows(observations, diagnostics, terminals), null, 2)}\n`
       : [formatFleetSweep(observations), formatFleetDiagnostics(diagnostics)].filter(Boolean).join('\n') + '\n');
   } catch (error) {
     process.stderr.write(`fleet-sweep: ${error instanceof Error ? error.message : String(error)}\n`);

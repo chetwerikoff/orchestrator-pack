@@ -5,6 +5,7 @@ import type {
   RuntimeWorkerIdentity,
 } from '../runtime/contracts.ts';
 import { OrcaRuntimeAdapter } from '../orca-runtime/adapter.ts';
+import { promptSendArgv } from '../orca-runtime/send-receipt.ts';
 import type { OrcaJsonResponse } from '../orca-runtime/native.ts';
 import {
   OPERATOR_PUBLICATION_MAX_TEXT_BYTES,
@@ -83,9 +84,7 @@ describe('Orca message truth', () => {
     });
     const sends = runJson.mock.calls.filter((call) => call[0]?.[0] === 'terminal' && call[0]?.[1] === 'send');
     expect(sends).toHaveLength(1);
-    expect(sends[0]?.[0]).toEqual([
-      'terminal', 'send', '--terminal', worker.id, '--text', 'exact payload', '--enter',
-    ]);
+    expect(sends[0]?.[0]).toEqual(promptSendArgv(worker.id, 'exact payload'));
   });
 
   it('does not credential a synthetic submit-witness shape without production capture', () => {

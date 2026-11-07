@@ -15,6 +15,7 @@ import {
   parseSweepCli,
   FileFleetStateStore,
   formatFleetDiagnostics,
+  fleetSweepJsonRows,
   defaultWorkspaceRegex,
   isBusyScreen,
   runFleetSweep,
@@ -323,6 +324,39 @@ describe('fleet sweep on real OpenCode screens', () => {
 });
 
 describe('fleet sweep pane selection and reads', () => {
+  it('Issue #2808: uses native agent identity before mutable titles without broadening project or primary ownership', () => {
+    const native = { ...pane('native', 'bash'), agentIdentity: 'opencode' };
+    const exited = { ...pane('exited', 'zsh'), agentIdentity: 'claude', status: 'exited' };
+    const rows = [native, exited, pane('shell', 'bash'),
+      { ...pane('blank', 'OpenCode'), agentIdentity: '' },
+      { ...native, handle: 'foreign', worktreePath: '/tmp/foreign' },
+      { ...native, handle: 'primary-agent', worktreePath: primary },
+      { ...native, handle: 'coord' }, { ...native, handle: 'arch' }];
+    expect(selectAgentTerminals(rows, primary, defaultWorkspaceRegex(primary), 'coord', undefined, 'arch')
+      .map((row) => row.handle)).toEqual(['native', 'exited']);
+  });
+
+  it('Issue #2808: reports missing primary binding without a callback and preserves diagnostic-only JSON rows', () => {
+    const unbound = { ...primaryTerminal('unbound'), title: 'bash' };
+    const worker = pane('worker', 'OpenCode');
+    const rows = [unbound, worker];
+    const options = { primary, projectId: 'orchestrator-pack', terminals: rows,
+      store: new MemoryPollingStore(), executor: fakeExecutor(rows, { worker: 'done' }) };
+    const observations = runFleetSweep(options);
+    expect(observations.map((row) => row.handle)).toEqual(['worker']);
+    const diagnostics = collectFleetDiagnostics({ ...options, observations });
+    expect(diagnostics[0]).toMatchObject({ handle: 'unbound', reason: 'primary_binding_missing',
+      evidence: expect.stringContaining('orchestrator reads the pane') });
+    const reported = fleetSweepJsonRows(observations, diagnostics, rows);
+    expect(reported[0]).toEqual({ ...observations[0], diagnostic: {
+      reason: diagnostics[1]!.reason, evidence: diagnostics[1]!.evidence,
+    } });
+    expect(reported[1]).toEqual({ handle: unbound.handle, title: 'bash', worktreePath: primary,
+      diagnostic: { reason: diagnostics[0]!.reason, evidence: diagnostics[0]!.evidence } });
+    expect(reported[1]).not.toHaveProperty('state');
+    expect(fleetSweepJsonRows([], diagnostics.slice(0, 1), rows)).toHaveLength(1);
+  });
+
   it.each([true, false])('one-off sweep consumes the exact optional ARCHITECT_HANDLE: %s (#2422)', (exclude) => {
     const handle = 'term_721dce76-e932-460a-8ebe-e9f80da9f056';
     const census = [pane(handle, 'Claude Code architect', workerPath), pane('worker', 'OpenCode worker'), pane('other', 'Claude Code architect')];
@@ -558,7 +592,9 @@ describe('Issue #2585 supervised primary-root admission', () => {
       const executor = primaryOrcaExecutor(terminals, { 'native-merge': 'done' }, workers, calls,
         shown ? { 'native-merge': shown } : {});
       expect(runFleetSweep({ ...opts, terminals, executor }), label).toEqual([]);
-      expect(collectFleetDiagnostics({ ...opts, terminals, executor }), label).toEqual([]);
+      expect(collectFleetDiagnostics({ ...opts, terminals, executor }), label).toEqual([
+        expect.objectContaining({ handle: 'native-merge', reason: 'primary_binding_missing' }),
+      ]);
       expect(calls.some((args) => args[0] === 'terminal' && args[1] === 'read'), label).toBe(false);
       expect(calls.filter((args) => args[0] === 'terminal' && args[1] === 'show'), label).toHaveLength(2);
     }
@@ -599,14 +635,15 @@ describe('Issue #2585 supervised primary-root admission', () => {
     const executor = primaryOrcaExecutor(terminals, { allowed: 'done', foreign: 'done',
       duplicate: 'done', 'no-inc': 'done', 'wrong-branch': 'done' }, workers, calls);
     expect(runFleetSweep({ ...opts, terminals, executor }).map((row) => row.handle)).toEqual(['allowed']);
-    expect(collectFleetDiagnostics({ ...opts, terminals, executor }).map((row) => row.handle)).toEqual(['allowed']);
+    expect(collectFleetDiagnostics({ ...opts, terminals, executor }).map((row) => row.handle))
+      .toEqual(['allowed', 'foreign', 'duplicate', 'no-inc', 'wrong-branch']);
     expect(calls.filter((args) => args[0] === 'terminal' && args[1] === 'read')
       .map((args) => args[args.indexOf('--terminal') + 1])).toEqual(['allowed', 'allowed']);
     expect(calls.some((args) => args[1] === 'run-show' && args.includes('run-foreign'))).toBe(true);
     expect(runFleetSweep({ ...opts, coordinatorHandle: 'missing',
       terminals, executor }).map((row) => row.handle)).toEqual([]);
     expect(collectFleetDiagnostics({ ...opts, coordinatorHandle: undefined,
-      terminals, executor })).toEqual([]);
+      terminals, executor }).every((row) => row.reason === 'primary_binding_missing')).toBe(true);
     const exitedCoordinator = [{ ...currentCoordinator, status: 'exited' }, ...terminals.slice(1)];
     expect(runFleetSweep({ ...opts, terminals: exitedCoordinator, executor }).map((row) => row.handle)).toEqual([]);
   });
@@ -628,7 +665,8 @@ describe('Issue #2585 supervised primary-root admission', () => {
       coordinator: 'done', 'unbound-cursor': 'done', operator: 'done', shell: 'done' }, workers, calls);
     const options = { ...opts, architectHandle: 'architect', terminals, executor };
     expect(runFleetSweep(options).map((row) => row.handle)).toEqual(['bound-cursor']);
-    expect(collectFleetDiagnostics(options).map((row) => row.handle)).toEqual(['bound-cursor']);
+    expect(collectFleetDiagnostics(options).map((row) => row.handle))
+      .toEqual(['bound-cursor', 'unbound-cursor', 'operator', 'shell']);
     expect(calls.filter((args) => args[1] === 'read').every((args) => args.includes('bound-cursor'))).toBe(true);
     expect(calls.filter((args) => args[1] === 'read')).toHaveLength(2);
   });
@@ -680,7 +718,8 @@ describe('Issue #2585 supervised primary-root admission', () => {
     expect(observations[0]?.lines).toEqual([]);
     const diagnostics = collectFleetDiagnostics({ ...opts, terminals, executor, observations });
     expect(diagnostics.map((row) => [row.handle, row.reason])).toEqual([
-      ['exited', 'terminal_exited'], ['unreadable', 'unverified:screen_unreadable'], ['peer', 'agent_unverified'],
+      ['exited', 'terminal_exited'], ['missing-tuple', 'primary_binding_missing'],
+      ['unreadable', 'unverified:screen_unreadable'], ['peer', 'agent_unverified'],
     ]);
     expect(diagnostics[0]?.state).toBe('STOPPED');
     expect(diagnostics[1]?.state).toBeUndefined();
@@ -1127,14 +1166,15 @@ describe('Issue #2749 B9-5/B9-6: observed idle and primary Dispatch-only selecti
         onMissingPrimaryBinding: (terminal) => { missing.push(terminal.handle); },
       }).map((row) => row.handle)).toEqual(['bound']);
       expect(missing).toEqual(['title-only']);
-      expect(collectFleetDiagnostics(options).map((row) => row.handle)).toEqual(['bound']);
+      expect(collectFleetDiagnostics(options).map((row) => row.handle)).toEqual(['bound', 'title-only']);
       const withoutDispatch = primaryOrcaExecutor(terminals, screens, []);
       const entirelyUnbound: string[] = [];
       expect(runFleetSweep({ ...options, executor: withoutDispatch,
         onMissingPrimaryBinding: (terminal) => { entirelyUnbound.push(terminal.handle); },
       })).toEqual([]);
       expect(entirelyUnbound).toEqual(['bound', 'title-only']);
-      expect(collectFleetDiagnostics({ ...options, executor: withoutDispatch })).toEqual([]);
+      expect(collectFleetDiagnostics({ ...options, executor: withoutDispatch }).map((row) => [row.handle, row.reason]))
+        .toEqual([['bound', 'primary_binding_missing'], ['title-only', 'primary_binding_missing']]);
     }
     const duplicate = primaryOrcaExecutor(terminals, screens, [worker, worker]);
     expect(runFleetSweep({ projectId: 'project', primary, terminals, executor: duplicate,
