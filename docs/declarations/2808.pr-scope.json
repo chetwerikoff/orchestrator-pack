@@ -13,6 +13,7 @@
     "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/unit-watcher-wake.test.ts",
     "scripts/unit-watcher-wake.ts",
+    "scripts/vitest-ci-lanes.config.json",
     "scripts/worktree-lifecycle/merge-cleanup.ts"
   ],
   "denylist": [
@@ -35,7 +36,8 @@
     "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/unit-watcher-wake.test.ts",
     "scripts/unit-watcher-wake.ts",
+    "scripts/vitest-ci-lanes.config.json",
     "scripts/worktree-lifecycle/merge-cleanup.ts"
   ],
-  "source_revision": "dc7ce15ddf7363ea6bc43b37b0b8799162c9a6cf"
+  "source_revision": "f0cd6500fe070573bea6cbdcce699741e57f1c1b"
 }
