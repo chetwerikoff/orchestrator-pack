@@ -7942,7 +7942,7 @@ describe('Issue #2796 plain source union after Opus removal', () => {
     ].join('\n')]);
     expect(existsSync(result.invoked)).toBe(false);
     expect(existsSync(path.join(result.storeRoot,'.local','state',
-      'orchestrator-session','orchestrator-pack','review-todo.md'))).toBe(false);
+      'orchestrator-session','orchestrator-pack',['review','todo.md'].join('-')))).toBe(false);
   });
 
   it('legacy triage record ignored', async () => {
