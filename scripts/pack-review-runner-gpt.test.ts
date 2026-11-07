@@ -42,7 +42,7 @@ import {
   readPackReviewAuthority,
   reconcilePackReviewTier,
 } from './pack-review-state.js';
-import { packReviewDeliveryNeedsResume, restorePackReviewAuthoritativeRequiredStatus, classifyPackReviewPayload } from './lib/pack-review-delivery.js';
+import { packReviewDeliveryNeedsResume, restorePackReviewAuthoritativeRequiredStatus } from './lib/pack-review-delivery.js';
 import {
   createPackReviewRun,
   derivePackReviewNoJudgmentBudgetOutcome,
@@ -104,6 +104,7 @@ function harnessEnv(storeRoot: string, capture: string): void {
 async function credentialFixtureCompleteSources(
   run: { id: string; targetSha: string; reviewRound: PackReviewGptRoundRecord },
   prNumber: number,
+  sourceReply = 'NO_FINDINGS',
 ): Promise<{ reviewRound: PackReviewGptRoundRecord; transport: PackGptSourceCommentTransport }> {
   const { id: runId, reviewRound } = run;
   const repository = 'chetwerikoff/orchestrator-pack';
@@ -119,7 +120,7 @@ async function credentialFixtureCompleteSources(
       slotId: slot.slotId, invocationId: slot.invocationId!,
     };
     return {
-      id, body: formatPackGptSourceCommentEnvelope(identity, 'NO_FINDINGS'),
+      id, body: formatPackGptSourceCommentEnvelope(identity, sourceReply),
       actorLogin: 'browser-gpt-bot',
       createdAt: timestamp, updatedAt: timestamp,
       url: 'https://github.com/' + repository + '/pull/' + prNumber + '#issuecomment-' + id,
@@ -145,6 +146,7 @@ async function credentialFixtureCompleteSources(
     if (witnessed.kind !== 'credentialed') throw new Error('synthetic original comment is not credentialed');
     return {
       ...slot,
+      terminalClass: witnessed.payload.verdict === 'clean' ? 'complete_clean' : 'complete_findings',
       terminalResult: {
         ...slot.terminalResult,
         source_comment_authority: 'credentialed_github',
@@ -3782,7 +3784,7 @@ describe('Issue #1741 failed GPT round source-comment settlement', () => {
     expect(finalReviewPosts).toBe(1);
   });
 
-  it('recovers all-complete unjournaled GPT rounds with legacy triage extras through the start path', async () => {
+  it('recovers all-complete unjournaled GPT rounds through the start path', async () => {
     const storeRoot = tempRoot('opk-gpt-1741-all-complete-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
@@ -3837,16 +3839,6 @@ describe('Issue #1741 failed GPT round source-comment settlement', () => {
       failureReason: 'stale_head_before_terminal',
     }, { projectId: 'orchestrator-pack', storeRoot });
     expect(packReviewDeliveryNeedsResume(failed)).toBe(true);
-    // A historical post-aggregation artifact must never veto ordinary source recovery.
-    const historicalRecordPath = path.join(storeRoot, 'runs', failed.id + '.json');
-    const historical = JSON.parse(readFileSync(historicalRecordPath, 'utf8')) as Record<string, unknown>;
-    writeFileSync(historicalRecordPath, JSON.stringify({
-      ...historical,
-      gptTriageAttempt: { schema: 'pack-review-gpt-triage-attempt/v1',
-        attemptedAtUtc: '2026-08-26T00:00:00.000Z' },
-      gptTriage: { schema: 'pack-review-gpt-triage/v1',
-        groups: [{ decision: 'DEFER', members: ['source-01:0'] }] },
-    }) + '\n');
     const originalComments = originalEvidence.transport;
 
     const reviews: GithubReviewSummary[] = [];
@@ -7883,14 +7875,15 @@ describe('Issue #2796 plain source union after Opus removal', () => {
     const statuses: string[] = [];
     const notifications: string[] = [];
     const fence = String.fromCharCode(96).repeat(3);
+    const tier = options.clean || options.advisoryOnly ? 'T3' : 'T2';
     const output = await startPackReview({
       projectId: 'orchestrator-pack', storeRoot,
       sourceRepoRoot: repoRoot, prNumber: 2796, headSha: HEAD_A,
       fixtureCurrentPrHeadSha: HEAD_A, fixturePrState: 'OPEN',
       fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
       fixturePostReviewHeadSha: HEAD_A,
-      fixtureIssueTitle: '[T3] Synthetic plain source union',
-      fixtureIssueBody: fence + 'complexity-tier\ntier: T3\n' + fence,
+      fixtureIssueTitle: '[' + tier + '] Synthetic plain source union',
+      fixtureIssueBody: fence + 'complexity-tier\ntier: ' + tier + '\n' + fence,
       fixtureIssueNumber: 2796, claimMode: 'preacquired',
       fixtureReviewBySourceSlot: options.clean ? {
         'source-01': [{ stdout: successfulCleanReviewPayload('inv-source-01') }],
@@ -7902,8 +7895,12 @@ describe('Issue #2796 plain source union after Opus removal', () => {
         'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
       } : {
         'source-01': [{ stdout: findingsPayload('duplicate') }],
-        'source-02': [{ stdout: findingsPayload('duplicate') }],
-        'source-03': [{ stdout: findingsPayload('cosmetic', 'warning') }],
+        'source-02': [{ stdout: terminalTurnPayload({
+          state: 'ok', cause: 'completed_page_only', sendCount: 1, invocationId: 'inv-duplicate-02',
+        }) + '\n' + JSON.stringify({ verdict: 'findings', findingCount: 2, findings: [
+          { title: 'duplicate', body: 'body-duplicate', severity: 'blocking' },
+          { title: 'cosmetic', body: 'body-cosmetic', severity: 'warning' },
+        ] }) }],
       },
       fixtureRequiredStatusWriter: async (request) => { statuses.push(request.state); },
       fixtureWorkerNotifier: async (request) => {
@@ -7929,15 +7926,15 @@ describe('Issue #2796 plain source union after Opus removal', () => {
     }))).toEqual([
       { title: 'duplicate', severity: 'blocking', sourceSlotId: 'source-01' },
       { title: 'duplicate', severity: 'blocking', sourceSlotId: 'source-02' },
-      { title: 'cosmetic', severity: 'warning', sourceSlotId: 'source-03' },
+      { title: 'cosmetic', severity: 'warning', sourceSlotId: 'source-02' },
     ]);
     expect(result.run?.findingCount).toBe(3);
-    const posted = readFileSync(result.capture, 'utf8');
+    const posted = (JSON.parse(readFileSync(result.capture, 'utf8')) as { body: string }).body;
     expect((posted.match(/### duplicate/g) ?? [])).toHaveLength(2);
     const sourceLine = (id: string) => 'Source slot: ' + String.fromCharCode(96) + id + String.fromCharCode(96);
     const first = posted.indexOf(sourceLine('source-01'));
     const second = posted.indexOf(sourceLine('source-02'));
-    const third = posted.indexOf(sourceLine('source-03'));
+    const third = posted.lastIndexOf(sourceLine('source-02'));
     expect(first).toBeGreaterThanOrEqual(0);
     expect(second).toBeGreaterThan(first);
     expect(third).toBeGreaterThan(second);
@@ -7956,38 +7953,117 @@ describe('Issue #2796 plain source union after Opus removal', () => {
   });
 
   it('legacy triage record ignored', async () => {
-    const result = await settled();
-    expect(result.output).toMatchObject({ ok: true });
-    const run = result.run!;
-    const record = path.join(result.storeRoot, 'runs', run.id + '.json');
-    const original = JSON.parse(readFileSync(record, 'utf8')) as Record<string, unknown>;
-    const historical = JSON.stringify(original.findings);
-    const variants = [
-      {
-        gptTriage: { schema: 'pack-review-gpt-triage/v1',
-          groups: [{ decision: 'DEFER', members: ['source-01:0', 'source-02:0'] }] },
-        gptTriageAttempt: { schema: 'pack-review-gpt-triage-attempt/v1', targetSha: run.targetSha },
-      },
-      { gptTriage: 'malformed', gptTriageAttempt: null },
-      { gptTriage: { partial: true }, gptTriageAttempt: {} },
-    ];
-    for (const extra of variants) {
-      writeFileSync(record, JSON.stringify({ ...original, ...extra }) + '\n');
-      const previous = readFileSync(record, 'utf8');
-      const loaded = getPackReviewRun(run.id,
-        { projectId: 'orchestrator-pack', storeRoot: result.storeRoot });
-      expect(loaded?.findings).toEqual(run.findings);
-      expect(JSON.stringify(loaded?.findings)).toBe(historical);
-      expect(classifyPackReviewPayload({
-        verdict: 'findings', findingCount: loaded!.findingCount!,
-        findings: loaded!.findings,
-      }, loaded!)).toMatchObject({
-        terminalStatus: 'changes_requested', requiredStatus: 'failure', blocking: true,
+    for (const advisoryOnly of [false, true]) {
+      const result = await settled({ advisoryOnly });
+      expect(result.output).toMatchObject({ ok: true });
+      const run = result.run!;
+      const record = path.join(result.storeRoot, 'runs', run.id + '.json');
+      const original = JSON.parse(readFileSync(record, 'utf8')) as Record<string, unknown>;
+      const identity = {
+        runId: run.id, targetSha: run.targetSha, cycleId: run.reviewCycleId,
+        roundOrdinal: run.logicalRoundOrdinal,
+        issueDigest: run.reviewRound!.boundIssueSnapshotDigest,
+        rawFindingsDigest: createHash('sha256').update(JSON.stringify(run.findings)).digest('hex'),
+      };
+      const members = advisoryOnly ? ['source-01:0'] : ['source-01:0', 'source-02:0'];
+      const group = (keys: string[], decision: string) => ({
+        groupId: 'g-' + createHash('sha256').update(JSON.stringify([
+          run.id, run.targetSha, keys,
+        ])).digest('hex').slice(0, 20),
+        members: keys, slotIds: [...new Set(keys.map((key) => key.split(':')[0]))],
+        decision, reason: 'Original source judgment retained', code: 'UNSPECIFIED',
       });
-      expect(readFileSync(record, 'utf8')).toBe(previous);
+      const variants = [
+        {
+          gptTriage: { schema: 'pack-review-gpt-triage/v1', ...identity,
+            groups: [group(members, advisoryOnly ? 'DEFER' : 'FIX_NOW'),
+              group([advisoryOnly ? 'source-02:0' : 'source-02:1'], 'DEFER')]
+              .sort((a, b) => a.groupId.localeCompare(b.groupId)) },
+          gptTriageAttempt: { schema: 'pack-review-gpt-triage-attempt/v1', ...identity,
+            attemptedAtUtc: run.createdAt },
+        },
+        { gptTriage: 'malformed', gptTriageAttempt: null },
+        { gptTriage: { partial: true }, gptTriageAttempt: {} },
+      ];
+      const source = await credentialFixtureCompleteSources({
+        id: run.id, targetSha: run.targetSha, reviewRound: run.reviewRound!,
+      }, 2796, JSON.stringify({ findings: [{
+        type: 'quality', code: 'quality:legacy', path: 'scripts/pack-review-runner.ts',
+        severity: advisoryOnly ? 'non-blocking' : 'blocking',
+        summary: 'Original legacy finding', source: 'gpt-browser',
+      }] }));
+      const recoveredFindings = source.reviewRound.sourceSlots.flatMap((slot) =>
+        (slot.payload as { findings: Record<string, unknown>[] }).findings.map((finding) =>
+          ({ ...finding, sourceSlotId: slot.slotId })));
+      const tier = advisoryOnly ? 'T3' : 'T2';
+      const issueBody = '```complexity-tier\ntier: ' + tier + '\n```';
+      const reconcile = (reviews: GithubReviewSummary[]) => reconcileStalePackReviewRuns({
+        projectId: 'orchestrator-pack', storeRoot: result.storeRoot,
+        sourceRepoRoot: repoRoot, repoSlug: 'chetwerikoff/orchestrator-pack',
+        prNumber: 2796, immediate: true, fixtureCurrentPrHeadSha: HEAD_A,
+        fixtureGptSourceCommentTransport: source.transport,
+        fixtureGithubReviewTransport: {
+          resolveActorLogin: async () => 'fixture-pack-reviewer',
+          listReviews: async () => reviews,
+          postReview: async ({ body, commitId }) => {
+            const review = { id: 2796100, body, commitId, state: 'COMMENTED',
+              userLogin: 'fixture-pack-reviewer', submittedAt: new Date().toISOString(),
+              url: 'https://example.test/reviews/2796100' };
+            reviews.push(review);
+            return { id: review.id, url: review.url };
+          },
+          dismissReview: async () => {},
+        },
+        fixtureRequiredStatusWriter: async (request) => { result.statuses.push(request.state); },
+        fixtureWorkerNotifier: async (request) => {
+          result.notifications.push(request.message);
+          return { state: 'delivered' as const, reason: 'fixture' };
+        },
+        fixtureIssueTitle: '[' + tier + '] Synthetic plain source union', fixtureIssueBody: issueBody,
+        fixtureIssueNumber: 2796, fixtureBoundIssueSnapshotBytes: issueBody,
+      });
+      for (const extra of variants) {
+        // Reading and reconciling fully delivered history must not migrate it.
+        writeFileSync(record, JSON.stringify({ ...original, ...extra }) + '\n');
+        const previous = readFileSync(record, 'utf8');
+        const loaded = getPackReviewRun(run.id,
+          { projectId: 'orchestrator-pack', storeRoot: result.storeRoot });
+        expect(loaded?.findings).toEqual(run.findings);
+        await reconcile([]);
+        expect(readFileSync(record, 'utf8')).toBe(previous);
+
+        // An interrupted source-settled run recovers through ordinary reconciliation,
+        // while an ambiguous notification attempt remains send-once.
+        const unjournaled = { ...original, ...extra, reviewRound: source.reviewRound,
+          status: 'failed', failureReason: 'stale_head_before_terminal',
+          findings: [], findingCount: 0, deliveryOutcomes: {
+            workerNotification: { ...run.deliveryOutcomes.workerNotification, state: 'failed',
+              reason: 'historical ambiguous notification attempt' },
+          } };
+        for (const key of ['reviewVerdict', 'journalOutcome', 'githubReviewReconciliation',
+          'githubReviewId', 'githubReviewUrl']) delete (unjournaled as Record<string, unknown>)[key];
+        writeFileSync(record, JSON.stringify(unjournaled) + '\n');
+        const reviews: GithubReviewSummary[] = [];
+        const recovered = await reconcile(reviews);
+        expect(recovered.results, JSON.stringify(recovered)).toEqual(expect.arrayContaining([
+          expect.objectContaining({ runId: run.id, recovered: true }),
+        ]));
+        const saved = getPackReviewRun(run.id,
+          { projectId: 'orchestrator-pack', storeRoot: result.storeRoot })!;
+        expect(saved.findings).toEqual(recoveredFindings);
+        expect(saved.status).toBe(advisoryOnly ? 'commented' : 'changes_requested');
+        expect(result.statuses.at(-1)).toBe(advisoryOnly ? 'pending' : 'failure');
+        expect(reviews).toHaveLength(1);
+        const delivered = readFileSync(record, 'utf8');
+        await reconcile(reviews);
+        expect(reviews).toHaveLength(1);
+        expect(readFileSync(record, 'utf8')).toBe(delivered);
+      }
+      expect(result.notifications).toHaveLength(1);
+      expect(existsSync(result.invoked)).toBe(false);
+      expect(existsSync(path.join(result.storeRoot, '.local', 'state',
+        'orchestrator-session', 'orchestrator-pack', ['review', 'todo.md'].join('-')))).toBe(false);
     }
-    expect(result.notifications).toHaveLength(1);
-    expect(existsSync(result.invoked)).toBe(false);
   });
 
   it.each([
