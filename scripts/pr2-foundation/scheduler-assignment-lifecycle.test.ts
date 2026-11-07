@@ -28,15 +28,51 @@ import {
   observeWorkerShowTerminalMail,
   type DispatchTerminalMailDeps,
 } from '../orca-runtime/dispatch-terminal-mail.ts';
-import type { runOrcaJson } from '../orca-runtime/native.ts';
+import type { OrcaJsonResponse, runOrcaJson } from '../orca-runtime/native.ts';
 import {
   consumeObservedTerminalAssignment,
   reconcileWorkerAssignments,
 } from '../reconcile-worker-assignments.ts';
 import { prepareWorktreeWithOrca } from './supervised-task-launch-assistant.ts';
+import { publishFleetReconciliationHandoff, readFleetReconciliationHandoff } from './fleet-reconciliation-handoff.ts';
 
 const roots: string[] = [];
 const REPOSITORY = 'chetwerikoff/orchestrator-pack';
+
+describe('Issue #2814 producer-terminal assignment lifecycle', () => {
+  it.each([
+    ['completed', 'succeeded', 'settled'],
+    ['failed', 'abandoned', 'terminal_missing'],
+    ['circuit_broken', 'failed', 'terminal'],
+  ])('classifies %s / %s / %s with a missing terminal as gone', (status, state, stage) => {
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: (() => ({ ok: true, result: {
+      dispatch: { status }, worker: { state, stage },
+      observation: { exactWorker: false, status: 'missing' },
+      terminalResource: { releaseState: 'not_requested' },
+    } })) as never });
+    expect(adapter.observeAssignmentLifecycle({ provider: 'orca', bindingKey: 'dispatch-2814' }))
+      .toEqual({ status: 'ok', value: { kind: 'gone', evidence: 'producer_exact_absence' } });
+  });
+
+  it.each([
+    ['failed', 'live'], ['dispatched', 'missing'], ['', 'missing'], ['completed', 'unknown'],
+  ])('keeps %s / inexact %s unresolved', (status, observationStatus) => {
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: (() => ({ ok: true, result: {
+      dispatch: { status }, observation: { exactWorker: false, status: observationStatus },
+    } })) as never });
+    expect(adapter.observeAssignmentLifecycle({ provider: 'orca', bindingKey: 'dispatch-2814' }))
+      .toMatchObject({ status: 'failed', reason: 'assignment_target_unresolved' });
+  });
+
+  it.each<OrcaJsonResponse>([
+    { ok: true, result: null },
+    { ok: false, error: { code: 'timeout', message: 'timed out' } },
+  ])('never turns malformed or failed reads into absence', (response) => {
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: (() => response) as never });
+    expect(adapter.observeAssignmentLifecycle({ provider: 'orca', bindingKey: 'dispatch-2814' }).status)
+      .toBe('failed');
+  });
+});
 
 describe('Issue #2788 retirement never manufactures dirty-worktree ownership', () => {
   it.each(['failed', 'abandoned', 'cancelled'])('preserves dirty bytes and refuses %s restoration after the normal mail-and-tick retirement', async (state) => {
@@ -217,6 +253,51 @@ afterEach(() => {
 });
 
 describe('Issue #2106 bounded scheduler assignment lifecycle reconciliation', () => {
+  it('retires producer-terminal missing rows at the existing bound, never before it', async () => {
+    const { store, ledger } = fixture();
+    const published = await publishCurrentWorkerAssignment({ file: store, repository: REPOSITORY,
+      issueNumber: 546, taskId: 'task-546', kind: 'local', provider: 'orca', bindingKey: 'dispatch-546', role: 'worker' });
+    if (!published.ok) throw new Error(published.reason);
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: (() => ({ ok: true, result: {
+      dispatch: { status: 'failed' }, worker: { state: 'abandoned', stage: 'terminal_missing' },
+      observation: { exactWorker: false, status: 'missing' }, terminalResource: { releaseState: 'not_requested' },
+    } })) as never });
+    for (let tick = 1; tick <= 4; tick += 1) {
+      const result = await reconcileWorkerAssignments({ file: store, repository: REPOSITORY, adapter,
+        terminalMailDeps: { ledgerPath: ledger, deliverMessage: null } });
+      expect(result.counts.boundedGiveUps).toBe(tick === 3 ? 1 : 0);
+      const current = currentWorkerAssignmentByDeliverable(store, 'task-546', 'dispatch-546');
+      if (tick < 3) expect(current?.deadObservationTicks).toBe(tick);
+      else expect(current).toBeNull();
+    }
+  });
+
+  it('hands off three reconciliations even when the first is persistently unresolved', async () => {
+    const { root, store, ledger } = fixture();
+    for (let index = 0; index < 3; index += 1) {
+      await publishCurrentWorkerAssignment({ file: store, repository: REPOSITORY,
+        issueNumber: 2814 + index, taskId: `task-${index}`, kind: index === 2 ? 'remote' : 'local',
+        provider: 'orca', bindingKey: `dispatch-${index}`, role: 'worker' });
+    }
+    const adapter = new class extends DeterministicRuntimeAdapter {
+      observeAssignmentLifecycle(): RuntimeResult<RuntimeAssignmentLifecycleObservation> {
+        return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
+      }
+    }();
+    const sweep = await reconcileWorkerAssignments({ file: store, repository: REPOSITORY, adapter,
+      terminalMailDeps: { ledgerPath: ledger, deliverMessage: null } });
+    const rows = sweep.reconciliations.map(({ assignment: row, reason }) => ({
+      assignmentId: row.assignmentId, assignmentGeneration: row.generation,
+      issueNumber: row.issueNumber, taskId: row.taskId, reason,
+    }));
+    expect(rows).toHaveLength(3);
+    const target = path.join(root, 'handoff.json');
+    expect(publishFleetReconciliationHandoff({ file: target, repository: REPOSITORY,
+      activationLineage: 'al-test', schedulerGeneration: 'sg-test', tickSequence: 1,
+      ...rows[0]!, reconciliations: rows }).ok).toBe(true);
+    expect(readFleetReconciliationHandoff(target)).toMatchObject({ ...rows[0]!, reconciliations: rows, reconciliationCount: 3 });
+  });
+
   it('drains a 72-row history in one observation per local row and only re-observes the retained set', async () => {
     const { store, ledger } = fixture();
     const rows = write72RowStore(store);

@@ -1845,7 +1845,7 @@ describe('Orca assignment resolution', () => {
         status: 'failed', reason: 'assignment_target_unresolved',
       });
       expect(adapter.observeAssignmentLifecycle({ provider: 'orca', bindingKey: 'dispatch-1' })).toMatchObject({
-        status: 'failed', reason: 'assignment_target_unresolved',
+        status: 'ok', value: { kind: 'gone', evidence: 'producer_exact_absence' },
       });
       expect(runJson.mock.calls.every((call) => call[0]?.[0] === 'orchestration')).toBe(true);
     },
@@ -1861,7 +1861,7 @@ describe('Orca assignment resolution', () => {
       status: 'failed', reason: 'assignment_target_unresolved',
     });
     expect(adapter.observeAssignmentLifecycle({ provider: 'orca', bindingKey: 'dispatch-1' })).toMatchObject({
-      status: 'failed', reason: 'assignment_target_unresolved',
+      status: 'ok', value: { kind: 'gone', evidence: 'producer_exact_absence' },
     });
   });
 
