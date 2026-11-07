@@ -620,10 +620,10 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     if (!parsed) {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
     }
-    if (isTerminallyFailedMissingRetained(parsed)) {
-      return corroboratedRetainedHandle(parsed, dispatchId)
-        ? { status: 'ok', value: { kind: 'gone', evidence: 'producer_exact_absence' } }
-        : runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
+    if (parsed.observation?.exactWorker === false
+      && parsed.observation.status === 'missing'
+      && TERMINAL_DISPATCH_STATES.has(String(parsed.dispatch?.status ?? '').trim().toLowerCase())) {
+      return { status: 'ok', value: { kind: 'gone', evidence: 'producer_exact_absence' } };
     }
     if (parsed.observation?.exactWorker !== true) {
       return runtimeFailure('resolve_assignment_worker', 'assignment_target_unresolved');
