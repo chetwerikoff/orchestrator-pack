@@ -309,6 +309,40 @@ afterEach(() => {
 });
 
 describe('post-merge destructive teardown', () => {
+  it.each(['fork/source', 'upstream/base', 'another/fork'])(
+    'preserves a differently named local branch backing an open upstream PR from %s', async (source) => {
+      const paths = fixture();
+      const state = defaultState(paths);
+      const deps = dependencies(paths, state);
+      const base = deps.runner;
+      const report = await runPostMergeTeardown({ ...paths.args, apply: true }, {
+        ...deps,
+        runner: (invocation) => {
+          const response = base(invocation);
+          if (invocation.args[0] === 'pr' && invocation.args[1] === 'view') {
+            return result({ stdout: JSON.stringify({ ...JSON.parse(response.stdout),
+              headRefName: 'fork/source-A', headRepository: { nameWithOwner: 'fork/source' } }) });
+          }
+          if (invocation.args[0] === 'pr' && invocation.args[1] === 'list') {
+            // The source fork has no PRs based there; the PR from local B is
+            // visible only in readPr's upstream/base repository context.
+            if (invocation.args.includes('--repo')) return result({ stdout: '[]' });
+            expect(invocation.cwd).toBe(paths.repo);
+            return result({ stdout: JSON.stringify([{ number: 1330, headRefName: BRANCH,
+              headRepository: { nameWithOwner: source } }]) });
+          }
+          return response;
+        },
+      });
+      expect(report.outcome).toBe('cleanup_deferred');
+      expect(state.gitPresent).toBe(true);
+      expect(state.branchOid).toBe(H0);
+      expect(state.invocations.some((item) => item.args.includes('update-ref'))).toBe(false);
+      expect(state.invocations.filter((item) => item.args[0] === 'pr' && item.args[1] === 'list'))
+        .not.toContainEqual(expect.objectContaining({ args: expect.arrayContaining(['--repo', 'fork/source']) }));
+    },
+  );
+
   it('cleans the explicitly bound local branch when the PR source branch has a different name', async () => {
     const paths = fixture();
     const state = defaultState(paths);
@@ -319,7 +353,8 @@ describe('post-merge destructive teardown', () => {
       runner: (invocation) => {
         const response = base(invocation);
         if (invocation.args[0] === 'pr' && invocation.args[1] === 'view') {
-          return result({ stdout: JSON.stringify({ ...JSON.parse(response.stdout), headRefName: 'pushed/source-branch' }) });
+          return result({ stdout: JSON.stringify({ ...JSON.parse(response.stdout), headRefName: 'pushed/source-branch',
+            headRepository: { nameWithOwner: 'fork/source' } }) });
         }
         return response;
       },
@@ -643,7 +678,7 @@ describe('pack GH path in direct post-merge teardown', () => {
   ];
   const prListArgs = [
     'pr', 'list', '--state', 'open', '--json',
-    'number,headRefName,headRepository', '--repo', 'chetwerikoff/orchestrator-pack',
+    'number,headRefName,headRepository',
   ];
 
   it('preserves a target checkout without scripts/gh and runs both exact pack GH commands with target cwd', async () => {

@@ -672,13 +672,15 @@ function checkBranchOwnership(
     'open',
     '--json',
     'number,headRefName,headRepository',
-    '--repo',
-    pr.headRepository,
   ];
   const result = runner({ command: gh, args, cwd: normalizeWorktreePath(expected.repositoryRoot) });
   if (!result.ok) return false;
   try {
     const rows = JSON.parse(result.stdout) as Array<{ number?: number; headRefName?: string }>;
+    // Use readPrIdentity's base-repository context. The merged PR's
+    // headRepository may be a fork, whose PR list omits PRs into this base.
+    // Without a local remote binding, any same-named open PR is an ownership
+    // ambiguity (even from another head repository), never deletion authority.
     return rows.filter(
       (row) => normalizeBranchName(row.headRefName) === expected.branchName
         && row.number !== expected.bindingNumber,

@@ -367,6 +367,34 @@ describe('dual census authority', () => {
 });
 
 describe('guarded Git-only recovery', () => {
+  it.each(['fork/source', 'upstream/base', 'another/fork'])(
+    'preserves local B when an upstream open PR from %s may own it', (source) => {
+      const paths = fixture();
+      const value = state();
+      const opts = operations(paths, value);
+      const base = opts.runner!;
+      const report = runLifecycle({ expected: { ...paths.expected, finalPrHeadSha: HEAD }, context: 'explicit-recovery', apply: true,
+        operations: { ...opts, runner: (invocation) => {
+          const response = base(invocation);
+          if (invocation.args[0] === 'pr' && invocation.args[1] === 'view') {
+            return result({ stdout: JSON.stringify({ ...JSON.parse(response.stdout),
+              headRefName: 'fork/source-A', headRepository: { nameWithOwner: 'fork/source' } }) });
+          }
+          if (invocation.args[0] === 'pr' && invocation.args[1] === 'list') {
+            if (invocation.args.includes('--repo')) return result({ stdout: '[]' });
+            expect(invocation.cwd).toBe(paths.repo);
+            return result({ stdout: JSON.stringify([{ number: 1301, headRefName: BRANCH,
+              headRepository: { nameWithOwner: source } }]) });
+          }
+          return response;
+        } },
+      });
+      expect(report).toMatchObject({ outcome: 'cleanup_deferred', gates: { branchOwnership: false } });
+      expect(value.removeCount).toBe(0);
+      expect(value.invocations.some((item) => item.args.includes('update-ref') || item.args.includes('-d'))).toBe(false);
+    },
+  );
+
   it('accepts an explicitly bound local branch whose name differs from the merged PR source', () => {
     const paths = fixture();
     const value = state();
@@ -376,7 +404,8 @@ describe('guarded Git-only recovery', () => {
       operations: { ...opts, runner: (invocation) => {
         const response = base(invocation);
         if (invocation.args[0] === 'pr' && invocation.args[1] === 'view') {
-          return result({ stdout: JSON.stringify({ ...JSON.parse(response.stdout), headRefName: 'pushed/other-name' }) });
+          return result({ stdout: JSON.stringify({ ...JSON.parse(response.stdout), headRefName: 'pushed/other-name',
+            headRepository: { nameWithOwner: 'fork/source' } }) });
         }
         return response;
       } },
@@ -759,7 +788,7 @@ describe('pack-owned lifecycle tool paths', () => {
         command: WRAPPER_PATH,
         args: [
           'pr', 'list', '--state', 'open', '--json',
-          'number,headRefName,headRepository', '--repo', 'chetwerikoff/orchestrator-pack',
+          'number,headRefName,headRepository',
         ],
         cwd: paths.repo,
       },

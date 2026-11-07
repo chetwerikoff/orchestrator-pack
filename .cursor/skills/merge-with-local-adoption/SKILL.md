@@ -261,10 +261,11 @@ report that exact external refusal; do not relabel it as a pack decision.
 
 ### Step 3-waiver — operator-authorized pack-review waiver
 
-Delegated-integration mode must not enter this subsection. Direct-user mode and qualifying
-orchestrator-issued Task mode may enter it only when the standing order permits the waiver
-and the authorized merge instruction includes
-the applicable no-review command below. Task-spec authority requires the exact matching command
+Delegated-integration mode must not enter this subsection. Direct-user mode may enter it
+when the direct user's written merge instruction includes the applicable no-review command
+below; it requires no standing order. Orchestrator-issued Task mode may enter it only when
+the standing order permits the waiver and the authorized Task includes that command and
+the waiver line. Task-spec authority requires the exact matching command
 to appear in the merge agent's own Orca Task spec, issued by its dispatching orchestrator.
 
 When the merge command includes either **«мерж N без ревью»**, **«merge N without review»**,

@@ -192,6 +192,10 @@ describe('Issue #926 delegated integration tracked procedure', () => {
     expect(override).not.toContain('qualifying orchestrator-issued Task instruction authorizes it');
     expect(skill).not.toContain('including repository-owned overrides');
     expect(skill).not.toContain('direct-user or qualifying Task modes may use Step 9b');
+    const waiver = skill.split('### Step 3-waiver — operator-authorized pack-review waiver')[1]!.split('## Step 4')[0]!;
+    expect(waiver).toContain("Direct-user mode may enter it\nwhen the direct user's written merge instruction");
+    expect(waiver).toContain('it requires no standing order');
+    expect(waiver).toContain('Orchestrator-issued Task mode may enter it only when\nthe standing order permits');
   });
 
   it('requires independent local adoption discovery and report-only operational outcomes', () => {

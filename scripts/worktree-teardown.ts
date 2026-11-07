@@ -626,17 +626,20 @@ function proveBranchOwnership(
   branch: string | null,
 ): boolean {
   if (!branch) return true;
-  const repo = info.headRepository?.nameWithOwner;
-  if (!repo) return false;
+  if (!info.headRepository?.nameWithOwner) return false;
   const gh = WRAPPER_PATH;
   const stdout = runChecked(runner, {
     command: gh,
     args: [
       'pr', 'list', '--state', 'open', '--json',
-      'number,headRefName,headRepository', '--repo', repo,
+      'number,headRefName,headRepository',
     ],
     cwd: repositoryRoot,
-  }, 'gh pr list');
+  }, 'gh pr list in merged PR base repository');
+  // Match readPr's repository context, not headRepository: PRs from a fork into
+  // this base are absent from the fork's own PR list. A same-named branch from
+  // any source repository is ambiguous without a local remote binding; preserve
+  // it rather than guessing that it is unrelated to this local ref.
   const rows = parseJson(stdout, 'gh pr list');
   if (!Array.isArray(rows)) throw new TypeError('gh pr list returned a non-array');
   return rows.every((value) => {
