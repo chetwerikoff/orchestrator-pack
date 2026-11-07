@@ -845,7 +845,8 @@ export async function claudePaneProfileObserved(
   if (!family) return false;
   // Read the final model status row, never a model/effort quoted by transcript text.
   const statusRow = /^\s*(?:Claude\s+)?(?:Opus|Sonnet)(?:[- .]?5[- .]?5)\b/iu;
-  const modelIndex = footer.findLastIndex((line) => statusRow.test(line));
+  let modelIndex = footer.length - 1;
+  while (modelIndex >= 0 && !statusRow.test(footer[modelIndex]!)) modelIndex -= 1;
   if (modelIndex < 0) return false;
   const modelLine = new RegExp(`^\\s*(?:Claude\\s+)?${family}(?:[- .]?5[- .]?5)\\b`, 'iu');
   const row = footer[modelIndex]!;
