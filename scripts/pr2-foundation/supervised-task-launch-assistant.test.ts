@@ -8177,7 +8177,7 @@ describe('manager push guard proof classes', () => {
         // Invoke the actual guard against disposable Git, intercepting only one
         // source-discovery child to deterministically simulate a timeout. This
         // avoids a flaky 20-second wall-clock pass/fail threshold.
-        const direct = async (timeoutDuringTracking: boolean): Promise<{
+        const direct = async (timeoutChild?: 'tracking' | 'batch'): Promise<{
           status: number; stderr: string; children: Array<{
             args: readonly string[]; timeoutMs: number; input?: string | Uint8Array;
           }>;
@@ -8191,8 +8191,12 @@ describe('manager push guard proof classes', () => {
               children.push({ args: [...args], timeoutMs: options.timeoutMs,
                 ...(options.input === undefined ? {} : { input: options.input }) });
             }
-            if (timeoutDuringTracking && options.command === 'git' && args[0] === 'for-each-ref'
-              && args.some((arg) => arg.startsWith('refs/remotes/origin'))) {
+            if (options.command === 'git' && (
+              (timeoutChild === 'tracking' && args[0] === 'for-each-ref'
+                && args.some((arg) => arg.startsWith('refs/remotes/origin')))
+              || (timeoutChild === 'batch' && args[0] === 'cat-file'
+                && args.some((arg) => arg === '--batch-check' || arg.startsWith('--batch-check=')))
+            )) {
               return { ok: false, outcome: 'timeout', exitCode: null, signal: null, stdout: '', stderr: '',
                 timedOut: true, cancelled: false };
             }
@@ -8212,7 +8216,7 @@ describe('manager push guard proof classes', () => {
           return { status, stderr, children };
         };
 
-        const timedOut = await direct(true);
+        const timedOut = await direct('tracking');
         expect(timedOut.status).toBe(1);
         expect(timedOut.stderr).toContain('AC2 denied ' + ref);
         expect(timedOut.stderr).toContain('exact-patch proof work exhausted');
@@ -8226,7 +8230,18 @@ describe('manager push guard proof classes', () => {
           && child.timeoutMs > 0 && child.timeoutMs <= 20_000)).toBe(true);
         expect(remoteRef(world, ref)).toBe('');
 
-        const proven = await direct(false);
+        const batchTimedOut = await direct('batch');
+        expect(batchTimedOut.status).toBe(1);
+        expect(batchTimedOut.stderr).toContain('AC2 denied ' + ref);
+        expect(batchTimedOut.stderr).toContain('exact-patch proof work exhausted');
+        expect(batchTimedOut.stderr).toContain('batch patch path lookup elapsed/child timeout');
+        expect(batchTimedOut.stderr).toContain('may still exist within the 500-commit source window');
+        expect(batchTimedOut.children.some((child) => child.args[0] === 'cat-file'
+          && child.args.some((arg) => arg === '--batch-check' || arg.startsWith('--batch-check='))
+          && child.timeoutMs > 0 && child.timeoutMs <= 20_000)).toBe(true);
+        expect(remoteRef(world, ref)).toBe('');
+
+        const proven = await direct();
         expect(proven.status, proven.stderr).toBe(0);
         const configReads = proven.children.filter((child) =>
           child.args[0] === 'config' && child.args.includes('remote.origin.fetch'));
@@ -8234,7 +8249,8 @@ describe('manager push guard proof classes', () => {
         const refScans = proven.children.filter((child) => child.args[0] === 'for-each-ref'
           && child.args.some((arg) => arg.startsWith('refs/remotes/origin')));
         expect(refScans).toHaveLength(1);
-        const batched = proven.children.filter((child) => child.args.includes('--batch-check'));
+        const batched = proven.children.filter((child) => child.args[0] === 'cat-file'
+          && child.args.some((arg) => arg === '--batch-check' || arg.startsWith('--batch-check=')));
         expect(batched).toHaveLength(1);
         const pathProbes = String(batched[0]!.input).trim().split('\n').length;
         expect(pathProbes).toBeLessThan(400); // 400 refs share one real commit ID.
@@ -8254,6 +8270,90 @@ describe('manager push guard proof classes', () => {
         expect(pushed.status, pushed.out).toBe(0);
         expect(remoteRef(world, ref)).toBe(candidate);
       }), 60_000);
+
+    it('measures the actual batch stdin and caps over 2048 distinct mapped source commits',
+      withWorld({}, async (world) => {
+        // Fast-import real Git commits efficiently; the locally mapped tracking
+        // refs are admitted under B5's documented local-ref trust limit, not
+        // treated as authentication of publication on the remote.
+        const importStream: string[] = ['blob\nmark :1\ndata 5\nbulk\n'];
+        for (let index = 0; index < 2_100; index += 1) {
+          const message = 'bulk history source ' + index;
+          importStream.push('commit refs/heads/bulk-history\n'
+            + 'mark :' + (index + 2) + '\n'
+            + 'author fixture <fixture@example.test> 1700000000 +0000\n'
+            + 'committer fixture <fixture@example.test> 1700000000 +0000\n'
+            + 'data ' + Buffer.byteLength(message) + '\n' + message + '\n'
+            + 'from ' + (index === 0 ? world.seed : ':' + (index + 1)) + '\n'
+            + 'M 100644 :1 README.md\n\n');
+        }
+        const imported = runProcessSync({ command: 'git', args: ['fast-import', '--quiet'],
+          cwd: world.manager, env: GIT_ENV, input: importStream.join('') });
+        expect(imported.ok, imported.stderr).toBe(true);
+        const ancestry = git(world.manager, 'rev-list', '--first-parent', '--max-count=2200',
+          'refs/heads/bulk-history').split('\n');
+        expect(new Set(ancestry).size).toBeGreaterThan(2_048);
+        for (let index = 0; index < 5; index += 1) {
+          git(world.manager, 'update-ref', 'refs/remotes/origin/bulk-' + index, ancestry[index * 500]!);
+        }
+
+        managerOn(world, 'bulk-unproved', world.seed);
+        write(world.manager, 'README.md', 'no eligible patch matches this candidate\n');
+        const candidate = commit(world.manager, 'ordinary candidate under over-cap source discovery');
+        const ref = 'refs/heads/over-cap';
+        const tuple = Buffer.from('HEAD ' + candidate + ' ' + ref + ' ' + ZERO + '\n');
+        const realSync = subprocess.runProcessSync;
+        const batchInputs: string[] = [];
+        const timeouts: number[] = [];
+        let stderr = '';
+        const childSpy = vi.spyOn(subprocess, 'runProcessSync').mockImplementation((options) => {
+          const args = options.args ?? [];
+          if (options.command === 'git' && options.timeoutMs !== undefined) {
+            timeouts.push(options.timeoutMs);
+            if (args[0] === 'cat-file'
+              && args.some((arg) => arg === '--batch-check' || arg.startsWith('--batch-check='))) {
+              batchInputs.push(String(options.input ?? ''));
+            }
+          }
+          return realSync(options);
+        });
+        const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+          stderr += String(chunk);
+          return true;
+        });
+        let status: number;
+        try {
+          status = await runPrePush(['origin', world.bare], tuple, world.manager);
+        } finally {
+          stderrSpy.mockRestore();
+          childSpy.mockRestore();
+        }
+
+        expect(status).toBe(1);
+        expect(batchInputs).toHaveLength(1);
+        const probes = batchInputs[0]!.trimEnd().split('\n');
+        expect(probes).toHaveLength(2_048);
+        expect(new Set(probes).size).toBe(2_048);
+        const sourceOids = new Set(ancestry);
+        expect(probes.every((expression) =>
+          /^[0-9a-f]{40}:patch\.diff$/u.test(expression) && sourceOids.has(expression.slice(0, 40)))).toBe(true);
+        expect(timeouts.length).toBeGreaterThan(0);
+        expect(timeouts.every((limit) => limit > 0 && limit <= 20_000)).toBe(true);
+        expect(timeouts.at(-1)!).toBeLessThanOrEqual(timeouts[0]!);
+        expect(stderr).toContain('AC2 denied ' + ref);
+        expect(stderr).toContain('exact-patch proof work exhausted');
+        expect(stderr).toContain('source path probe limit');
+        expect(stderr).toMatch(/source probes 2048\/2048; apply trials 0\/1024; elapsed \d+\/20000 ms/u);
+        expect(stderr).toContain('may still exist within the 500-commit source window');
+        expect(stderr.trimEnd().split('\n').slice(-2)).toEqual([
+          'git show --no-patch --format=fuller ' + candidate, B5_ROUTE_SENTENCE,
+        ]);
+        expect(remoteRef(world, ref)).toBe('');
+        const pushed = gitTry(world.manager, 'push', 'origin', 'HEAD:' + ref);
+        expect(pushed.status).not.toBe(0);
+        expect(pushed.out).toContain('exact-patch proof work exhausted');
+        expect(remoteRef(world, ref)).toBe('');
+      }), 120_000);
 
     it('admits unchanged docs-only tip and first-parent ancestor patches with exact P/applied/C trees', withWorld({}, (world) => {
       const other = otherClone(world);
@@ -8443,18 +8543,11 @@ describe('manager push guard proof classes', () => {
           return git(world.manager, 'rev-parse', 'HEAD');
         };
 
-        // Git's native Trace2 start records count actual proof Git child invocations.
-        // Independently enumerate deduplicated eligible first-parent source OIDs before the push;
-        // the one observed batch-check child receives one path probe per such OID (up to the cap).
+        // Trace2 counts actual proof Git child invocations and application trials.
+        // The separate over-cap test captures the actual batch-check stdin paths.
         const tracedPush = (target: string): {
-          status: number; out: string; trials: number; probes: number; batches: number;
+          status: number; out: string; trials: number; batches: number;
         } => {
-          const eligible = new Set<string>();
-          for (const tip of git(world.manager, 'for-each-ref', '--format=%(objectname)', 'refs/remotes/origin')
-            .split('\n').filter(Boolean)) {
-            for (const source of git(world.manager, 'rev-list', '--first-parent', '--max-count=500', tip)
-              .split('\n').filter(Boolean)) eligible.add(source);
-          }
           const tracePath = join(world.base, 'git-trace2-' + randomUUID() + '.jsonl');
           const result = runProcessSync({
             command: 'git', args: ['push', 'origin', 'HEAD:refs/heads/' + target],
@@ -8474,7 +8567,6 @@ describe('manager push guard proof classes', () => {
             out: result.stdout + result.stderr,
             batches: count(['cat-file', '--batch-check']),
             trials: count(['apply', '--cached']),
-            probes: Math.min(eligible.size, 2_048),
           };
         };
 
@@ -8483,8 +8575,6 @@ describe('manager push guard proof classes', () => {
         expect(admitted.status, admitted.out).toBe(0);
         expect(remoteRef(world, 'refs/heads/near-proven')).toBe(nearHead);
         expect(admitted.batches).toBe(1);
-        expect(admitted.probes).toBeGreaterThanOrEqual(500);
-        expect(admitted.probes).toBeLessThanOrEqual(2_048);
         expect(admitted.trials).toBeGreaterThanOrEqual(3);
         expect(admitted.trials).toBeLessThanOrEqual(1_024);
 
@@ -8497,7 +8587,6 @@ describe('manager push guard proof classes', () => {
         expect(refused.out).toContain('may still exist within the 500-commit source window');
         expect(refused.out).toMatch(/source probes \d+\/2048; apply trials \d+\/1024; elapsed \d+\/20000 ms/u);
         expect(refused.batches).toBe(1);
-        expect(refused.probes).toBeLessThanOrEqual(2_048);
         expect(refused.trials).toBeLessThanOrEqual(1_024);
         expect(remoteRef(world, ref)).toBe('');
 
@@ -8516,7 +8605,6 @@ describe('manager push guard proof classes', () => {
         const recovered = tracedPush('many');
         expect(recovered.status, recovered.out).toBe(0);
         expect(recovered.batches).toBe(1);
-        expect(recovered.probes).toBeLessThanOrEqual(2_048);
         expect(recovered.trials).toBeLessThanOrEqual(1_024);
         expect(remoteRef(world, ref)).toBe(recoveredHead);
       }), 180_000);
