@@ -118,6 +118,7 @@ import {
   SEND_BUTTON_SELECTOR,
   RENDERED_CONVERSATION_TURN_SECTION_SELECTOR,
   RENDERED_STOP_BUTTON_SELECTOR,
+  STOP_BUTTON_SELECTOR,
   CONNECTION_RECOVERY_STATUS_SELECTOR,
   stripUiCollapseAffixes,
   UNMARKED_ALERT_SELECTOR,
@@ -320,8 +321,8 @@ const BLOCKING_PAGE_OVERLAY_SELECTOR = '[role="dialog"][aria-modal="true"], [dat
 const MESSAGE_NODE_READ_TIMEOUT_MS = 800;
 const MESSAGE_NODE_READ_RETRY_TIMEOUT_MS = 400;
 const MESSAGE_NODE_READ_ATTEMPTS = 2;
-/** Exact generation selector already owned by browser-gpt-page-probe; do not widen it here. */
-const BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR = '[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]';
+/** Shared Stop controls plus the existing non-button generation signals. */
+const BROWSER_GPT_PAGE_TURN_GENERATION_SELECTOR = `${STOP_BUTTON_SELECTOR}, [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]`;
 const CONTINUE_GENERATING_SELECTOR = 'button[aria-label*="Continue generating" i], button[data-testid*="continue-generating"], button[data-testid*="continue_generating"]';
 /** Post-send wall probes must not block transcript reads or the confirm loop. */
 const POST_SEND_PRODUCT_WALL_PROBE_MS = 2_000;
