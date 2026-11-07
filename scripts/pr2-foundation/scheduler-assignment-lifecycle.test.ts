@@ -33,9 +33,51 @@ import {
   consumeObservedTerminalAssignment,
   reconcileWorkerAssignments,
 } from '../reconcile-worker-assignments.ts';
+import { prepareWorktreeWithOrca } from './supervised-task-launch-assistant.ts';
 
 const roots: string[] = [];
 const REPOSITORY = 'chetwerikoff/orchestrator-pack';
+
+describe('Issue #2788 retirement never manufactures dirty-worktree ownership', () => {
+  it.each(['failed', 'abandoned', 'cancelled'])('preserves dirty bytes and refuses %s restoration after the normal mail-and-tick retirement', async (state) => {
+    const { root, store, ledger } = fixture();
+    const tracked = path.join(root, 'tracked-change.txt');
+    const untracked = path.join(root, 'untracked-change.txt');
+    writeFileSync(tracked, 'retained uncommitted edit\n');
+    writeFileSync(untracked, 'retained new bytes\n');
+    const published = await publishCurrentWorkerAssignment({ file: store, repository: REPOSITORY,
+      issueNumber: 2788, taskId: 'task-2788', kind: 'local', provider: 'orca', bindingKey: 'dispatch-2788', role: 'worker' });
+    if (!published.ok) throw new Error(published.reason);
+    writeFileSync(ledger, JSON.stringify({ notified: { 'dispatch-2788': 'sent:msg-2788' } }));
+    let elapsed = 0;
+    const adapter = new class extends DeterministicRuntimeAdapter {
+      observeAssignmentLifecycle(): RuntimeResult<RuntimeAssignmentLifecycleObservation> {
+        elapsed += 2_000;
+        return { status: 'ok', value: { kind: 'terminal', released: true, snapshot: {
+          dispatchId: 'dispatch-2788', runId: 'run-2788', state, stage: 'terminal', lastError: null,
+          dispatchStatus: state, observationStatus: 'exited',
+        } } };
+      }
+    }();
+    const tick = await reconcileWorkerAssignments({ file: store, repository: REPOSITORY, adapter,
+      terminalMailDeps: { ledgerPath: ledger, deliverMessage: null } });
+    expect(tick.counts.retired).toBe(1);
+    expect(elapsed).toBe(2_000);
+    expect(currentWorkerAssignmentByDeliverable(store, 'task-2788', 'dispatch-2788')).toBeNull();
+    const commands: readonly string[][] = [];
+    const observed: string[][] = commands as string[][];
+    const restore = await prepareWorktreeWithOrca({ repository: REPOSITORY, issueNumber: 2788,
+      taskId: 'task-2788', worktreeSelector: `path:${root}` }, async (argv) => {
+      observed.push([...argv]);
+      return { ok: true, stdout: JSON.stringify({ ok: true, result: { worktree: { id: 'repo::retained', path: root } } }) };
+    });
+    expect(restore).toMatchObject({ status: 'continue', cause: 'worktree_reuse_ownership_unproven' });
+    expect(observed).toEqual([['orca', 'worktree', 'show', '--worktree', `path:${root}`, '--json']]);
+    expect(readFileSync(tracked, 'utf8')).toBe('retained uncommitted edit\n');
+    expect(readFileSync(untracked, 'utf8')).toBe('retained new bytes\n');
+  });
+});
+
 
 function fixture(): { root: string; store: string; ledger: string } {
   const root = mkdtempSync(path.join(tmpdir(), 'opk-1899-'));

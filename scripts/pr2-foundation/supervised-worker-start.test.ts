@@ -593,7 +593,8 @@ describe('supervised worker start exact assignment admission',()=>{
       inspect:inspectPlacement(),
       execute:async()=>{starts+=1;return{ok:true,stdout:envelope({taskId:'task_blocked',dispatchId:'dispatch_new',state:'ready',effects:producerEffects()})};},
     });
-    expect(result).toEqual({ok:false,reason:'target_unresolved',errorMessage:'native cause unavailable'});
+    expect(result).toEqual({ok:false,reason:'target_unresolved',errorMessage:'native_worker_show_unreadable',
+      admissionEvidence: { assignmentTaskId: 'task_old', assignmentDispatchId: 'dispatch_old', missingWitness: 'native_worker_show_unreadable' } });
     expect(starts).toBe(0);
     expect(currentWorkerAssignment(file,1416)).toEqual(old.assignment);
     expect(runJson.mock.calls.some((call)=>call[0]?.slice(0,2).join(' ')==='orchestration send')).toBe(true);
@@ -613,9 +614,46 @@ describe('supervised worker start exact assignment admission',()=>{
       inspect:inspectPlacement({terminal:'foreign-terminal'}),
       execute:async()=>{calls+=1;return{ok:true,stdout:envelope({taskId:'task_new',dispatchId:'dispatch_new',state:'ready',effects:producerEffects({terminal:'foreign-terminal'})})}},
     });
-    expect(result).toEqual({ok:false,reason:'target_unresolved',errorMessage:'native cause unavailable'});
+    expect(result).toEqual({ok:false,reason:'target_unresolved',errorMessage:'native_worker_show_unreadable',
+      admissionEvidence: { assignmentTaskId: 'task_old', assignmentDispatchId: 'dispatch_old', missingWitness: 'native_worker_show_unreadable' } });
     expect(calls).toBe(0);
     expect(currentWorkerAssignment(file,1416)).toEqual(old.assignment);
+  });
+
+  it.each([
+    { mode: 'live', cause: 'holder_live_no_replacement_authority' },
+    { mode: 'delegated-merge', cause: 'holder_live_no_replacement_authority' },
+    { mode: 'malformed', cause: 'native_worker_observation_malformed' },
+    { mode: 'foreign', cause: 'native_dispatch_identity_missing_or_foreign' },
+  ])('Issue #2788 projects only source-observed holder evidence: $mode', async ({ mode, cause }) => {
+    const base = root();
+    const env = { ...process.env, OPK_BASE_DIR: base };
+    const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
+    const old = await publishCurrentWorkerAssignment({ file, repository: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1416, taskId: 'task_old', kind: 'local', provider: 'orca', bindingKey: 'dispatch_old', role: 'worker' });
+    if (!old.ok) throw new Error(old.reason);
+    const shown = { ...terminallyFailedExactLiveRetainedShow(),
+      dispatch: { id: mode === 'foreign' ? 'dispatch_other' : 'dispatch_old', taskId: 'task_old', status: 'failed' },
+      observation: mode === 'malformed' ? { status: 17 } : { exactWorker: true, status: 'live' },
+      terminal: { handle: 'term-holder', incarnationId: 'holder-incarnation' },
+    };
+    const placement = inspectPlacement({ terminal: 'foreign-terminal' });
+    let starts = 0;
+    const result = await runSupervisedWorkerStart({ role: 'worker', issueNumber: 1416,
+      ...(mode === 'delegated-merge' ? { delegatedIntegration: { prNumber: 926, expectedHeadSha: 'a'.repeat(40),
+        predecessorAssignmentId: old.assignment.assignmentId, predecessorGeneration: old.assignment.generation } } : {}),
+      repository: 'chetwerikoff/orchestrator-pack', env, orcaArgs: argsForTerminal('terminal:foreign-owned', mode === 'delegated-merge' ? 'task_old' : 'task_new'),
+      adapter: new OrcaTaskRuntimeAdapter({ runJson: (() => ({ ok: true, result: terminallyFailedExactLiveRetainedShow() })) as never }),
+      inspect: async (argv) => argv[1] === 'worker-show' ? { ok: true, stdout: envelope(shown) } : placement(argv),
+      execute: async () => { starts += 1; return { ok: false, stdout: '' }; },
+    });
+    expect(result).toMatchObject({ ok: false, reason: 'target_unresolved', errorMessage: cause,
+      admissionEvidence: { assignmentTaskId: 'task_old', assignmentDispatchId: 'dispatch_old', missingWitness: cause } });
+    if (mode === 'live' || mode === 'delegated-merge') expect(result.admissionEvidence).toMatchObject({ terminalHandle: 'term-holder',
+      terminalIncarnation: 'holder-incarnation', dispatchState: 'failed', observationStatus: 'live' });
+    else expect(result.admissionEvidence).not.toHaveProperty('terminalHandle');
+    expect(starts).toBe(0);
+    expect(currentWorkerAssignment(file, 1416)).toEqual(old.assignment);
   });
 
   it('rejects a missing/failed/retained historical terminal on all three repeated start attempts', async () => {

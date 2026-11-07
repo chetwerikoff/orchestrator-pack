@@ -4404,7 +4404,7 @@ describe('Issue #2689 r03 exact native terminal -> canonical Issue assignment ->
     };
     const opencodeExecutable = '/opt/opencode/1.18.35/bin/opencode';
     const env = {
-      ...process.env, OPK_BASE_DIR: root,
+      ...process.env, OPK_BASE_DIR: root, OPK_PROJECT_ID: 'orchestrator-pack',
       PACK_EXECUTOR_MANAGER_AGENT: 'opencode',
       PACK_EXECUTOR_MANAGER_MODEL: 'fixture-opencode-model',
       PACK_EXECUTOR_MANAGER_EFFORT: 'fixture-opencode-effort',
@@ -4431,17 +4431,18 @@ describe('Issue #2689 r03 exact native terminal -> canonical Issue assignment ->
       { kind: 'dispatch_input', role: 'agent', id: handle, state: 'accepted' },
     ];
     let dispatchState: 'dispatched' | 'failed' = 'dispatched';
+    let nativeCommand = '';
     const nativeCalls: string[][] = [];
     const native = (args: readonly string[]): OrcaJsonResponse => {
       nativeCalls.push([...args]);
       switch (args.slice(0, 2).join(' ')) {
         case 'terminal show':
           return { ok: true, result: { terminal: {
-            handle, incarnationId, worktreePath, title: manager.title, status: 'running',
+            handle, incarnationId, worktreePath, title: manager.title, status: 'running', command: nativeCommand,
           } } };
         case 'terminal list':
           return { ok: true, result: { terminals: [{
-            handle, incarnationId, worktreePath, title: manager.title, status: 'running',
+            handle, incarnationId, worktreePath, title: manager.title, status: 'running', command: nativeCommand,
           }], totalCount: 1, truncated: false } };
         case 'terminal wait':
           return { ok: true, result: { wait: { status: 'running', satisfied: true } } };
@@ -4477,8 +4478,17 @@ describe('Issue #2689 r03 exact native terminal -> canonical Issue assignment ->
         adapter,
         commandPreflight: () => ({ status: 'ok', value: true }),
         repositoryPreflight: async () => ({ status: 'ok', value: true }),
-        resolveProfile: (workClass, profileEnv, startMode) => resolveLiveExecutorProfile(
-          workClass, profileEnv, startMode, async (args) => opencodeProbeResult(args)),
+        resolveProfile: async (workClass, profileEnv, startMode) => {
+          const profile = await resolveLiveExecutorProfile(
+            workClass, profileEnv, startMode, async (args) => opencodeProbeResult(args));
+          if (profile.status === 'ok') {
+            const launchCommand = profile.value.launchCommand.replace(` ${opencodeExecutable} `,
+              ` XDG_STATE_HOME='/tmp/opk-opencode-state-11111111-1111-4111-8111-111111111111' ${opencodeExecutable} `);
+            nativeCommand = "OPK_PROJECT_ID='orchestrator-pack' " + launchCommand;
+            return { ...profile, value: { ...profile.value, launchCommand } };
+          }
+          return profile;
+        },
         observeManagerRun: async () => ({ status: 'ok', value: { runId: 'run-2689' } }),
         proveManagerTaskMembership: async () => ({ status: 'ok', value: { taskId } }),
         readManagerBriefTemplate: async () => ({ status: 'ok', value: 'not used' }),

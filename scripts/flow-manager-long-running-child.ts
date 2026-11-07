@@ -1832,7 +1832,8 @@ export type OwnerCurrencyState = 'current' | 'not_current' | 'unverified';
 export function observeOwnerCurrency(
   taskId: string, dispatchId: string, env: NodeJS.ProcessEnv = process.env,
 ): { readonly state: OwnerCurrencyState; readonly evidence: string } {
-  const projectId = env.OPK_PROJECT_ID?.trim() || 'orchestrator-pack';
+  const projectId = env.OPK_PROJECT_ID?.trim();
+  if (!projectId) return { state: 'unverified', evidence: 'project_selection_required' };
   let file: string;
   try {
     file = resolveWorkerAssignmentStorePath(projectId, env);
@@ -1889,7 +1890,8 @@ export type OwnerAuthority =
  */
 export async function verifyCurrentInvokingOwner(input: OwnerAuthorityInput): Promise<OwnerAuthority> {
   const env = input.env ?? process.env;
-  const projectId = env.OPK_PROJECT_ID?.trim() || 'orchestrator-pack';
+  const projectId = env.OPK_PROJECT_ID?.trim();
+  if (!projectId) return { ok: false, evidence: 'project_selection_required' };
   let file: string;
   try { file = resolveWorkerAssignmentStorePath(projectId, env); }
   catch { return { ok: false, evidence: 'assignment_store_path_unresolved' }; }
@@ -2739,11 +2741,18 @@ async function ownerWaitReap(input: {
   readonly receipt: HandoffReceipt;
   readonly profile?: string; readonly cdp?: string;
   readonly deps: OwnerWaitDependencies;
+  readonly readWinner: () => TerminalEnvelope | null;
 }): Promise<OwnerWaitOutcome> {
   const none = (reason: string, nextStep: string, diagnostics?: Record<string, unknown>): OwnerWaitOutcome => ({
     effect: 'none', reason, nextStep, ...(diagnostics ? { diagnostics } : {}),
   });
   const { receipt } = input;
+  const winnerOutcome = (): OwnerWaitOutcome | null => {
+    const envelope = input.readWinner();
+    return envelope ? { effect: 'occupied_by_winner', envelope } : null;
+  };
+  const initialWinner = winnerOutcome();
+  if (initialWinner) return initialWinner;
   if (!receipt.owner_task_id?.trim() || !receipt.owner_dispatch_id?.trim() || !receipt.invocation_id?.trim()) {
     return none('original_receipt_not_managed', OWNER_RECONCILE_STEP);
   }
@@ -2755,8 +2764,12 @@ async function ownerWaitReap(input: {
     ...(input.deps.invokingTerminalHandle ? { invokingTerminalHandle: input.deps.invokingTerminalHandle } : {}),
   };
   const notOwner = (evidence: string) => none(`owner_not_current:${evidence}`,
-    'run this wait from the original Task+Dispatch worker terminal while that Dispatch is current and live (worker-show / current assignment), or reconcile the exact invocation on GitHub');
+    evidence === 'project_selection_required'
+      ? 'only if the original Task+Dispatch owner and owner-wait effect remain lawful: from that original worker terminal, re-invoke the exact original wait argv unchanged with a shell-quoted OPK_PROJECT_ID assignment for the independently verified selected project; do not guess the project or send again. Otherwise inspect the exact current assignment / worker-show, original Page and GitHub target read-only; do not re-invoke an unlawful owner-wait'
+      : 'run this wait from the original Task+Dispatch worker terminal while that Dispatch is current and live (worker-show / current assignment), or reconcile the exact invocation on GitHub');
   const owner = await verifyCurrentInvokingOwner(authorityInput);
+  const ownerRaceWinner = winnerOutcome();
+  if (ownerRaceWinner) return ownerRaceWinner;
   if (!owner.ok) return notOwner(owner.evidence);
   const launcher = observeOriginalLauncher(receipt, input.deps.launcherProbe);
   if (launcher.state !== 'dead') {
@@ -2764,11 +2777,8 @@ async function ownerWaitReap(input: {
       ? 'the original launcher is still live and owns its watchdog/child signal: wait again, or stop it through its exact-owner native supervisor; this wait never signals a PID'
       : 'original launcher death is unproven: reconcile through the exact-owner native supervisor and the original Page/GitHub target; no signal, no publication');
   }
-  const existing = readTerminalEnvelope(input.terminalEnvelopePath, {
-    runIdentity: input.runIdentity, attemptIdentity: input.attemptIdentity,
-  });
-  // A terminal committed after the poll loop is the original authority: report it, never replace it.
-  if (existing) return { effect: 'occupied_by_winner', envelope: existing };
+  const existingWinner = winnerOutcome();
+  if (existingWinner) return existingWinner;
   const invocationId = receipt.invocation_id;
   let record: StateLightTurnObservationRecord | undefined;
   let page: OwnerWaitPageWitness = { state: 'page_unverified', evidence: 'profile_cdp_not_supplied' };
@@ -2791,6 +2801,8 @@ async function ownerWaitReap(input: {
       }
     }
   }
+  const pageRaceWinner = winnerOutcome();
+  if (pageRaceWinner) return pageRaceWinner;
   const freshReceipt = readHandoffReceipt(input.handoffReceiptPath, {
     runIdentity: input.runIdentity, attemptIdentity: input.attemptIdentity,
   });
@@ -2842,11 +2854,15 @@ async function ownerWaitReap(input: {
       github_effect: github,
     }),
   };
+  const effectRaceWinner = winnerOutcome();
+  if (effectRaceWinner) return effectRaceWinner;
   // Owner authority is re-proven after the awaited Page/GitHub reads, and the exclusive create runs
   // inside the assignment fence: a Dispatch replaced meanwhile publishes nothing.
   let fenced: Awaited<ReturnType<typeof withVerifiedOwnerEffect<'created'>>>;
   try {
     fenced = await withVerifiedOwnerEffect(authorityInput, () => {
+      const winner = input.readWinner();
+      if (winner) throw new Error('terminal_winner_present');
       atomicCreateJson(input.terminalEnvelopePath, envelope as unknown as Record<string, unknown>, 'envelope');
       return 'created' as const;
     });
@@ -2854,15 +2870,9 @@ async function ownerWaitReap(input: {
     fenced = { ok: false, evidence: 'terminal_create_failed', actionEntered: true };
   }
   if (fenced.ok) return { effect: 'published', envelope };
+  const finalWinner = winnerOutcome();
+  if (finalWinner) return finalWinner;
   if (!fenced.actionEntered) return notOwner(fenced.evidence);
-  const winner = readTerminalEnvelope(input.terminalEnvelopePath, {
-    runIdentity: input.runIdentity, attemptIdentity: input.attemptIdentity,
-  });
-  if (winner && winner.launcher_started_at === receipt.launcher_started_at
-    && winner.handoff_committed_at === receipt.handoff_committed_at
-    && (winner.observed_invocation_id === undefined || winner.observed_invocation_id === invocationId)) {
-    return { effect: 'occupied_by_winner', envelope: winner };
-  }
   return none('terminal_publication_uncertain', 'an unreadable or foreign terminal occupies the original path: reconcile the exact invocation manually; never republish');
 }
 
@@ -2951,17 +2961,56 @@ export async function runWait(options: {
     || initialReceipt.completion_mode !== COMPLETION_MODE)) {
     throw new Error('wait_receipt_owner_mismatch');
   }
+  // Every winner, including one racing owner/native/Page reads, uses the same
+  // current locator and immutable original handoff, not a previous poll's trust.
+  const readWinner = (): TerminalEnvelope | null => {
+    const candidate = readTerminalEnvelope(terminalEnvelopePath, {
+      runIdentity: options.runIdentity, attemptIdentity: options.attemptIdentity,
+    });
+    if (!candidate) {
+      if ((indexed || taskBound) && existsSync(terminalEnvelopePath)) throw new Error('wait_receipt_identity_changed');
+      return null;
+    }
+    if (!indexed && !taskBound) return candidate;
+    const receipt = readHandoffReceipt(handoffReceiptPath, {
+      runIdentity: options.runIdentity, attemptIdentity: options.attemptIdentity,
+    });
+    if (indexed || taskBound) {
+      if (!explicitPathsBoundToLocator({ ...options, invocationId: options.invocationId ?? bound?.locator.invocation_id }, handoffReceiptPath, terminalEnvelopePath)) {
+        throw new Error('wait_locator_identity_changed');
+      }
+    }
+    const complete = candidate.completion_mode === COMPLETION_MODE
+      && typeof candidate.terminal_at === 'string' && Boolean(candidate.terminal_at.trim())
+      && typeof candidate.launcher_started_at === 'string' && Boolean(candidate.launcher_started_at.trim())
+      && typeof candidate.handoff_committed_at === 'string' && Boolean(candidate.handoff_committed_at.trim())
+      && ['success', 'incident'].includes(candidate.lifecycle_outcome)
+      && ['not-sent', 'POSSIBLY_DELIVERED', 'landed'].includes(candidate.delivery)
+      && typeof candidate.recovery_available === 'boolean'
+      && typeof candidate.handoff_receipt_path === 'string'
+      && candidate.handoff_receipt_path.length > 0;
+    if (!complete || !receipt || !sameHandoffIdentity(initialReceipt ?? bound?.receipt, receipt)
+      || candidate.launcher_started_at !== receipt.launcher_started_at
+      || candidate.handoff_committed_at !== receipt.handoff_committed_at
+      || (isAbsolute(candidate.handoff_receipt_path)
+        ? resolve(candidate.handoff_receipt_path) !== resolve(handoffReceiptPath)
+        : basename(normalize(candidate.handoff_receipt_path)) !== basename(handoffReceiptPath))
+      || (receipt.invocation_id && candidate.observed_invocation_id !== receipt.invocation_id)) {
+      throw new Error('wait_receipt_identity_changed');
+    }
+    return candidate;
+  };
   const started = Date.now();
   let envelope: TerminalEnvelope | null = null;
+  let handoff: HandoffReceipt | null = initialReceipt ?? bound?.receipt ?? null;
+  let ownerWait: OwnerWaitOutcome | undefined;
+  try {
   while (Date.now() - started < options.deadlineMs) {
-    envelope = readTerminalEnvelope(terminalEnvelopePath, {
-      runIdentity: options.runIdentity,
-      attemptIdentity: options.attemptIdentity,
-    });
+    envelope = readWinner();
     if (envelope) break;
     await delay(50);
   }
-  const handoff = readHandoffReceipt(handoffReceiptPath, {
+  handoff = readHandoffReceipt(handoffReceiptPath, {
     runIdentity: options.runIdentity,
     attemptIdentity: options.attemptIdentity,
   });
@@ -3005,7 +3054,6 @@ export async function runWait(options: {
   }
   // Only a Task-bound wait over a managed original receipt can ever reach the reaper; legacy,
   // direct and unbound waits stay diagnostic-only.
-  let ownerWait: OwnerWaitOutcome | undefined;
   if (!envelope && taskBound && handoff && initialReceipt && options.ownerDispatchId === undefined) {
     ownerWait = {
       effect: 'none', reason: 'owner_dispatch_required',
@@ -3022,11 +3070,22 @@ export async function runWait(options: {
       runIdentity: options.runIdentity, attemptIdentity: options.attemptIdentity,
       ownerTaskId: options.ownerTaskId!, ownerDispatchId: options.ownerDispatchId!,
       handoffReceiptPath, terminalEnvelopePath, receipt: initialReceipt,
+      readWinner,
       ...(options.profile ? { profile: options.profile } : {}),
       ...(options.cdp ? { cdp: options.cdp } : {}),
       deps: options.ownerWaitDependencies ?? {},
     });
     if (ownerWait.effect !== 'none') envelope = ownerWait.envelope;
+  }
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : '';
+    if (!(indexed || taskBound) || !existsSync(terminalEnvelopePath)
+      || !['wait_receipt_identity_changed', 'wait_locator_identity_changed'].includes(reason)) throw error;
+    // Occupancy is not terminal authority; keep the original bytes and the
+    // existing structured uncertainty outcome even when a late winner is invalid.
+    envelope = null;
+    ownerWait = { effect: 'none', reason: 'terminal_publication_uncertain',
+      nextStep: `${reason}: preserve the occupied terminal path; reconcile the exact original invocation ${options.invocationId ?? bound?.locator.invocation_id} and its receipt/locator read-only; do not overwrite, republish, signal a process or send again` };
   }
   process.stdout.write(JSON.stringify({
     schema: WAIT_SCHEMA,
