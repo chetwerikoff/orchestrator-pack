@@ -1,0 +1,33 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2807,
+  "declared_paths": [
+    "docs/target_repo_setup.md",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts",
+    "scripts/lib/target-context.test.ts",
+    "scripts/lib/target-context.ts",
+    "scripts/manager-formatter-fix.test.ts",
+    "scripts/manager-formatter-fix.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "denylist": [
+    ".github/workflows/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "tests/external-output-references/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/target_repo_setup.md",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts",
+    "scripts/lib/target-context.test.ts",
+    "scripts/lib/target-context.ts",
+    "scripts/manager-formatter-fix.test.ts",
+    "scripts/manager-formatter-fix.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "source_revision": "ff35699c64e8ad3b085d22d98454f89933e0e061"
+}
