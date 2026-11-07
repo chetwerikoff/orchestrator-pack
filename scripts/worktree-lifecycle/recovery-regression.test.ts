@@ -274,7 +274,7 @@ describe('cross-repository pack transport recovery regression', () => {
       },
       {
         command: WRAPPER_PATH,
-        args: ['pr', 'list', '--state', 'open', '--json', 'number,headRefName,headRepository', '--repo', 'chetwerikoff/orchestrator-pack'],
+        args: ['pr', 'list', '--state', 'open', '--json', 'number,headRefName,headRepository'],
         cwd: scenario.repo,
       },
     ]));

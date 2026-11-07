@@ -9,6 +9,7 @@
     "scripts/worktree-lifecycle/head-bound-runner.ts",
     "scripts/worktree-lifecycle/operations.test.ts",
     "scripts/worktree-lifecycle/operations.ts",
+    "scripts/worktree-lifecycle/recovery-regression.test.ts",
     "scripts/worktree-teardown.test.ts",
     "scripts/worktree-teardown.ts"
   ],
@@ -28,8 +29,9 @@
     "scripts/worktree-lifecycle/head-bound-runner.ts",
     "scripts/worktree-lifecycle/operations.test.ts",
     "scripts/worktree-lifecycle/operations.ts",
+    "scripts/worktree-lifecycle/recovery-regression.test.ts",
     "scripts/worktree-teardown.test.ts",
     "scripts/worktree-teardown.ts"
   ],
-  "source_revision": "dc7ce15ddf7363ea6bc43b37b0b8799162c9a6cf"
+  "source_revision": "e5fd846580602132d12d5aac9efcd836c1d2c0dc"
 }
