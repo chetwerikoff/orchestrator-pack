@@ -277,6 +277,7 @@ function resolveLocalModulePath(fromFile: string, specifier: string): string | n
 function resolveScriptDependencyClosureFromAbsEntry(
   entryScript: string,
   repoRoot: string,
+  selectedCardProducer = false,
 ): { relPaths: string[]; establishable: boolean } {
   const repoRootNorm = path.normalize(repoRoot);
   const visited = new Set<string>();
@@ -303,6 +304,14 @@ function resolveScriptDependencyClosureFromAbsEntry(
     }
 
     const collected = collectLocalModuleSpecifiers(content);
+    // The shared collector proves only literal require(...) calls. A
+    // createRequire handle can be aliased or invoked with a computed path;
+    // do not credit an incomplete selected-card P/W closure as trusted.
+    if (selectedCardProducer && (/\bcreateRequire\b/.test(content)
+        || [...content.matchAll(/\brequire\b/g)].some((call) =>
+          !/^require\(\s*(['"])[^'"]+\1\s*\)/.test(content.slice(call.index))))) {
+      establishable = false;
+    }
     if (!collected.establishable) {
       establishable = false;
     }
@@ -449,8 +458,8 @@ export function selectedCardProducerClosureIsTrusted(input: {
   const primaryEntry = primaryCommand.args[0];
   const reviewEntry = reviewCommand.args[0];
   if (!primaryEntry || !reviewEntry) return false;
-  const a = resolveScriptDependencyClosureFromAbsEntry(primaryEntry, primary);
-  const b = resolveScriptDependencyClosureFromAbsEntry(reviewEntry, review);
+  const a = resolveScriptDependencyClosureFromAbsEntry(primaryEntry, primary, true);
+  const b = resolveScriptDependencyClosureFromAbsEntry(reviewEntry, review, true);
   if (!a.establishable || !b.establishable) return false;
   const x = [...a.relPaths].sort();
   const y = [...b.relPaths].sort();

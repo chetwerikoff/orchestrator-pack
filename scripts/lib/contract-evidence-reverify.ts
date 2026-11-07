@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { extractAtJsonPath } from '../external-output-shape-guard.mjs';
@@ -1151,6 +1151,10 @@ export function runContractEvidenceReverify(input: ReverifyRunInput): ReverifyRu
       command: 'git', args: ['rev-parse', 'HEAD'],
       cwd: reviewTargetRoot, inheritParentEnv: false,
     });
+    const topLevel = runProcessSync({
+      command: 'git', args: ['rev-parse', '--show-toplevel'],
+      cwd: reviewTargetRoot, inheritParentEnv: false,
+    });
     // Refuse dirty or untracked W content as proof of committed HEAD.
     const status = runProcessSync({
       command: 'git', args: ['status', '--porcelain', '--untracked-files=all'],
@@ -1158,6 +1162,8 @@ export function runContractEvidenceReverify(input: ReverifyRunInput): ReverifyRu
     });
     const boundSha = String(input.prHeadSha ?? '').trim().toLowerCase();
     const validHead = /^[0-9a-f]{40}$/.test(boundSha)
+      && existsSync(path.join(reviewTargetRoot, '.git'))
+      && topLevel.ok && realpathSync(topLevel.stdout.trim()) === realpathSync(reviewTargetRoot)
       && head.ok && head.stdout.trim().toLowerCase() === boundSha
       && status.ok && status.stdout.trim() === '';
     const validOrigin = origin.ok

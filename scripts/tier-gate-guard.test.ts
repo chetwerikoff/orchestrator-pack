@@ -1,7 +1,7 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
 import { fileURLToPath } from 'node:url';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -154,7 +154,8 @@ describe('current substantive Issue floor', () => {
       '  - action: resume run_123abcd | expected: complete')).ok).toBe(false);
   });
 
-  it('binds target NEW evidence and independent proof to a synthetic selected card without admitting other commands', () => {
+  it.each(['baseline', 'dynamic-commonjs', 'nested-root'] as const)(
+    'binds target NEW evidence and independent proof to a synthetic selected card without admitting other commands: %s', (mode) => {
     const temp = mkdtempSync(join(tmpdir(), 'opk2751-'));
     const packRoot = fileURLToPath(new URL('../', import.meta.url));
     const projectId = 'synthetic-2751';
@@ -179,7 +180,13 @@ describe('current substantive Issue floor', () => {
       copyFileSync(join(packRoot, producerDir, 'emit-reverify-status.mjs'), join(targetRoot, 'scripts', 'verify-boundary.mjs'));
       // Both trusted scripts read checkout-local input; only W's read-only
       // input is modified, not the P/W executable/dependency closure.
-      const observedProducer = [
+      const observedProducer = mode === 'dynamic-commonjs' ? [
+        "import { createRequire } from 'node:module';",
+        'const require = createRequire(import.meta.url);',
+        "const worker = './worker.cjs';",
+        'process.stdout.write(require(worker));',
+        '',
+      ].join('\n') : [
         "import { readProof } from './proof-input.mjs';",
         "process.stdout.write(readProof());",
         '',
@@ -189,6 +196,12 @@ describe('current substantive Issue floor', () => {
       writeFileSync(join(targetRoot, producerDir, 'emit-reverify-status.mjs'), observedProducer);
       writeFileSync(join(targetRoot, 'scripts', 'proof-input.mjs'), dependency);
       writeFileSync(join(targetRoot, producerDir, 'proof-input.mjs'), dependency);
+      if (mode === 'dynamic-commonjs') {
+        for (const directory of ['scripts', producerDir]) {
+          writeFileSync(join(targetRoot, directory, 'worker.cjs'),
+            'module.exports = ' + JSON.stringify(JSON.stringify({ 'reverify-status': 'primary-only' })) + ';\n');
+        }
+      }
       mkdirSync(join(targetRoot, 'inputs'), { recursive: true });
       writeFileSync(join(targetRoot, 'inputs', 'proof.json'), JSON.stringify({ 'reverify-status': 'primary-only' }));
       const manifestPath = 'tests/external-output-references/capture-manifest.json';
@@ -205,15 +218,16 @@ describe('current substantive Issue floor', () => {
       });
       expect(prHeadResult.ok).toBe(true);
       const primaryHeadSha = prHeadResult.stdout.trim();
-      const reviewRoot = join(temp, 'review-target');
-      runGit('worktree', 'add', '--detach', reviewRoot, primaryHeadSha);
+      const worktreeRoot = join(temp, 'review-target');
+      let reviewRoot = worktreeRoot;
+      runGit('worktree', 'add', '--detach', worktreeRoot, primaryHeadSha);
       const gitW = (...args: string[]) => {
-        const result = runProcessSync({ command: 'git', args, cwd: reviewRoot, inheritParentEnv: true });
+        const result = runProcessSync({ command: 'git', args, cwd: worktreeRoot, inheritParentEnv: true });
         if (!result.ok) throw new Error('PR worktree Git failed: ' + String(result.stderr || result.error));
       };
       const headW = () => {
         const result = runProcessSync({
-          command: 'git', args: ['rev-parse', 'HEAD'], cwd: reviewRoot, inheritParentEnv: true,
+          command: 'git', args: ['rev-parse', 'HEAD'], cwd: worktreeRoot, inheritParentEnv: true,
         });
         if (!result.ok) throw new Error('PR HEAD unreadable');
         return result.stdout.trim();
@@ -221,6 +235,31 @@ describe('current substantive Issue floor', () => {
       writeFileSync(join(reviewRoot, 'inputs', 'proof.json'), JSON.stringify({ 'reverify-status': 'verified' }));
       gitW('add', 'inputs/proof.json');
       gitW('-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.test', 'commit', '-m', 'PR input only');
+      if (mode === 'dynamic-commonjs') {
+        for (const directory of ['scripts', producerDir]) {
+          writeFileSync(join(reviewRoot, directory, 'worker.cjs'),
+            'module.exports = ' + JSON.stringify(JSON.stringify({ 'reverify-status': 'verified' })) + ';\n');
+        }
+        gitW('add', 'scripts/worker.cjs', producerDir + '/worker.cjs');
+        gitW('-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.test', 'commit', '-m', 'PR changes runtime CommonJS dependency');
+      }
+      if (mode === 'nested-root') {
+        writeFileSync(join(worktreeRoot, '.gitignore'), 'nested-w/\n');
+        gitW('add', '.gitignore');
+        gitW('-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.test', 'commit', '-m', 'ignore nested live inputs');
+        reviewRoot = join(worktreeRoot, 'nested-w');
+        for (const relative of ['scripts/verify-boundary.mjs', 'scripts/proof-input.mjs',
+          producerDir + '/genuine-new-proof.mjs', producerDir + '/emit-reverify-status.mjs',
+          producerDir + '/proof-input.mjs', 'inputs/proof.json']) {
+          mkdirSync(dirname(join(reviewRoot, relative)), { recursive: true });
+          copyFileSync(join(worktreeRoot, relative), join(reviewRoot, relative));
+        }
+        expect(existsSync(join(reviewRoot, '.git'))).toBe(false);
+        const clean = runProcessSync({ command: 'git', args: ['status', '--porcelain', '--untracked-files=all'], cwd: reviewRoot });
+        expect(clean.ok).toBe(true);
+        expect(clean.stdout).toBe('');
+        expect(runProcessSync({ command: 'git', args: ['check-ignore', 'inputs/proof.json'], cwd: reviewRoot }).ok).toBe(true);
+      }
       const prHeadSha = headW();
       expect(prHeadSha).not.toBe(primaryHeadSha);
       expect(readFileSync(join(targetRoot, 'inputs', 'proof.json'), 'utf8')).toContain('primary-only');
@@ -275,7 +314,8 @@ describe('current substantive Issue floor', () => {
         runContractEvidenceReverify({
           repoRoot: packRoot, trustedBaseRoot: targetRoot, reviewTargetRoot: reviewRoot,
           manifestPath, boundSnapshotBody: body, explicitIssueNumber: 2751,
-          prHeadSha, projectId, env, prModifiedPaths: ['inputs/proof.json'], ...extra,
+          prHeadSha, projectId, env, prModifiedPaths: mode === 'dynamic-commonjs'
+            ? ['inputs/proof.json', 'scripts/worker.cjs', producerDir + '/worker.cjs'] : ['inputs/proof.json'], ...extra,
         });
       const verified = reverify(targetIssue);
       expect(verified).toMatchObject({ candidateOnly: true, neverBlocks: true, runOutcome: 'rows-evaluated' });
@@ -283,9 +323,9 @@ describe('current substantive Issue floor', () => {
         .toMatchObject({ status: 'unverified', reason: 'producer-unreachable', producerVerified: false });
       expect(reverify(targetIssue, { prHeadSha: null }).rows[0])
         .toMatchObject({ status: 'unverified', reason: 'producer-unreachable', producerVerified: false });
-      if (isPrHeadNetworkSandboxAvailable()) {
+      if (mode === 'baseline' && isPrHeadNetworkSandboxAvailable()) {
         expect(verified.rows[0]).toMatchObject({ status: 'verified', verificationMode: 'live', producerVerified: true });
-      } else {
+      } else if (mode === 'baseline') {
         expect(verified.rows[0]).toMatchObject({ status: 'unverified', reason: 'producer-unreachable' });
       }
 
@@ -296,7 +336,8 @@ describe('current substantive Issue floor', () => {
         issueBody: targetIssue, storeDirOverride: snapshotStore,
       });
       const changedPathsFile = join(temp, 'changed-paths.txt');
-      writeFileSync(changedPathsFile, '', 'utf8');
+      writeFileSync(changedPathsFile, mode === 'dynamic-commonjs'
+        ? 'inputs/proof.json\nscripts/worker.cjs\n' + producerDir + '/worker.cjs\n' : '', 'utf8');
       const cliEnv: NodeJS.ProcessEnv = { ...env, OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR: snapshotStore };
       delete cliEnv.OPK_PROJECT_ID;
       const invokeCli = (sha: string | null = prHeadSha, snapshotPath = captured.snapshotPath, extraArgs: string[] = []) => runProcessSync({
@@ -315,6 +356,14 @@ describe('current substantive Issue floor', () => {
       const cliResult = JSON.parse(cliReverify.stdout);
       expect(cliResult).toMatchObject({ candidateOnly: true, neverBlocks: true, runOutcome: 'rows-evaluated' });
       expect(cliResult.rows).toHaveLength(1);
+      if (mode !== 'baseline') {
+        for (const result of [verified, cliResult]) {
+          expect(result).toMatchObject({ candidateOnly: true, neverBlocks: true });
+          expect(result.rows[0], mode).toMatchObject({ status: 'unverified', producerVerified: false });
+          if (mode === 'nested-root') expect(result.rows[0].reason).toBe('producer-unreachable');
+        }
+        return;
+      }
       expect(cliResult.rows[0].reason).not.toBe('unsupported-producer');
       if (isPrHeadNetworkSandboxAvailable()) {
         expect(cliResult.rows[0]).toMatchObject({ status: 'verified', verificationMode: 'live', producerVerified: true });

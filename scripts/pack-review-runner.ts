@@ -860,7 +860,7 @@ async function resolvePackReviewStrictDescendant(input: {
 
 interface VerifiedRebasedC {
   anchorSha: string;
-  recheck: () => Promise<void>;
+  recheck: (requiredCi: TargetContext['requiredCi']) => Promise<void>;
 }
 const rebaseSha1 = /^[0-9a-f]{40}$/;
 const rebaseRawDiffArgs = ['diff', '--no-ext-diff', '--no-textconv', '--no-color',
@@ -1045,11 +1045,12 @@ async function proveUniqueRebasedC(
   const cTree = await rebaseGitSha1(root, ['rev-parse', anchorSha + '^{tree}'], 'C tree');
   const hTree = await rebaseGitSha1(root, ['rev-parse', h2 + '^{tree}'], 'H2 tree');
   if (cTree === hTree) throw new Error('empty-tree C/H2 fix');
-  return { anchorSha, recheck: async () => {
+  return { anchorSha, recheck: async (requiredCi) => {
     await input.fixtureBeforeRebaseSettlementRecheck?.();
     const card = resolveTargetContext({ projectId: options.projectId, env: process.env });
     if (card.projectId !== selected.projectId || card.repository !== selected.repository
-        || card.defaultBranch !== base || card.primaryRoot !== selected.primaryRoot) {
+        || card.defaultBranch !== base || card.primaryRoot !== selected.primaryRoot
+        || stableJson(card.requiredCi ?? null) !== stableJson(requiredCi ?? null)) {
       throw new Error('selected card moved before C settlement');
     }
     if ((await runGit(root, ['remote', 'get-url', 'origin'], 'origin recheck')).trim() !== remote) {
@@ -6969,6 +6970,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
     }
   }
 
+  let verifiedFinalCiSelectors: TargetContext['requiredCi'];
   if (logicalAccounting && currentHead !== priorRun.targetSha
       && (process.env.OPK_VITEST_HARNESS !== '1' || rebasedC
         || input.fixtureGithubReviewTransport)) {
@@ -6979,11 +6981,13 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       if (!await verifyOriginalGithubSourcesAndReview(priorRun, input,
         options.repoSlug, input.sourceRepoRoot)) throw new Error('original source/REVIEW evidence unverified');
       const context = resolveTargetContext({ projectId: options.projectId });
+      const requiredCi = context.requiredCi ? [...context.requiredCi] : undefined;
       if (!await manualPackReviewRequiredCiGreen({ startInput: input, targetContext: context,
         target: { prNumber, headSha: currentHead, repoSlug: options.repoSlug,
           sourceRepoRoot: input.sourceRepoRoot, prBaseRef: context.defaultBranch } })) {
         throw new Error('current-head required CI not green');
       }
+      verifiedFinalCiSelectors = requiredCi;
     } catch (error) {
       return { prNumber, headSha: currentHead, finalCapSettlement: true, settled: false,
         reason: 'final_cap_review_binding_unverified', detail: describeError(error),
@@ -7199,7 +7203,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       try {
         // The incumbent head observation is permitted before this recheck.
         // Failed identity/B validation makes no durable stage-close mutation.
-        if (rebasedC) await rebasedC.recheck();
+        if (rebasedC) await rebasedC.recheck(verifiedFinalCiSelectors);
         authority = settleLogicalPackReviewFindingsByStrictDescendant({
           prNumber, expectedTransitionSeq: authority.transitionSeq,
           reviewedHeadSha, currentHeadSha: authority.currentHeadSha,

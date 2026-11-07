@@ -4314,6 +4314,27 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     },
   );
 
+  it.each(['scoped', 'start'] as const)(
+    'Issue #2790: %s refuses required-CI-only card drift before durable C settlement', async (entry) => {
+      const g = realRebasedGitGraph();
+      const f = eligibleRebaseCase(g);
+      const authorityFile = join(f.options.storeRoot, 'authority', 'pr-' + prNumber + '.json');
+      const cardPath = join(process.env.XDG_CONFIG_HOME!, 'orchestrator-pack', 'projects', 'orchestrator-pack.json');
+      const originalCard = readFileSync(cardPath, 'utf8');
+      let snapshot: Buffer | undefined;
+      f.input.fixtureBeforeRebaseSettlementRecheck = () => {
+        snapshot = readFileSync(authorityFile);
+        writeFileSync(cardPath, JSON.stringify({ ...JSON.parse(originalCard),
+          requiredCi: ['New required workflow / missing H2 job'] }));
+      };
+      try {
+        expectRebaseRefusal(f, await enterRebase(f, entry));
+        expect(snapshot).toBeDefined();
+        expect(readFileSync(authorityFile)).toEqual(snapshot);
+      } finally { writeFileSync(cardPath, originalCard); }
+    },
+  );
+
   it('Issue #2790: actual tracked gh rest_direct executes only runner-constructed canonical protection GET', async () => {
     const g = realRebasedGitGraph();
     const f = eligibleRebaseCase(g);
