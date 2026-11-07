@@ -3782,7 +3782,7 @@ describe('Issue #1741 failed GPT round source-comment settlement', () => {
     expect(finalReviewPosts).toBe(1);
   });
 
-  it('recovers all-complete unjournaled GPT rounds through the start path', async () => {
+  it('recovers all-complete unjournaled GPT rounds with legacy triage extras through the start path', async () => {
     const storeRoot = tempRoot('opk-gpt-1741-all-complete-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
@@ -3837,6 +3837,16 @@ describe('Issue #1741 failed GPT round source-comment settlement', () => {
       failureReason: 'stale_head_before_terminal',
     }, { projectId: 'orchestrator-pack', storeRoot });
     expect(packReviewDeliveryNeedsResume(failed)).toBe(true);
+    // A historical post-aggregation artifact must never veto ordinary source recovery.
+    const historicalRecordPath = path.join(storeRoot, 'runs', failed.id + '.json');
+    const historical = JSON.parse(readFileSync(historicalRecordPath, 'utf8')) as Record<string, unknown>;
+    writeFileSync(historicalRecordPath, JSON.stringify({
+      ...historical,
+      gptTriageAttempt: { schema: 'pack-review-gpt-triage-attempt/v1',
+        attemptedAtUtc: '2026-08-26T00:00:00.000Z' },
+      gptTriage: { schema: 'pack-review-gpt-triage/v1',
+        groups: [{ decision: 'DEFER', members: ['source-01:0'] }] },
+    }) + '\n');
     const originalComments = originalEvidence.transport;
 
     const reviews: GithubReviewSummary[] = [];
