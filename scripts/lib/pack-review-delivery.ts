@@ -18,8 +18,6 @@ import {
   type PackReviewDeliveryOutcome,
   type PackReviewJournalOutcome,
   isPackReviewUnfinishedTerminalRun,
-  projectPackReviewEffectiveFindings,
-  appendPackReviewDeferredTodos,
   PACK_REVIEW_ACTIVE_STATUSES,
   type PackReviewRunRecord,
   type PackReviewRunStatus,
@@ -366,9 +364,6 @@ export interface PackReviewDeliveryResult {
   journalOutcome: PackReviewJournalOutcome;
   githubReviewId?: number | string;
   githubReviewUrl?: string;
-  /** Non-gating local TODO failure; no required-status gate is introduced. */
-  todoAppendError?: string;
-  todoManualNextAction?: string;
 }
 
 interface PackReviewVerdictClassification {
@@ -450,13 +445,11 @@ export function isNonBlockingPackReviewFinding(value: unknown): boolean {
 
 export function classifyPackReviewPayload(
   payload: PackReviewTerminalPayload,
-  run?: PackReviewRunRecord,
+  _run?: PackReviewRunRecord,
 ): PackReviewVerdictClassification {
-  const projected = run?.reviewRound ? projectPackReviewEffectiveFindings(run) : null;
-  const blocking = projected?.mode === 'triaged' ? projected.blocking
-    : payload.findings.length > 0
-      ? payload.findings.some((finding) => !isNonBlockingPackReviewFinding(finding))
-      : payload.verdict === 'findings';
+  const blocking = payload.findings.length > 0
+    ? payload.findings.some((finding) => !isNonBlockingPackReviewFinding(finding))
+    : payload.verdict === 'findings';
   if (blocking) {
     return {
       terminalStatus: 'changes_requested',
@@ -806,8 +799,7 @@ export async function deliverPackReviewVerdict(
     throw new Error(`pack review run ${options.run.id} has no valid persisted verdict to resume`);
   }
   const payload = resumedPayload ?? options.payload;
-  const savedRun = safeGetPackReviewRun(options.run.id,options) ?? options.run;
-  const classification = classifyPackReviewPayload(payload,savedRun);
+  const classification = classifyPackReviewPayload(payload);
   const supplemental = supplementalRun(options.run);
   const intermediateRoundPending = !classification.blocking && packReviewRunNeedsAnotherRequiredRound(options.run);
   const projectedRequiredStatus: PackReviewRequiredStatusState = intermediateRoundPending
@@ -827,16 +819,6 @@ export async function deliverPackReviewVerdict(
       run: safeGetPackReviewRun(options.run.id, options),
       journalOutcome: journal.outcome,
     };
-  }
-
-  // The run's valid triage is already durable. TODO is advisory and idempotent
-  // under the existing store lock; a failed local append cannot block delivery.
-  let todoAppendError: string | undefined;
-  try {
-    const todo = appendPackReviewDeferredTodos(options.run.id,storeOptions(options));
-    todoAppendError = todo.error;
-  } catch (error) {
-    todoAppendError = describeError(error);
   }
 
   const githubKey = githubCommentIdempotencyKey(options.run);
@@ -904,21 +886,13 @@ export async function deliverPackReviewVerdict(
     && completedResumeChannelOutcome(options.run, 'workerNotification', workerKey);
   if (!supplemental && !workerNotificationComplete) {
     try {
-      const projected = savedRun.reviewRound
-        ? projectPackReviewEffectiveFindings(savedRun) : null;
       const notified = await options.notifyWorker({
         message: [
           `Pack review completed for PR #${options.run.prNumber}.`,
           `Run: ${options.run.id}`,
           `Head: ${options.run.targetSha}`,
-          `Verdict: ${payload.verdict} (raw immutable)`,
-          `Findings: ${payload.findingCount} (original source occurrences)`,
-          `Effective FIX_NOW groups: ${projected?.mode === 'triaged'
-            ? projected.effectiveBlockingGroupCount : 'not triaged; original union applies'}`,
-          ...(projected?.mode === 'triaged'
-            ? projected.fixNow.map((group) => `FIX_NOW ${group.groupId} ${group.code}: ${group.reason}`) : []),
-          ...(projected?.mode === 'plain' && projected.blocking
-            ? projected.fixNow.map((row) => `ORIGINAL_BLOCKER ${row.members[0]} ${row.code}: ${row.reason}`) : []),
+          `Verdict: ${payload.verdict}`,
+          `Findings: ${payload.findingCount}`,
           `Pack-review status: ${projectedRequiredStatus}`,
         ].join('\n'),
         idempotencyKey: workerKey,
@@ -958,10 +932,6 @@ export async function deliverPackReviewVerdict(
     run: terminalRun,
     journalOutcome: journal.outcome,
     ...(githubReview ? { githubReviewId: githubReview.id, githubReviewUrl: githubReview.url } : {}),
-    ...(todoAppendError ? {
-      todoAppendError,
-      todoManualNextAction: 'manually append missing DEFER group line to the selected-project review-todo.md; recheck the original run/group IDs, never start a new review',
-    } : {}),
   };
 }
 
