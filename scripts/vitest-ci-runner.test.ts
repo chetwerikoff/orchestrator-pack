@@ -1,7 +1,7 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
 
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -10,6 +10,7 @@ import { runProcessSync } from './kernel/subprocess.ts';
 import { validateHeavyBatchReportPayload, type HeavyInvocationUnit } from './lib/vitest-heavy-batching.mjs';
 import { hasFailedTestsVitestJsonReport } from './lib/vitest-json-report.mjs';
 import { observeHeavyLaneContext, readHeavyLaneContexts } from './lib/testmode-fleet-lane.ts';
+import { buildLanePlan, partitionByLane, validateClassification } from './lib/vitest-ci-lanes.mjs';
 import {
   aggregateFailures,
   aggregateFromEnv,
@@ -100,6 +101,112 @@ function runTopologyEmitter(repoRoot: string, overrides: NodeJS.ProcessEnv = {})
 }
 
 describe('Vitest topology emitter worktree hygiene', () => {
+  it('plans an unlisted test into heavy through the ordinary emitter without changing the manifest', () => {
+    const root = makeTopologyEmitterFixture();
+    const file = 'scripts/unlisted.test.ts';
+    writeFileSync(path.join(root, file), 'export {};\n');
+    const configPath = path.join(root, 'scripts/vitest-ci-lanes.config.json');
+    const before = readFileSync(configPath, 'utf8');
+
+    const emitted = runTopologyEmitter(root, { OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT: '1' });
+    expect(emitted.exitCode, emitted.stderr).toBe(0);
+    const plan = buildLanePlan(root);
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) throw new Error(plan.errors.join('\n'));
+    expect(plan.heavy.filter((entry) => entry === file)).toHaveLength(1);
+    expect(plan.heavyShards.flatMap((shard) => shard.files).filter((entry) => entry === file)).toHaveLength(1);
+    expect(plan.light).not.toContain(file);
+    expect(plan.parked).not.toContain(file);
+    expect(plan.topology.heavyLaneTotalWeightSeconds).toBe(2);
+    expect(readFileSync(configPath, 'utf8')).toBe(before);
+
+    // Exercise the CI light planner on the ordinary emitter's fresh artifact,
+    // without a lane directive supplying an ephemeral classification.
+    const artifactPath = path.join(root, 'emitted-plan.json');
+    writeFileSync(artifactPath, emitted.stdout);
+    const light = runProcessSync({
+      command: process.execPath,
+      args: [path.resolve('scripts/invoke-vitest-ci-lane-plan.mjs'), 'light'],
+      env: { ...process.env, OPK_VITEST_TOPOLOGY_PLAN_PATH: artifactPath },
+      inheritParentEnv: false,
+    });
+    expect(light.ok, light.stderr).toBe(true);
+    expect(JSON.parse(light.stdout).light).not.toContain(file);
+    expect(readFileSync(configPath, 'utf8')).toBe(before);
+  });
+
+  it('keeps unlisted tests in PR heavy selection and ignores renamed/deleted manifest entries', () => {
+    const root = makeTopologyEmitterFixture();
+    const oldFile = 'scripts/sample.test.ts';
+    const file = 'scripts/renamed.test.ts';
+    renameSync(path.join(root, oldFile), path.join(root, file));
+    const configPath = path.join(root, 'scripts/vitest-ci-lanes.config.json');
+    const before = readFileSync(configPath, 'utf8');
+    const plan = buildLanePlan(root, {
+      prScopeMode: 'enforce',
+      changedPathManifest: {
+        version: 1, baseSha: 'a'.repeat(40), headSha: 'b'.repeat(40), diffOk: true,
+        entryCount: 1, entries: [{ status: 'R', path: file, previousPath: oldFile, oldMode: '100644', newMode: '100644' }],
+      },
+    });
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) throw new Error(plan.errors.join('\n'));
+    expect(plan.heavy).toEqual([file]);
+    expect(plan.topology.prScope.effectiveRunMode).toBe('full'); // Existing rename policy.
+    const added = buildLanePlan(root, {
+      prScopeMode: 'enforce',
+      changedPathManifest: {
+        version: 1, baseSha: 'a'.repeat(40), headSha: 'b'.repeat(40), diffOk: true,
+        entryCount: 1, entries: [{ status: 'A', path: file, newMode: '100644' }],
+      },
+    });
+    expect(added.ok).toBe(true);
+    if (!added.ok) throw new Error(added.errors.join('\n'));
+    expect(added.topology.prScope.effectiveRunMode).toBe('scoped');
+    expect(added.heavy).toEqual([file]);
+    rmSync(path.join(root, file));
+    const deleted = buildLanePlan(root);
+    expect(deleted.ok).toBe(true);
+    if (!deleted.ok) throw new Error(deleted.errors.join('\n'));
+    expect(deleted.heavy).toEqual([]);
+    expect(readFileSync(configPath, 'utf8')).toBe(before);
+  });
+
+  it('preserves every explicit lane and parked consistency while defaulting only absent keys', () => {
+    const classification = {
+      'scripts/light.test.ts': 'light',
+      'scripts/heavy.test.ts': 'heavy',
+      'scripts/wallclock.test.ts': 'postMergeWallclock',
+      'scripts/parked.test.ts': 'parked',
+      'scripts/deleted.test.ts': 'light',
+    };
+    const discovered = Object.keys(classification).filter((file) => !file.includes('deleted'));
+    discovered.push('scripts/new.test.ts');
+    expect(validateClassification(discovered, classification)).toEqual([]);
+    expect(partitionByLane(discovered, classification)).toEqual({
+      light: ['scripts/light.test.ts'], heavy: ['scripts/heavy.test.ts', 'scripts/new.test.ts'],
+      postMergeWallclock: ['scripts/wallclock.test.ts'], parked: ['scripts/parked.test.ts'],
+    });
+    const root = makeTopologyEmitterFixture();
+    const configPath = path.join(root, 'scripts/vitest-ci-lanes.config.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.classification['scripts/sample.test.ts'] = 'parked';
+    writeFileSync(configPath, JSON.stringify(config));
+    const inconsistent = buildLanePlan(root);
+    expect(inconsistent.ok).toBe(false);
+    if (inconsistent.ok) throw new Error('expected inconsistent parked configuration to fail');
+    expect(inconsistent.errors.join('\n')).toContain('classified parked file missing');
+  });
+
+  it.each(['', 'unknown', null, false, 0])('rejects an explicitly malformed lane %j with the exact correction key', (lane) => {
+    const file = 'scripts/invalid.test.ts';
+    const errors = validateClassification([file], { [file]: lane } as Record<string, string>);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain(`classification["${file}"]`);
+    expect(errors[0]).toContain('scripts/vitest-ci-lanes.config.json');
+    expect(partitionByLane([file], { [file]: lane } as Record<string, string>).heavy).toEqual([]);
+  });
+
   it('leaves the tracked topology plan clean after a successful local run', () => {
     const root = makeTopologyEmitterFixture();
     const planPath = path.join(root, 'scripts', 'vitest-heavy-topology.plan.json');

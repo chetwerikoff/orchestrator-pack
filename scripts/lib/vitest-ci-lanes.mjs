@@ -162,22 +162,9 @@ const VALID_LANES = new Set(['light', 'heavy', 'postMergeWallclock', 'parked']);
 
 export function validateClassification(discoveredFiles, classification) {
   const errors = [];
-  const classified = new Set(Object.keys(classification));
-
-  for (const file of discoveredFiles) {
-    const lane = classification[file];
-    if (!lane) {
-      errors.push(`classification-required: ${file} (new, renamed, or unclassified)`);
-      continue;
-    }
+  for (const [file, lane] of Object.entries(classification)) {
     if (!VALID_LANES.has(lane)) {
-      errors.push(`invalid lane for ${file}: ${lane}`);
-    }
-  }
-
-  for (const file of classified) {
-    if (!discoveredFiles.includes(file)) {
-      errors.push(`stale classification entry (file missing from discovery): ${file}`);
+      errors.push(`invalid lane ${JSON.stringify(lane)}: correct classification[${JSON.stringify(file)}] in scripts/vitest-ci-lanes.config.json to light, heavy, postMergeWallclock, or parked`);
     }
   }
 
@@ -190,7 +177,7 @@ export function partitionByLane(discoveredFiles, classification) {
   const postMergeWallclock = [];
   const parked = [];
   for (const file of discoveredFiles) {
-    const lane = classification[file];
+    const lane = Object.hasOwn(classification, file) ? classification[file] : 'heavy';
     if (lane === 'light') {
       light.push(file);
     } else if (lane === 'heavy') {

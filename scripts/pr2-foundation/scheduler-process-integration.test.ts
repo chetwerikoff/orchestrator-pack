@@ -4,7 +4,7 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runProcess } from '../kernel/subprocess.ts';
 import {
   publishCurrentWorkerAssignment,
@@ -22,12 +22,17 @@ import {
   runOrchestrationMailReconcileTick,
   type UnsentComposerSubmitDeps,
 } from '../cursor-unsent-composer-submit.ts';
-import { productionFleetObserverSource, runSchedulerTick, type SchedulerBoundary } from './scheduler.ts';
+import { loadProductionBoundary, productionFleetObserverSource, runSchedulerTick, schedulerFleetPhaseFailure, writeSchedulerTickResult, type SchedulerBoundary } from './scheduler.ts';
 
 const roots: string[] = [];
-const DEFAULT_S1_FIXTURE_REPEATS = 20;
-const DEFAULT_S1_FIXTURE_TIMEOUT_MS = 120_000;
+beforeEach(() => {
+  // CLI processes remain real. Only the test-owned scheduler's budget clock is
+  // virtual, so process startup cannot spend an S1/S2 deadline.
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+});
 afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -139,7 +144,7 @@ switch (operation) {
             run_id: worker.runId ?? 'run-fixture',
             status: worker.dispatchStatus ?? 'dispatched',
             last_heartbeat_at: worker.lastHeartbeatAt === undefined
-              ? (state.defaultHeartbeatAt ??= new Date().toISOString())
+              ? (state.defaultHeartbeatAt ??= new Date(Number(process.env.OPK_PROCESS_FIXTURE_NOW_MS)).toISOString())
               : worker.lastHeartbeatAt,
           },
           worker: {
@@ -254,18 +259,41 @@ async function runTickProcess(env: NodeJS.ProcessEnv) {
   });
 }
 
-async function runTick(env: NodeJS.ProcessEnv): Promise<Record<string, unknown>> {
-  const result = await runTickProcess(env);
-  expect(result.ok, [result.stderr, result.stdout, result.error].filter(Boolean).join('\n')).toBe(true);
-  const line = result.stdout.trim().split(/\r?\n/u).at(-1) ?? '';
-  expect(line).not.toBe('');
-  return JSON.parse(line) as Record<string, unknown>;
+async function runTick(env: NodeJS.ProcessEnv, s2ElapsedMs = 0): Promise<Record<string, unknown>> {
+  for (const key of new Set([...Object.keys(process.env), ...Object.keys(env)])) {
+    vi.stubEnv(key, env[key]);
+  }
+  try {
+    // Reconstruct the production boundary each tick, as a fresh scheduler child
+    // does, exercising persisted continuity rather than reusing in-memory state.
+    const { boundary } = await loadProductionBoundary();
+    if (s2ElapsedMs > 0) {
+      const actuator = boundary.fleetNudgeActuator!;
+      boundary.fleetNudgeActuator = { tick: (input) => {
+        // Spend a precise amount of the scheduler-supplied phase budget before
+        // entering the real production actuator; never change its deadlines.
+        vi.advanceTimersByTime(s2ElapsedMs);
+        return actuator.tick(input);
+      } };
+    }
+    const result = await runSchedulerTick(boundary, env);
+    const failure = schedulerFleetPhaseFailure(result);
+    if (failure) throw new Error(failure);
+    let stdout = '';
+    writeSchedulerTickResult(result, (value) => { stdout += value; });
+    return JSON.parse(stdout) as Record<string, unknown>;
+  } finally {
+    vi.unstubAllEnvs();
+  }
 }
 
 async function runTickFailure(env: NodeJS.ProcessEnv): Promise<string> {
-  const result = await runTickProcess(env);
-  expect(result.ok, result.stdout || result.stderr || result.error).toBe(false);
-  return result.stderr || result.error || result.stdout;
+  try {
+    await runTick(env);
+  } catch (error) {
+    return String(error);
+  }
+  throw new Error('expected scheduler tick failure');
 }
 
 function schedulerResult(value: Record<string, unknown>): Record<string, unknown> {
@@ -320,27 +348,6 @@ function fixture(file: string): FixtureState {
   return JSON.parse(readFileSync(file, 'utf8')) as FixtureState;
 }
 
-function waitForDispatches(file: string, count: number, timeoutMs = 30_000): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const deadline = Date.now() + timeoutMs;
-    const timer = setInterval(() => {
-      try {
-        if ((fixture(file).dispatches?.length ?? 0) >= count) {
-          clearInterval(timer);
-          resolve();
-          return;
-        }
-      } catch {
-        // The fixture is being replaced by the child process; observe its next complete state.
-      }
-      if (Date.now() >= deadline) {
-        clearInterval(timer);
-        reject(new Error('timed out waiting for dispatches'));
-      }
-    }, 20);
-  });
-}
-
 function processEnv(root: string, fixturePath: string, epochPath: string, configPath: string, epochId: string, nonce: string): NodeJS.ProcessEnv {
   const runtimeCli = installOrcaFixture(root);
   const wakeState = path.join(root, 'wake-supervisor');
@@ -365,6 +372,7 @@ function processEnv(root: string, fixturePath: string, epochPath: string, config
     PATH: `${root}${path.delimiter}${process.env.PATH ?? ''}`,
     OPK_RUNTIME_CLI_COMMAND: runtimeCli,
     OPK_PROCESS_FIXTURE_PATH: fixturePath,
+    OPK_PROCESS_FIXTURE_NOW_MS: String(Date.now()),
     OPK_PROJECT_ID: 'orchestrator-pack',
     XDG_CONFIG_HOME: configHome,
     OPK_BASE_DIR: path.join(root, 'opk'),
@@ -431,14 +439,14 @@ describe('scheduler bounded-child production composition', () => {
         return { ok: true, attempted: 0, nudged: 0, skipped: 0, reasons: [], deliveryEvidence: [] };
       },
     };
-    await expect(Promise.race([
-      runSchedulerTick(boundary, env),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('scheduler_tick_waited_for_periodic_mail')), 250)),
-    ])).resolves.toMatchObject({ attempted: 1, skipped: 1 });
+    const tick = runSchedulerTick(boundary, env);
+    await vi.advanceTimersByTimeAsync(25);
+    await expect(tick).resolves.toMatchObject({ attempted: 1, skipped: 1 });
     expect(reconcileCalls).toBeGreaterThanOrEqual(2);
   });
 
   it('records every scheduler tick phase under the 70s stall deadline', async () => {
+    vi.useRealTimers();
     const root = makeRoot();
     const fixturePath = path.join(root, 'fixture.json');
     const epochPath = path.join(root, 'epoch.json');
@@ -447,8 +455,9 @@ describe('scheduler bounded-child production composition', () => {
     writeFileSync(fixturePath, JSON.stringify({ workers: [], dispatches: [] }));
     writeEpoch(epochPath, 'epoch-phase-log', 'nonce-phase-log');
     const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-phase-log', 'nonce-phase-log');
-    const result = await runTick(env);
-    expect(observerResult(result)).toMatchObject({ status: 'complete' });
+    const child = await runTickProcess(env);
+    expect(child.ok, child.stderr || child.error).toBe(true);
+    expect(observerResult(JSON.parse(child.stdout.trim()) as Record<string, unknown>)).toMatchObject({ status: 'complete' });
     const logPath = path.join(String(env.OPK_SIDE_PROCESS_STATE_DIR), 'scheduler-tick-phases.jsonl');
     expect(existsSync(logPath)).toBe(true);
     const rows = readFileSync(logPath, 'utf8').trim().split(/\r?\n/u).map((line) => JSON.parse(line) as {
@@ -521,7 +530,7 @@ describe('scheduler bounded-child production composition', () => {
     expect(fixture(fixturePath).listWorkerWorktrees?.[0]).toBe('/home/che/orca/workspaces/orchestrator-pack/mgr1415-sup');
   });
 
-  it('keeps assignment census lookups inside one shared S1 timeout budget', async () => {
+  it.each([20, 99, 100])('keeps assignment census lookups inside one shared S1 timeout budget after %i ms', async (elapsedMs) => {
     const workers: RuntimeWorker[] = [
       { identity: { runtime: 'orca', id: 'budget-worker-a', generation: 'generation-budget-a' }, workspacePath: '/home/che/orca/workspaces/orchestrator-pack/mgr1415-sup', title: 'budget-worker-a', provenance: 'internal' },
       { identity: { runtime: 'orca', id: 'budget-worker-b', generation: 'generation-budget-b' }, workspacePath: '/home/che/orca/workspaces/orchestrator-pack/mgr1416-sup', title: 'budget-worker-b', provenance: 'internal' },
@@ -531,7 +540,7 @@ describe('scheduler bounded-child production composition', () => {
       listWorkers: () => ({ status: 'ok', value: [] }),
       findWorker: (identity: RuntimeWorkerIdentity, options?: RuntimeCallOptions) => {
         timeouts.push(options?.timeoutMs ?? 0);
-        if (timeouts.length === 1) { const delayDeadline = Date.now() + 20; while (Date.now() < delayDeadline) {} }
+        if (timeouts.length === 1) vi.advanceTimersByTime(elapsedMs);
         return { status: 'ok', value: workers.find((worker) => worker.identity.id === identity.id) ?? null };
       },
       readBoundedOutput: () => ({ status: 'failed', operation: 'read_bounded_output', reason: 'unused' }),
@@ -539,17 +548,46 @@ describe('scheduler bounded-child production composition', () => {
     };
     const source = productionFleetObserverSource(runtime, workers.map((worker, index) => ({ assignmentId: `assignment-budget-${index}`, assignmentGeneration: 1, issueNumber: 1420, taskId: `task-budget-${index}`, unitRef: `u-budget-${index}`, worker: worker.identity })));
     const result = await source.listWorkers({ workspace: 'active' }, { timeoutMs: 100 });
-    expect(result).toMatchObject({ status: 'ok' });
-    expect(timeouts).toHaveLength(2);
-    expect(timeouts[0]).toBeGreaterThan(timeouts[1]!);
+    if (elapsedMs < 100) {
+      expect(result).toMatchObject({ status: 'ok' });
+      expect(timeouts).toEqual([100, 100 - elapsedMs]);
+    } else {
+      expect(result).toMatchObject({ status: 'failed', reason: 'phase_budget_expired' });
+      expect(timeouts).toEqual([100]);
+    }
   });
 
-  it('restores one S1 lineage across separate child processes and records one ambiguous S2 send attempt', async () => {
+  it.each([499, 500])('preserves production S2 admission at its 500 ms boundary after %i ms', async (elapsedMs) => {
+    const root = makeRoot();
+    const fixturePath = path.join(root, 'fixture.json');
+    const epochPath = path.join(root, 'epoch.json');
+    const configPath = path.join(root, 'fleet-config.json');
+    writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 }));
+    writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }], dispatches: [] }));
+    writeEpoch(epochPath, 'epoch-s2-deadline', 'nonce-s2-deadline');
+    const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-s2-deadline', 'nonce-s2-deadline');
+    await publishLocal(env);
+    await runTick(env);
+    if (elapsedMs < 500) {
+      const second = await runTick(env, elapsedMs);
+      expect(schedulerResult(second).fleetNudge).toMatchObject({
+        status: 'complete', effectiveS2BudgetMs: 625, claimStarts: 1, returnedWithinBudget: true,
+      });
+      // Admission is allowed just before its boundary. Do not require a real
+      // CLI process to finish within the remaining one-millisecond call timeout;
+      // the ordinary production-composition cases assert the exact send count.
+    } else {
+      await expect(runTick(env, elapsedMs)).rejects.toThrow('scheduler_fleet_phase_failed:one-budgeted-gated-nudge-per-new-eligible-episode');
+      expect(fixture(fixturePath).dispatches).toHaveLength(0);
+    }
+  });
+
+  it('restores one S1 lineage across reconstructed production boundaries and records one ambiguous S2 send attempt', async () => {
     const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json');
     writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1, maxConcurrency: 2 }));
     writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }], dispatches: [] }));
     writeEpoch(epochPath, 'epoch-1420', 'nonce-1420'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-1420', 'nonce-1420'); await publishLocal(env);
-    const first = await runTick(env); const second = await runTick(env); await waitForDispatches(fixturePath, 1); expect(fixture(fixturePath).dispatches).toHaveLength(1); const third = await runTick(env); expect(fixture(fixturePath).dispatches).toHaveLength(1);
+    const first = await runTick(env); const second = await runTick(env); expect(fixture(fixturePath).dispatches, JSON.stringify({ second, fixture: fixture(fixturePath) })).toHaveLength(1); const third = await runTick(env); expect(fixture(fixturePath).dispatches).toHaveLength(1);
     const firstObserver = observerResult(first); const secondObserver = observerResult(second); const thirdObserver = observerResult(third);
     expect(firstObserver.schedulerGeneration).toBe(secondObserver.schedulerGeneration); expect(secondObserver.schedulerGeneration).toBe(thirdObserver.schedulerGeneration); expect([firstObserver.tickSequence, secondObserver.tickSequence, thirdObserver.tickSequence]).toEqual([1, 2, 3]);
     const secondNudge = schedulerResult(second).fleetNudge as Record<string, unknown>; expect(secondNudge.dispatched).toBe(0); expect(secondNudge.sendAttempts).toBe(1); const secondOutcomes = secondNudge.outcomes as Array<Record<string, unknown>>; expect(secondOutcomes.some((row) => row.outcome === 'dispatch_unknown')).toBe(true); const thirdNudge = schedulerResult(third).fleetNudge as Record<string, unknown>; expect(thirdNudge.dispatched).toBe(0);
@@ -566,7 +604,7 @@ describe('scheduler bounded-child production composition', () => {
     const third = await runTick(env); expect((schedulerResult(third).fleetNudge as Record<string, unknown>).dispatched).toBe(0); expect(fixture(fixturePath).dispatches).toHaveLength(1);
   });
 
-  it('never sends to ready + input_accepted without a dispatch heartbeat in a separate scheduler process', async () => {
+  it('never sends to ready + input_accepted without a dispatch heartbeat on a production boundary', async () => {
     const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json');
     writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1, maxConcurrency: 2 }));
     writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'never-started-worker', generation: 'generation-never-started', bindingKey: 'dispatch-never-started', lines: ['prompt only'], liveness: 'idle', state: 'ready', stage: 'input_accepted', observationStatus: 'live', lastHeartbeatAt: null }], dispatches: [], sendCalls: 0 }));
@@ -577,7 +615,7 @@ describe('scheduler bounded-child production composition', () => {
     expect(handoff(env)).toMatchObject({ reason: 'target_unresolved', decision: 'orchestrator_required', issueNumber: 1420, taskId: 'task-never-started' });
   });
 
-  it('notifies the bound Run once, retires the released terminal assignment, and does not re-observe it in the next child', async () => {
+  it('notifies the bound Run once, retires the released terminal assignment, and does not re-observe it in the next tick', async () => {
     const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json');
     writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1, maxConcurrency: 2 }));
     writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'settled-worker', generation: 'generation-settled', bindingKey: 'dispatch-settled', runId: 'run-settled', worktreeId: 'worktree-settled', lines: ['done'], liveness: 'idle', state: 'succeeded', stage: 'settled', observationStatus: 'exited', dispatchStatus: 'failed', releaseState: 'released' }], dispatches: [], sendCalls: 0, runMessages: [] }));
@@ -821,7 +859,7 @@ describe('scheduler bounded-child production composition', () => {
     writeEpoch(epochPath, 'epoch-b', 'nonce-b'); const changedEnv = { ...baseEnv, ORCHESTRATOR_CUTOVER_EPOCH_ID: 'epoch-b', ORCHESTRATOR_CUTOVER_NONCE: 'nonce-b' }; const second = await runTick(changedEnv); expect(observerResult(second).schedulerGeneration).not.toBe(observerResult(first).schedulerGeneration); expect(observerResult(second).tickSequence).toBe(1); expect(fixture(fixturePath).dispatches).toHaveLength(0);
   });
 
-  it('preserves dispatch_unknown without automatic retry in a later child', async () => {
+  it('preserves dispatch_unknown without automatic retry in a later production boundary', async () => {
     const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json');
     writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 })); writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }], dispatchOutcome: 'dispatch_unknown', dispatches: [] })); writeEpoch(epochPath, 'epoch-unknown', 'nonce-unknown'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-unknown', 'nonce-unknown'); await publishLocal(env); await runTick(env); const second = await runTick(env); const third = await runTick(env); const secondOutcomes = (schedulerResult(second).fleetNudge as Record<string, unknown>).outcomes as Array<Record<string, unknown>>; expect(secondOutcomes.some((row) => row.outcome === 'dispatch_unknown')).toBe(true); const thirdNudge = schedulerResult(third).fleetNudge as Record<string, unknown>; expect(thirdNudge.sendAttempts).toBe(0); expect(fixture(fixturePath).dispatches).toHaveLength(0);
   });
@@ -831,21 +869,19 @@ describe('scheduler bounded-child production composition', () => {
     writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 })); writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }], dispatchOutcome: 'send_failed', dispatches: [], sendCalls: 0 })); writeEpoch(epochPath, 'epoch-send-failed', 'nonce-send-failed'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-send-failed', 'nonce-send-failed'); await publishLocal(env); await runTick(env); const second = await runTick(env); const secondOutcomes = (schedulerResult(second).fleetNudge as Record<string, unknown>).outcomes as Array<Record<string, unknown>>; expect(secondOutcomes.some((row) => row.outcome === 'dispatch_unknown')).toBe(true); expect(schedulerResult(second).orchestratorRequired).toBe(true); expect(handoff(env)).toMatchObject({ reason: 'dispatch_unknown', decision: 'orchestrator_required' }); const third = await runTick(env); expect(fixture(fixturePath).sendCalls).toBe(1); expect(fixture(fixturePath).dispatches).toHaveLength(0); const thirdNudge = schedulerResult(third).fleetNudge as Record<string, unknown>; expect(thirdNudge.sendAttempts).toBe(0);
   });
 
-  it('uses the established default S1 config and snapshot authorities across bounded children', async () => {
-    for (let iteration = 0; iteration < DEFAULT_S1_FIXTURE_REPEATS; iteration += 1) {
+  it('uses the established default S1 config and snapshot authorities across production boundaries', async () => {
       const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const legacyHome = path.join(root, 'home'); const legacyConfig = path.join(legacyHome, '.config', 'orchestrator-pack', 'fleet-observer.json'); mkdirSync(path.dirname(legacyConfig), { recursive: true }); writeFileSync(legacyConfig, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 })); writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }], dispatchOutcome: 'dispatch_unknown', dispatches: [] })); writeEpoch(epochPath, 'epoch-defaults', 'nonce-defaults'); const env = processEnv(root, fixturePath, epochPath, legacyConfig, 'epoch-defaults', 'nonce-defaults'); delete env.OPK_SIDE_PROCESS_STATE_DIR; delete env.OPK_FLEET_OBSERVER_CONFIG; env.HOME = legacyHome; await publishLocal(env); const first = await runTick(env); const second = await runTick(env); expect(observerResult(first).schedulerGeneration).toBe(observerResult(second).schedulerGeneration); expect(fixture(fixturePath).dispatches).toHaveLength(0); expect(existsSync(path.join(legacyHome, '.local', 'state', 'orchestrator-pack', 'fleet-observer', 'snapshot.json'))).toBe(true);
-    }
-  }, DEFAULT_S1_FIXTURE_TIMEOUT_MS);
+  });
 
   it('re-resolves the persistence-safe Dispatch before S2 claim/send', async () => {
     const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json'); writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 })); writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'busy' }], dropResolutionAtCall: 3, dispatches: [] })); writeEpoch(epochPath, 'epoch-revalidate', 'nonce-revalidate'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-revalidate', 'nonce-revalidate'); await publishLocal(env); await runTick(env); const second = await runTick(env); const outcomes = (schedulerResult(second).fleetNudge as Record<string, unknown>).outcomes as Array<Record<string, unknown>>; expect(outcomes.some((row) => row.outcome === 'revalidation_failed')).toBe(true); expect(fixture(fixturePath).dispatches).toHaveLength(0); expect(handoff(env)?.reason).toBe('target_stale');
   });
 
-  it('fails closed at the process boundary when assignment is missing', async () => {
+  it('fails closed at the production boundary when assignment is missing', async () => {
     const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json'); writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 })); writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-1', lines: ['unchanged'], liveness: 'idle' }], dispatches: [] })); writeEpoch(epochPath, 'epoch-missing-assignment', 'nonce-missing-assignment'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-missing-assignment', 'nonce-missing-assignment'); await runTick(env); await runTick(env); expect(fixture(fixturePath).dispatches).toHaveLength(0);
   });
 
-  it('fails closed at the process boundary when the current runtime binding is missing', async () => {
+  it('fails closed at the production boundary when the current runtime binding is missing', async () => {
     const root = makeRoot(); const fixturePath = path.join(root, 'fixture.json'); const epochPath = path.join(root, 'epoch.json'); const configPath = path.join(root, 'fleet-config.json'); writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, livelockTicks: 1 })); writeFileSync(fixturePath, JSON.stringify({ workers: [{ id: 'worker-1', generation: 'generation-1', bindingKey: 'dispatch-other', lines: ['unchanged'], liveness: 'idle' }], dispatches: [], sendCalls: 0 })); writeEpoch(epochPath, 'epoch-missing-runtime', 'nonce-missing-runtime'); const env = processEnv(root, fixturePath, epochPath, configPath, 'epoch-missing-runtime', 'nonce-missing-runtime'); await publishLocal(env, 'dispatch-1'); const first = await runTick(env); expect(schedulerResult(first).orchestratorRequired).toBe(true); expect(handoff(env)).toMatchObject({ reason: 'target_unresolved', decision: 'orchestrator_required', issueNumber: 1420, taskId: 'task-1420' }); await runTick(env); expect(fixture(fixturePath).sendCalls).toBe(0); expect(fixture(fixturePath).dispatches).toHaveLength(0);
   });
 
@@ -901,7 +937,9 @@ describe('scheduler bounded-child production composition', () => {
         return { ok: true, attempted: 0, nudged: 0, skipped: 0, reasons: [], deliveryEvidence: [] };
       },
     };
-    const result = await runSchedulerTick(boundary, env);
+    const tick = runSchedulerTick(boundary, env);
+    await vi.advanceTimersByTimeAsync(80);
+    const result = await tick;
     expect(result.attempted).toBe(1);
     expect(reconcileCalls).toBeGreaterThanOrEqual(2);
     expect(reconcilesDuringLongWork).toBeGreaterThanOrEqual(1);
@@ -910,6 +948,12 @@ describe('scheduler bounded-child production composition', () => {
     ['observer_timeout', () => new Promise<never>(() => {})],
     ['observer_threw', async () => { throw new Error('injected'); }],
   ] as const)('does not turn %s into a successful scheduler tick', async (expectedReason, tick) => {
-    const root = makeRoot(); const epochPath = path.join(root, 'epoch.json'); writeEpoch(epochPath, `epoch-${expectedReason}`, `nonce-${expectedReason}`); const env: NodeJS.ProcessEnv = { ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: epochPath, ORCHESTRATOR_CUTOVER_EPOCH_ID: `epoch-${expectedReason}`, ORCHESTRATOR_CUTOVER_NONCE: `nonce-${expectedReason}` }; const handoffs: Array<{ reason: string; schedulerGeneration: string; tickSequence: number }> = []; const boundary: SchedulerBoundary = { listCandidates: () => [], readCurrentPr: async () => { throw new Error('not called'); }, readChecks: async () => [], listReviewRuns: () => [], start: async () => ({ ok: true }), schedulerIntervalMs: 40, fleetObserver: { schedulerGeneration: `sg-${expectedReason}`, getEffectiveBudgetMs: () => expectedReason === 'observer_timeout' ? 10 : 100, tick }, publishHandoff: (record) => { handoffs.push(record); return { ok: true }; } }; await expect(runSchedulerTick(boundary, env)).rejects.toThrow(`scheduler_observer_untrusted:${expectedReason}`); expect(handoffs).toEqual([{ reason: 'observer_untrusted', schedulerGeneration: `sg-${expectedReason}`, tickSequence: 1 }]);
+    const root = makeRoot(); const epochPath = path.join(root, 'epoch.json'); writeEpoch(epochPath, `epoch-${expectedReason}`, `nonce-${expectedReason}`); const env: NodeJS.ProcessEnv = { ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: epochPath, ORCHESTRATOR_CUTOVER_EPOCH_ID: `epoch-${expectedReason}`, ORCHESTRATOR_CUTOVER_NONCE: `nonce-${expectedReason}` }; const handoffs: Array<{ reason: string; schedulerGeneration: string; tickSequence: number }> = []; const boundary: SchedulerBoundary = { listCandidates: () => [], readCurrentPr: async () => { throw new Error('not called'); }, readChecks: async () => [], listReviewRuns: () => [], start: async () => ({ ok: true }), schedulerIntervalMs: 40, fleetObserver: { schedulerGeneration: `sg-${expectedReason}`, getEffectiveBudgetMs: () => expectedReason === 'observer_timeout' ? 10 : 100, tick }, publishHandoff: (record) => { handoffs.push(record); return { ok: true }; } };
+    const failure = expect(runSchedulerTick(boundary, env)).rejects.toThrow(`scheduler_observer_untrusted:${expectedReason}`);
+    await vi.advanceTimersByTimeAsync(9);
+    if (expectedReason === 'observer_timeout') expect(handoffs).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    await failure;
+    expect(handoffs).toEqual([{ reason: 'observer_untrusted', schedulerGeneration: `sg-${expectedReason}`, tickSequence: 1 }]);
   });
 });

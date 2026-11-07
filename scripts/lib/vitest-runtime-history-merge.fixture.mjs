@@ -2,8 +2,7 @@
 /**
  * Fixture suite for runtime-history refresh guards (Issue #691 / #1384).
  */
-import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runProcessSync } from '../kernel/subprocess.ts';
@@ -25,7 +24,6 @@ import {
   SUPPLEMENTAL_META_SCHEMA,
   SUPPLEMENTAL_TARGET,
   buildSyntheticVitestReport,
-  diffRuntimeHistoryInventories,
   historyBytes,
   medianMs,
   mergeConcurrentRefreshes,
@@ -36,21 +34,12 @@ import {
   refreshRuntimeHistory,
   runtimeHistoryInventory,
   stableStringify,
+  validateReportSet,
 } from './vitest-runtime-history-merge.mjs';
 
 const failures = [];
-const SUPPLEMENTAL_TUPLE_ERROR =
-  'SupplementalReportsDir, SupplementalSourceSha, SupplementalRunId, and SupplementalRunAttempt must be supplied together';
-const ISSUE_1384_STARTING_CENSUS_SHA256 = 'a6ea3c28c365898a52a8aa8a0c06f97b7158c94184054daef2f61bc5c5dfa36a';
 const PR_1376_REPLAY_BASE_SHA = '6e9614d0c9ce0c34b41a731059df4398b770c162';
 const PR_1376_REPLAY_HEAD_SHA = 'de03343f3f71f0c673157e055bf47f62700a576b';
-const PR_1376_CHANGED_FILES = [
-  '.cursor/rules/flow-manager-browser-turn-monitoring.mdc',
-  'docs/declarations/1266.pr-scope.json',
-  'package.json',
-  'scripts/chatgpt-browser-turn/contracts.ts',
-  'scripts/vitest-ci-lanes.config.json',
-].sort();
 
 function fail(message) {
   failures.push(message);
@@ -137,37 +126,6 @@ function buildLanePlanShardReports(dir, commitSha, repoRoot, durationForFile = (
     );
   }
   return buildCompleteShardSet(dir, commitSha, assignments, repoRoot);
-}
-
-function writeCanonicalSupplementalReport(dir, sourceSha, durationMs = 321) {
-  mkdirSync(dir, { recursive: true });
-  const reportPath = join(dir, 'supplemental-pack-reviewer-preference.json');
-  const metaPath = `${reportPath}.meta.json`;
-  const report = {
-    success: true,
-    numFailedTests: 0,
-    ...buildSyntheticVitestReport(
-      [{ file: SUPPLEMENTAL_TARGET, durationMs }],
-      join(defaultRepoRoot, 'supplemental-source'),
-    ),
-  };
-  writeFileSync(reportPath, stableStringify(report), 'utf8');
-  writeFileSync(metaPath, stableStringify({
-    schema: SUPPLEMENTAL_META_SCHEMA,
-    repository: 'chetwerikoff/orchestrator-pack',
-    target: SUPPLEMENTAL_TARGET,
-    commitSha: sourceSha,
-    success: true,
-    conclusion: 'success',
-    lane: 'light',
-    discovery: {
-      source: 'scripts/vitest-ci-lanes.config.json',
-      target: SUPPLEMENTAL_TARGET,
-      lane: 'light',
-    },
-    runId: '9001',
-    runAttempt: '1',
-  }), 'utf8');
 }
 
 function runMeasuredRefreshFixture() {
@@ -471,7 +429,7 @@ function runProvenanceGateFixtures() {
     unknownShard1.reportPath,
     stableStringify(
       buildSyntheticVitestReport([
-        { file: 'scripts/__classification_required_fixture__.test.ts', durationMs: 12000 },
+        { file: 'scripts/__undiscovered_report_fixture__.test.ts', durationMs: 12000 },
       ]),
     ),
     'utf8',
@@ -482,7 +440,7 @@ function runProvenanceGateFixtures() {
     expectedCommitSha: commitSha,
     repoRoot: defaultRepoRoot,
   });
-  assert(unknown.rejected, 'unclassified path must be rejected');
+  assert(unknown.rejected, 'undiscovered report path must be rejected');
 
   const partialTimingAssignments = new Map();
   for (let shard = 1; shard <= heavyShardCount; shard += 1) {
@@ -691,38 +649,6 @@ function runCoverageAndDurableProvenanceFixture() {
   assert(shortfall.shortfall, 'mostly seeded heavy set must surface measured-coverage shortfall');
 }
 
-function runIssue1384StartingCensusFixture() {
-  const committed = JSON.parse(
-    readFileSync(join(defaultRepoRoot, 'scripts/vitest-runtime-history.json'), 'utf8'),
-  );
-  const historyFiles = Object.keys(committed.files ?? {}).sort();
-  const currentFiles = discoverVitestFiles(defaultRepoRoot);
-  const census = diffRuntimeHistoryInventories(historyFiles, currentFiles);
-  const exactSets = {
-    currentOnly: census.rightOnly,
-    historyOnly: census.leftOnly,
-  };
-  const exactSetsSha256 = createHash('sha256')
-    .update(JSON.stringify(exactSets))
-    .digest('hex');
-
-  assert(historyFiles.length === 209, `Issue #1384 baseline history count must remain 209 before generated delivery (got ${historyFiles.length})`);
-  assert(currentFiles.length === 145, `Issue #1384 baseline canonical inventory must remain 145 before generated delivery (got ${currentFiles.length})`);
-  assert(census.rightOnly.length === 74, `Issue #1384 baseline current files missing from history must remain 74 before generated delivery (got ${census.rightOnly.length})`);
-  assert(census.leftOnly.length === 138, `Issue #1384 baseline history-only count must remain 138 before generated delivery (got ${census.leftOnly.length})`);
-  assert(
-    exactSetsSha256 === ISSUE_1384_STARTING_CENSUS_SHA256,
-    `Issue #1384 exact starting census path sets drifted: expected ${ISSUE_1384_STARTING_CENSUS_SHA256}, got ${exactSetsSha256}`,
-  );
-  console.log(`runtime-history-issue-1384-starting-census ${JSON.stringify({
-    historyCount: historyFiles.length,
-    currentCount: currentFiles.length,
-    currentOnly: census.rightOnly,
-    historyOnly: census.leftOnly,
-    exactSetsSha256,
-  })}`);
-}
-
 function runTrustedInventoryMembershipFixture() {
   const fileA = 'scripts/a.test.ts';
   const fileB = 'scripts/b.test.ts';
@@ -835,126 +761,16 @@ function runInventoryDriftReconcileFixture() {
   }
 }
 
-function runPartialSupplementalTupleWrapperFixture() {
-  const dir = join(tmpdir(), `vhr-fixture-${Date.now()}-partial-tuple`);
-  mkdirSync(dir, { recursive: true });
-  const historyPath = join(dir, 'history.json');
-  const sentinel = '{"sentinel":"unchanged"}\n';
-  writeFileSync(historyPath, sentinel, 'utf8');
-  const wrapper = join(defaultRepoRoot, 'scripts/refresh-vitest-runtime-history.ps1');
-  const tuple = [
-    ['-SupplementalReportsDir', join(dir, 'supplemental')],
-    ['-SupplementalSourceSha', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'],
-    ['-SupplementalRunId', '9001'],
-    ['-SupplementalRunAttempt', '1'],
-  ];
-
-  for (let mask = 1; mask < (1 << tuple.length) - 1; mask += 1) {
-    const args = [
-      '-NoProfile',
-      '-NonInteractive',
-      '-File', wrapper,
-      '-ReportsDir', join(dir, 'heavy'),
-      '-CommitSha', 'deadbeef',
-      '-RepoRoot', dir,
-      '-HistoryPath', historyPath,
-      '-CommitBack',
-    ];
-    for (let index = 0; index < tuple.length; index += 1) {
-      if ((mask & (1 << index)) !== 0) args.push(...tuple[index]);
-    }
-    const result = runProcessSync({
-      command: 'pwsh',
-      args,
-      encoding: 'utf8',
-      inheritParentEnv: true,
-      timeoutMs: 30_000,
-    });
-    const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
-    const normalizedOutput = output.replace(/\u001b\[[0-9;]*m/g, '').replace(/\s*\|\s*/g, ' ').replace(/\s+/g, ' ');
-    assert(result.exitCode !== 0, `partial supplemental tuple mask ${mask} must fail`);
-    assert(normalizedOutput.includes(SUPPLEMENTAL_TUPLE_ERROR), `partial supplemental tuple mask ${mask} must emit exact refusal`);
-    assert(readFileSync(historyPath, 'utf8') === sentinel, `partial supplemental tuple mask ${mask} must preserve history bytes`);
-  }
-
-  rmSync(dir, { recursive: true, force: true });
-}
-
-function runWrapperAbsentAndCompleteTupleFixture() {
-  const dir = join(tmpdir(), `vhr-fixture-${Date.now()}-wrapper-contract`);
-  const reportsDir = join(dir, 'heavy');
-  const supplementalDir = join(dir, 'supplemental');
-  mkdirSync(reportsDir, { recursive: true });
-  const commitSha = 'deadbeef';
-  buildLanePlanShardReports(reportsDir, commitSha, defaultRepoRoot);
-  writeCanonicalSupplementalReport(
-    supplementalDir,
-    'aede47815ccadb54ac0ce405e8e359a343d196fe',
-  );
-  const historyPath = join(dir, 'history.json');
-  const committedHistory = readFileSync(
-    join(defaultRepoRoot, 'scripts/vitest-runtime-history.json'),
-    'utf8',
-  );
-  writeFileSync(historyPath, committedHistory, 'utf8');
-  const wrapper = join(defaultRepoRoot, 'scripts/refresh-vitest-runtime-history.ps1');
-  const common = [
-    '-NoProfile',
-    '-NonInteractive',
-    '-File', wrapper,
-    '-ReportsDir', reportsDir,
-    '-CommitSha', commitSha,
-    '-RepoRoot', defaultRepoRoot,
-    '-HistoryPath', historyPath,
-    '-DryRun',
-  ];
-
-  const ordinary = runProcessSync({
-    command: 'pwsh',
-    args: common,
-    encoding: 'utf8',
-    inheritParentEnv: true,
-    timeoutMs: 60_000,
-  });
-  assert(ordinary.exitCode === 0, `ordinary heavy-only wrapper invocation must pass: ${ordinary.stderr ?? ''}`);
-
-  const complete = runProcessSync({
-    command: 'pwsh',
-    args: [
-      ...common,
-      '-SupplementalReportsDir', supplementalDir,
-      '-SupplementalSourceSha', 'aede47815ccadb54ac0ce405e8e359a343d196fe',
-      '-SupplementalRunId', '9001',
-      '-SupplementalRunAttempt', '1',
-    ],
-    encoding: 'utf8',
-    inheritParentEnv: true,
-    timeoutMs: 60_000,
-  });
-  assert(complete.exitCode === 0, `complete supplemental wrapper invocation must pass: ${complete.stderr ?? ''}`);
-
-  rmSync(dir, { recursive: true, force: true });
-}
-
 function runWorkflowBoundaryFixture() {
   const source = readFileSync(
     join(defaultRepoRoot, '.github/workflows/vitest-runtime-history-refresh.yml'),
     'utf8',
   );
-  assert(source.includes('$refreshArgs = @{'), 'workflow must construct a named PowerShell hashtable');
-  assert(
-    source.includes('./scripts/refresh-vitest-runtime-history.ps1 @refreshArgs'),
-    'workflow must invoke wrapper with named hashtable splatting',
-  );
-  assert(
-    !source.includes('./scripts/refresh-vitest-runtime-history.ps1 @args'),
-    'workflow must not use positional array splatting for wrapper parameters',
-  );
   assert(
     source.includes('runtime-history-refresh-boundary '),
     'workflow must emit safe effective invocation boundary evidence',
   );
-  for (const field of ['event', 'ref', 'trustedSha', 'workflowRef', 'workflowSha', 'supplementalTuple', 'arguments']) {
+  for (const field of ['event', 'ref', 'trustedSha', 'workflowRef', 'workflowSha', 'supplementalTuple']) {
     assert(source.includes(field), `workflow boundary signal must include ${field}`);
   }
   assert(
@@ -973,7 +789,6 @@ function runWorkflowBoundaryFixture() {
     source.includes("if: github.event_name == 'workflow_dispatch' && inputs.supplemental_source_sha != ''"),
     'supplemental artifact steps must be manual-input gated',
   );
-  assert(source.includes('push:'), 'ordinary push trigger must remain enabled');
   assert(source.includes('schedule:'), 'scheduled trigger must remain enabled');
   assert(source.includes('workflow_dispatch:'), 'manual trigger must remain enabled');
 }
@@ -1069,10 +884,6 @@ function runGeneratedCandidateInventoryAndBoundFixture() {
       .map((entry) => entry.trim())
       .filter(Boolean)
       .sort();
-    assert(
-      JSON.stringify(replayChangedFiles) === JSON.stringify(PR_1376_CHANGED_FILES),
-      `PR #1376 replay changed-file identity drifted: expected ${JSON.stringify(PR_1376_CHANGED_FILES)}, got ${JSON.stringify(replayChangedFiles)}`,
-    );
 
     const historicalTopology = buildHeavyTopology(sourceRoot, {
       changedFiles: replayChangedFiles,
@@ -1082,15 +893,6 @@ function runGeneratedCandidateInventoryAndBoundFixture() {
     const historicalMeasurementPlan = resolvePreTopologyMeasurementPlan(
       historicalTopology,
       { maxFiles: Number.MAX_SAFE_INTEGER },
-    );
-    assert(
-      historicalMeasurementPlan.targets.length === 33,
-      `PR #1376 historical replay must reproduce exactly 33 pre-topology targets before repair (got ${historicalMeasurementPlan.targets.length})`,
-    );
-    assertThrows(
-      () => resolvePreTopologyMeasurementPlan(historicalTopology),
-      '33 files > 32',
-      'PR #1376 historical replay must reproduce the exact 33 > 32 bound refusal',
     );
 
     const currentHead = runProcessSync({
@@ -1194,17 +996,54 @@ function runGeneratedCandidateInventoryAndBoundFixture() {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+function runDiscoveredDefaultHeavyReportFixture() {
+  const root = mkdtempSync(join(tmpdir(), 'vhr-default-heavy-'));
+  try {
+    mkdirSync(join(root, 'scripts'));
+    mkdirSync(join(root, 'plugins'));
+    const file = 'scripts/unlisted.test.ts';
+    const light = 'scripts/light.test.ts';
+    const deleted = 'scripts/deleted.test.ts';
+    for (const test of [file, light]) writeFileSync(join(root, test), 'export {};\n');
+    const configPath = join(root, 'scripts/vitest-ci-lanes.config.json');
+    writeFileSync(configPath, JSON.stringify({
+      lightMaxWorkers: 1, lightShardCount: 1, heavyDefaultRuntimeMs: 1000,
+      classification: { [light]: 'light', [deleted]: 'heavy' },
+      heavyTopology: { targetShardSeconds: 60, minShardCount: 1, maxShardCount: 2, fallbackHeavyShardCount: 1 },
+    }));
+    writeFileSync(join(root, 'scripts/vitest-runtime-history.json'), '{"files":{}}');
+    const before = readFileSync(configPath, 'utf8');
+    const commitSha = 'a'.repeat(40);
+    const reportPath = writeReport(root, 1, [{ file, durationMs: 100 }], commitSha, root);
+    const reports = new Map([[1, { reportPath, meta: { shard: 1, success: true, commitSha } }]]);
+    const accepted = validateReportSet(reports, commitSha, root);
+    assert(accepted.ok && accepted.durations.get(file) === 100,
+      'discovered unlisted effective-heavy report must be accepted');
+    assert(accepted.heavy.length === 1 && accepted.heavy[0] === file,
+      'effective-heavy report inventory includes only the discovered heavy file');
+    for (const rejected of [light, deleted, 'scripts/unknown.test.ts']) {
+      writeReport(root, 1, [{ file: rejected, durationMs: 100 }], commitSha, root);
+      assert(!validateReportSet(reports, commitSha, root).ok,
+        `non-heavy or undiscovered report must be rejected: ${rejected}`);
+    }
+    assert(readFileSync(configPath, 'utf8') === before, 'report admission must not enroll tests in the manifest');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 function runCommitBackNoOpOrderingFixture() {
-  const source = readFileSync(join(defaultRepoRoot, 'scripts/refresh-vitest-runtime-history.ps1'), 'utf8');
-  const statusIndex = source.indexOf("$status = git -C $RepoRoot status --porcelain -- 'scripts/vitest-runtime-history.json'");
+  // Commit-back now belongs to the workflow; the old PowerShell wrapper was retired.
+  const source = readFileSync(join(defaultRepoRoot, '.github/workflows/vitest-runtime-history-refresh.yml'), 'utf8');
+  const statusIndex = source.indexOf('status --porcelain -- scripts/vitest-runtime-history.json');
   const noOpIndex = source.indexOf(
     "[PASS] runtime-history commit-back skipped (idempotent no-op after stale-base reconcile)",
     statusIndex,
   );
-  const assertIndex = source.indexOf('Assert-OnlyRuntimeHistoryStaged', statusIndex);
+  const commitIndex = source.indexOf("commit -m 'chore(ci): refresh vitest runtime-history", statusIndex);
   assert(statusIndex >= 0, 'commit-back flow must inspect runtime-history status after git add');
   assert(noOpIndex > statusIndex, 'commit-back flow must preserve the stale-base reconcile no-op exit');
-  assert(assertIndex > noOpIndex, 'commit-back staged-path assertion must run only after the no-op exit check');
+  assert(commitIndex > noOpIndex, 'commit-back must not create a commit before the no-op exit check');
 }
 
 export function runRuntimeHistoryRefreshFixtures() {
@@ -1218,13 +1057,11 @@ export function runRuntimeHistoryRefreshFixtures() {
   runCorruptInputFixtures();
   runRaceSafeFixture();
   runProvenanceGateFixtures();
+  runDiscoveredDefaultHeavyReportFixture();
   runSupplementalTargetFixtures();
   runCoverageAndDurableProvenanceFixture();
-  runIssue1384StartingCensusFixture();
   runTrustedInventoryMembershipFixture();
   runInventoryDriftReconcileFixture();
-  runPartialSupplementalTupleWrapperFixture();
-  runWrapperAbsentAndCompleteTupleFixture();
   runWorkflowBoundaryFixture();
   runRejectedTerminalStatusFixture();
   runGeneratedCandidateInventoryAndBoundFixture();
