@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { collectLocalModuleSpecifiers } from './module-specifiers.mjs';
 import { loadReverifyAllowlistConfig } from './reverify-allowlist-config.ts';
 import type { TargetContext } from './target-context.ts';
@@ -421,6 +422,69 @@ function resolveNpmTestDependencyClosure(command: string, repoRoot: string): { r
   }
 
   return { relPaths: [...relPaths], establishable };
+}
+
+/**
+ * Trust the exact selected-card producer against the entire PR file set, never
+ * an inferred import closure. Only declared data fixtures may vary; executable,
+ * JSON and package changes elsewhere fail closed regardless of loader syntax.
+ * The existing command resolver remains the only command authorizer.
+ */
+export function selectedCardProducerClosureIsTrusted(input: {
+  command: string;
+  selectedContext: TargetContext;
+  reviewTargetRoot: string;
+  prModifiedPaths: readonly string[];
+  declaredFixturePaths: readonly string[];
+}): boolean {
+  const card = input.selectedContext.contractEvidenceProducer;
+  if (!card || input.command.trim() !== card.boundaryCommand) return false;
+  const primary = input.selectedContext.primaryRoot;
+  const review = input.reviewTargetRoot;
+  const primaryCommand = resolveAllowlistedCommand(card.boundaryCommand, {
+    repoRoot: primary, selectedContext: input.selectedContext,
+  });
+  const reviewCommand = resolveAllowlistedCommand(card.boundaryCommand, {
+    repoRoot: review, selectedContext: input.selectedContext,
+  });
+  if (!primaryCommand || !reviewCommand || primaryCommand.executable !== process.execPath
+      || reviewCommand.executable !== process.execPath) return false;
+  const primaryEntry = primaryCommand.args[0];
+  const reviewEntry = reviewCommand.args[0];
+  if (!primaryEntry || !reviewEntry) return false;
+  try {
+    const primaryRoot = realpathSync(primary);
+    const reviewRoot = realpathSync(review);
+    if (primaryRoot === reviewRoot) return false;
+    const git = (cwd: string, args: string[]) => runProcessSync({
+      command: 'git', args, cwd, inheritParentEnv: false,
+    });
+    const primaryHead = git(primary, ['rev-parse', '--verify', 'HEAD^{commit}']);
+    const reviewHead = git(review, ['rev-parse', '--verify', 'HEAD^{commit}']);
+    const primaryStatus = git(primary, ['status', '--porcelain', '--untracked-files=all']);
+    if (!primaryHead.ok || !reviewHead.ok || !primaryStatus.ok || primaryStatus.stdout.trim()
+        || !/^[0-9a-f]{40}$/.test(primaryHead.stdout.trim())
+        || !/^[0-9a-f]{40}$/.test(reviewHead.stdout.trim())) return false;
+    const diff = git(review, ['diff', '--name-only', '--no-renames', '-z',
+      primaryHead.stdout.trim(), reviewHead.stdout.trim(), '--']);
+    if (!diff.ok || (diff.stdout && !diff.stdout.endsWith('\0'))) return false;
+    const changed = new Set([...input.prModifiedPaths, ...diff.stdout.split('\0').filter(Boolean)]
+      .map((rel) => path.posix.normalize(normalizePath(rel))));
+    const fixtures = new Set(input.declaredFixturePaths.map((rel) => path.posix.normalize(normalizePath(rel))));
+    for (const rel of changed) {
+      if (rel === '..' || rel.startsWith('../') || path.posix.isAbsolute(rel)) return false;
+      const packageFile = /(?:^|\/)(?:package(?:-[^/]*)?\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-(?:lock|workspace)\.yaml|bun\.lockb?|\.npmrc|\.yarnrc(?:\.yml)?)$/i.test(rel);
+      const runtimeFile = /\.(?:[cm]?[jt]s|[jt]sx|json)$/i.test(rel);
+      if (packageFile || (runtimeFile && !(rel.toLowerCase().endsWith('.json') && fixtures.has(rel)))) return false;
+    }
+    // Keep exact entrypoint identity/confinement, independent of imports.
+    return normalizePath(path.relative(primaryRoot, realpathSync(primaryEntry)))
+        === normalizePath(path.relative(reviewRoot, realpathSync(reviewEntry)))
+      && !changed.has(normalizePath(path.relative(primaryRoot, realpathSync(primaryEntry))))
+      && readFileSync(primaryEntry).equals(readFileSync(reviewEntry));
+  } catch {
+    return false;
+  }
 }
 
 export function listNodeScriptDependencyClosureRelPaths(command: string, repoRoot: string): string[] {

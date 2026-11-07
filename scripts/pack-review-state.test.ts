@@ -1082,6 +1082,52 @@ describe('Issue #1887 strict-descendant findings settlement', () => {
     expect(state.triage).toBeUndefined();
   });
 
+  it('keeps immutable H1 terminal when a separately proved transient C anchors strict descent', () => {
+    const storeOptions = options();
+    const original = sha('1');
+    const rebasedIntermediate = sha('2');
+    const fixedHead = sha('3');
+    let state = initializePackReviewAuthority({
+      prNumber: 2790, headSha: original, tier: 'T2', options: storeOptions,
+    });
+    state = commitPackReviewTerminal({
+      prNumber: 2790, expectedTransitionSeq: state.transitionSeq,
+      terminal: { ...findingsTerminal('issue-2790-final', original), logicalRoundOrdinal: 1 },
+      status: 'changes_requested', findingCount: 1, options: storeOptions,
+    });
+    state = observePackReviewHead({
+      prNumber: 2790, expectedTransitionSeq: state.transitionSeq,
+      headSha: fixedHead, options: storeOptions,
+    });
+    const seq = state.transitionSeq;
+    expect(() => settleLogicalPackReviewFindingsByStrictDescendant({
+      prNumber: 2790, expectedTransitionSeq: seq,
+      reviewedHeadSha: original, currentHeadSha: fixedHead,
+      reviewedHeadIsAncestor: false, options: storeOptions,
+    })).toThrow(/findings_settlement_invalid/);
+    expect(() => settleLogicalPackReviewFindingsByStrictDescendant({
+      prNumber: 2790, expectedTransitionSeq: seq,
+      reviewedHeadSha: rebasedIntermediate, currentHeadSha: fixedHead,
+      ancestryAnchorSha: rebasedIntermediate,
+      reviewedHeadIsAncestor: true, options: storeOptions,
+    })).toThrow(/findings_settlement_invalid/);
+    expect(() => settleLogicalPackReviewFindingsByStrictDescendant({
+      prNumber: 2790, expectedTransitionSeq: seq,
+      reviewedHeadSha: original, currentHeadSha: fixedHead,
+      ancestryAnchorSha: fixedHead,
+      reviewedHeadIsAncestor: true, options: storeOptions,
+    })).toThrow(/findings_settlement_invalid/);
+    expect(readPackReviewAuthority(2790, storeOptions)?.transitionSeq).toBe(seq);
+    const settled = settleLogicalPackReviewFindingsByStrictDescendant({
+      prNumber: 2790, expectedTransitionSeq: seq,
+      reviewedHeadSha: original, currentHeadSha: fixedHead,
+      ancestryAnchorSha: rebasedIntermediate,
+      reviewedHeadIsAncestor: true, options: storeOptions,
+    });
+    expect(settled.terminal?.targetSha).toBe(original);
+    expect(settled.cycle).toMatchObject({ state: 'closed', reviewStageComplete: true });
+  });
+
   it('latches a clean T2 terminal without publication evidence', () => {
     const storeOptions = options();
     const head = sha('a');

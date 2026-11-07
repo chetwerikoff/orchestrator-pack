@@ -23,8 +23,9 @@ import {
 import { normalizePath } from '@orchestrator-pack/shared/lib/normalize.js';
 import { pathMatchesAnyPattern } from '../plugins/task-declaration/lib/glob_match.ts';
 import { REPOSITORY_DENYLIST } from './pr-scope-declaration.ts';
-import { observePosixProcessGroup, runProcess, type ProcessResult } from './kernel/subprocess.ts';
+import { observePosixProcessGroup, runProcess, runProcessSync, type ProcessResult } from './kernel/subprocess.ts';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
+import { parseRemoteSlug } from './lib/git-origin-slug.mjs';
 import { claudeHelpEdgeCapabilities } from './executor-profile-policy.ts';
 import {
   INSPECTION_EXPRESSION,
@@ -326,6 +327,13 @@ interface StartInput {
   fixtureChangedPaths?: string[];
   fixtureBoundIssueSnapshotBytes?: string;
   fixtureReviewCompareStatus?: string;
+  fixtureRebaseProtectionRunner?: typeof runProcess;
+  fixtureRebasePrReader?: () => Promise<{
+    prNumber: number; headSha: string; baseRef: string; body: string;
+  }> | { prNumber: number; headSha: string; baseRef: string; body: string };
+  fixtureRebaseOriginRepository?: string;
+  fixtureBeforeRebaseSettlementRecheck?: () => void | Promise<void>;
+  fixtureStrictDescendantTreeChanged?: boolean;
   fixtureSameHeadIssueResolutionRunner?: typeof runProcess;
   /** Synthetic GitHub evidence for the narrow #2655/#2656 incident. */
   fixtureIncidentGithubRunner?: typeof runProcess;
@@ -389,6 +397,13 @@ export interface ReconcileStalePackReviewRunsInput {
   fixtureChangedPaths?: string[];
   fixtureBoundIssueSnapshotBytes?: string;
   fixtureReviewCompareStatus?: string;
+  fixtureRebaseProtectionRunner?: typeof runProcess;
+  fixtureRebasePrReader?: () => Promise<{
+    prNumber: number; headSha: string; baseRef: string; body: string;
+  }> | { prNumber: number; headSha: string; baseRef: string; body: string };
+  fixtureRebaseOriginRepository?: string;
+  fixtureBeforeRebaseSettlementRecheck?: () => void | Promise<void>;
+  fixtureStrictDescendantTreeChanged?: boolean;
   fixtureSameHeadIssueResolutionRunner?: typeof runProcess;
   /** Offline connector-shaped existing GitHub architect/diff evidence; no runtime bypass. */
   fixtureIncidentGithubRunner?: typeof runProcess;
@@ -840,6 +855,214 @@ async function resolvePackReviewStrictDescendant(input: {
   fixtureReviewCompareStatus?: string;
 }): Promise<boolean> {
   return await resolvePackReviewFindingsHeadRelation(input) === 'strict_descendant';
+}
+
+
+interface VerifiedRebasedC {
+  anchorSha: string;
+  recheck: (requiredCi: TargetContext['requiredCi']) => Promise<void>;
+}
+const rebaseSha1 = /^[0-9a-f]{40}$/;
+const rebaseRawDiffArgs = ['diff', '--no-ext-diff', '--no-textconv', '--no-color',
+  '--raw', '-z', '--no-renames', '--full-index', '--abbrev=40'] as const;
+function rebaseRawDelta(repoRoot: string, from: string, to: string): Buffer {
+  // The canonical subprocess wrapper buffers all output. Latin-1 is a
+  // reversible one-byte mapping, including NUL, non-UTF-8 pathnames and modes;
+  // reconstruct bytes before comparing the *complete* Git --raw -z result.
+  const result = runProcessSync({
+    command: 'git', args: [...rebaseRawDiffArgs, from, to],
+    cwd: repoRoot, encoding: 'latin1', inheritParentEnv: true, timeoutMs: 30_000,
+  });
+  if (!result.ok || result.outcome !== 'exit' || result.exitCode !== 0) {
+    throw new Error('complete raw Git diff unavailable');
+  }
+  const raw = Buffer.from(result.stdout, 'latin1');
+  for (let at = 0; at < raw.length;) {
+    const headerEnd = raw.indexOf(0, at);
+    const pathEnd = headerEnd < 0 ? -1 : raw.indexOf(0, headerEnd + 1);
+    if (headerEnd < 0 || pathEnd <= headerEnd + 1
+        || !/^:[0-7]{6} [0-7]{6} [0-9a-f]{40} [0-9a-f]{40} [A-Z][0-9]*$/.test(
+          raw.subarray(at, headerEnd).toString('latin1'),
+        )) throw new Error('raw Git diff full OID/mode/path invalid');
+    at = pathEnd + 1;
+  }
+  return raw;
+}
+async function rebaseGitSha1(root: string, args: string[], label: string): Promise<string> {
+  const value = (await runGit(root, args, label)).trim();
+  if (!rebaseSha1.test(value)) throw new Error(label + ': expected unique full SHA-1');
+  return value;
+}
+async function rebaseAncestor(root: string, from: string, to: string): Promise<boolean> {
+  const result = await runProcess({
+    command: 'git', args: ['merge-base', '--is-ancestor', from, to],
+    cwd: root, inheritParentEnv: true, allowEmptyStdout: true,
+  });
+  if (result.outcome !== 'exit' || ![0, 1].includes(result.exitCode ?? -1)) {
+    throw new Error('merge-base ancestry command failed');
+  }
+  return result.exitCode === 0;
+}
+async function rebaseUniqueMergeBase(root: string, head: string, b: string): Promise<string> {
+  const lines = (await runGit(root, ['merge-base', '--all', head, b], 'merge-base --all'))
+    .trim().split(/\r?\n/);
+  if (lines.length !== 1 || !rebaseSha1.test(lines[0] ?? '')
+      || (await runGit(root, ['cat-file', '-t', lines[0]!], 'base object')).trim() !== 'commit') {
+    throw new Error('missing/multiple/invalid merge bases');
+  }
+  return lines[0]!;
+}
+/** One per-call nonpersistent C proof for both PR-led and scoped entrypoints. */
+async function verifiedStrictDescendantTreeChanged(
+  input: ReconcileStalePackReviewRunsInput, reviewedH1: string, currentH2: string,
+): Promise<boolean> {
+  if (process.env.OPK_VITEST_HARNESS === '1') {
+    if (input.fixtureStrictDescendantTreeChanged !== undefined) {
+      return input.fixtureStrictDescendantTreeChanged;
+    }
+    // Existing synthetic ancestry fixtures lack real Git objects; they are
+    // neither proof of production ancestry nor a real changed-tree positive.
+    if (input.fixtureReviewCompareStatus !== undefined) return true;
+  }
+  const h1Tree = await rebaseGitSha1(
+    input.sourceRepoRoot, ['rev-parse', reviewedH1 + '^{tree}'], 'review H1 tree',
+  );
+  const h2Tree = await rebaseGitSha1(
+    input.sourceRepoRoot, ['rev-parse', currentH2 + '^{tree}'], 'current H2 tree',
+  );
+  return h1Tree !== h2Tree;
+}
+
+async function proveUniqueRebasedC(
+  input: ReconcileStalePackReviewRunsInput,
+  options: { projectId: string; repoSlug: string },
+  prNumber: number, h1: string, h2: string,
+): Promise<VerifiedRebasedC> {
+  const root = input.sourceRepoRoot;
+  const harness = process.env.OPK_VITEST_HARNESS === '1';
+  const selected = resolveTargetContext({ projectId: options.projectId, env: process.env });
+  const base = selected.defaultBranch;
+  if (selected.repository.toLowerCase() !== options.repoSlug.toLowerCase()
+      || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(base) || base.includes('..')
+      || base.endsWith('.lock') || base.includes('@{')
+      || ![base, 'origin/' + base].includes(String(input.baseRef || 'origin/' + base))) {
+    throw new Error('selected PR repository/baseRef not proven');
+  }
+  const remote = (await runGit(root, ['remote', 'get-url', 'origin'], 'selected origin')).trim();
+  const originSlug = harness && input.fixtureRebaseOriginRepository
+    ? input.fixtureRebaseOriginRepository : parseRemoteSlug(remote);
+  if (!originSlug || originSlug.toLowerCase() !== selected.repository.toLowerCase()) {
+    throw new Error('checkout origin is not selected PR repository');
+  }
+  const readPr = async () => {
+    if (harness && input.fixtureRebasePrReader) return input.fixtureRebasePrReader();
+    if (harness && input.fixturePrBody !== undefined && input.fixtureCurrentPrHeadSha) {
+      if (String(input.fixturePrState || 'OPEN').toUpperCase() !== 'OPEN'
+          || input.fixturePrMerged === true) throw new Error('PR not open/unmerged');
+      return { prNumber, headSha: input.fixtureCurrentPrHeadSha,
+        baseRef: base, body: input.fixturePrBody };
+    }
+    const boundRunner: typeof runProcess = async (request) => {
+      const result = await runProcess(request);
+      const row = githubEvidenceObject(JSON.parse(await requireProcess(result, 'rebased PR identity read')) as unknown);
+      if (row.number !== prNumber || trim(row.url).toLowerCase()
+          !== `https://api.github.com/repos/${selected.repository}/pulls/${prNumber}`.toLowerCase()) {
+        throw new Error('live PR repository/number identity mismatch');
+      }
+      return result;
+    };
+    return { prNumber, ...await resolveCurrentPrTarget(root, options.repoSlug, prNumber, boundRunner) };
+  };
+  const pr = await readPr();
+  const requirePr = (next: Awaited<ReturnType<typeof readPr>>) => {
+    if (next.prNumber !== prNumber || next.headSha.toLowerCase() !== h2.toLowerCase()
+        || next.baseRef !== base || next.body !== pr.body
+        || !extractClosingIssueNumber(next.body)) {
+      throw new Error('live open PR number/head/baseRef/Issue changed');
+    }
+  };
+  requirePr(pr);
+  const protectionResult = await (harness && input.fixtureRebaseProtectionRunner
+    ? input.fixtureRebaseProtectionRunner : runProcess)({
+      command: resolveTrackedGhWrapper(),
+      args: ['api', 'repos/' + selected.repository + '/branches/' + base + '/protection'],
+      cwd: root, inheritParentEnv: true, allowEmptyStdout: false, timeoutMs: 30_000,
+    });
+  if (!protectionResult.ok) throw new Error('branch protection GET unavailable or denied');
+  let policy: unknown;
+  try { policy = JSON.parse(protectionResult.stdout); }
+  catch { throw new Error('branch protection GET invalid JSON'); }
+  if (!policy || typeof policy !== 'object' || Array.isArray(policy)) {
+    throw new Error('branch protection GET invalid object');
+  }
+  const record = policy as Record<string, unknown>;
+  const disabled = (key: string) => {
+    const value = record[key];
+    return !!value && typeof value === 'object' && !Array.isArray(value)
+      && (value as Record<string, unknown>).enabled === false;
+  };
+  if (!disabled('allow_force_pushes') || !disabled('allow_deletions')) {
+    throw new Error('force pushes/deletions must both be explicitly disabled');
+  }
+  if ((await runGit(root, ['rev-parse', '--show-object-format=storage'], 'object format')).trim() !== 'sha1') {
+    throw new Error('unsupported non-SHA-1 object format');
+  }
+  const fullRef = 'refs/heads/' + base;
+  const liveBase = async (): Promise<string> => {
+    let output: string;
+    try { output = await runGit(root, ['ls-remote', remote, fullRef], 'live selected base tip'); }
+    catch { throw new Error('ls-remote unavailable; rerun when remote is reachable'); }
+    const rows = output.trim().split(/\r?\n/);
+    const fields = rows.length === 1 ? rows[0]!.split('\t') : [];
+    if (fields.length !== 2 || !rebaseSha1.test(fields[0] ?? '')
+        || fields[1] !== fullRef) throw new Error('missing/malformed/nonunique live base tip');
+    return fields[0]!;
+  };
+  const localBase = async () => rebaseGitSha1(
+    root, ['rev-parse', '--verify', 'refs/remotes/origin/' + base + '^{commit}'],
+    'local origin base',
+  );
+  const b = await liveBase();
+  if (await localBase() !== b) throw new Error('stale local base; fetch origin ' + base + ' and rerun');
+  const m1 = await rebaseUniqueMergeBase(root, h1, b);
+  const m2 = await rebaseUniqueMergeBase(root, h2, b);
+  if (!(await rebaseAncestor(root, m1, m2))) throw new Error('rewritten-base M1/M2 ancestry false');
+  if (await rebaseAncestor(root, h1, h2)) throw new Error('H1 route is not rewritten');
+  const authenticDelta = rebaseRawDelta(root, m1, h1);
+  const output = (await runGit(root, ['rev-list', '--first-parent', m2 + '..' + h2],
+    'first-parent C census')).trim();
+  const candidates = output ? output.split(/\r?\n/) : [];
+  if (candidates.some((oid) => !rebaseSha1.test(oid))) throw new Error('malformed C candidates');
+  const matching: string[] = [];
+  for (const oid of candidates) {
+    if (rebaseRawDelta(root, m2, oid).equals(authenticDelta)) matching.push(oid);
+  }
+  if (matching.length !== 1) throw new Error('nonunique or absent full-raw matching C');
+  const anchorSha = matching[0]!;
+  if (anchorSha === h2 || !(await rebaseAncestor(root, anchorSha, h2))) {
+    throw new Error('C is not a strict H2 ancestor');
+  }
+  const cTree = await rebaseGitSha1(root, ['rev-parse', anchorSha + '^{tree}'], 'C tree');
+  const hTree = await rebaseGitSha1(root, ['rev-parse', h2 + '^{tree}'], 'H2 tree');
+  if (cTree === hTree) throw new Error('empty-tree C/H2 fix');
+  return { anchorSha, recheck: async (requiredCi) => {
+    await input.fixtureBeforeRebaseSettlementRecheck?.();
+    const card = resolveTargetContext({ projectId: options.projectId, env: process.env });
+    if (card.projectId !== selected.projectId || card.repository !== selected.repository
+        || card.defaultBranch !== base || card.primaryRoot !== selected.primaryRoot
+        || stableJson(card.requiredCi ?? null) !== stableJson(requiredCi ?? null)) {
+      throw new Error('selected card moved before C settlement');
+    }
+    if ((await runGit(root, ['remote', 'get-url', 'origin'], 'origin recheck')).trim() !== remote) {
+      throw new Error('checkout origin moved before C settlement');
+    }
+    requirePr(await readPr());
+    const secondLiveB = await liveBase();
+    const secondLocalB = await localBase();
+    if (secondLiveB !== b || secondLocalB !== b) {
+      throw new Error('selected live/local base tip moved; fetch origin ' + base + ' and rerun');
+    }
+  } };
 }
 
 export async function resolveCurrentPrTarget(
@@ -5438,9 +5661,9 @@ async function ensurePromotedRoundPublicPending(input: {
 }
 
 
-/** Recredential the original GitHub evidence for an ordinary required GPT
+/** Recredential the original GitHub evidence for a required
  * success. Journal delivery flags or a public status alone are never proof. */
-async function verifyOriginalGptGithubSourcesAndReview(
+async function verifyOriginalGithubSourcesAndReview(
   run: PackReviewRunRecord,
   input: {
     fixtureGptSourceCommentTransport?: PackGptSourceCommentTransport;
@@ -5450,13 +5673,15 @@ async function verifyOriginalGptGithubSourcesAndReview(
   sourceRepoRoot: string,
 ): Promise<boolean> {
   const round = run.reviewRound;
-  if (!round || round.reviewer !== 'gpt') return true;
-  if (!hasCredentialedGptSourceAuthority(run)
+  if (!round && (!['codex', 'claude'].includes(run.resolvedReviewer ?? '')
+      || !hasPersistedPackReviewVerdict(run)
+      || run.deliveryOutcomes.githubComment?.state !== 'succeeded')) return false;
+  if (round && (round.reviewer !== 'gpt' || !hasCredentialedGptSourceAuthority(run)
       || (round.settledSourceCount !== undefined
         && (!Number.isInteger(round.settledSourceCount)
           || round.settledSourceCount < (round.cardinality === 3 ? 2 : round.cardinality)
           || round.settledSourceCount > round.cardinality))
-      || gptUsableSourceCount(round) !== (round.settledSourceCount ?? round.cardinality)) return false;
+       || gptUsableSourceCount(round) !== (round.settledSourceCount ?? round.cardinality))) return false;
   // Tests must model both authenticated GitHub evidence surfaces explicitly.
   // Setting a harness environment variable cannot substitute for either one.
   const sourceTransport = process.env.OPK_VITEST_HARNESS === '1'
@@ -5469,16 +5694,16 @@ async function verifyOriginalGptGithubSourcesAndReview(
     : createGithubReviewTransport({
         repoRoot: sourceRepoRoot, repoSlug, prNumber: run.prNumber,
       });
-  if (!sourceTransport || !reviewTransport) return false;
-  const complete = round.sourceSlots.filter((slot) =>
-    slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings');
-  if (complete.length < Number(round.settledSourceCount)) return false;
+  if (!reviewTransport || (round && !sourceTransport)) return false;
+  const complete = round?.sourceSlots.filter((slot) =>
+    slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings') ?? [];
+  if (round && complete.length < Number(round.settledSourceCount)) return false;
   for (const slot of complete) {
     const identity = gptSourceIdentity({
       repoSlug, prNumber: run.prNumber, headSha: run.targetSha,
       runId: run.id, slotId: slot.slotId, invocationId: trim(slot.invocationId),
     });
-    const observed = await resolvePackGptSourceComment({ identity, transport: sourceTransport });
+    const observed = await resolvePackGptSourceComment({ identity, transport: sourceTransport! });
     const terminal = slot.terminalResult && typeof slot.terminalResult === 'object'
       && !Array.isArray(slot.terminalResult)
       ? slot.terminalResult as Record<string, unknown> : null;
@@ -5507,7 +5732,7 @@ async function verifyOriginalGptGithubSourcesAndReview(
     && reviewRuns.length === 1 && reviewRuns[0]![1] === run.id
     && reviewHeads.length === 1 && reviewHeads[0]![1] === run.targetSha
     && review.body.startsWith(requiredHeading)
-    && !(round.cardinality === 3 && round.settledSourceCount === 2
+    && !(round?.cardinality === 3 && round.settledSourceCount === 2
       && !/^Sources: 2\/3 \(degraded after timeout\)$/m.test(review.body))
     && !review.body.includes('Mode: supplemental advisory review')
     && (!run.githubReviewReconciliation?.commentBody
@@ -5556,7 +5781,7 @@ async function verifyOrdinaryRequiredSuccessBinding(
       ? input.fixtureIssueBody
       : (await resolveCurrentIssueFields(options.sourceRepoRoot, options.repoSlug, issueNumber)).body;
     if (typeof body !== 'string' || computeBoundIssueSnapshotHash(body) !== digest) return false;
-    return await verifyOriginalGptGithubSourcesAndReview(
+    return !round || await verifyOriginalGithubSourcesAndReview(
       run, input, options.repoSlug, options.sourceRepoRoot,
     );
   } catch { return false; }
@@ -6470,20 +6695,46 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
   // GPT T1 source-final path uses the same strict-descendant proof as T2/T3.
   const sourceBoundT1 = priorRun.resolvedReviewer === 'gpt'
     && frozenLogicalGptSourceIdentity(priorRun);
-  // A non-descendant cannot settle an eligible final-cap GPT source review.
+  // The unique-C proof precedes the H1-only ancestry veto on both entries.
+  let rebasedC: VerifiedRebasedC | undefined;
   if (logicalFinalFindings && (authority.cycle.frozenTier !== 'T1' || sourceBoundT1)
-      && authority.terminal
-      && currentHead !== authority.terminal.targetSha) {
+      && authority.terminal && currentHead !== authority.terminal.targetSha) {
     const strict = await resolvePackReviewStrictDescendant({
       repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
       reviewedHeadSha: authority.terminal.targetSha,
       currentHeadSha: currentHead,
       fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
     });
+    if (strict) {
+      try {
+        if (!(await verifiedStrictDescendantTreeChanged(
+          input, authority.terminal.targetSha, currentHead,
+        ))) {
+          return { prNumber, headSha: currentHead, finalCapSettlement: true,
+            settled: false, reason: 'final_cap_strict_descendant_required',
+            nextAction: 'make a real changed-tree fix after the reviewed findings head, then rerun reconcile' };
+        }
+      } catch {
+        return { prNumber, headSha: currentHead, finalCapSettlement: true,
+          settled: false, reason: 'final_cap_strict_descendant_required',
+          nextAction: 'restore current-head Git tree proof, then rerun reconcile' };
+      }
+    }
     if (!strict) {
-      return { prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
-        settled: false, reason: 'final_cap_strict_descendant_required',
-        nextAction: 'advance the same PR from the final findings head with a verified strict descendant, then reconcile' };
+      try {
+        rebasedC = await proveUniqueRebasedC(input, options, prNumber,
+          authority.terminal.targetSha, currentHead);
+      } catch (error) {
+        const detail = describeError(error);
+        return { prNumber, headSha: currentHead, finalCapSettlement: true,
+          settled: false, reason: 'final_cap_strict_descendant_required', detail,
+          nextAction: detail.includes('ls-remote unavailable')
+            ? 'rerun when the remote is reachable'
+            : detail.includes('base tip moved') || detail.includes('stale local')
+              ? 'git fetch origin ' + String(input.baseRef || 'origin/main').replace(/^origin\//, '')
+                + ', then rerun the same reconcile'
+              : 'restore the selected protected base/PR identity and unique changed-tree C proof, then rerun scoped reconcile or seek architect/operator decision' };
+      }
     }
   }
 
@@ -6719,6 +6970,31 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
     }
   }
 
+  let verifiedFinalCiSelectors: TargetContext['requiredCi'];
+  if (logicalAccounting && currentHead !== priorRun.targetSha
+      && (process.env.OPK_VITEST_HARNESS !== '1' || rebasedC
+        || input.fixtureGithubReviewTransport)) {
+    // Legacy test-only ancestry fixtures have no GitHub transport. Production,
+    // the C route and evidence-bearing fixtures always refresh original REVIEW
+    // and mode-correct source authority plus exact-current-head CI before close.
+    try {
+      if (!await verifyOriginalGithubSourcesAndReview(priorRun, input,
+        options.repoSlug, input.sourceRepoRoot)) throw new Error('original source/REVIEW evidence unverified');
+      const context = resolveTargetContext({ projectId: options.projectId });
+      const requiredCi = context.requiredCi ? [...context.requiredCi] : undefined;
+      if (!await manualPackReviewRequiredCiGreen({ startInput: input, targetContext: context,
+        target: { prNumber, headSha: currentHead, repoSlug: options.repoSlug,
+          sourceRepoRoot: input.sourceRepoRoot, prBaseRef: context.defaultBranch } })) {
+        throw new Error('current-head required CI not green');
+      }
+      verifiedFinalCiSelectors = requiredCi;
+    } catch (error) {
+      return { prNumber, headSha: currentHead, finalCapSettlement: true, settled: false,
+        reason: 'final_cap_review_binding_unverified', detail: describeError(error),
+        nextAction: 'restore original credentialed sources, native delivery and terminal REVIEW plus current-head CI; rerun scoped reconcile without another round' };
+    }
+  }
+
   // Observe H2 only after proving the original terminal and current Issue
   // binding. A refusal above retains B0/B1 quorum and historical evidence.
   if (unobservedDescendant) {
@@ -6917,7 +7193,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         currentHeadSha: authority.currentHeadSha,
         fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
       });
-      if (!strictDescendant) {
+      if (!strictDescendant && !rebasedC) {
         return {
           prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
           settled: false, reason: 'final_cap_strict_descendant_required',
@@ -6925,21 +7201,37 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         };
       }
       try {
+        // The incumbent head observation is permitted before this recheck.
+        // Failed identity/B validation makes no durable stage-close mutation.
+        if (rebasedC) await rebasedC.recheck(verifiedFinalCiSelectors);
         authority = settleLogicalPackReviewFindingsByStrictDescendant({
           prNumber, expectedTransitionSeq: authority.transitionSeq,
           reviewedHeadSha, currentHeadSha: authority.currentHeadSha,
+          ...(rebasedC ? { ancestryAnchorSha: rebasedC.anchorSha } : {}),
           reviewedHeadIsAncestor: true, options: { storeRoot: options.storeRoot },
         });
       } catch (error) {
         return {
           prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
           settled: false, reason: `final_cap_settlement_incomplete:${describeError(error)}`,
-          nextAction: 'rerun scoped reconcile after confirming the current PR head',
+          nextAction: rebasedC
+            ? describeError(error).includes('ls-remote unavailable')
+              ? 'rerun when the remote is reachable'
+              : describeError(error).includes('base tip moved')
+                ? 'git fetch origin ' + String(input.baseRef || 'origin/main').replace(/^origin\//, '')
+                  + ', then rerun the same reconcile'
+                : 'correct the selected remote/ref and PR/card/origin identity, then rerun scoped reconcile or seek architect/operator decision'
+            : 'rerun scoped reconcile after confirming the current PR head',
         };
       }
     }
     return publishFinalCapStatus(
-      'Required pack-review stage completed; strict descendant of reviewed findings.',
+      rebasedC
+        ? 'Review settled on H1 ' + reviewedHeadSha.slice(0, 8)
+          + '; rebased descendant H2 ' + authority.currentHeadSha.slice(0, 8) + '.'
+        : completedFinalFindings
+          ? 'Required pack-review stage already completed; current-head status revalidated.'
+          : 'Required pack-review stage completed; strict descendant of reviewed findings.',
       sameHeadPublicationDigest ?? sha256Bytes(stableJson({
         runId: priorRun.id, reviewedHeadSha, publicationHead: authority.currentHeadSha,
         settlementKind: 'strict_descendant',
@@ -9441,8 +9733,10 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
           && authority.terminal.targetSha !== target.headSha));
     // Completed final-cap stages still require verified Issue binding on
     // rewritten/diverged heads; ancestry is decided inside reconciliation.
+    let completedFinalCapVerified = false;
     if (finalFindings && authority.terminal!.targetSha !== target.headSha
         && !supplementalMode && !completedScopeOnlyReplayCandidate) {
+      const alreadyComplete = authority.cycle?.reviewStageComplete === true;
       const result = await reconcileFinalCapSettlement({
         projectId, storeRoot, prNumber: target.prNumber,
         repoSlug: target.repoSlug, sourceRepoRoot: target.sourceRepoRoot,
@@ -9451,6 +9745,11 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         fixtureIssueNumber: input.fixtureIssueNumber,
         fixtureIssueBody: input.fixtureIssueBody, fixtureIssueTitle: input.fixtureIssueTitle,
         fixtureReviewCompareStatus: input.fixtureReviewCompareStatus,
+        fixtureRebaseProtectionRunner: input.fixtureRebaseProtectionRunner,
+        fixtureRebasePrReader: input.fixtureRebasePrReader,
+        fixtureRebaseOriginRepository: input.fixtureRebaseOriginRepository,
+        fixtureBeforeRebaseSettlementRecheck: input.fixtureBeforeRebaseSettlementRecheck,
+        fixtureStrictDescendantTreeChanged: input.fixtureStrictDescendantTreeChanged,
         fixtureSameHeadIssueResolutionRunner: input.fixtureSameHeadIssueResolutionRunner,
         fixtureGptSourceCommentTransport: input.fixtureGptSourceCommentTransport,
         fixtureGithubReviewTransport: input.fixtureGithubReviewTransport,
@@ -9469,7 +9768,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
       await releaseEarlyClaim(result?.settled === true ? 'final_cap_descendant_settled' : 'final_cap_settlement_refused');
       // reconcileFinalCapSettlement settles only after current-head required
       // status success readback; keep that exact publication head visible.
-      return result?.settled === true
+      if (!alreadyComplete || result?.settled !== true) return result?.settled === true
         ? { ok: true, created: false, reused: true, prNumber: target.prNumber,
             headSha: target.headSha, reason: result.reason,
             statusPublished: true, publicationVerified: true,
@@ -9481,6 +9780,10 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
             ...(result?.detail ? { detail: result.detail } : {}),
             nextAction: result?.nextAction ?? 'restore verified final-cap binding and retry scoped reconcile',
             httpStatus: 409 };
+      // Revalidate original evidence above, then use the incumbent completed-
+      // stage projection below. Only a first settlement has the descendant reason.
+      authority = readPackReviewAuthority(target.prNumber, authorityOptions) ?? authority;
+      completedFinalCapVerified = true;
     }
     if (authority.cycle?.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
         && authority.terminal?.reviewVerdict === 'findings'
@@ -9531,7 +9834,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
               || original.canonicalRepository?.toLowerCase() !== target.repoSlug.toLowerCase()
               || original.reviewCycleId !== cycleId
               || original.targetSha !== authority.terminal.targetSha
-              || !hasPersistedPackReviewVerdict(original)) return false;
+              || (!hasPersistedPackReviewVerdict(original) && !completedFinalCapVerified)) return false;
           const bound = original.boundIssueSnapshotDigest
             ?? original.reviewRound?.boundIssueSnapshotDigest
             ?? authoritative.snapshotDigest;
@@ -9551,6 +9854,11 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
               target.sourceRepoRoot, target.repoSlug, target.issueNumber,
             )).body;
           if (body === undefined) return false;
+          // The scoped reconciler above has just revalidated the original
+          // full-body authority (including named exceptions), sources and REVIEW.
+          // Keep its accepted current body stable across this status projection.
+          if (completedFinalCapVerified
+              && computeBoundIssueSnapshotHash(body) === authoritative.snapshotDigest) return true;
           // A completed #2428 same-head correction accepted B1, not its B0
           // review-preflight body. Reverting to B0 must never use this shortcut.
           if (authority.cycle?.settlementKind !== 'same_head_issue_resolution'

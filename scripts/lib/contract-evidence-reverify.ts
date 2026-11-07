@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { extractAtJsonPath } from '../external-output-shape-guard.mjs';
@@ -30,6 +30,7 @@ import {
   listNodeScriptDependencyClosureRelPaths,
   listNpmTestDependencyClosureRelPaths,
   resolveAllowlistedCommand,
+  selectedCardProducerClosureIsTrusted,
 } from './reverify-command-resolution.ts';
 import { loadReverifyAllowlistConfig } from './reverify-allowlist-config.ts';
 import { runSandboxedAllowlistedCommand } from './reverify-sandbox.ts';
@@ -811,10 +812,17 @@ function evaluateNewRow(input: {
   timeoutMs: number;
   forceProducerUnreachable?: boolean;
   selectedContext?: TargetContext;
+  selectedProducerUnavailable?: boolean;
+  prModifiedPaths: string[];
+  declaredFixturePaths: string[];
 }): ReverifyRowResult {
-  const { row, rowIndex, markdown, trustedBaseRoot, reviewTargetRoot, timeoutMs, forceProducerUnreachable, selectedContext } = input;
+  const { row, rowIndex, markdown, trustedBaseRoot, reviewTargetRoot, timeoutMs,
+    forceProducerUnreachable, selectedContext, selectedProducerUnavailable, prModifiedPaths } = input;
   const selectedTarget = selectedContext?.contractEvidenceProducer;
   const producer = canonicalProducer(row.producer ?? '');
+  if (selectedProducerUnavailable && !(producerRegistry.repoOwned ?? []).includes(producer)) {
+    return buildUnverified(rowIndex, row, 'producer-unreachable');
+  }
   if (canonicalBindingIdProducer(row) !== producer || isExternalProducer(producer)) {
     return buildUnverified(rowIndex, row, 'unsupported-producer');
   }
@@ -850,6 +858,14 @@ function evaluateNewRow(input: {
     || areNewRowCommandsSemanticallyIdentical(independentCommand, proofCommand, reviewTargetRoot)
   ) {
     return buildUnverified(rowIndex, row, 'non-genuine-proof');
+  }
+
+  if (selectedTarget?.name === producer
+      && !selectedCardProducerClosureIsTrusted({
+        command: independentCommand, selectedContext: selectedContext!,
+        reviewTargetRoot, prModifiedPaths, declaredFixturePaths: input.declaredFixturePaths,
+      })) {
+    return buildUnverified(rowIndex, row, 'untrusted-pr-modified');
   }
 
   const expected = block.expected ?? '';
@@ -1118,20 +1134,51 @@ export function runContractEvidenceReverify(input: ReverifyRunInput): ReverifyRu
   const corpusRoot = path.dirname(input.manifestPath).replace(/\\/g, '/');
   const rows: ReverifyRowResult[] = [];
   let selectedContext: TargetContext | undefined;
-  // The selected card must bind to the repository actually under review, not
-  // merely to a valid but unrelated primary checkout.
+  let configuredProducerContext: TargetContext | undefined;
+  let selectedProducerUnavailable = false;
+  // The exact-bound PR worktree W is the only allowed live target producer
+  // execution root. Checking origin alone cannot bind W to reviewed PR bytes.
   try {
     const context = resolveTargetContext({ projectId: input.projectId, env: input.env });
+    if (context.contractEvidenceProducer) {
+      configuredProducerContext = context;
+      selectedProducerUnavailable = true;
+    }
     const origin = runProcessSync({
       command: 'git', args: ['remote', 'get-url', 'origin'],
       cwd: reviewTargetRoot, inheritParentEnv: false,
     });
-    if (origin.ok && parseRemoteSlug(origin.stdout)?.toLowerCase() === context.repository) {
+    const head = runProcessSync({
+      command: 'git', args: ['rev-parse', 'HEAD'],
+      cwd: reviewTargetRoot, inheritParentEnv: false,
+    });
+    const topLevel = runProcessSync({
+      command: 'git', args: ['rev-parse', '--show-toplevel'],
+      cwd: reviewTargetRoot, inheritParentEnv: false,
+    });
+    // Refuse dirty or untracked W content as proof of committed HEAD.
+    const status = runProcessSync({
+      command: 'git', args: ['status', '--porcelain', '--untracked-files=all'],
+      cwd: reviewTargetRoot, inheritParentEnv: false,
+    });
+    const boundSha = String(input.prHeadSha ?? '').trim().toLowerCase();
+    const validRoots = !context.contractEvidenceProducer
+      || (realpathSync(context.primaryRoot) === realpathSync(input.trustedBaseRoot)
+        && realpathSync(input.trustedBaseRoot) !== realpathSync(reviewTargetRoot));
+    const validHead = /^[0-9a-f]{40}$/.test(boundSha)
+      && validRoots
+      && existsSync(path.join(reviewTargetRoot, '.git'))
+      && topLevel.ok && realpathSync(topLevel.stdout.trim()) === realpathSync(reviewTargetRoot)
+      && head.ok && head.stdout.trim().toLowerCase() === boundSha
+      && status.ok && status.stdout.trim() === '';
+    const validOrigin = origin.ok
+      && parseRemoteSlug(origin.stdout)?.toLowerCase() === context.repository;
+    if (validOrigin && (!context.contractEvidenceProducer || validHead)) {
       selectedContext = context;
+      selectedProducerUnavailable = false;
     }
   } catch {
-    // Pack-owned producers retain their current behavior without target selection.
-    // Target rows remain unsupported until the selected card is corrected.
+    // Missing W, Git or exact SHA leaves selected-card proof unavailable.
   }
 
   for (const [index, row] of parsed.rows.entries()) {
@@ -1158,6 +1205,13 @@ export function runContractEvidenceReverify(input: ReverifyRunInput): ReverifyRu
           timeoutMs,
           forceProducerUnreachable: input.forceProducerUnreachable,
           selectedContext,
+          selectedProducerUnavailable,
+          prModifiedPaths,
+          declaredFixturePaths: Object.values(manifest.entries ?? {})
+            .map((entry) => (entry as CaptureManifestEntry).path)
+            .filter((entry): entry is string => typeof entry === 'string')
+            .map((entry) => path.posix.join(corpusRoot, entry))
+            .filter((entry) => entry.startsWith(corpusRoot + '/')),
         }),
       );
       continue;
@@ -1175,6 +1229,11 @@ export function runContractEvidenceReverify(input: ReverifyRunInput): ReverifyRu
       continue;
     }
 
+    if (configuredProducerContext?.contractEvidenceProducer?.name
+        === canonicalProducer(entry.producer) && selectedProducerUnavailable) {
+      rows.push(buildUnverified(index, row, 'producer-unreachable'));
+      continue;
+    }
     rows.push(
       evaluateCaptureRow({
         rowIndex: index,
