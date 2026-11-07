@@ -839,14 +839,21 @@ export async function claudePaneProfileObserved(
     || !sameIdentity(screen.value.worker, worker.identity)) return false;
   const lines = screen.value.lines.map((line) => line.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/gu, ''));
   if (!lines.some((line) => /\bClaude Code\b/iu.test(line))) return false;
-  const footer = lines.slice(-20).join('\n');
+  const footer = lines.flatMap((line) => line.split(/\r?\n/u)).slice(-20);
   const family = profile.model === 'claude-opus-5-5' ? 'Opus'
     : profile.model === 'claude-sonnet-5-5' ? 'Sonnet' : '';
   if (!family) return false;
-  const modelLine = new RegExp(`\\b${family}(?:[- .]?5[- .]?5)\\b`, 'iu');
-  const effortLine = new RegExp(`\\beffort\\s*[:=]\\s*${profile.effort}\\b|\\b${profile.effort}\\s+effort\\b`, 'iu');
-  const modelEffortLine = new RegExp(`${modelLine.source}[ \\t]+${profile.effort}\\b`, 'iu');
-  return modelLine.test(footer) && (effortLine.test(footer) || modelEffortLine.test(footer));
+  // Read the final model status row, never a model/effort quoted by transcript text.
+  const statusRow = /^\s*(?:Claude\s+)?(?:Opus|Sonnet)(?:[- .]?5[- .]?5)\b/iu;
+  const modelIndex = footer.findLastIndex((line) => statusRow.test(line));
+  if (modelIndex < 0) return false;
+  const modelLine = new RegExp(`^\\s*(?:Claude\\s+)?${family}(?:[- .]?5[- .]?5)\\b`, 'iu');
+  const row = footer[modelIndex]!;
+  if (!modelLine.test(row)) return false;
+  const effortLine = new RegExp(`^\\s*(?:effort\\s*[:=]\\s*${profile.effort}|${profile.effort}\\s+effort)\\s*$`, 'iu');
+  const suffix = row.replace(modelLine, '').replace(/^\s*[·|•]\s*/u, '').trim();
+  return suffix.toLowerCase() === profile.effort.toLowerCase() || effortLine.test(suffix)
+    || (!suffix && footer.slice(modelIndex + 1).some((line) => effortLine.test(line)));
 }
 
 /** Reobserve selected-worktree terminals and Linux /proc processes, ignoring other fleets. */
@@ -2533,10 +2540,18 @@ async function resumeManagerAtOpenPrHead(
     && text(pr.headRepository.nameWithOwner).toLowerCase() === request.repository.trim().toLowerCase()
     && typeof pr.body === 'string'
     && prBodyClosesIssue(pr.body, request.issueNumber!);
+  const ownedRecovery = text(candidate.state).toLowerCase() === 'open'
+    && text(candidate.baseRefName) === managerDefaultBranch(request)
+    && text(candidate.headRefName) === branch
+    && record(candidate.headRepository)
+    && text(candidate.headRepository.nameWithOwner).toLowerCase() === request.repository.trim().toLowerCase();
   if (!matchesHead(candidate)) return worktreeContinue('manager_pr_resume_head_mismatch', {
     worktreeId: id, branch, head, originMain, prNumber,
     headRefName: text(candidate.headRefName), headRefOid: text(candidate.headRefOid), baseRefName: text(candidate.baseRefName),
-  }, 'If the PR head branch equals this worktree branch, the worktree is clean, and after git fetch --no-tags origin <headRefName> the command git merge-base --is-ancestor HEAD <headRefOid> succeeds, run git merge --ff-only <headRefOid> in this worktree and rerun the same launch command; otherwise do not move the branch and reconcile the PR head with its owner');
+    headRepository: record(candidate.headRepository) ? text(candidate.headRepository.nameWithOwner) : '',
+  }, ownedRecovery
+    ? 'If the PR head branch equals this worktree branch, the worktree is clean, and after git fetch --no-tags origin <headRefName> the command git merge-base --is-ancestor HEAD <headRefOid> succeeds, run git merge --ff-only <headRefOid> in this worktree and rerun the same launch command; otherwise do not move the branch and reconcile the PR head with its owner'
+    : 'Do not move the branch; reconcile the PR head repository, base and branch with its owner before rerunning the same launch command');
 
   // The remote-tracking fetch and PR reads must not authorize a changed local HEAD/branch.
   const finalStatus = await execute(['git', 'status', '--porcelain=v1', '--untracked-files=all'], undefined, undefined, path);

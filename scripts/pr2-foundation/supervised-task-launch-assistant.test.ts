@@ -68,6 +68,44 @@ import {
 import { overlayExecutorProfileEnv, readExecutorProfileStore } from '../executor-profile-store.ts';
 
 describe('Issue #2754 AC5 serialized worktree restoration', () => {
+  it('Issue #2810 filters foreign native rows before actual adapter identity normalization, retaining complete-list and target proof', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2810-native-census-'));
+    const target = join(root, 'target');
+    const foreign = join(root, 'foreign');
+    mkdirSync(target);
+    mkdirSync(foreign);
+    const roster = join(root, 'roster.json');
+    const executable = join(root, 'orca-fixture.mjs');
+    writeFileSync(executable, `#!/usr/bin/env node\nimport { readFileSync } from 'node:fs';\nprocess.stdout.write(readFileSync(${JSON.stringify(roster)}, 'utf8'));\n`);
+    chmodSync(executable, 0o755);
+    const adapter = new OrcaTaskRuntimeAdapter({ executable });
+    const foreignRows = [
+      { handle: 'term-foreign', worktreePath: foreign },
+      { handle: 'term-deleted', worktreePath: join(root, 'deleted') },
+    ];
+    const setRows = (terminals: readonly unknown[], metadata = { totalCount: terminals.length, truncated: false }) =>
+      writeFileSync(roster, JSON.stringify({ ok: true, result: { terminals, ...metadata } }));
+    try {
+      setRows(foreignRows);
+      expect(await observeQuiescentRestoreCensus(adapter, target, () => [], 'linux'))
+        .toEqual({ status: 'ok', value: true });
+      // Unscoped enumeration still validates every native identity, as before.
+      expect(await adapter.listWorkersAsync()).toMatchObject({ status: 'unsupported', reason: 'runtime_worker_generation_missing' });
+      setRows(foreignRows, { totalCount: 3, truncated: true });
+      expect(await observeQuiescentRestoreCensus(adapter, target, () => [], 'linux'))
+        .toMatchObject({ status: 'continue', cause: 'worktree_restore_terminals_incomplete', evidence: { reason: 'runtime_worker_list_incomplete' } });
+      setRows([...foreignRows, { handle: 'term-target', worktreePath: target }]);
+      expect(await observeQuiescentRestoreCensus(adapter, target, () => [], 'linux'))
+        .toMatchObject({ status: 'continue', cause: 'worktree_restore_terminals_incomplete', evidence: { reason: 'runtime_worker_generation_missing' } });
+      setRows([...foreignRows, { handle: 'term-target', worktreePath: target, incarnationId: 'target-generation' }]);
+      expect(await observeQuiescentRestoreCensus(adapter, target, () => [], 'linux'))
+        .toMatchObject({ status: 'continue', cause: 'worktree_restore_target_terminal_retained' });
+      setRows([{ handle: 'unknown-path' }]);
+      expect(await observeQuiescentRestoreCensus(adapter, target, () => [], 'linux'))
+        .toMatchObject({ status: 'continue', cause: 'worktree_restore_terminals_incomplete', evidence: { reason: 'runtime_worker_workspace_unproven' } });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('requires complete native census and empty Linux process descendants; retained terminal fails even if exited', async () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-2754-restore-'));
     const foreign = join(root, 'foreign');
@@ -4792,10 +4830,18 @@ The words Firefighter universal appear here only as prose.`;
         baseRefName: options.prOverrides?.baseRefName ?? 'main',
       } });
       if (result.status !== 'continue') throw new Error('expected refusal');
-      expect(result.nextAction.note).toContain('git fetch --no-tags origin <headRefName>');
-      expect(result.nextAction.note).toContain('git merge-base --is-ancestor HEAD <headRefOid>');
-      expect(result.nextAction.note).toContain('git merge --ff-only <headRefOid>');
-      expect(result.nextAction.note).toContain('worktree is clean');
+      expect(result).toMatchObject({ evidence: {
+        headRepository: options.prOverrides?.headRepository?.nameWithOwner ?? 'chetwerikoff/orchestrator-pack',
+      } });
+      if (options.prOverrides && 'headRefOid' in options.prOverrides) {
+        expect(result.nextAction.note).toContain('git fetch --no-tags origin <headRefName>');
+        expect(result.nextAction.note).toContain('git merge-base --is-ancestor HEAD <headRefOid>');
+        expect(result.nextAction.note).toContain('git merge --ff-only <headRefOid>');
+        expect(result.nextAction.note).toContain('worktree is clean');
+      } else {
+        expect(result.nextAction.note).not.toContain('git merge --ff-only');
+        expect(result.nextAction.note).toContain('Do not move the branch');
+      }
     }
     expect(fixture.head()).toBe('1'.repeat(40));
     expect(fixture.mergeTransitions()).toBe(0);
@@ -7126,6 +7172,11 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
       ['Sonnet 5.5 Medium', false],
       ['Opus 5.5 High', false],
       ['Sonnet 5.5\nHigh', false],
+      ['Use Sonnet 5.5 High\nSonnet 5.5 Medium', false],
+      ['Sonnet 5.5 High\nSonnet 5.5 Medium', false],
+      ['Use Sonnet 5.5 High\nOpus 5.5 High', false],
+      ['Sonnet 5.5 · effort: high', true],
+      ['Sonnet 5.5 · high effort', true],
     ] as const) {
       const adapter: RuntimeAdapter = { ...native, readBoundedOutputAsync: async (input) => {
         const output = await native.readBoundedOutputAsync!(input);
