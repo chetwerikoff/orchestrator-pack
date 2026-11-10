@@ -44,10 +44,18 @@ The supervisor owns **completion continuity**, not substantive implementation.
    through a manager only from the exact authoritative evidence required by the
    owning Browser-GPT recovery branch. Read the deep Browser-GPT runbook itself
    only when performing or diagnosing that recovery.
-6. If a possible send occurred and the exact authoritative
-   conversation/invocation/profile/CDP identity required by the recovery path is
-   unavailable after legal recovery is exhausted, fail closed: no fresh chat,
-   no duplicate prompt, and no guessed identity.
+6. If a turn is `POSSIBLY_DELIVERED` or its exact conversation identity is
+   unavailable, the same Task+Dispatch owner first reads **post-launch GitHub
+   effects** for the Issue (executor: linked open PRs and newly published
+   Issue-owned branches; author: body revisions and comments), not just the
+   originally bound object. Adopt any found effect and send nothing new.
+   Otherwise, after the original deadline, a positively dead launcher and
+   positively idle/unavailable original Page permit **one** ordinary fresh
+   `--new-chat` turn with new identities and genuinely distinct intent, under
+   the [Browser-GPT effect-first recovery rules](../../../docs/browser-gpt-turn-runbook.md#github-effect-read-and-adoption-issue-2827).
+   This is the same Task+Dispatch owner's bounded exception, not blind resend
+   or architect/operator decision. A live launcher, generating/uncertain Page,
+   incomplete GitHub read, or already-admitted successor permits no new Send.
 7. Never take over the substantive Issue implementation merely because manager
    recovery is required.
 8. For a manager-controlled Browser-GPT implementation, treat settled pack
@@ -86,6 +94,13 @@ revalidation gates. A boundary outcome never becomes manager
 `worker_done --outcome failed`.
 
 For every **manager-authored** initial, implementation/fixer, product-error same-conversation, or authorized fresh-chat execution turn, carry the exact live Issue URL and the latest GitHub-observed Issue-bound PR URL plus 40-hex head baseline when present. Otherwise use the proven Issue-owned remote branch/head or explicitly report `PR: none` and no observed remote work/head. A bare fleet-wake notification is not a continuation prompt or permission to send: expand it only after existing GitHub-first reconciliation and Browser-GPT send/no-resend authority permits a new turn. The [execution runbook](../../../docs/chatgpt-task-execution-runbook.md#per-turn-execution-contract) owns the **single literal advisory executor footer**, the exact-context examples, and the rule that authoritative owned-turn attribution/settlement precedes any model-reported task-status claim. Do not introduce another acceptance classifier or treat a bad footer as grounds to re-send or discard independently verified Issue-bound GitHub work.
+
+At **every executor-manager wake**, list all open Issue-linked PRs before
+choosing the next Send or review action. If several are open, keep the adopted
+open PR (otherwise the earliest-created), comment on each other PR naming the
+kept one, then close the duplicates without deleting their branches; use the
+[shared Browser-GPT recovery procedure](../../../docs/browser-gpt-turn-runbook.md#github-effect-read-and-adoption-issue-2827).
+This wake reconciliation is not a separate poller or a new acceptance authority.
 
 At the start of **every** manager turn, re-read the live Issue before choosing
 the turn prompt or next action. If the title/body changed since the manager's

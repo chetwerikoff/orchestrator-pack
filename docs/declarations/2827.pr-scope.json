@@ -1,0 +1,24 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2827,
+  "declared_paths": [
+    ".cursor/skills/execute-issue-with-gpt/SKILL.md",
+    "docs/browser-gpt-turn-runbook.md",
+    "docs/declarations/2827.pr-scope.json",
+    "scripts/chatgpt-browser-turn/orphan-recovery.test.ts"
+  ],
+  "denylist": [
+    ".github/workflows/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "tests/external-output-references/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/skills/execute-issue-with-gpt/SKILL.md",
+    "docs/browser-gpt-turn-runbook.md",
+    "docs/declarations/",
+    "scripts/chatgpt-browser-turn/orphan-recovery.test.ts"
+  ]
+}
