@@ -189,9 +189,13 @@ bound PR. Include all pages of the relevant GitHub listings:
   launcher start. A PR whose `createdAt` is later than that start is a possible
   turn effect. A branch requires both an Issue-N ownership witness and a
   post-start creation/first-publication witness (for example, an owned
-  pre-launch branch absence snapshot plus its now-published head); a matching
-  branch name or recent commit alone does not prove branch creation. Compare
-  any retained pre-send baseline; do not guess absent timestamps or authorship.
+  pre-launch branch absence snapshot plus its now-published head). Because
+  GitHub branch listings do not supply a reliable creation timestamp, an
+  explicitly Issue-N-linked post-start commit on that branch may instead be
+  adopted as **existing Issue work**, without claiming the branch itself was
+  created after launch or attributing authorship to this turn. A matching
+  branch name or unrelated recent commit alone is insufficient. Compare any
+  retained pre-send baseline; do not guess absent timestamps or authorship.
 - **Issue author:** read current Issue body and the post-launch Issue edit
   timeline or equivalent original pre-SEND body baseline and timestamped edit
   evidence, plus newly created Issue comments. A body revision or comment
