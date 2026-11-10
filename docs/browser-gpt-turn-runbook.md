@@ -168,25 +168,108 @@ read-only inspect for the next existing wake; it emits no immediate argv.
 
 ### Same-invocation recovery
 
-When delivery may have happened: retain invocation/conversation identity,
-re-observe the owned conversation, harvest only an attributable reply, and
-publish output once. If attribution remains uncertain, report uncertainty and
-preserve no-resend semantics. A redirect away from the bound conversation is
-`cause: conversation_unavailable` with no recoverable locator. The next action
-is read-first: the exact bound target read (`scripts/gh issue view <N> --repo
-<owner/repo> --json state,title,body,closedAt` or `scripts/gh pr view <N>
---repo <owner/repo> --json number,state,headRefOid,headRefName,headRepository`),
-then reconciliation of the original invocation by its still-current
-Task+Dispatch owner. Without a trusted bound target, inspect the original
-invocation read-only. Unchanged GitHub state is not proof of no Send. Only that
-owner may separately admit a genuinely distinct new intent on an ordinary
-`--new-chat` path with new identities.
-No fixed time window settles an attempt or
-authorizes a new Send: reconcile the original Page and the exact bound GitHub
-target (task-progress check) first. The owner-run `wait` may publish one
-uncertainty envelope only for a currently approved original Task+Dispatch owner
-after the original launcher is positively dead, and never signals a live
-launcher.
+When delivery may have happened, retain the original invocation/conversation
+identity, re-observe that Page when possible, harvest only an attributable reply,
+and publish output once. A redirect away from the bound conversation is
+`cause: conversation_unavailable`, not a new Send license. Transport delivery
+remains `POSSIBLY_DELIVERED` when unproven; a repository effect can settle the
+**workflow** without falsely changing the transport envelope to `landed`.
+
+#### GitHub effect read and adoption (Issue #2827)
+
+On **every existing owner wake**, the still-current Task+Dispatch owner first
+reads the original launcher start timestamp from its authoritative handoff and
+performs a fresh GitHub effect read for the selected project repository and
+bound Issue N. Read the effect, not just `issue view N` or the originally
+bound PR. Include all pages of the relevant GitHub listings:
+
+- **Executor:** list the repository's open PRs explicitly linked to Issue N,
+  including their creation timestamps and heads, **and** published branches
+  explicitly tied to Issue N with evidence that they appeared since the original
+  launcher start. A PR whose `createdAt` is later than that start is a possible
+  turn effect. A branch requires both an Issue-N ownership witness and a
+  post-start creation/first-publication witness (for example, an owned
+  pre-launch branch absence snapshot plus its now-published head); a matching
+  branch name or recent commit alone does not prove branch creation. Compare
+  any retained pre-send baseline; do not guess absent timestamps or authorship.
+- **Issue author:** read current Issue body and the post-launch Issue edit
+  timeline or equivalent original pre-SEND body baseline and timestamped edit
+  evidence, plus newly created Issue comments. A body revision or comment
+  after launcher start is a possible effect; `updatedAt` alone (which can
+  change for unrelated reasons) is not evidence of a body revision.
+
+If the post-start effect exists, **adopt the observed current PR/branch,
+Issue body revision or comment as the workflow's delivered outcome**, do not
+send a new turn, and continue the existing Issue/PR author or executor lifecycle.
+A found effect takes precedence over launcher/Page uncertainty. Do not infer
+which model invocation authored a GitHub write or upgrade the original transport
+status. An ambiguous or incomplete effect read is not proof of no effect and
+does not grant a new Send.
+
+For **every executor-manager wake**, regardless of turn outcome, list **all
+open Issue-N-linked PRs** (not merely the one previously known). Resolve any
+effect/adoption first. If more than one is open, keep the already-adopted **open**
+PR; otherwise keep the earliest-created PR (tie-break by smaller PR number).
+For each other PR, publish a comment naming the Issue and the kept PR, **then
+close that duplicate PR**, and read back its closed state. Never delete the
+duplicate PR's branch. If the list or Issue linkage is ambiguous, reconcile
+GitHub first instead of closing a guessed PR. This is manager wake work, not a
+new watcher or a second PR-selection service.
+
+#### One bounded fresh turn after a missing effect
+
+If the full GitHub effect read finds no post-start effect, reconcile the
+original launcher and the original **identity-bound** Page. A live/unproven
+launcher or a Page still generating, unreadable, contradictory, or otherwise
+possibly busy keeps the original turn pinned: observe or recover it, **no
+blind resend**. Merely failing to attach to CDP is not proof of idle Page.
+A positively unavailable original Page means its **exact owned target** is
+confirmed absent; it does not mean a generic probe error.
+
+Only **after the original turn deadline**, with the launcher **positively
+dead**, the original Page **positively idle or unavailable**, a complete
+negative GitHub-effect read, and the **same exact Task+Dispatch owner**, admit
+**exactly one** fresh ordinary `--new-chat` turn. It is a newly stated,
+genuinely distinct continuation intent with fresh invocation, attempt, output
+and conversation identities, not a resend of the earlier prompt. Give it the
+live Issue plus the adopted PR/head, proven Issue-owned branch/head or truthful
+no-work baseline required by the execution workflow. Do not require an
+architect/operator decision for this specific recovery case. Revalidate
+GitHub effects and Page/launcher conditions just before the new Send.
+
+Count this admission against the **original uncertain turn** using the
+existing owned-turn/handoff history. On later wakes, reconcile that successor
+rather than admitting another fresh turn for the same original incident; no
+new ledger, retry service or persistence format is introduced. If any condition
+is unknown, keep read-only recovery of the incumbent with no new Send. A
+post-deadline orphaned server-side Send is a residual possibility, not evidence
+that cancellation happened.
+
+The following ordered manager decision table is the fixture-testable
+projection of those rules. Predicates are derived from the reads above; in
+particular `no_effects_verified` is false on a failed/partial GitHub read,
+`launcher_positively_dead` requires positive original-launcher evidence,
+`page_generating_or_unproven` includes an unreadable/uncertain Page, and
+`page_idle_or_unavailable` requires affirmative exact-owned evidence.
+First matching row wins; `otherwise` is the final fallback.
+
+| Predicate | Action |
+| --- | --- |
+| `effect_found` | `adopt_existing_no_send` |
+| `!no_effects_verified` | `reconcile_original_no_send` |
+| `!launcher_positively_dead` | `observe_original_no_send` |
+| `page_generating_or_unproven` | `observe_original_no_send` |
+| `!deadline_passed` | `observe_original_no_send` |
+| `!same_task_dispatch_owner` | `reconcile_original_no_send` |
+| `fresh_turn_already_admitted` | `reconcile_successor_no_send` |
+| `page_idle_or_unavailable` | `admit_one_fresh_new_chat` |
+| `otherwise` | `reconcile_original_no_send` |
+
+The owner-run `wait` may still publish one uncertainty envelope only after
+the original launcher is positively dead and only for its approved original
+Task+Dispatch. It never signals a live launcher. The manager does not use
+this table to alter Browser-GPT transport status or the original Page's
+guarded tab-lifecycle authority.
 
 ### Diagnostic recurrence journal
 
