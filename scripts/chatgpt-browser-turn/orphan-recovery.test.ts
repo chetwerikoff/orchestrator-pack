@@ -106,7 +106,7 @@ describe('Issue #2827: documented uncertain-turn manager recovery', () => {
     expect(projectDocumentedDecision(ready)).toBe('admit_one_fresh_new_chat');
     expect(recovery).toContain('genuinely distinct continuation intent');
     expect(recovery).toContain('fresh invocation, attempt, output');
-    expect(recovery).toContain('no new ledger');
+    expect(recovery).toMatch(/no\\s+new ledger/);
     expect(skill).toContain('architect/operator decision');
   });
 
