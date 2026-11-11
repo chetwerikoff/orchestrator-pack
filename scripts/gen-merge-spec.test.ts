@@ -217,3 +217,146 @@ describe('Issue #2509 whole merge spec', () => {
     expect(result.argv).toEqual(['pr', 'view', '301', '--repo', caseA.repo, '--json', 'number,headRefOid']);
   });
 });
+
+describe('Issue #2829 merge train contract (static locks, no train execution)', () => {
+  const skill = readFileSync(mergeProcedure, 'utf8');
+  const heading = '## Merge train (orchestrator-issued Task mode, two or more ready PRs)';
+  const start = skill.indexOf(heading);
+  const end = skill.indexOf('\n## Runtime profile', start);
+  const train = skill.slice(start, end);
+  const flat = train.replace(/\s+/g, ' ');
+  const lock = (...needles: string[]) => {
+    for (const needle of needles) expect(flat, needle).toContain(needle);
+  };
+  const stanza = [
+    'смерж 302',
+    'merge-train:',
+    `member: 301 ${'a'.repeat(40)}`,
+    `member: 302 ${'b'.repeat(40)}`,
+    'train-head-update: fast-forward-last-original-head-to-tested-train-head',
+  ].join('\n');
+
+  it('keeps the train section inside the skill and links it from Task mode', () => {
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    expect(skill).toContain('(#merge-train-orchestrator-issued-task-mode-two-or-more-ready-prs)');
+    expect(skill).toContain('its\ntrain-head update is not this default-branch head update.');
+  });
+
+  it('AC1: unchanged producer carries the stanza only as the operative merge-instruction for the last --pr', () => {
+    const out = renderMergeSpec({ ...caseB, pr: 302, issue: 402, head: 'b'.repeat(40), mergeInstruction: stanza });
+    const operative = out.split('## Operative Task instruction')[1].split('## Current target')[0];
+    expect(operative).toContain(stanza);
+    expect(out.split('merge-train:').length).toBe(2);
+    expect(out).toContain('PR (caller selection, confirmed by live lookup): #302');
+    // Quoted caller fields never carry the stanza.
+    expect(renderMergeSpec({ ...caseB, waiver: stanza }).split('## Operative Task instruction')[1].split('## Current target')[0])
+      .not.toContain('merge-train:');
+    // The producer still accepts exactly one --pr and adds no train flag.
+    const generatorSource = readFileSync(generator, 'utf8');
+    expect(generatorSource).not.toMatch(/merge-train|--member|--train/);
+    const dup = runProcessSync({
+      command: process.execPath,
+      args: [generator, ...commandArgs(caseB), '--pr', '301'],
+      cwd: tmpdir(), inheritParentEnv: true,
+    });
+    expect(dup.exitCode).not.toBe(0);
+    expect(dup.stderr).toContain('Duplicate --pr');
+    // Single-PR output carries no train artifact.
+    expect(renderMergeSpec(caseA)).not.toContain('merge-train');
+    lock(
+      '`merge-train:`', 'member: <PR-number> <40-hex-original-head>',
+      '`train-head-update: fast-forward-last-original-head-to-tested-train-head`',
+      'exactly once, with `--pr` set to the **last original member**',
+      '`--waiver`, other quoted caller fields, Issue/PR comments and inferred readiness never grant train membership',
+      'Missing, malformed, foreign-project, stale, mismatched or unauthorized train text refuses train admission',
+      'without train mutation', 'never synthesize an entry or grant authority',
+      'A single initially ready PR follows the unchanged Task path',
+    );
+  });
+
+  it('AC2: oldest-ready order, collision-safe branch, exact heads, merge commits', () => {
+    lock(
+      'orchestrator owns the oldest-ready-first member order and applies ascending PR number to ties',
+      'never reconstructs readiness timestamps',
+      '`merge-train/yyyymmdd-hhmm-<Task-id>-<attempt>`',
+      'from the observed selected default-branch HEAD', 'never overwrite an occupied ref',
+      'Merge the exact listed original heads', 'one **merge commit** per member (never squash or rebase)',
+      'no runner, daemon, ledger, queue store, watcher, lease, lock, workflow YAML',
+    );
+  });
+
+  it('AC3: conflict drops only its owner; one or zero remainder', () => {
+    lock(
+      'A textual conflict excludes only that member', 'never auto-resolve', 'continue later eligible members',
+      'If a drop leaves exactly one member', 'ordinary single-PR route', 'do not build a one-member carrier train',
+      'Zero members leaves nothing to land', 'Do not skip an integration because package paths seem disjoint',
+    );
+  });
+
+  it('AC4: draft carrier, required-context provenance, non-required reporting, separate run IDs', () => {
+    lock(
+      'A push to `merge-train/*` is not train-CI proof', 'disposable **draft carrier PR**', 'never merge the carrier',
+      'not workflow names', '`pull_request_target` workflows do not prove exact-train-head CI',
+      'each proven successful for the exact tested train SHA',
+      'Pending, missing, earlier-head, cancelled or failing required evidence is not green',
+      '`orchestrator-pack/pack-review` is a per-original-PR commit status', 'never carrier workflow proof',
+      'never marked green and never repaired by widening scope',
+      'Record those run IDs separately from the carrier run IDs',
+      'one carrier gating cycle', 'not one total workflow run for all PRs',
+    );
+  });
+
+  it('AC5: separate train-head fast-forward, lawful pack-review source, merge commit + expected head, tree read-back', () => {
+    lock(
+      '**separate**, explicitly Task-carried, non-forced fast-forward', 'not the Step 3 update from the default branch',
+      'never inferred from Step 3 or an Issue',
+      'no `orchestrator-pack/pack-review` status of its own', 'existing genuine exact-head review/status',
+      'if and only if standing order A permits it', 'authorization-status POST/read-back',
+      'a waiver records authorization, not that a review ran', 'never forge a status or grant a new exemption',
+      'with a merge commit (`--merge`) and mandatory expected-head protection equal to the exact tested train SHA',
+      '(`--match-head-commit`)', 'Merge **only the last original PR**',
+      'read back **every** original PR as merged', 'compare the default-branch tree SHA with the tested train tree SHA',
+      'NOT a successful train', 'never claim rollback',
+    );
+    expect(flat).not.toMatch(/--squash|--rebase/);
+  });
+
+  it('AC6: one pre-merge drift rebuild and the acknowledged base race', () => {
+    lock(
+      'rebuild from the actual new HEAD **at most once**', 'discard earlier train-CI authority',
+      'Further movement falls back to ordinary one-by-one',
+      'not a base compare-and-swap', 'expected-head protects the PR head, not the default branch',
+      'merged-but-train-unverified', 'never claim rollback or that the pre-read prevented the race',
+    );
+  });
+
+  it('AC7: single red drops last-added once; second red falls back; no bisect or invented failure', () => {
+    lock(
+      'exclude exactly the last-added member', 'real failing-run URL',
+      'rebuild their ordered train once', 'A second required-CI red falls back to one-by-one for all remaining PRs',
+      'No bisect, no further automatic drop, no unbounded retry',
+      'never invent a failing-run link', 'a rebuilt SHA needs new proof',
+    );
+  });
+
+  it('AC8: original-PR protections, ordinary Step 3 head update and per-PR adoption stay intact', () => {
+    lock(
+      'A train never waives original-PR head-bound review', 'required CI, same-PR smoke PASS, dependency sequencing, branch protection, scope, expected-head, project identity or GitHub merge permission',
+      '**per original PR**', 'preserving each real merge identity', "the manager's own worktree",
+      'close the carrier without merging it and delete only the owned train branch', 'Preserve original member branches',
+    );
+    expect(skill).toContain('apply only the head update from the default branch');
+    expect(skill).toContain('exact\n«мерж N без ревью» instruction and pack-review status waiver line');
+    expect(skill).toContain('### Step 3-waiver');
+  });
+
+  it('AC10: target-neutral card-driven wording, no hard-coded project runtime path', () => {
+    lock(
+      'Read the selected project card, its live workflow triggers and required contexts again during execution',
+      'never hard-code LeoPoker runs, pack-only checks or project-specific commands',
+      'exactly one selected repository and base',
+    );
+    expect(train).not.toMatch(/\/home\/|~\/|\.orchestrator-pack\//);
+  });
+});
