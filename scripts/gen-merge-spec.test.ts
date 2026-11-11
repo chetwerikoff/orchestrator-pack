@@ -335,7 +335,11 @@ describe('Issue #2829 merge train contract (static locks, no train execution)', 
     lock(
       'exclude exactly the last-added member', 'real failing-run URL',
       "The last-added member is the Task's `--pr` anchor", 'run no second CI cycle under the stale Task',
-      'freshly issued train Task that binds the new final member', 'or for ordinary one-by-one merges',
+      'the one red retry is **spent**', 'freshly issued train Task that binds the new final member',
+      '`red-retry-spent: <failing-run-URL>`', 'its build is the one permitted second cycle, not a new first cycle',
+      'a required-CI red falls back to ordinary one-by-one for all remaining PRs with no drop or rebuild',
+      "a dropped member's red is never retried under any Task",
+      'A conflict drop of the final member leaves no later member to continue', 'or for ordinary one-by-one merges',
       'No bisect, no further automatic drop, no unbounded retry',
       'never invent a failing-run link', 'a rebuilt SHA needs new proof',
     );
@@ -355,11 +359,21 @@ describe('Issue #2829 merge train contract (static locks, no train execution)', 
   it('review fix: last-PR Issue scope is binding independent of required contexts', () => {
     lock(
       'Scope of the last original PR is not optional',
-      'must stay inside its own live Issue allowed roots and declaration',
+      'must stay inside its own live Issue allowed roots and denylist',
+      "only when the selected target's live base workflow actually runs a scope guard",
       'binding whether or not the card requires the context',
+      'A guard-free target has only the live Issue as scope authority and no declaration is required or created',
+      'plus its declaration on a verified guard-enabled target',
       'fall back before the update and never widen the declaration',
     );
     expect(flat).not.toContain('(for example `pr-scope-guard` on an Issue-less carrier or an expanded diff');
+  });
+
+  it('review fix: every retained member is revalidated immediately before the final merge', () => {
+    lock(
+      'Immediately before the final merge, re-read **every** retained original PR',
+      'not only the last PR', 'any drift is a fallback under the phase-aware rule below',
+    );
   });
 
   it('review fix: carrier is closed unmerged before landing; post-fast-forward failure is phase-aware', () => {

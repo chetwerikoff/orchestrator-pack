@@ -137,7 +137,8 @@ live lookup proves only that PR's head. The operative `--merge-instruction` text
 "Operative Task instruction" section, not the quoted caller-data lines) carries the qualifying
 «смерж N» for that last PR plus a stanza that starts with `merge-train:`, one ordered line
 `member: <PR-number> <40-hex-original-head>` per member, and the exact line
-`train-head-update: fast-forward-last-original-head-to-tested-train-head`. `--waiver`, other
+`train-head-update: fast-forward-last-original-head-to-tested-train-head`, and optionally
+`red-retry-spent: <failing-run-URL>` (see Red, drift and bounded retry). `--waiver`, other
 quoted caller fields, Issue/PR comments and inferred readiness never grant train membership,
 order, heads, or the train-head update.
 
@@ -190,9 +191,12 @@ is never carrier workflow proof. Non-required contexts on the carrier (for examp
 `pr-scope-guard` on an Issue-less carrier, `codex-pr-review`,
 `vitest-runtime-history-delivery`) are reported faithfully, never marked green and never
 repaired by widening scope. Scope of the last original PR is not optional: its full
-post-update changed-path set must stay inside its own live Issue allowed roots and
-declaration, and a `pr-scope-guard` or equivalent scope failure on that PR is binding whether
-or not the card requires the context (see the train-head update). A stable candidate has one carrier gating cycle;
+post-update changed-path set must stay inside its own live Issue allowed roots and denylist,
+and, only when the selected target's live base workflow actually runs a scope guard
+(guard-enabled), inside that PR's declaration; a `pr-scope-guard` failure on that PR is then
+binding whether or not the card requires the context (see the train-head update). A
+guard-free target has only the live Issue as scope authority and no declaration is required
+or created. A stable candidate has one carrier gating cycle;
 it may span several required workflow runs and is not one total workflow run for all PRs.
 
 ### Red, drift and bounded retry
@@ -201,9 +205,15 @@ On the first actually failed required exact-train-head cycle, exclude exactly th
 last-added member (not the presumed cause), return it to its owner with the real failing-run
 URL, and preserve its branch. The last-added member is the Task's `--pr` anchor, so the
 retained train cannot land under this Task: close the owned carrier and train ref, run no
-second CI cycle under the stale Task, and return the retained ordered members to the
-orchestrator for a freshly issued train Task that binds the new final member (its own build is
-a new first cycle) or for ordinary one-by-one merges. One remaining member uses the ordinary
+second CI cycle under the stale Task, and return the retained ordered members, the failing-run
+URL and the fact that the one red retry is **spent** to the orchestrator, for a freshly issued
+train Task that binds the new final member or for ordinary one-by-one merges. That fresh Task
+carries the spent retry as an optional operative line
+`red-retry-spent: <failing-run-URL>` in its stanza; its build is the one permitted second
+cycle, not a new first cycle. With `red-retry-spent` present, a required-CI red falls back to
+ordinary one-by-one for all remaining PRs with no drop or rebuild, and a dropped member's
+red is never retried under any Task. A conflict drop of the final member leaves no later member
+to continue and uses the same handoff without a CI cycle. One remaining member uses the ordinary
 single-PR route; zero means nothing lands. No bisect, no further automatic drop, no unbounded
 retry. Missing, unprovable or unsupported evidence is not a proved red: fall back with the
 exact reason and never invent a failing-run link.
@@ -222,8 +232,9 @@ carrier without merging it, after its exact-head required results are recorded: 
 open would be marked merged indirectly once the train commit reaches the default branch. Read
 the carrier back as closed and unmerged; any rebuild uses a new owned carrier. Require the
 train's full changed-path set to stay inside the last original PR's own live Issue allowed
-roots and declaration (distinct Issues usually widen it): if it does not, or the PR's scope
-guard would fail, fall back before the update and never widen the declaration. The train-head update is a **separate**,
+roots and denylist, plus its declaration on a verified guard-enabled target (distinct Issues
+usually widen it): if it does not, or an active scope guard would fail, fall back before the
+update and never widen the declaration. The train-head update is a **separate**,
 explicitly Task-carried, non-forced fast-forward of the last original PR's branch to the
 exact tested train commit; it is not the Step 3 update from the default branch and is never
 inferred from Step 3 or an Issue. Require the last PR branch still at its listed original
@@ -239,7 +250,11 @@ exemption: fall back.
 The fast-forward emits a `pull_request synchronize` run on the last original PR at the same
 SHA. Record those run IDs separately from the carrier run IDs, wait for the contexts actually
 required there (the pack's protected main requires it), and re-check the real original-PR
-readiness. This duplicate is expected, not a failed train; an additional independent
+readiness. Immediately before the final merge, re-read **every** retained original PR (head
+equal to its listed head or, for the last PR, the tested train SHA; open, non-draft,
+non-conflicting; review, smoke, dependency and scope conditions still met) and the Task
+authorization, not only the last PR; any drift is a fallback under the phase-aware rule below.
+This duplicate is expected, not a failed train; an additional independent
 train recomposition or CI decision, a missing required success, a wrong head or an unproven
 green is a failure. Do not promise one total Actions run or universal wall-clock savings.
 
