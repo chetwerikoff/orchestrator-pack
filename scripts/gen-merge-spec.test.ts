@@ -325,7 +325,7 @@ describe('Issue #2829 merge train contract (static locks, no train execution)', 
   it('AC6: one pre-merge drift rebuild and the acknowledged base race', () => {
     lock(
       'rebuild from the actual new HEAD **at most once**', 'discard earlier train-CI authority',
-      'Further movement falls back to ordinary one-by-one',
+      'A required-CI red on that rebuilt train, or further movement, falls back to ordinary one-by-one/owner decision',
       'not a base compare-and-swap', 'expected-head protects the PR head, not the default branch',
       'merged-but-train-unverified', 'never claim rollback or that the pre-read prevented the race',
     );
@@ -334,9 +334,41 @@ describe('Issue #2829 merge train contract (static locks, no train execution)', 
   it('AC7: single red drops last-added once; second red falls back; no bisect or invented failure', () => {
     lock(
       'exclude exactly the last-added member', 'real failing-run URL',
-      'rebuild their ordered train once', 'A second required-CI red falls back to one-by-one for all remaining PRs',
+      "The last-added member is the Task's `--pr` anchor", 'run no second CI cycle under the stale Task',
+      'freshly issued train Task that binds the new final member', 'or for ordinary one-by-one merges',
       'No bisect, no further automatic drop, no unbounded retry',
       'never invent a failing-run link', 'a rebuilt SHA needs new proof',
+    );
+    expect(flat).not.toContain('rebuild their ordered train once');
+  });
+
+  it('review fix: dropped members rebind the active set and never keep a stale Task target', () => {
+    lock(
+      'rebind the **active member set** to the retained members',
+      'a dropped PR is returned to its owner and never read back as merged',
+      'The Task authorizes landing only through its `--pr`',
+      'open no carrier, run no CI cycle and make no train-head update',
+      'Never reuse the stale Task for a different final member',
+    );
+  });
+
+  it('review fix: last-PR Issue scope is binding independent of required contexts', () => {
+    lock(
+      'Scope of the last original PR is not optional',
+      'must stay inside its own live Issue allowed roots and declaration',
+      'binding whether or not the card requires the context',
+      'fall back before the update and never widen the declaration',
+    );
+    expect(flat).not.toContain('(for example `pr-scope-guard` on an Issue-less carrier or an expanded diff');
+  });
+
+  it('review fix: carrier is closed unmerged before landing; post-fast-forward failure is phase-aware', () => {
+    lock(
+      'close the owned draft carrier without merging it, after its exact-head required results are recorded',
+      'marked merged indirectly', 'Read the carrier back as closed and unmerged', 'any rebuild uses a new owned carrier',
+      '**Phase-aware fallback.**', 'Before the fast-forward, fallback only cleans owned train refs',
+      'Preserve and report the mutated branch and head', 'never force-reset it',
+      'never merge it through the ordinary route', 'explicit orchestrator/owner reconciliation with fresh original-PR gates',
     );
   });
 
@@ -344,7 +376,7 @@ describe('Issue #2829 merge train contract (static locks, no train execution)', 
     lock(
       'A train never waives original-PR head-bound review', 'required CI, same-PR smoke PASS, dependency sequencing, branch protection, scope, expected-head, project identity or GitHub merge permission',
       '**per original PR**', 'preserving each real merge identity', "the manager's own worktree",
-      'close the carrier without merging it and delete only the owned train branch', 'Preserve original member branches',
+      'read the carrier back as closed and unmerged', 'delete only the owned train branch', 'Preserve original member branches',
     );
     expect(skill).toContain('apply only the head update from the default branch');
     expect(skill).toContain('exact\n«мерж N без ревью» instruction and pack-review status waiver line');

@@ -166,6 +166,15 @@ close any carrier, clean only the owned train ref, and continue that PR on the o
 single-PR route (Steps 3-10); do not build a one-member carrier train. Zero members leaves
 nothing to land.
 
+After every drop, rebind the **active member set** to the retained members: success,
+read-back, cleanup and adoption cover only retained members, and a dropped PR is returned to
+its owner and never read back as merged. The Task authorizes landing only through its `--pr`
+(the last original member). If a drop removes that PR, the retained final member is not
+authorized by this Task: open no carrier, run no CI cycle and make no train-head update; return
+the retained ordered list to the orchestrator for a freshly issued train Task (new `--pr`,
+stanza and heads) or ordinary one-by-one merges. Never reuse the stale Task for a different
+final member.
+
 ### Carrier CI and required contexts
 
 A push to `merge-train/*` is not train-CI proof: the observed pack, LeoPoker and AppliedIn
@@ -177,31 +186,44 @@ ran. Only contexts actually **required** by the selected card, branch protection
 standing order count, each proven successful for the exact tested train SHA. Pending,
 missing, earlier-head, cancelled or failing required evidence is not green.
 `orchestrator-pack/pack-review` is a per-original-PR commit status bound to an exact head and
-is never carrier workflow proof. Non-required contexts on the carrier or the moved last PR
-(for example `pr-scope-guard` on an Issue-less carrier or an expanded diff,
-`codex-pr-review`, `vitest-runtime-history-delivery`) are reported faithfully, never marked
-green and never repaired by widening scope. A stable candidate has one carrier gating cycle;
+is never carrier workflow proof. Non-required contexts on the carrier (for example
+`pr-scope-guard` on an Issue-less carrier, `codex-pr-review`,
+`vitest-runtime-history-delivery`) are reported faithfully, never marked green and never
+repaired by widening scope. Scope of the last original PR is not optional: its full
+post-update changed-path set must stay inside its own live Issue allowed roots and
+declaration, and a `pr-scope-guard` or equivalent scope failure on that PR is binding whether
+or not the card requires the context (see the train-head update). A stable candidate has one carrier gating cycle;
 it may span several required workflow runs and is not one total workflow run for all PRs.
 
 ### Red, drift and bounded retry
 
 On the first actually failed required exact-train-head cycle, exclude exactly the
 last-added member (not the presumed cause), return it to its owner with the real failing-run
-URL, and preserve its branch. If two or more members remain, rebuild their ordered train once
-and obtain required CI for that new SHA; a rebuilt SHA needs new proof. One remaining member
-uses the ordinary single-PR route; zero means nothing lands. A second required-CI red falls
-back to one-by-one for all remaining PRs. No bisect, no further automatic drop, no unbounded
+URL, and preserve its branch. The last-added member is the Task's `--pr` anchor, so the
+retained train cannot land under this Task: close the owned carrier and train ref, run no
+second CI cycle under the stale Task, and return the retained ordered members to the
+orchestrator for a freshly issued train Task that binds the new final member (its own build is
+a new first cycle) or for ordinary one-by-one merges. One remaining member uses the ordinary
+single-PR route; zero means nothing lands. No bisect, no further automatic drop, no unbounded
 retry. Missing, unprovable or unsupported evidence is not a proved red: fall back with the
 exact reason and never invent a failing-run link.
 
 If the selected default head moved before last-PR landing, discard earlier train-CI
-authority and rebuild from the actual new HEAD **at most once**, with fresh exact-head
-required CI. Further movement falls back to ordinary one-by-one/owner decision.
+authority and rebuild from the actual new HEAD **at most once**, with the same active
+members and a new owned carrier, and obtain fresh exact-head required CI; a rebuilt SHA needs
+new proof. A required-CI red on that rebuilt train, or further movement, falls back to ordinary
+one-by-one/owner decision.
 
 ### Train-head update and landing
 
 After required CI is green on the exact train SHA, re-read the default branch, every original
-PR head and readiness, and the Task authorization. The train-head update is a **separate**,
+PR head and readiness, and the Task authorization. Before the update, close the owned draft
+carrier without merging it, after its exact-head required results are recorded: a carrier left
+open would be marked merged indirectly once the train commit reaches the default branch. Read
+the carrier back as closed and unmerged; any rebuild uses a new owned carrier. Require the
+train's full changed-path set to stay inside the last original PR's own live Issue allowed
+roots and declaration (distinct Issues usually widen it): if it does not, or the PR's scope
+guard would fail, fall back before the update and never widen the declaration. The train-head update is a **separate**,
 explicitly Task-carried, non-forced fast-forward of the last original PR's branch to the
 exact tested train commit; it is not the Step 3 update from the default branch and is never
 inferred from Step 3 or an Issue. Require the last PR branch still at its listed original
@@ -221,6 +243,13 @@ readiness. This duplicate is expected, not a failed train; an additional indepen
 train recomposition or CI decision, a missing required success, a wrong head or an unproven
 green is a failure. Do not promise one total Actions run or universal wall-clock savings.
 
+**Phase-aware fallback.** Before the fast-forward, fallback only cleans owned train refs. Once
+the last original PR branch has been fast-forwarded, a failed or unprovable required
+`synchronize` context, an unlawful or missing review/status, or a refused merge leaves that
+branch changed to the combined train head. Preserve and report the mutated branch and head,
+never force-reset it and never merge it through the ordinary route: require explicit
+orchestrator/owner reconciliation with fresh original-PR gates first.
+
 Merge **only the last original PR**, with a merge commit (`--merge`) and mandatory
 expected-head protection equal to the exact tested train SHA (`--match-head-commit`). If merge
 commits or expected-head protection are unsupported, or GitHub refuses, fall back before
@@ -235,8 +264,8 @@ pre-read prevented the race.
 
 ### Cleanup and adoption
 
-On verified success, close the carrier without merging it and delete only the owned train
-branch. On any abort, close the owned carrier and safely delete its train branch when no
+On verified success, read the carrier back as closed and unmerged (it was closed before the
+update) and delete only the owned train branch. On any abort, close the owned carrier and safely delete its train branch when no
 longer needed. Preserve original member branches and every unrelated ref. After verified
 merges apply Steps 4 and 6-10 **per original PR** (selected-main adoption/read-back, consumer
 handling and exact-target worktree/branch cleanup), preserving each real merge identity and the
