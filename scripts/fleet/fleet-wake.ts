@@ -2,7 +2,7 @@
 import '../toolchain/native-entrypoint-preflight.ts';
 import { createHash } from 'node:crypto';
 import { runProcessSync } from '../kernel/subprocess.ts';
-import { existsSync, mkdirSync, readFileSync, readlinkSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readlinkSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,7 +23,7 @@ import {
   createOrcaMessageSubmitDeps,
 } from '../cursor-unsent-composer-submit.ts';
 import { OrcaRuntimeAdapter } from '../orca-runtime/adapter.ts';
-import { classifyPromptSendReceipt, promptSendArgv } from '../orca-runtime/send-receipt.ts';
+import { classifyPromptSendReceipt, promptSendArgv, type PromptSendReceipt } from '../orca-runtime/send-receipt.ts';
 import { parseOrcaJsonOutput, resolveOrcaOperation, type OrcaJsonResponse } from '../orca-runtime/native.ts';
 import { resolveWakeSupervisorStateRoot } from '../pr2-foundation/wake-supervisor-state-root.ts';
 import {
@@ -77,6 +77,8 @@ export interface FleetWakeConfig {
   readonly chatScope?: ChatBannerScope;
   readonly selectedRepository?: string;
 }
+
+const UNVERIFIED_WAKE_RETRY_MS = 5 * 60_000;
 
 export interface FleetWakeStateStore extends FleetPollingStore {
   readLastSentSignature(): string | null;
@@ -237,11 +239,19 @@ export class FileFleetWakeStateStore extends FileFleetStateStore implements Flee
   }
 
   hasParkedWakeEvent(key: string): boolean {
-    return existsSync(this.parkedWakeEventPath(key));
+    const path = this.parkedWakeEventPath(key);
+    if (!existsSync(path)) return false;
+    try {
+      const [storedKey, status, timestamp] = readFileSync(path, 'utf8').split(/\r?\n/u);
+      // Historical undated attempted marks use file mtime.
+      if (storedKey !== key || status !== 'attempted_unverified') return true;
+      const recorded = timestamp?.trim() ? Number(timestamp) : statSync(path).mtimeMs;
+      return !Number.isFinite(recorded) || Date.now() - recorded < UNVERIFIED_WAKE_RETRY_MS;
+    } catch { return true; }
   }
 
   readParkedWakeEventStatus(key: string): 'sent' | 'attempted_unverified' | undefined {
-    if (!this.hasParkedWakeEvent(key)) return undefined;
+    if (!existsSync(this.parkedWakeEventPath(key))) return undefined;
     try {
       const [storedKey, status] = readFileSync(this.parkedWakeEventPath(key), 'utf8').split(/\r?\n/u);
       // Old single-line successful marks remain valid; malformed marks fail closed.
@@ -253,7 +263,7 @@ export class FileFleetWakeStateStore extends FileFleetStateStore implements Flee
 
   markParkedWakeEvent(key: string, status: 'sent' | 'attempted_unverified' = 'sent'): void {
     mkdirSync(this.root, { recursive: true });
-    writeFileSync(this.parkedWakeEventPath(key), `${key}\n${status}\n`, 'utf8');
+    writeFileSync(this.parkedWakeEventPath(key), `${key}\n${status}\n${Date.now()}\n`, 'utf8');
   }
 
   clearParkedWakeEvent(key: string): void {
@@ -1827,12 +1837,11 @@ async function sendMarkedUnitMessage(
     counts.attempts += 1;
     if (producerFactId) counts.attemptedProducerFacts.add(handle + ':' + producerFactId);
   }
-  let delivered = false;
-  // The single send carries text AND Enter; it already submits.
-  try { delivered = sendCoordinator(executor, pane, message); }
-  catch { /* An unverified send is not delivered. */ }
-  if (!delivered) {
-    log('unit wake delivery unverified: ' + key + '; next: owner reads the exact pane; do not resend');
+  // Only a native turn_started receipt proves the Enter was submitted.
+  const receipt = sendCoordinatorReceipt(executor, pane, message);
+  if (receipt.status !== 'turn_started') {
+    log('unit wake delivery unverified: ' + key + ' reason=' + receipt.reason
+      + '; retry after 5 min if the exact pane and park remain selected');
     return false;
   }
   try { for (const mark of allMarks) store.markParkedWakeEvent(mark, 'sent'); }
@@ -2238,15 +2247,21 @@ function defaultSleep(milliseconds: number): Promise<void> {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
 }
 
-function sendCoordinator(
+function sendCoordinatorReceipt(
   executor: OrcaExecutor,
   pane: FleetTerminal,
   message: string,
-): boolean {
-  const response = executor(promptSendArgv(pane.handle, message));
-  if (!response.ok) return false;
-  try { return classifyPromptSendReceipt(JSON.parse(response.stdout), pane.handle, pane.incarnationId).status === 'turn_started'; }
-  catch { return false; }
+): PromptSendReceipt {
+  try {
+    const response = executor(promptSendArgv(pane.handle, message));
+    if (!response.ok) return { status: 'unverified', reason: 'native_send_failed' };
+    try { return classifyPromptSendReceipt(JSON.parse(response.stdout), pane.handle, pane.incarnationId); }
+    catch { return { status: 'unverified', reason: 'invalid_send_receipt' }; }
+  } catch { return { status: 'unverified', reason: 'native_send_threw' }; }
+}
+
+function sendCoordinator(executor: OrcaExecutor, pane: FleetTerminal, message: string): boolean {
+  return sendCoordinatorReceipt(executor, pane, message).status === 'turn_started';
 }
 
 // Bounded pre-effect native census. This is not an atomic generation guard on
@@ -2591,7 +2606,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     }
 
     // Persist one notification state per pane; one pane changing cannot re-alarm another.
-    type PaneState = { state: string; sent: boolean; attempted?: boolean };
+    type PaneState = { state: string; sent: boolean; attempted?: boolean; attemptedAt?: number };
     type History = { panes: Record<string, PaneState>; routed: string; coordinator?: string };
     let previous: History = { panes: {}, routed: '' };
     const pendingPermission = observedPermissionWarnings(observations, config.projectId, store);
@@ -2618,7 +2633,9 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
         && previous.panes[pane.handle]?.state === state
         && previous.panes[pane.handle]?.sent === true,
         ...(sameCoordinator && previous.panes[pane.handle]?.state === state
-          && previous.panes[pane.handle]?.attempted ? { attempted: true } : {}) };
+          && previous.panes[pane.handle]?.attempted ? { attempted: true,
+            ...(previous.panes[pane.handle]?.attemptedAt !== undefined
+              ? { attemptedAt: previous.panes[pane.handle]!.attemptedAt } : {}) } : {}) };
     }
     for (const handle of bareShellHandles) {
       paneStates[handle] = { state: 'suspected_bare_shell',
@@ -2633,7 +2650,10 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       && now >= lastAt + REMINDER_INTERVAL_MS;
     const stopped = actionablePanes(observations)
       .filter((pane) => !bareShellHandles.has(pane.handle)
-        && !paneStates[pane.handle]?.attempted && (!paneStates[pane.handle]?.sent || reminderDue));
+        && (!paneStates[pane.handle]?.attempted
+          || (paneStates[pane.handle]?.attemptedAt !== undefined
+            && now - paneStates[pane.handle]!.attemptedAt! >= UNVERIFIED_WAKE_RETRY_MS))
+        && (!paneStates[pane.handle]?.sent || reminderDue));
     const bareAlerts = [...bareShellHandles].filter((handle) => !paneStates[handle]?.sent && !paneStates[handle]?.attempted);
     const routedSignature = chatBannerSignature(routed);
     const pendingRouted = !sameCoordinator || routedSignature !== previous.routed ? routed : [];
@@ -2727,14 +2747,18 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       }
       // Remember ordinary facts before input too: the next message can omit an
       // already-attempted local warning without replaying its STOPPED companions.
-      for (const pane of stopped) paneStates[pane.handle]!.attempted = true;
+      for (const pane of stopped) {
+        paneStates[pane.handle]!.attempted = true;
+        paneStates[pane.handle]!.attemptedAt = now;
+      }
       for (const handle of bareAlerts) paneStates[handle]!.attempted = true;
       if (ordinaryDue) store.writeLastSentSignature(JSON.stringify({
         panes: paneStates, routed: routedSignature, coordinator: coordinatorKey,
       }));
-      if (!sendCoordinator(executor, coordinator, message)) {
-        log('coordinator wake delivery unverified: ' + coordinator.handle
-          + '; next: owner reads the exact pane; do not resend');
+      const receipt = sendCoordinatorReceipt(executor, coordinator, message);
+      if (receipt.status !== 'turn_started') {
+        log('coordinator wake delivery unverified: ' + coordinator.handle + ' reason=' + receipt.reason
+          + '; retry after 5 min if the idle pane is unchanged');
         return { state: 'send_failed', coordinator: coordinator.handle };
       }
     } catch {
@@ -2749,7 +2773,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       log(`${coordinator.handle} local chat delivered but final mark unverified`);
       return { state: 'send_failed', coordinator: coordinator.handle };
     }
-    for (const pane of stopped) { paneStates[pane.handle]!.sent = true; delete paneStates[pane.handle]!.attempted; }
+    for (const pane of stopped) { paneStates[pane.handle]!.sent = true; delete paneStates[pane.handle]!.attempted; delete paneStates[pane.handle]!.attemptedAt; }
     for (const handle of bareAlerts) { paneStates[handle]!.sent = true; delete paneStates[handle]!.attempted; }
     store.writeLastSentSignature(JSON.stringify({ panes: paneStates, routed: routedSignature, coordinator: coordinatorKey }));
     if (ordinaryDue) store.writeLastSentAt?.(now);
