@@ -8,8 +8,10 @@ import { basename, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTargetContext, type TargetContext } from '../lib/target-context.ts';
 import {
+  PACK_REVIEW_ACTIVE_STATUSES,
   PACK_REVIEW_TERMINAL_STATUSES,
   isPackReviewRunStale,
+  packReviewRunGraceElapsed,
   listPackReviewRunRecordsRaw,
   resolvePackReviewRunStoreRoot,
   type PackReviewRunRecord,
@@ -331,6 +333,8 @@ export interface FleetAlarmTickOptions {
   /** Read-only fake Linux proc/namespace observation; never starts a child. */
   readonly probePid?: (pid: number) => ProcessObservation;
   readonly readPackReviewRuns?: () => readonly PackReviewRunRecord[];
+  /** Read-only systemd unit observation; offline test seam. */
+  readonly readUnitState?: (name: string) => UnitState | undefined;
   readonly reconcilePackReview?: typeof reconcileStalePackReviewRuns;
   readonly now?: () => number;
 }
@@ -928,7 +932,7 @@ const REMINDER_INTERVAL_MS = 30 * 60 * 1_000;
 const SHA40 = /^[0-9a-f]{40}$/u;
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 
-type ProducerKind = 'gpt' | 'gpt-multi' | 'time' | 'process' | 'pack-review' | 'review-run' | 'review' | 'ci' | 'merge' | 'terminal';
+type ProducerKind = 'gpt' | 'gpt-multi' | 'time' | 'process' | 'unit' | 'pack-review' | 'review-run' | 'review' | 'ci' | 'merge' | 'terminal';
 interface NamedProducer {
   readonly kind: ProducerKind;
   readonly label: string;
@@ -937,6 +941,7 @@ interface NamedProducer {
   readonly dueAt?: number;
   readonly pid?: number;
   readonly startticks?: string;
+  readonly unit?: string;
   readonly number?: number;
   readonly sha?: string;
   readonly reviewId?: number;
@@ -958,6 +963,8 @@ interface ProducerResolution {
 // GPT invocation names are free-form; punctuation belongs to the park sentence.
 // Other named producer forms retain their exact response syntax.
 export function parseNamedParkedProducer(wait: string): NamedProducer | undefined {
+  // Resume instructions do not name a producer; revalidate against the full original line.
+  wait = wait.replace(/(?:\s*;\s*|\s+—\s+).+$/u, '').replace(/ \(self-wake armed\)$/u, '');
   const triple = /^PARKED on GPT turns ([A-Za-z0-9_.:-]+), ([A-Za-z0-9_.:-]+), ([A-Za-z0-9_.:-]+)$/u.exec(wait);
   if (triple) {
     const ids = triple.slice(1);
@@ -987,19 +994,22 @@ export function parseNamedParkedProducer(wait: string): NamedProducer | undefine
     const id = first.replace(/[\p{P}\s]+$/u, '');
     return id ? { kind: 'gpt', label: 'GPT-turn-' + id, id } : undefined;
   }
-  const source = wait.endsWith(' (self-wake armed)')
-    ? wait.slice(0, -' (self-wake armed)'.length) : wait;
+  const source = wait;
   let match = /^PARKED on review run (prr-[0-9a-f]{32})$/u.exec(source);
   if (match) return { kind: 'review-run', label: 'review-run-' + match[1], id: match[1] };
   match = /^PARKED on pack-review PR #([1-9]\d*) head ([0-9a-f]{40})$/u.exec(source);
   if (match) return { kind: 'pack-review', label: 'pack-review-PR-' + match[1], number: Number(match[1]), sha: match[2] };
+  match = /^PARKED on pack-review (?:PR )?#?([1-9]\d*)$/u.exec(source);
+  if (match) return { kind: 'pack-review', label: 'pack-review-PR-' + match[1], number: Number(match[1]) };
+  match = /^PARKED on (?:systemd unit|smoke (?:unit|run)) ([A-Za-z0-9_.@-]{1,128})$/u.exec(source);
+  if (match) return { kind: 'unit', label: 'unit-' + match[1], unit: match[1] };
   match = /^PARKED on PR #([1-9]\d*) review #([1-9]\d*) head ([0-9a-f]{40})$/u.exec(source);
   if (match) return { kind: 'review', label: 'review-' + match[2] + '-PR-' + match[1], number: Number(match[1]), reviewId: Number(match[2]), sha: match[3] };
   match = /^PARKED on CI PR #([1-9]\d*) head ([0-9a-f]{40})$/u.exec(source);
   if (match) return { kind: 'ci', label: 'CI-PR-' + match[1], number: Number(match[1]), sha: match[2] };
   match = /^PARKED on CI on ([0-9a-f]{40})$/u.exec(source);
   if (match) return { kind: 'ci', label: 'CI-' + match[1], sha: match[1] };
-  match = /^PARKED on (?:merge-([1-9]\d*)|PR #([1-9]\d*) merged|#([1-9]\d*) merged into main)$/u.exec(source);
+  match = /^PARKED on (?:merge-([1-9]\d*)|PR #([1-9]\d*) merged|#([1-9]\d*) merged(?: into main)?)$/u.exec(source);
   if (match) {
     const number = Number(match[1] ?? match[2] ?? match[3]);
     return { kind: 'merge', label: 'merge-PR-' + number, number };
@@ -1334,6 +1344,30 @@ type ProcessObservation =
   | { readonly state: 'absent'; readonly namespace: string }
   | { readonly state: 'unverified' };
 
+interface UnitState {
+  readonly activeState: string;
+  readonly result: string;
+}
+
+/** Read the named service without starting, stopping or changing it. */
+function readSystemdUnitState(unit: string): UnitState | undefined {
+  const name = unit.endsWith('.service') ? unit : unit + '.service';
+  if (!/^[A-Za-z0-9_.@-]{1,136}$/u.test(name)) return undefined;
+  const response = runProcessSync({
+    command: 'systemctl',
+    args: ['--user', 'show', name, '--property=Id,LoadState,ActiveState,SubState,Result', '--no-pager'],
+    timeoutMs: 5_000, inheritParentEnv: true,
+  });
+  if (!response.ok) return undefined;
+  const facts = new Map(response.stdout.split(/\r?\n/u).map((row) => {
+    const pos = row.indexOf('=');
+    return pos > 0 ? [row.slice(0, pos), row.slice(pos + 1)] as const : ['', ''] as const;
+  }));
+  if (facts.get('Id') !== name || facts.get('LoadState') !== 'loaded') return undefined;
+  const activeState = facts.get('ActiveState'), result = facts.get('Result');
+  return activeState && result ? { activeState, result } : undefined;
+}
+
 function readLinuxProcess(pid: number): ProcessObservation {
   if (process.platform !== 'linux' || !Number.isSafeInteger(pid) || pid <= 0) return { state: 'unverified' };
   try {
@@ -1387,9 +1421,28 @@ function resolveParkEvent(
       return undefined;
     }
     const run = matches.length === 1 ? matches[0] : undefined;
-    return run && PACK_REVIEW_TERMINAL_STATUSES.has(run.status)
-      ? resolved(run.status, 'PR-' + run.prNumber + '-head-' + run.targetSha,
-        'review-run:' + run.id + ':' + run.status) : undefined;
+    if (!run) return undefined;
+    if (PACK_REVIEW_TERMINAL_STATUSES.has(run.status)) return resolved(
+      run.status, 'PR-' + run.prNumber + '-head-' + run.targetSha,
+      'review-run:' + run.id + ':' + run.status);
+    if (PACK_REVIEW_ACTIVE_STATUSES.has(run.status)
+      && Number.isSafeInteger(run.runnerPid) && run.runnerPid > 0) {
+      const now = new Date((options.now ?? Date.now)());
+      const pidState = (options.probePid ?? readLinuxProcess)(run.runnerPid).state;
+      const dead = pidState === 'absent' || pidState === 'exited';
+      const heartbeat = Date.parse(run.heartbeatAtUtc);
+      if (dead || (Number.isFinite(heartbeat) && packReviewRunGraceElapsed(run, now))) {
+        return resolved('runner-dead', 'PR-' + run.prNumber + '-head-' + run.targetSha,
+          'review-run:' + run.id + ':runner-dead');
+      }
+    }
+    return undefined;
+  }
+  if (producer.kind === 'unit' && producer.unit) {
+    const fact = (options.readUnitState ?? readSystemdUnitState)(producer.unit);
+    return fact && (fact.activeState === 'inactive' || fact.activeState === 'failed')
+      ? resolved('unit-' + fact.activeState, producer.unit,
+        'unit:' + producer.unit + ':' + fact.activeState + ':' + fact.result) : undefined;
   }
   if (producer.kind === 'merge' && producer.number) {
     const pull = (options.readNamedPull ?? readNativePull)(repo, producer.number);
@@ -1416,11 +1469,14 @@ function resolveParkEvent(
       };
     }
   }
-  if (producer.kind === 'pack-review' && producer.sha) {
-    const stage = (options.readPackReviewStage ?? readPackReviewStatus)(repo, producer.sha);
+  if (producer.kind === 'pack-review') {
+    const sha = producer.sha ?? (producer.number
+      ? (options.readNamedPull ?? readNativePull)(repo, producer.number)?.headSha : undefined);
+    if (!sha || !SHA40.test(sha)) return undefined;
+    const stage = (options.readPackReviewStage ?? readPackReviewStatus)(repo, sha);
     return stage && (stage.state === 'success' || stage.state === 'failure')
-      ? resolved('stage-' + stage.state, 'pack-review-' + producer.sha,
-        'pack-review:' + producer.sha + ':' + stage.state) : undefined;
+      ? resolved('stage-' + stage.state, 'pack-review-' + sha,
+        'pack-review:' + sha + ':' + stage.state) : undefined;
   }
   if (producer.kind === 'ci') {
     const sha = producer.sha ?? (producer.number
@@ -1614,7 +1670,7 @@ function gptTerminalResolution(
   for (const id of ids) {
     // The exact invocation ID named by the pane's own final PARKED line binds the
     // envelope; the launcher tab and the child cwd are incidental.
-    const associated = events.filter((event) => event.observedInvocationId === id);
+    const associated = events.filter((event) => event.observedInvocationId === id || event.attemptIdentity === id);
     if (associated.length === 0) continue; // No attributable landed artifact is ordinary pending.
     if (associated.length !== 1) { deficient = true; continue; }
     const event = associated[0]!;
@@ -1901,9 +1957,9 @@ async function wakeNamedParkedProducers(
         await alarmParkUncertainty('unknown parked producer', pane, pane.ownParkObservation, epoch,
           options, store, executor, sleepMs, log, counts, stillParkedOwner);
       }
-      continue; // Unknown grammar is not a named 30-minute Reminder.
+      // Unknown grammar still gets the incumbent 30-minute reminder.
     }
-    if (match) {
+    if (match && producer) {
       const eventKey = 'event:' + pane.handle + ':' + match.eventId
         + ((producer.kind === 'time' || producer.kind === 'process') ? ':episode:' + (epoch?.started ?? epoch?.since ?? now) : '');
       // A terminal-envelope event also owns the shared (handle, path) mark; a gpt-multi
