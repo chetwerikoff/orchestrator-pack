@@ -1,0 +1,23 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2831,
+  "declared_paths": [
+    "docs/declarations/2831.pr-scope.json",
+    "prompts/gpt_pack_review_prompt.md",
+    "scripts/pack-pr-review-contract.test.ts"
+  ],
+  "denylist": [
+    ".github/workflows/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "tests/external-output-references/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "prompts/gpt_pack_review_prompt.md",
+    "scripts/pack-pr-review-contract.test.ts"
+  ],
+  "source_revision": "9b9f31318c45ddf69c4c3ff199b8d5b787a4539d"
+}

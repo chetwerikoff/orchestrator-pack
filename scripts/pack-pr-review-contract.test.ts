@@ -6,6 +6,7 @@ import {
   codexPromptIncludesCanonicalContract,
   gptPromptIncludesCanonicalContract,
   loadCanonicalReviewContract,
+  loadGptPromptTemplate,
 } from './lib/pack-pr-review-contract.ts';
 
 describe('pack PR review canonical contract (Issue #1031)', () => {
@@ -25,6 +26,23 @@ describe('pack PR review canonical contract (Issue #1031)', () => {
     expect(contract).toContain('proportionate blocking or non-blocking reviewer judgment');
     expect(contract).not.toContain('REJECT a race');
     expect(contract).not.toContain('Otherwise choose FIX_NOW or DEFER');
+  });
+
+  it('Issue #2831 keeps unexecutable criteria non-blocking and unread sources fail-closed', () => {
+    const cleanReview = loadGptPromptTemplate().split('### Clean review')[1]?.split('### Findings review')[0] ?? '';
+    const text = cleanReview.replace(/\s+/gu, ' ');
+    expect(text).toContain('read the linked Issue in full, read every changed file and the whole diff at the bound head');
+    expect(text).toContain('command execution (such as tests or `make check`)');
+    expect(text).toContain('GitHub search returning `incomplete_results`');
+    expect(text).toContain('required CI that checks it is confirmed successful for the exact bound head');
+    expect(text).toContain('otherwise classify it as `unverified-by-reviewer`');
+    expect(text).toContain('Such a criterion alone must not block `NO_FINDINGS`');
+    expect(text).toContain('Preserve the normal exact `NO_FINDINGS` or findings payload format');
+    expect(text).toContain(
+      'Withhold the verdict only if the linked Issue, a changed file, or the diff at the bound head could not be read completely.',
+    );
+    expect(text).toContain('do not emit `NO_FINDINGS`, fabricate findings, or publish a canonical source comment/payload');
+    expect(text).toContain('An `unverified-by-reviewer` criterion after complete required reads is not an unread-source case.');
   });
 
   it('composes GPT and Codex prompts from the same canonical contract', () => {

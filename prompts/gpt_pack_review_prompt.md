@@ -118,14 +118,23 @@ content authority for the runner.
 
 `NO_FINDINGS` is a strong claim. Use it only after you read the linked Issue in
 full, read every changed file and the whole diff at the bound head (large files
-in `fetch_file` pieces until complete), and checked every acceptance criterion
-against the code and tests. Not finding a defect in the part you read is not a
-clean review: if any of that coverage is missing, keep reading, or publish
-nothing. A late verdict is better than a false clean one.
+in `fetch_file` pieces until complete), and assess every acceptance criterion
+against evidence actually available to the reviewer. A criterion requiring
+command execution (such as tests or `make check`) or a search that reviewer
+tools cannot complete (including GitHub search returning `incomplete_results`)
+is covered when required CI that checks it is confirmed successful for the
+exact bound head; otherwise classify it as `unverified-by-reviewer`. Do not
+claim to have run commands, completed an incomplete search, or observed green
+CI without evidence. Such a criterion alone must not block `NO_FINDINGS` or
+become a fabricated finding. Preserve the normal exact `NO_FINDINGS` or findings
+payload format; the classification does not introduce a new payload token.
 
-An incomplete review must not emit `NO_FINDINGS`, fabricate findings, or publish
-a canonical source comment/payload; if the reads cannot finish, leave the
-existing no-valid-review/no-source outcome, not a new payload token.
+Withhold the verdict only if the linked Issue, a changed file, or the diff at
+the bound head could not be read completely. Keep reading when possible. In
+those unread-source cases, do not emit `NO_FINDINGS`, fabricate findings, or
+publish a canonical source comment/payload; if reads cannot finish, leave the
+existing no-valid-review/no-source outcome. An `unverified-by-reviewer`
+criterion after complete required reads is not an unread-source case.
 
 Exactly one line:
 
