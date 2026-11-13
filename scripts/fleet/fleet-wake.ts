@@ -1512,8 +1512,9 @@ function resolveParkEvent(
       };
       const completed = (options.checkRunsFinishedAt ?? checkRunsFinishedAt)(repo, current.headSha);
       return completed !== undefined && Number.isFinite(completed)
-        ? resolved('checks-completed', 'CI-' + current.headSha,
-          'ci:' + candidate.number + ':' + current.headSha + ':' + completed) : undefined;
+        ? { ...resolved('checks-completed', 'CI-' + current.headSha,
+          'ci:' + candidate.number + ':' + current.headSha + ':' + completed),
+          pullNumber: candidate.number, currentHeadSha: current.headSha } : undefined;
     }
     const sha = producer.sha ?? (producer.number
       ? (options.readNamedPull ?? readNativePull)(repo, producer.number)?.headSha : undefined);
@@ -2010,7 +2011,7 @@ async function wakeNamedParkedProducers(
         && sharedMarks.every((mark) => store.hasParkedWakeEvent(mark));
       if (!store.hasParkedWakeEvent(eventKey) && !covered) {
         const movedPullNumber = match.pullNumber ?? producer.number;
-        const message = match.currentHeadSha && movedPullNumber
+        const message = match.terminalState === 'head-moved' && match.currentHeadSha && movedPullNumber
           ? safeMovedHeadWakeText(movedPullNumber, match.currentHeadSha)
           : safeUnitWakeText(match.label, match.terminalState, match.evidence);
         const wakeText = message ?? 'Wake: matching producer event landed - re-check it yourself before continuing';
