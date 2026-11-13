@@ -2476,7 +2476,13 @@ describe('Issue #2484 visible OpenCode permission (genuine capture; synthetic ne
       expect(msg(first.calls)).not.toContain('POLLING');
       const marks = readdirSync(store.root).filter((p) => p.startsWith('parked-wake-'));
       expect(marks).toHaveLength(1);
-      expect(readFileSync(join(store.root, marks[0]!), 'utf8')).toMatch(/^permission:[0-9a-f:]+\nsent\n$/u);
+      const persisted = readFileSync(join(store.root, marks[0]!), 'utf8');
+      const mark = /^permission:[0-9a-f:]+\nsent\n([1-9]\d*)\n$/u.exec(persisted);
+      expect(mark).not.toBeNull();
+      const timestamp = Number(mark?.[1]);
+      expect(Number.isSafeInteger(timestamp)).toBe(true);
+      expect(timestamp).toBeGreaterThan(0);
+      expect(timestamp).toBeLessThanOrEqual(Date.now());
       expect(readFileSync(join(store.root, marks[0]!), 'utf8')).not.toContain('permission-probe.txt');
       store = new FileFleetWakeStateStore('orchestrator-pack', { XDG_RUNTIME_DIR: root });
       for (const at of [60_000, 1_800_000, 3_600_000]) {
@@ -5343,6 +5349,26 @@ describe('Issue #2833 firefighter parked-producer and submit regressions', () =>
     const foreign = await tick({ ...common, screens: { one: wait },
       listTerminalEnvelopes: () => [{ ...envelope, attemptIdentity: 'a-foreign' }] });
     expect(sentText(foreign.calls)).toHaveLength(0);
+  });
+
+  it('rejects foreign-terminal and filename-only attempt-id envelopes without an attributable wake', async () => {
+    const wait = 'PARKED on GPT turn a-author-2833';
+    const envelope: TerminalEnvelopeEvent = {
+      path: '/tmp/author-2833-terminal.json',
+      invocationId: 'i-author-2833', observedInvocationId: 'i-author-2833',
+      attemptIdentity: 'a-author-2833', terminalHandle: 'foreign',
+      lifecycleOutcome: 'success', turnResultState: 'ok',
+    };
+    const filenameOnly: TerminalEnvelopeEvent = {
+      ...envelope, observedInvocationId: undefined, invocationId: 'a-author-2833',
+      terminalHandle: 'one',
+    };
+    for (const event of [envelope, filenameOnly]) {
+      const observed = await tick({ ...common, terminals: [terminals[0]!, unit],
+        screens: { coord: 'idle', one: wait },
+        listTerminalEnvelopes: () => [event] });
+      expect(sends(observed.calls)).toHaveLength(0);
+    }
   });
 
   it('wakes on changed PR head before CI completes, never treats it as success', async () => {
