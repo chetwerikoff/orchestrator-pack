@@ -2835,7 +2835,7 @@ export function fleetWakeConfigFromEnv(
   const inheritedPin = env.ORCH_HANDLE?.trim();
   const coordinatorPinFile = pinFile && inheritedPin && envHandleFromFile(pinFile) === inheritedPin
     ? pinFile : undefined;
-  const intervalSeconds = env.FLEET_WAKE_INTERVAL?.trim() ? Number(env.FLEET_WAKE_INTERVAL) : 300;
+  const intervalSeconds = env.FLEET_WAKE_INTERVAL?.trim() ? Number(env.FLEET_WAKE_INTERVAL) : 60;
   if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
     throw new Error('FLEET_WAKE_INTERVAL must be a positive number of seconds');
   }
