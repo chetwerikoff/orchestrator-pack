@@ -968,6 +968,7 @@ interface ProducerResolution {
   readonly paths?: readonly string[];
   /** Exact new live head for a named obsolete-head advisory; never a green verdict. */
   readonly currentHeadSha?: string;
+  readonly pullNumber?: number;
 }
 
 // GPT invocation names are free-form; punctuation belongs to the park sentence.
@@ -1017,7 +1018,7 @@ export function parseNamedParkedProducer(wait: string): NamedProducer | undefine
   if (match) return { kind: 'review', label: 'review-' + match[2] + '-PR-' + match[1], number: Number(match[1]), reviewId: Number(match[2]), sha: match[3] };
   match = /^PARKED on CI PR #([1-9]\d*) head ([0-9a-f]{40})$/u.exec(source);
   if (match) return { kind: 'ci', label: 'CI-PR-' + match[1], number: Number(match[1]), sha: match[2] };
-  match = /^PARKED on CI on ([0-9a-f]{40})$/u.exec(source);
+  match = /^PARKED on CI on ([0-9a-f]{7,40})$/u.exec(source);
   if (match) return { kind: 'ci', label: 'CI-' + match[1], sha: match[1] };
   match = /^PARKED on (?:merge-([1-9]\d*)|PR #([1-9]\d*) merged|#([1-9]\d*) merged(?: into main)?)$/u.exec(source);
   if (match) {
@@ -1406,6 +1407,7 @@ function resolveParkEvent(
   terminals: readonly FleetTerminal[],
   options: FleetAlarmTickOptions,
   log: (line: string) => void,
+  pane?: FleetPaneObservation,
 ): ProducerResolution | undefined {
   const producer = parseNamedParkedProducer(wait);
   if (!producer || producer.kind === 'gpt' || producer.kind === 'gpt-multi'
@@ -1489,6 +1491,30 @@ function resolveParkEvent(
         'pack-review:' + sha + ':' + stage.state) : undefined;
   }
   if (producer.kind === 'ci') {
+    // An abbreviated "CI on SHA" must resolve to one exact live PR/head,
+    // optionally through the pane's actual branch when the head already moved.
+    if (producer.sha && !SHA40.test(producer.sha)) {
+      let pulls: readonly OpenPullHead[];
+      try { pulls = (options.listOpenPulls ?? listOpenPullHeads)(repo); }
+      catch { return undefined; }
+      const candidates = pulls.filter((pull) => SHA40.test(pull.sha)
+        && (pull.sha.startsWith(producer.sha!)
+          || (pane?.branch && (pane.branch === pull.ref || pane.branch === 'refs/heads/' + pull.ref))));
+      if (candidates.length !== 1) return undefined;
+      const candidate = candidates[0]!;
+      const current = (options.readNamedPull ?? readNativePull)(repo, candidate.number);
+      if (!current || current.number !== candidate.number || current.state !== 'open'
+        || current.merged || current.headSha !== candidate.sha) return undefined;
+      if (!current.headSha.startsWith(producer.sha)) return {
+        label: producer.label, terminalState: 'head-moved', evidence: current.headSha,
+        eventId: 'head-moved:' + candidate.number + ':' + producer.sha,
+        currentHeadSha: current.headSha, pullNumber: candidate.number,
+      };
+      const completed = (options.checkRunsFinishedAt ?? checkRunsFinishedAt)(repo, current.headSha);
+      return completed !== undefined && Number.isFinite(completed)
+        ? resolved('checks-completed', 'CI-' + current.headSha,
+          'ci:' + candidate.number + ':' + current.headSha + ':' + completed) : undefined;
+    }
     const sha = producer.sha ?? (producer.number
       ? (options.readNamedPull ?? readNativePull)(repo, producer.number)?.headSha : undefined);
     if (!sha) return undefined;
@@ -1905,6 +1931,11 @@ async function wakeNamedParkedProducers(
             + ': re-check selected coordinator and current worker-list/worker-show/run-show Dispatch binding');
           return false;
         }
+        if (match?.pullNumber && match.currentHeadSha) {
+          const repo = namedRepository(options.config);
+          const pull = repo && (options.readNamedPull ?? readNativePull)(repo, match.pullNumber);
+          if (!pull || pull.headSha !== match.currentHeadSha || pull.state !== 'open' || pull.merged) return false;
+        }
         if ((producer?.kind === 'ci' || producer?.kind === 'pack-review')
           && producer.number && producer.sha) {
           const repo = namedRepository(options.config);
@@ -1949,7 +1980,7 @@ async function wakeNamedParkedProducers(
         uncertainty = 'process provenance unverified';
       }
     } else if (producer) {
-      match = resolveParkEvent(pane.wait, terminals, options, log);
+      match = resolveParkEvent(pane.wait, terminals, options, log, pane);
       if (!match && (producer.kind === 'ci' || producer.kind === 'pack-review') && producer.number) {
         log('named PR Wake pending/unverified for ' + pane.handle
           + ': re-check exact PR #' + producer.number + ' open/current head and its current-head producer');
@@ -1978,8 +2009,9 @@ async function wakeNamedParkedProducers(
       const covered = producer.kind === 'gpt-multi' && sharedMarks.length > 0
         && sharedMarks.every((mark) => store.hasParkedWakeEvent(mark));
       if (!store.hasParkedWakeEvent(eventKey) && !covered) {
-        const message = match.currentHeadSha && producer.number
-          ? safeMovedHeadWakeText(producer.number, match.currentHeadSha)
+        const movedPullNumber = match.pullNumber ?? producer.number;
+        const message = match.currentHeadSha && movedPullNumber
+          ? safeMovedHeadWakeText(movedPullNumber, match.currentHeadSha)
           : safeUnitWakeText(match.label, match.terminalState, match.evidence);
         const wakeText = message ?? 'Wake: matching producer event landed - re-check it yourself before continuing';
         const shared: SharedWakeMarks | undefined = sharedMarks.length > 0
