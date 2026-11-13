@@ -1707,7 +1707,7 @@ function gptTerminalResolution(
   for (const id of ids) {
     // The exact invocation ID named by the pane's own final PARKED line binds the
     // envelope; the launcher tab and the child cwd are incidental.
-// Only an observed invocation can bind an alternate attempt-id park.
+    // Only an observed invocation can bind an alternate attempt-id park.
     // A filename-only artifact or an explicitly foreign terminal is not its owner.
     const associated = events.filter((event) => event.observedInvocationId === id
       || (event.attemptIdentity === id && typeof event.observedInvocationId === 'string'
