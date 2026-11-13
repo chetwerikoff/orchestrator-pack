@@ -282,7 +282,8 @@ describe('fleet alarm', () => {
       expect([...store.eventStatus.values()].every((status) => status === 'attempted_unverified')).toBe(true);
       expect(clear).not.toHaveBeenCalled();
       expect(sends((await tick(input)).calls)).toHaveLength(0);
-      expect(first.logs.join(' ')).toContain('next: owner reads the exact pane');
+      expect(first.logs.join(' ')).toContain('unit wake delivery unverified:');
+      expect(first.logs.join(' ')).toContain('reason=');
     },
   );
 
@@ -5444,5 +5445,56 @@ describe('Issue #2833 firefighter parked-producer and submit regressions', () =>
       restarted.markParkedWakeEvent('event:one:receipt', 'sent');
       expect(restarted.hasParkedWakeEvent('event:one:receipt')).toBe(true);
     } finally { clock.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+
+describe('Issue #2833 short-head CI and stale-heartbeat regressions', () => {
+  const a = 'a'.repeat(40), b = 'b'.repeat(40);
+  it('binds an abbreviated CI head to one exact native PR and detects its later head change', async () => {
+    const wait = 'PARKED on CI on aaaaaaaa; resume step: inspect head';
+    const unit = { ...terminals[1]!, branch: 'refs/heads/fix/short', agentIdentity: 'opencode' };
+    const store = new MemoryWakeStore();
+    let head = a;
+    let done = false;
+    const run = () => tick({
+      terminals: [unit], screens: { one: wait }, store, config: config({ selectedRepository: 'test/project' }),
+      readCurrentAssignments: () => [],
+      listOpenPulls: () => [{ number: 42, ref: 'fix/short', sha: head }],
+      readNamedPull: () => ({ number: 42, headSha: head, state: 'open', merged: false }),
+      checkRunsFinishedAt: (_repo, sha) => done && sha === a ? 1234 : undefined,
+    });
+    expect(sendsTo((await run()).calls, 'one')).toHaveLength(0);
+    done = true;
+    expect(sendsTo((await run()).calls, 'one')[0]?.join(' ')).toContain('checks-completed');
+    done = false;
+    head = b;
+    expect(sendsTo((await run()).calls, 'one')[0]?.join(' ')).toContain('head moved to ' + b);
+    expect(sendsTo((await run()).calls, 'one')).toHaveLength(0);
+  });
+
+  it('wakes an active review runner after a stale heartbeat even if its PID probe is live', async () => {
+    const id = 'prr-' + 'd'.repeat(32);
+    const record = {
+      id, runId: id, projectId: 'orchestrator-pack', canonicalRepository: 'test/project',
+      sourceRepoRoot: primary, prNumber: 635, targetSha: a, status: 'reviewing',
+      runnerPid: 12345, heartbeatAtUtc: '2026-11-11T10:00:00Z',
+    } as PackReviewRunRecord;
+    const store = new MemoryWakeStore();
+    const run = () => tick({
+      terminals: [{ ...terminals[1]!, agentIdentity: 'opencode' }],
+      screens: { one: 'PARKED on review run ' + id }, store,
+      config: config({ selectedRepository: 'test/project' }),
+      readCurrentAssignments: () => [], listOpenPulls: () => [],
+      resolveSelectedReviewProject: () => ({
+        projectId: 'orchestrator-pack', repository: 'test/project', primaryRoot: primary,
+      }),
+      readPackReviewRuns: () => [record],
+      probePid: () => ({ state: 'live', startticks: '22', namespace: 'pid:[1]' }),
+      reconcilePackReview: vi.fn(async () => ({ ok: true as const, results: [] })),
+      now: () => Date.parse('2026-11-13T10:00:00Z'),
+    });
+    expect(sendsTo((await run()).calls, 'one')[0]?.join(' ')).toContain('runner-dead');
+    expect(sendsTo((await run()).calls, 'one')).toHaveLength(0);
   });
 });
