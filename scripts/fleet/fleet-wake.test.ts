@@ -54,6 +54,7 @@ class MemoryWakeStore implements FleetWakeStateStore {
   readonly marks = new Set<string>();
   readonly parkedWakeEvents = new Set<string>();
   readonly eventStatus = new Map<string, 'sent' | 'attempted_unverified'>();
+  readonly attemptedAt = new Map<string, number>();
   readonly epochs = new Map<string, { key: string; since: number; started?: number;
     liveProcess?: { pid: number; startticks: string; namespace: string } }>();
   signature: string | null = null;
@@ -77,17 +78,22 @@ class MemoryWakeStore implements FleetWakeStateStore {
   pruneParkedEpochs(keys: ReadonlyMap<string, string>): void {
     for (const [handle, epoch] of this.epochs) if (keys.get(handle) !== epoch.key) this.epochs.delete(handle);
   }
-  hasParkedWakeEvent(key: string): boolean { return this.parkedWakeEvents.has(key); }
+  hasParkedWakeEvent(key: string): boolean {
+    return this.parkedWakeEvents.has(key) && (this.eventStatus.get(key) !== 'attempted_unverified'
+      || (this.attemptedAt.has(key) && Date.now() - this.attemptedAt.get(key)! < 5 * 60_000));
+  }
   readParkedWakeEventStatus(key: string): 'sent' | 'attempted_unverified' | undefined {
     return this.parkedWakeEvents.has(key) ? this.eventStatus.get(key) ?? 'sent' : undefined;
   }
   markParkedWakeEvent(key: string, status: 'sent' | 'attempted_unverified' = 'sent'): void {
     this.parkedWakeEvents.add(key);
     this.eventStatus.set(key, status);
+    this.attemptedAt.set(key, Date.now());
   }
   clearParkedWakeEvent(key: string): void {
     this.parkedWakeEvents.delete(key);
     this.eventStatus.delete(key);
+    this.attemptedAt.delete(key);
   }
   rearmPermissionWakeEvents(scope: string): void {
     for (const key of this.parkedWakeEvents) {
@@ -186,6 +192,7 @@ async function tick(input: {
   resolveSelectedReviewProject?: FleetAlarmTickOptions['resolveSelectedReviewProject'];
   probePid?: FleetAlarmTickOptions['probePid'];
   readPackReviewRuns?: FleetAlarmTickOptions['readPackReviewRuns'];
+  readUnitState?: FleetAlarmTickOptions['readUnitState'];
   reconcilePackReview?: FleetAlarmTickOptions['reconcilePackReview'];
   sleepMs?: (ms: number) => void | Promise<void>;
   now?: () => number;
@@ -219,6 +226,7 @@ async function tick(input: {
     ...(input.resolveSelectedReviewProject ? { resolveSelectedReviewProject: input.resolveSelectedReviewProject } : {}),
     ...(input.probePid ? { probePid: input.probePid } : {}),
     ...(input.readPackReviewRuns ? { readPackReviewRuns: input.readPackReviewRuns } : {}),
+    ...(input.readUnitState ? { readUnitState: input.readUnitState } : {}),
     ...(input.reconcilePackReview ? { reconcilePackReview: input.reconcilePackReview } : {}),
     ...(input.now ? { now: input.now } : {}),
   });
@@ -274,7 +282,8 @@ describe('fleet alarm', () => {
       expect([...store.eventStatus.values()].every((status) => status === 'attempted_unverified')).toBe(true);
       expect(clear).not.toHaveBeenCalled();
       expect(sends((await tick(input)).calls)).toHaveLength(0);
-      expect(first.logs.join(' ')).toContain('next: owner reads the exact pane');
+      expect(first.logs.join(' ')).toContain('unit wake delivery unverified:');
+      expect(first.logs.join(' ')).toContain('reason=');
     },
   );
 
@@ -2467,7 +2476,13 @@ describe('Issue #2484 visible OpenCode permission (genuine capture; synthetic ne
       expect(msg(first.calls)).not.toContain('POLLING');
       const marks = readdirSync(store.root).filter((p) => p.startsWith('parked-wake-'));
       expect(marks).toHaveLength(1);
-      expect(readFileSync(join(store.root, marks[0]!), 'utf8')).toMatch(/^permission:[0-9a-f:]+\nsent\n$/u);
+      const persisted = readFileSync(join(store.root, marks[0]!), 'utf8');
+      const mark = /^permission:[0-9a-f:]+\nsent\n([1-9]\d*)\n$/u.exec(persisted);
+      expect(mark).not.toBeNull();
+      const timestamp = Number(mark?.[1]);
+      expect(Number.isSafeInteger(timestamp)).toBe(true);
+      expect(timestamp).toBeGreaterThan(0);
+      expect(timestamp).toBeLessThanOrEqual(Date.now());
       expect(readFileSync(join(store.root, marks[0]!), 'utf8')).not.toContain('permission-probe.txt');
       store = new FileFleetWakeStateStore('orchestrator-pack', { XDG_RUNTIME_DIR: root });
       for (const at of [60_000, 1_800_000, 3_600_000]) {
@@ -5220,5 +5235,292 @@ describe('Issue #2749 B9-6: exact primary-root near-effect Dispatch admission', 
         expect(deliveredText((await exercise('stable', store)).calls)).toHaveLength(0);
       }
     }
+  });
+});
+
+
+describe('Issue #2833 firefighter parked-producer and submit regressions', () => {
+  const repo = 'test/project';
+  const a = 'a'.repeat(40), b = 'b'.repeat(40);
+  const unit = { ...terminals[1]!, agentIdentity: 'opencode' };
+  const common = {
+    terminals: [unit], config: config({ selectedRepository: repo }),
+    readCurrentAssignments: () => [], listOpenPulls: () => [],
+    resolveSelectedReviewProject: () => ({
+      projectId: 'orchestrator-pack', repository: repo, primaryRoot: primary,
+    }),
+  };
+  const sentText = (calls: string[][], handle = 'one'): string[] =>
+    sendsTo(calls, handle).map((call) => call[call.indexOf('--text') + 1] ?? '');
+
+  it('re-reads live CI for exact head each tick, including a resume suffix', async () => {
+    const wait = 'PARKED on CI PR #42 head ' + a + '; resume step: inspect CI';
+    let finished = false;
+    const store = new MemoryWakeStore();
+    const run = () => tick({ ...common, screens: { one: wait }, store,
+      readNamedPull: () => ({ number: 42, headSha: a, state: 'open', merged: false }),
+      checkRunsFinishedAt: (_repo, sha) => finished && sha === a ? 1234 : undefined });
+    expect(sentText((await run()).calls)).toHaveLength(0);
+    finished = true;
+    const first = await run();
+    expect(sentText(first.calls)[0]).toContain('checks-completed');
+    expect(sendsTo(first.calls, 'one')[0]).toEqual(expect.arrayContaining(['--enter', '--wait-submit']));
+    expect(sentText((await run()).calls)).toHaveLength(0);
+  });
+
+  it('rechecks current head and pack-review status for number-only producer', async () => {
+    const wait = 'PARKED on pack-review 635 — resume step: read review';
+    let stage: string | undefined;
+    const store = new MemoryWakeStore();
+    const run = () => tick({ ...common, screens: { one: wait }, store,
+      readNamedPull: () => ({ number: 635, headSha: b, state: 'open', merged: false }),
+      readPackReviewStage: (_repo, sha) => sha === b && stage
+        ? { state: stage, description: 'runner terminal' } : undefined });
+    expect(sentText((await run()).calls)).toHaveLength(0);
+    stage = 'failure';
+    expect(sentText((await run()).calls)[0]).toContain('stage-failure');
+    expect(sentText((await run()).calls)).toHaveLength(0);
+  });
+
+  it('wakes a review runner whose pid is gone even with active status', async () => {
+    const id = 'prr-' + 'c'.repeat(32);
+    const wait = 'PARKED on review run ' + id;
+    const record = {
+      id, runId: id, projectId: 'orchestrator-pack', canonicalRepository: repo,
+      sourceRepoRoot: primary, prNumber: 635, targetSha: a, status: 'running',
+      runnerPid: 12345, heartbeatAtUtc: '2026-11-13T10:00:00Z',
+    } as PackReviewRunRecord;
+    let pid: 'live' | 'absent' = 'live';
+    const store = new MemoryWakeStore();
+    const run = () => tick({ ...common, screens: { one: wait }, store,
+      readPackReviewRuns: () => [record],
+      probePid: () => pid === 'live'
+        ? { state: 'live', startticks: '22', namespace: 'pid:[1]' }
+        : { state: 'absent', namespace: 'pid:[1]' },
+      reconcilePackReview: vi.fn(async () => ({ ok: true as const, results: [] })),
+      now: () => Date.parse('2026-11-13T10:00:01Z') });
+    expect(sentText((await run()).calls)).toHaveLength(0);
+    pid = 'absent';
+    expect(sentText((await run()).calls)[0]).toContain('runner-dead');
+    expect(sentText((await run()).calls)).toHaveLength(0);
+  });
+
+  it('wakes a named smoke systemd service only when it exits', async () => {
+    const wait = 'PARKED on smoke run leopoker-633-smoke-1840; resume step: inspect log';
+    let activeState = 'active';
+    const store = new MemoryWakeStore();
+    const readUnitState = vi.fn(() => ({ activeState, result: 'success' }));
+    const run = () => tick({ ...common, screens: { one: wait }, store, readUnitState });
+    expect(sentText((await run()).calls)).toHaveLength(0);
+    activeState = 'inactive';
+    const first = await run();
+    expect(sentText(first.calls)[0]).toContain('unit-inactive');
+    expect(readUnitState).toHaveBeenCalledWith('leopoker-633-smoke-1840');
+    expect(sentText((await run()).calls)).toHaveLength(0);
+  });
+
+  it('wakes the same PID when its witnessed process exits', async () => {
+    const wait = 'PARKED on process pid 7654 startticks 123456';
+    let alive = true;
+    const store = new MemoryWakeStore();
+    const run = () => tick({ ...common, screens: { one: wait }, store,
+      probePid: () => alive
+        ? { state: 'live', startticks: '123456', namespace: 'pid:[11]' }
+        : { state: 'absent', namespace: 'pid:[11]' } });
+    expect(sentText((await run()).calls)).toHaveLength(0);
+    alive = false;
+    expect(sentText((await run()).calls)[0]).toContain('process-exited');
+    expect(sentText((await run()).calls)).toHaveLength(0);
+  });
+
+  it('matches the author attempt id as well as its distinct observed invocation id', async () => {
+    const wait = 'PARKED on GPT turn a-author-2833';
+    const envelope: TerminalEnvelopeEvent = {
+      path: '/tmp/author-2833-terminal.json',
+      invocationId: 'i-author-2833', observedInvocationId: 'i-author-2833',
+      attemptIdentity: 'a-author-2833', lifecycleOutcome: 'success',
+      turnResultState: 'ok',
+    };
+    const run = (store: MemoryWakeStore) => tick({ ...common, screens: { one: wait },
+      store, listTerminalEnvelopes: () => [envelope] });
+    const store = new MemoryWakeStore();
+    expect(sentText((await run(store)).calls)[0]).toContain('ended state ok');
+    expect(sentText((await run(store)).calls)).toHaveLength(0);
+    const foreign = await tick({ ...common, screens: { one: wait },
+      listTerminalEnvelopes: () => [{ ...envelope, attemptIdentity: 'a-foreign' }] });
+    expect(sentText(foreign.calls)).toHaveLength(0);
+  });
+
+  it('rejects foreign-terminal and filename-only attempt-id envelopes without an attributable wake', async () => {
+    const wait = 'PARKED on GPT turn a-author-2833';
+    const envelope: TerminalEnvelopeEvent = {
+      path: '/tmp/author-2833-terminal.json',
+      invocationId: 'i-author-2833', observedInvocationId: 'i-author-2833',
+      attemptIdentity: 'a-author-2833', terminalHandle: 'foreign',
+      lifecycleOutcome: 'success', turnResultState: 'ok',
+    };
+    const filenameOnly: TerminalEnvelopeEvent = {
+      ...envelope, observedInvocationId: undefined, invocationId: 'a-author-2833',
+      terminalHandle: 'one',
+    };
+    for (const event of [envelope, filenameOnly]) {
+      const observed = await tick({ ...common, terminals: [terminals[0]!, unit],
+        screens: { coord: 'idle', one: wait },
+        listTerminalEnvelopes: () => [event] });
+      expect(sends(observed.calls)).toHaveLength(0);
+    }
+  });
+
+  it('wakes on changed PR head before CI completes, never treats it as success', async () => {
+    const wait = 'PARKED on CI PR #42 head ' + a;
+    let head = a;
+    const store = new MemoryWakeStore();
+    const run = () => tick({ ...common, screens: { one: wait }, store,
+      readNamedPull: () => ({ number: 42, headSha: head, state: 'open', merged: false }),
+      checkRunsFinishedAt: () => undefined });
+    expect(sentText((await run()).calls)).toHaveLength(0);
+    head = b;
+    expect(sentText((await run()).calls)[0]).toContain('head moved to ' + b);
+    expect(sentText((await run()).calls)).toHaveLength(0);
+  });
+
+  it('parses #N merged and retains a 30-minute reminder for unknown parks', async () => {
+    expect(parseNamedParkedProducer('PARKED on #610 merged; resume step: continue'))
+      .toMatchObject({ kind: 'merge', number: 610 });
+    const store = new MemoryWakeStore();
+    const opts = { ...common, screens: { one: 'PARKED on smoke run' }, store };
+    expect(sentText((await tick({ ...opts, now: () => 0 })).calls)).toHaveLength(0);
+    const later = await tick({ ...opts, now: () => 30 * 60_000 });
+    expect(sentText(later.calls)[0]).toContain('Reminder: parked 30 min');
+  });
+
+  it('does not call input accepted a submitted wake, and retries after five minutes', async () => {
+    const clock = vi.spyOn(Date, 'now');
+    let now = Date.parse('2026-11-13T10:00:00Z');
+    clock.mockImplementation(() => now);
+    try {
+      const wait = 'PARKED on time 2026-11-13T09:00:00Z';
+      const screens = { one: wait };
+      const native = fakeOrca(screens, [], [unit]);
+      let submitted = false;
+      const executor: OrcaExecutor = (args) => args[1] === 'send' && !submitted
+        ? commandResult(JSON.stringify({ ok: true, result: {
+          send: { handle: 'one', accepted: true, prompt: {
+            requestId: 'r1', processIncarnation: unit.incarnationId,
+            provider: 'opencode', observation: 'supported', stages: ['input_accepted'],
+          } }, mutation: { requestId: 'r1', replayed: false },
+        } })) : native(args);
+      const store = new MemoryWakeStore();
+      const run = () => tick({ ...common, screens, executor, store, now: () => now });
+      const first = await run();
+      expect(sendsTo(first.calls, 'one')[0]).toEqual(expect.arrayContaining(['--enter', '--wait-submit']));
+      expect(first.logs.join(' ')).toContain('reason=turn_start_unverified');
+      expect(first.result).toMatchObject({ paneWakeAttempts: 1, paneWakeConfirmed: 0 });
+      expect(sentText((await run()).calls)).toHaveLength(0);
+      now += 5 * 60_000;
+      submitted = true;
+      const second = await run();
+      expect(sentText(second.calls)[0]).toContain('UTC-time-due');
+      expect(second.result).toMatchObject({ paneWakeAttempts: 1, paneWakeConfirmed: 1 });
+      expect(sentText((await run()).calls)).toHaveLength(0);
+    } finally { clock.mockRestore(); }
+  });
+
+  it('alerts the orchestrator once for an idle unit, retrying unsubmitted input only after five minutes', async () => {
+    const clock = vi.spyOn(Date, 'now');
+    let now = Date.parse('2026-11-13T10:00:00Z');
+    clock.mockImplementation(() => now);
+    try {
+      const screens = { coord: 'idle', one: 'Task open, awaiting next action' };
+      const native = fakeOrca(screens, [], [terminals[0]!, unit]);
+      let submitted = false;
+      const executor: OrcaExecutor = (args) => args[1] === 'send' && !submitted
+        ? commandResult(JSON.stringify({ ok: true, result: {
+          send: { handle: 'coord', accepted: true, prompt: {
+            requestId: 'r1', processIncarnation: terminals[0]!.incarnationId,
+            provider: 'opencode', observation: 'supported', stages: ['input_accepted'],
+          } }, mutation: { requestId: 'r1', replayed: false },
+        } })) : native(args);
+      const store = new MemoryWakeStore();
+      const run = () => tick({ config: config(), terminals: [terminals[0]!, unit],
+        screens, executor, store, now: () => now });
+      const first = await run();
+      expect(sentText(first.calls, 'coord')[0]).toContain('one');
+      expect(first.logs.join(' ')).toContain('reason=turn_start_unverified');
+      expect(sentText((await run()).calls, 'coord')).toHaveLength(0);
+      now += 5 * 60_000;
+      submitted = true;
+      const second = await run();
+      expect(sentText(second.calls, 'coord')[0]).toContain('one');
+      expect(sentText((await run()).calls, 'coord')).toHaveLength(0);
+    } finally { clock.mockRestore(); }
+  });
+
+  it('persists unverified timestamps across a real file-store restart', () => {
+    const root = mkdtempSync(join(tmpdir(), 'fleet-2833-'));
+    const clock = vi.spyOn(Date, 'now');
+    let now = Date.parse('2026-11-13T10:00:00Z');
+    clock.mockImplementation(() => now);
+    try {
+      const store = new FileFleetWakeStateStore('orchestrator-pack', { XDG_RUNTIME_DIR: root });
+      store.markParkedWakeEvent('event:one:receipt', 'attempted_unverified');
+      const restarted = new FileFleetWakeStateStore('orchestrator-pack', { XDG_RUNTIME_DIR: root });
+      expect(restarted.hasParkedWakeEvent('event:one:receipt')).toBe(true);
+      now += 5 * 60_000;
+      expect(restarted.hasParkedWakeEvent('event:one:receipt')).toBe(false);
+      restarted.markParkedWakeEvent('event:one:receipt', 'sent');
+      expect(restarted.hasParkedWakeEvent('event:one:receipt')).toBe(true);
+    } finally { clock.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+
+describe('Issue #2833 short-head CI and stale-heartbeat regressions', () => {
+  const a = 'a'.repeat(40), b = 'b'.repeat(40);
+  it('binds an abbreviated CI head to one exact native PR and detects its later head change', async () => {
+    const wait = 'PARKED on CI on aaaaaaaa; resume step: inspect head';
+    const unit = { ...terminals[1]!, branch: 'refs/heads/fix/short', agentIdentity: 'opencode' };
+    const store = new MemoryWakeStore();
+    let head = a;
+    let done = false;
+    const run = () => tick({
+      terminals: [unit], screens: { one: wait }, store, config: config({ selectedRepository: 'test/project' }),
+      readCurrentAssignments: () => [],
+      listOpenPulls: () => [{ number: 42, ref: 'fix/short', sha: head }],
+      readNamedPull: () => ({ number: 42, headSha: head, state: 'open', merged: false }),
+      checkRunsFinishedAt: (_repo, sha) => done && sha === a ? 1234 : undefined,
+    });
+    expect(sendsTo((await run()).calls, 'one')).toHaveLength(0);
+    done = true;
+    expect(sendsTo((await run()).calls, 'one')[0]?.join(' ')).toContain('checks-completed');
+    done = false;
+    head = b;
+    expect(sendsTo((await run()).calls, 'one')[0]?.join(' ')).toContain('head moved to ' + b);
+    expect(sendsTo((await run()).calls, 'one')).toHaveLength(0);
+  });
+
+  it('wakes an active review runner after a stale heartbeat even if its PID probe is live', async () => {
+    const id = 'prr-' + 'd'.repeat(32);
+    const record = {
+      id, runId: id, projectId: 'orchestrator-pack', canonicalRepository: 'test/project',
+      sourceRepoRoot: primary, prNumber: 635, targetSha: a, status: 'reviewing',
+      runnerPid: 12345, heartbeatAtUtc: '2026-11-11T10:00:00Z',
+    } as PackReviewRunRecord;
+    const store = new MemoryWakeStore();
+    const run = () => tick({
+      terminals: [{ ...terminals[1]!, agentIdentity: 'opencode' }],
+      screens: { one: 'PARKED on review run ' + id }, store,
+      config: config({ selectedRepository: 'test/project' }),
+      readCurrentAssignments: () => [], listOpenPulls: () => [],
+      resolveSelectedReviewProject: () => ({
+        projectId: 'orchestrator-pack', repository: 'test/project', primaryRoot: primary,
+      }),
+      readPackReviewRuns: () => [record],
+      probePid: () => ({ state: 'live', startticks: '22', namespace: 'pid:[1]' }),
+      reconcilePackReview: vi.fn(async () => ({ ok: true as const, results: [] })),
+      now: () => Date.parse('2026-11-13T10:00:00Z'),
+    });
+    expect(sendsTo((await run()).calls, 'one')[0]?.join(' ')).toContain('runner-dead');
+    expect(sendsTo((await run()).calls, 'one')).toHaveLength(0);
   });
 });
