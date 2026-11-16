@@ -12,6 +12,7 @@
     "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner.test.ts",
     "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.test.ts",
     "scripts/pack-review-state.ts",
     "scripts/run-pack-review-gpt.ts",
     "scripts/worker-smoke-run.ts",
@@ -34,10 +35,11 @@
     "scripts/pack-review-runner-gpt.test.ts",
     "scripts/pack-review-runner.test.ts",
     "scripts/pack-review-runner.ts",
+    "scripts/pack-review-state.test.ts",
     "scripts/pack-review-state.ts",
     "scripts/run-pack-review-gpt.ts",
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "b7d5796a80b3ad318a7e804d550bad74f3498f66"
+  "source_revision": "10ffa710d44a9f935b3e8af3fb2bbb0d25f019e1"
 }
