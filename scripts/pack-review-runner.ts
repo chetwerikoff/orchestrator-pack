@@ -6334,14 +6334,23 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
   let frontier = original.targetSha;
   let unresolved: unknown[] = [...original.findings];
   let lastComplete: PackReviewRunRecord | undefined;
+  // A previously verified F..T ordinary run authenticates its own parent
+  // frontier even after restart. Recover the exact stored T lineage backwards;
+  // only a NEW head lacking a completed delta still needs a fresh Git ancestry
+  // witness for earlier reviewed heads.
+  const completedLineage = new Set<string>([opts.targetSha]);
+  for (const r of [...previous].reverse()) {
+    if (completedLineage.has(r.targetSha) && r.finalCapDelta) {
+      completedLineage.add(r.finalCapDelta.fromSha);
+    }
+  }
   // Ordered, fully completed original-run continuations form the only F
   // chain. A divergent/missing predecessor cannot become reviewer authority.
   for (const r of previous) {
     // Completed reviews on a different descendant branch cannot advance F on
     // this exact-T lineage; do not let them corrupt the current chain either.
-    // Exact-T authenticated completion is a reusable protected-store fact;
-    // Git ancestry is needed only when carrying it forward to a NEW head.
-    if (r.targetSha !== opts.targetSha
+    // The exact stored chain is already protected; otherwise prove ancestry.
+    if (!completedLineage.has(r.targetSha)
         && !await ancestry(r.targetSha, opts.targetSha)) continue;
     if (r.finalCapDelta?.fromSha !== frontier
         || r.finalCapDelta.toSha !== r.targetSha) {
