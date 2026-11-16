@@ -8041,7 +8041,7 @@ describe('Issue #2835 pure base-merge safety proof', () => {
       expect(await finalCapPureSelectedBaseMerge(root, f, git(['rev-parse', 'HEAD']),
         'origin/main')).toBe(false);
       git(['checkout', '-q', 'main']);
-      writeFileSync(join(root, 'base.txt'), 'base C\n');
+      writeFileSync(join(root, 'base.txt'), 'base D\n');
       git(['add', 'base.txt']);
       git(['commit', '--quiet', '-m', 'later base movement']);
       git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
