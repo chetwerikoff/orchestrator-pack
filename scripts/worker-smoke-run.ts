@@ -613,6 +613,8 @@ export interface PostSmokeReadinessDependencies {
   readonly fetchSmokeComments?: typeof fetchPrComments;
   readonly fetchCurrentHead?: typeof fetchLivePrHead;
   readonly listDirectReviews?: (repoRoot: string, repositorySlug: string, prNumber: number) => Promise<GithubReviewSummary[]>;
+  /** Offline status-POST witness; production retains the same publisher. */
+  readonly publishRequiredStatus?: typeof publishPackReviewRequiredStatus;
 }
 
 export async function evaluatePostSmokeReadiness(
@@ -726,7 +728,7 @@ export async function evaluatePostSmokeReadiness(
   }
   if (!options.dryRun && exactStatusHead
       && (directOwnsSemanticProjection || (!runner.hasLegitimateReview && runner.activeAttempt !== true))) {
-    await publishPackReviewRequiredStatus({
+    await (dependencies.publishRequiredStatus ?? publishPackReviewRequiredStatus)({
       repoRoot: options.repoRoot, repoSlug: target.repositorySlug, headSha: target.headSha,
       request: postSmokeReview.completedLogicalCycleId ? {
         state: 'success', context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT, description: reviewProjection.description,
