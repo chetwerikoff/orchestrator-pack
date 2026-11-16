@@ -2837,6 +2837,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       sourceRepoRoot: settings.sourceRepoRoot ?? process.cwd(), canonicalRepository: selectedRepository, resolvedReviewer: 'gpt',
       accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, reviewCycleId: authority.cycle!.cycleId,
       logicalRoundOrdinal: 2, logicalRoundCap: 2, now: new Date(terminalAt),
+      boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(frozenBody),
     }).run;
     const sourceProofs = [1, 2, 3].map((ordinal) => {
       const slotId = `source-${String(ordinal).padStart(2, '0')}`;
@@ -2885,7 +2886,14 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
             source_comment_receipt: sourceProofs[ordinal - 1]!.receipt } };
       }),
     } }, options);
-    setPackReviewRunTerminal(run.id, 'changes_requested', { reviewVerdict: 'findings', findingCount: 2, findings }, { ...options, now: new Date('2026-10-08T20:46:00Z') });
+    setPackReviewRunTerminal(run.id, 'changes_requested', {
+      reviewVerdict: 'findings', findingCount: 2, findings,
+      journalOutcome: {
+        state: 'persisted', recordedAtUtc: '2026-10-08T20:46:00Z',
+        reason: 'original-authenticated-review', idempotencyKey: 'verdict:' + run.id + ':' + selectedHead,
+        attempts: 1,
+      },
+    }, { ...options, now: new Date('2026-10-08T20:46:00Z') });
     authority = commitPackReviewTerminal({
       prNumber, expectedTransitionSeq: authority.transitionSeq, status: 'changes_requested', findingCount: 2, options,
       terminal: { schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal', runId: run.id,
@@ -2963,6 +2971,117 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       fixtureIssueBody: revisedBody,
     });
     return f;
+  }
+
+  // A completed runner-owned ordinary delta is created by the same protected
+  // run-store API as production, rather than an ad-hoc in-memory verdict.
+  // Each frozen GPT source slot has ordinary clean terminal evidence. This
+  // fixture proves reloaded exact-F/T reuse; no reviewer is sent again.
+  function completeFinalCapDelta(
+    f: ReturnType<typeof fixture>,
+    toSha: string,
+    issueBody: string,
+    fromSha: string = f.authority.terminal!.targetSha,
+    outstanding?: unknown[],
+  ) {
+    const original = getPackReviewRun(f.run.id, f.options)!;
+    const oldRound = original.reviewRound!;
+    const outstandingFindings = outstanding ?? [...original.findings];
+    let authority = readPackReviewAuthority(prNumber, f.options)!;
+    if (authority.currentHeadSha !== toSha) {
+      authority = observePackReviewHead({
+        prNumber, expectedTransitionSeq: authority.transitionSeq, headSha: toSha,
+        options: f.options,
+      });
+    }
+    const digest = computeBoundIssueSnapshotHash(issueBody);
+    const identityInput = {
+      originalRunId: original.id, originalCycleId: authority.cycle!.cycleId,
+      repository: f.input.repoSlug, prNumber,
+      selectedBaseRef: 'origin/main', fromSha, toSha,
+      reviewer: 'gpt' as const,
+      sourceSlotIds: oldRound.sourceSlots.map((slot) => slot.slotId),
+      issueDigest: digest, priorFindings: outstandingFindings,
+    };
+    const contextDigest = createHash('sha256').update(stableJson({
+      originalRunId: identityInput.originalRunId,
+      cycleId: identityInput.originalCycleId,
+      repository: identityInput.repository.toLowerCase(),
+      prNumber: identityInput.prNumber,
+      selectedBaseRef: identityInput.selectedBaseRef,
+      fromSha: identityInput.fromSha, toSha: identityInput.toSha,
+      reviewer: identityInput.reviewer,
+      sourceSlotIds: identityInput.sourceSlotIds,
+      issueDigest: identityInput.issueDigest, unresolved: identityInput.priorFindings,
+    })).digest('hex');
+    const deltaIdentity = { ...identityInput, contextDigest };
+    const plannedRound = {
+      ...oldRound, boundIssueSnapshotDigest: digest, settledSourceCount: undefined,
+      sourceSlots: oldRound.sourceSlots.map((slot) =>
+        ({ slotId: slot.slotId, ordinal: slot.ordinal, lifecycle: 'planned' as const })),
+    };
+    const delta = createPackReviewRun({
+      ...f.options, prNumber, headSha: toSha,
+      sourceRepoRoot: f.input.sourceRepoRoot, trustedPackRoot: process.cwd(),
+      canonicalRepository: f.input.repoSlug, resolvedReviewer: 'gpt',
+      reviewCycleId: authority.cycle!.cycleId,
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      surface: 'pack-review-runner', startReason: 'final-cap-delta',
+      automaticBudgetDisposition: 'non_consuming_explicit',
+      allowRunnerFinalCapDeltaStart: true, boundIssueSnapshotDigest: digest,
+      finalCapDelta: deltaIdentity, reviewRound: plannedRound,
+    });
+    expect(delta.created, JSON.stringify(delta)).toBe(true);
+    const sourceSlots = oldRound.sourceSlots.map((slot) => {
+      const invocationId = '2835-clean-' + slot.slotId + '-' + toSha.slice(0, 8);
+      const commentIdentity = {
+        repository: f.input.repoSlug, prNumber, headSha: toSha,
+        runId: delta.run.id, slotId: slot.slotId, invocationId,
+      };
+      const sourceBody = formatPackGptSourceCommentEnvelope(commentIdentity, 'NO_FINDINGS');
+      return {
+        slotId: slot.slotId, ordinal: slot.ordinal, lifecycle: 'terminal' as const,
+        invocationId, attemptOrdinal: 1, terminalClass: 'complete_clean',
+        payload: { verdict: 'clean', findingCount: 0, findings: [] },
+        terminalResult: {
+          schema: 'turn-result/v1', state: 'ok', scope: 'none', send_count: 1,
+          cause: 'github_source_comment_credentialed', invocation_id: invocationId,
+          source_comment_authority: 'credentialed_github',
+          source_comment_receipt: {
+            ...commentIdentity, commentId: 28350000 + slot.ordinal,
+            commentUrl: `https://github.com/${f.input.repoSlug}/pull/${prNumber}#issuecomment-${28350000 + slot.ordinal}`,
+            actorLogin: 'chetwerikoff', createdAt: '2026-10-14T01:00:00Z',
+            updatedAt: '2026-10-14T01:00:00Z',
+            bodySha256: createHash('sha256').update(sourceBody).digest('hex'),
+          },
+        },
+      };
+    });
+    updatePackReviewRun(delta.run.id, {
+      reviewRound: { ...plannedRound, settledSourceCount: sourceSlots.length, sourceSlots },
+    }, f.options);
+    setPackReviewRunTerminal(delta.run.id, 'up_to_date', {
+      reviewVerdict: 'clean', findingCount: 0, findings: [],
+      journalOutcome: {
+        state: 'persisted', recordedAtUtc: new Date().toISOString(),
+        reason: 'ordinary-delta-source-census', idempotencyKey: 'verdict:' + delta.run.id + ':' + toSha,
+        attempts: 1,
+      },
+      deliveryOutcomes: {
+        githubComment: {
+          state: 'succeeded', recordedAtUtc: new Date().toISOString(),
+          reason: 'comment_posted', idempotencyKey: 'github-comment:' + delta.run.id,
+        },
+      },
+    }, f.options);
+    const reloaded = getPackReviewRun(delta.run.id, f.options)!;
+    expect(reloaded.finalCapDelta).toEqual(deltaIdentity);
+    expect(reloaded.reviewVerdict).toBe('clean');
+    expect(reloaded.reviewRound?.sourceSlots.map((slot) => slot.terminalClass))
+      .toEqual(sourceSlots.map(() => 'complete_clean'));
+    expect(reloaded.automaticBudgetDisposition).toBe('non_consuming_explicit');
+    expect(readPackReviewAuthority(prNumber, f.options)?.cycle?.consumedRoundOrdinals).toEqual([1, 2]);
+    return reloaded;
   }
 
   it.each(['scoped reconcile', 'PR-led start', 'unauthorized', 'wrong-head', 'wrong-diff',
