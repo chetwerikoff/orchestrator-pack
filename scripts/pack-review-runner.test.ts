@@ -4064,6 +4064,31 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       sourceRepoRoot: graph.checkout,
       settledSourceCount,
     });
+    // The real Git C topology is the test subject, not incomplete delivery of
+    // the earlier H1 GPT terminal. Its source-census journal and ordinary
+    // COMMENT/failure-status writes were completed before H2 was constructed.
+    updatePackReviewRun(f.run.id, {
+      boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(revisedBody),
+      journalOutcome: {
+        state: 'persisted', recordedAtUtc: '2026-10-08T20:46:00Z',
+        reason: 'original-c-rebase-terminal',
+        idempotencyKey: 'verdict:' + f.run.id + ':' + graph.h1,
+        attempts: 1,
+      },
+      deliveryOutcomes: {
+        githubComment: {
+          state: 'succeeded', recordedAtUtc: '2026-10-08T20:46:00Z',
+          reason: 'h1-comment-published',
+          idempotencyKey: 'github-comment:' + f.run.id + ':' + graph.h1,
+        },
+        requiredStatus: {
+          state: 'succeeded', recordedAtUtc: '2026-10-08T20:46:00Z',
+          reason: 'h1-blocker-status-published',
+          idempotencyKey: 'required-status:orchestrator-pack/pack-review:' + graph.h1,
+        },
+      },
+    }, f.options);
+    expect(getPackReviewRun(f.run.id, f.options)?.journalOutcome?.state).toBe('persisted');
     const input: Parameters<typeof reconcileStalePackReviewRuns>[0] & { fixtureCurrentPrHeadSha: string } = {
       ...f.input, fixtureCurrentPrHeadSha: graph.h2,
       fixtureIssueBody: revisedBody, fixtureReviewCompareStatus: 'diverged',
