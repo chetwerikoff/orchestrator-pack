@@ -141,10 +141,11 @@ your own producer" correction to the verified parking manager only), or
 - **Named merge.** `merge-N`, `PR #N merged` and `#N merged` complete only for
   an own PR (same closer rule). Waiting for another Issue's merge uses a typed
   external dependency or the coordinator, not a guessed Wake.
-- **Native or merge-agent terminal exit.** An exited terminal has no retained
-  producer Task or delegation origin, so every bare terminal-exit park is
-  **unverified**, including apparently foreign or orphan exits: neither a
-  completion Wake nor a direct foreign correction. The coordinator gets the
+- **Native or merge-agent terminal.** A bare terminal has no retained
+  producer Task or delegation origin, so every bare terminal park, **live or
+  exited**, is **unverified**, including apparently foreign or orphan
+  terminals: neither a completion Wake, a direct Reminder nor a direct foreign
+  correction, and never a silent pending. The coordinator gets the
   supported next steps: the own GPT terminal envelope, an own PR merge or a
   typed external dependency.
 - **Exceptions.** Strict UTC time, `orchestrator answer` and the named
@@ -157,8 +158,9 @@ containing byte-exact `observed_invocation_id`, the indexed run/attempt identity
 and the present, equal indexed handoff receipt path, a recorded `cwd` equal to
 the indexed `child_cwd` and a `terminal_handle` equal to the verified launching
 manager terminal, and a coherent ended result
-(a `success` lifecycle without a recorded turn-result state is uncertain, never
-an inferred `ok`) (`ok`, `not-sent`,
+(an explicit `lifecycle_outcome` of `success` or `incident` is required; a
+missing lifecycle, or `success` without a recorded turn-result state, is
+uncertain, never an inferred `ok`) (`ok`, `not-sent`,
 `driver_error:<cause>` or another positively terminal non-contradictory
 outcome). An unmarked terminal **already present
 before the first own PARKED** triggers an outcome-naming advisory on the next

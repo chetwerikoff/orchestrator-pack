@@ -1692,8 +1692,11 @@ function decideNamedPark(
     case 'terminal': {
       const exited = terminals.some((term) => term.handle === producer.handle
         && term.incarnationId === producer.incarnation && term.status?.toLowerCase() === 'exited');
-      return exited ? { kind: 'unverified', reason: 'bare terminal exit is not producer Task evidence'
-        + ' - use the own GPT terminal envelope, an own PR merge or a typed external dependency' } : PENDING;
+      // A bare terminal, live or exited, has no Task-bound producer origin:
+      // coordinator-only reconcile, never a silent pending or a direct send.
+      return { kind: 'unverified', reason: (exited ? 'bare terminal exit is not producer Task evidence'
+        : 'bare live terminal park has no Task-bound producer origin')
+        + ' - use the own GPT terminal envelope, an own PR merge or a typed external dependency' };
     }
     case 'gpt':
     case 'gpt-multi': {
@@ -2014,9 +2017,9 @@ function gptTerminalResolution(
     if (associated.length === 0) continue; // Indexed own turn with no envelope yet is ordinary pending.
     if (associated.length !== 1) { deficient = true; continue; }
     const event = associated[0]!;
-    const settledOutcome = event.lifecycleOutcome === 'success' || event.lifecycleOutcome === 'incident'
-      || (typeof event.turnResultState === 'string' && event.turnResultState.length > 0
-        && !/^(?:pending|running|in_progress|unknown|unverified)$/iu.test(event.turnResultState));
+    // The producer's mandatory lifecycle field is required; a result state
+    // alone (partial or competing artifact) never grants completion.
+    const settledOutcome = event.lifecycleOutcome === 'success' || event.lifecycleOutcome === 'incident';
     const contradicts = (event.lifecycleOutcome === 'success' && failureTerminalEnvelope(event))
       || (event.lifecycleOutcome === 'incident' && event.turnResultState === 'ok')
       || (typeof event.turnResultState === 'string'

@@ -394,7 +394,7 @@ describe('fleet alarm', () => {
       Object.assign(store, { clearPaneWait: clear });
       const input = { store, screens, terminals: rows, executor, now: () => 0,
         config: config({ selectedRepository: 'test/project' }), extra: owned.options,
-        listTerminalEnvelopes: () => [owned.envelope('receipt-test', { lifecycleOutcome: undefined })],
+        listTerminalEnvelopes: () => [owned.envelope('receipt-test')],
       };
       const first = await tick(input);
       expect(sendsTo(first.calls, 'one')).toHaveLength(1);
@@ -6321,7 +6321,7 @@ describe('Issue #2840 named park producer ownership', () => {
     expect(sendsTo(first.calls, 'one')).toHaveLength(0);
   });
 
-  it('(ii) a live non-primary terminal park without an assignment never gets a direct 30-minute reminder', async () => {
+  it('(ii) a live non-primary terminal park without an assignment is coordinator-only unverified, never a direct reminder (#2840 review 3)', async () => {
     const fixture = setup();
     const producer: FleetTerminal = { handle: 'producer', title: 'OpenCode producer',
       worktreePath: workerBase + '/producer', incarnationId: 'inc-prod', status: 'running', agentIdentity: 'opencode' };
@@ -6330,10 +6330,24 @@ describe('Issue #2840 named park producer ownership', () => {
     const overrides = { terminals: rows, extra: { ...fixture.options, readCurrentAssignments: () => [] },
       executor: fixture.executor(fakeOrca({ coord: 'idle', ...screens }, [], rows)) };
     const store = new MemoryWakeStore();
-    await run(fixture, screens, { ...overrides, now: () => 0 }, store);
+    const first = await run(fixture, screens, { ...overrides, now: () => 0 }, store);
+    expect(sendsTo(first.calls, 'one')).toHaveLength(0);
+    expect(texts(first.calls, 'coord')).toEqual([expect.stringContaining('bare live terminal park has no Task-bound producer origin')]);
     for (const now of [1_800_000, 3_600_000]) {
-      expect(sendsTo((await run(fixture, screens, { ...overrides, now: () => now }, store)).calls, 'one')).toHaveLength(0);
+      const later = await run(fixture, screens, { ...overrides, now: () => now }, store);
+      expect(sendsTo(later.calls, 'one')).toHaveLength(0);
     }
+  });
+
+  it('(v) an indexed envelope with every exact binding but no lifecycle_outcome never wakes (#2840 review 3)', async () => {
+    const fixture = setup();
+    fixture.own('inv-no-lifecycle');
+    const screens = { one: 'PARKED on GPT turn inv-no-lifecycle' };
+    const missing = await run(fixture, screens, { listTerminalEnvelopes: () => [
+      fixture.envelope('inv-no-lifecycle', { lifecycleOutcome: undefined, turnResultState: 'ok' })] });
+    expect(sendsTo(missing.calls, 'one')).toHaveLength(0);
+    const control = await run(fixture, screens, { listTerminalEnvelopes: () => [fixture.envelope('inv-no-lifecycle')] });
+    expect(texts(control.calls, 'one')).toEqual([expect.stringContaining('ended state ok')]);
   });
 
   it('(iii) an unreadable review-run store gets a coordinator alarm only, never a pane reminder', async () => {
