@@ -4157,10 +4157,16 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
           const f = eligibleRebaseCase({ ...g, h2 });
           f.input.fixtureReviewCompareStatus = undefined;
           const result = await enterRebase(f, entry);
+          expectRebaseRefusal(f, result);
           if (changed) {
-            expect(result.reason, JSON.stringify(result)).toBe('final_cap_descendant_settled');
-            expect('settled' in result ? result.settled : result.ok).toBe(true);
-          } else expectRebaseRefusal(f, result);
+            // An actual changed-tree strict descendant needs the ordinary
+            // reviewer; tree difference by itself cannot settle H1 findings.
+            expect(result.reason, JSON.stringify(result)).not.toBe('final_cap_descendant_settled');
+            expect(result.reason).not.toBe('final_cap_strict_descendant_required');
+          } else {
+            // Even an ancestor-only no-op is not the clean merge-tree exception.
+            expect(result.reason).toBe('final_cap_strict_descendant_required');
+          }
         }
       } finally { vi.mocked(runProcess).mockImplementation(actual.runProcess); }
     },
@@ -4177,9 +4183,13 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
         '-p', g.b2, '-m', 'later unequal-tree rewritten head');
       f.input.fixtureCurrentPrHeadSha = h3;
       const result = await enterRebase(f, entry);
-      expect('settled' in result ? result.settled : result.ok).toBe(true);
-      if (entry === 'start') expect(result.reason).toBe('review_stage_complete');
+      expect('settled' in result ? result.settled : result.ok).toBe(false);
+      expect(result.reason).not.toBe('final_cap_descendant_settled');
+      expect(result.nextAction).toBeTruthy();
       expect(readPackReviewAuthority(prNumber, f.options)?.terminal).toEqual(f.authority.terminal);
+      // Original C settlement is retained for H2 only, never projected onto
+      // unrelated new H3 code without an H2..H3 ordinary review.
+      expect(f.statuses.filter((row) => row.state === 'success')).toHaveLength(1);
     },
   );
 
