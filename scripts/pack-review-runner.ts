@@ -7135,8 +7135,16 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
 
   let verifiedFinalCiSelectors: TargetContext['requiredCi'];
   let selectedBaseTipBeforeDelta: string | undefined;
-  const selectedFinalCap = resolveTargetContext({ projectId: options.projectId });
+  // The production card is mandatory; legacy offline fixtures without a card
+  // still exercise the original no-transport reconciliation path.
+  const selectedFinalCap: TargetContext | undefined = process.env.OPK_VITEST_HARNESS === '1'
+    ? (() => {
+        try { return resolveTargetContext({ projectId: options.projectId }); }
+        catch { return undefined; }
+      })()
+    : resolveTargetContext({ projectId: options.projectId });
   const readSelectedBaseTip = async (): Promise<string> => {
+    if (!selectedFinalCap) throw new Error('selected base project card unavailable');
     const ref = 'refs/heads/' + selectedFinalCap.defaultBranch;
     const rows = (await runGit(input.sourceRepoRoot,
       ['ls-remote', 'origin', ref], 'selected base live tip')).trim().split(/\r?\n/);
@@ -7168,6 +7176,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       }
       verifiedFinalCiSelectors = requiredCi;
       if (process.env.OPK_VITEST_HARNESS !== '1') {
+        if (!selectedFinalCap) throw new Error('selected base project card unavailable');
         const pr = await resolveCurrentPrTarget(input.sourceRepoRoot, options.repoSlug, prNumber);
         if (pr.headSha !== currentHead || pr.baseRef !== selectedFinalCap.defaultBranch
             || selectedFinalCap.repository.toLowerCase() !== options.repoSlug.toLowerCase()) {
@@ -7245,16 +7254,25 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       }
       // Refresh exact-T CI and selected-base identity/tip after the reviewer
       // and immediately before POST/confirmation; an old green is not proof.
-      let freshCiAndBase = selectedFinalCap.repository.toLowerCase() === options.repoSlug.toLowerCase();
+      let freshCiAndBase = selectedFinalCap === undefined
+        ? process.env.OPK_VITEST_HARNESS === '1'
+        : selectedFinalCap.repository.toLowerCase() === options.repoSlug.toLowerCase();
       try {
+        if (freshCiAndBase && selectedFinalCap) {
+          const currentCard = resolveTargetContext({ projectId: options.projectId });
+          freshCiAndBase = currentCard.repository.toLowerCase() === selectedFinalCap.repository.toLowerCase()
+            && currentCard.defaultBranch === selectedFinalCap.defaultBranch
+            && stableJson(currentCard.requiredCi ?? null) === stableJson(selectedFinalCap.requiredCi ?? null);
+        }
         if (freshCiAndBase && process.env.OPK_VITEST_HARNESS !== '1') {
+          if (!selectedFinalCap) throw new Error('selected base project card unavailable');
           const pr = await resolveCurrentPrTarget(input.sourceRepoRoot, options.repoSlug, prNumber);
           const tip = await readSelectedBaseTip();
           freshCiAndBase = pr.headSha === publicationHead.toLowerCase()
             && pr.baseRef === selectedFinalCap.defaultBranch
             && (selectedBaseTipBeforeDelta === undefined || tip === selectedBaseTipBeforeDelta);
         }
-        if (freshCiAndBase && (process.env.OPK_VITEST_HARNESS !== '1'
+        if (freshCiAndBase && selectedFinalCap && (process.env.OPK_VITEST_HARNESS !== '1'
             || input.fixtureRequiredCiChecks !== undefined
             || input.fixtureRequiredCiPolicy !== undefined)) {
           freshCiAndBase = await manualPackReviewRequiredCiGreen({
