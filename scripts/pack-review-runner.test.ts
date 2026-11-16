@@ -1711,7 +1711,7 @@ describe('Issue #2719 primary start result with secondary claim release', () => 
 });
 
 describe('Issue #1887 immediate final-cap descendant reconciliation', () => {
-  it('observes a live strict descendant and settles without prior smoke or review-start observation', async () => {
+  it('observes a strict descendant but refuses unreviewed H1..H2 without smoke or start observation', async () => {
     const parent = mkdtempSync(join(tmpdir(), 'pack-review-1887-immediate-settlement-'));
     roots.push(parent);
     const storeRoot = join(parent, 'store');
@@ -1797,20 +1797,24 @@ describe('Issue #1887 immediate final-cap descendant reconciliation', () => {
       fixtureRequiredStatusWriter: async (request) => { publishedStatus = request.state; },
     });
 
+    // An observed strict descendant without an authenticated F..T ordinary
+    // reviewer result must not close the original capped FINDINGS stage.
     expect(reconciled.results).toContainEqual(expect.objectContaining({
       prNumber,
       headSha: current,
       finalCapSettlement: true,
-      settled: true,
-      reason: 'final_cap_descendant_settled',
+      settled: false,
+      reason: 'final_cap_original_reviewer_unverified',
+      nextAction: expect.stringContaining('delta run/source census'),
     }));
-    const settled = readPackReviewAuthority(prNumber, authorityOptions);
-    expect(settled?.currentHeadSha).toBe(current);
-    expect(settled?.cycle).toMatchObject({
-      state: 'closed',
+    const unsettled = readPackReviewAuthority(prNumber, authorityOptions);
+    expect(unsettled?.terminal?.runId).toBe(run.id);
+    expect(unsettled?.cycle).toMatchObject({
+      state: 'at_cap_open_findings',
       consumedRoundOrdinals: [1],
-      reviewStageComplete: true,
     });
+    expect(unsettled?.cycle?.reviewStageComplete).not.toBe(true);
+    expect(publishedStatus).not.toBe('success');
   });
 });
 
@@ -1945,12 +1949,18 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     'final-cap unchanged Issue strict descendant, exact preflight %s snapshot', async (reviewer) => {
       const f = fixture(reviewer);
       const settled = await reconcileStalePackReviewRuns(f.request(originalBody));
+      // Snapshot equivalence alone does not supply an H1..T ordinary reviewer
+      // result or resolve the original blocking findings.
       expect(settled.results).toContainEqual(expect.objectContaining({
-        prNumber: f.prNumber, settled: true, reason: 'final_cap_descendant_settled',
+        prNumber: f.prNumber, settled: false,
+        reason: 'final_cap_original_reviewer_unverified',
+        nextAction: expect.stringContaining('delta run/source census'),
       }));
       expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle)
-        .toMatchObject({ state: 'closed', reviewStageComplete: true, consumedRoundOrdinals: [1] });
-      expect(f.getStatus()).toBe('success');
+        .toMatchObject({ state: 'at_cap_open_findings', consumedRoundOrdinals: [1] });
+      expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle?.reviewStageComplete)
+        .not.toBe(true);
+      expect(f.statusWrites).not.toContain('success');
     },
   );
 
@@ -1991,10 +2001,16 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
             : await startPackReview({ ...input, headSha: f.current, claimMode: 'preacquired',
               fixturePostReviewHeadSha: f.current, fixturePostReviewPrBody: input.fixturePrBody });
           const ok = 'settled' in outcome ? outcome.settled : outcome.ok;
-          expect(ok, mode + ':' + JSON.stringify(outcome)).toBe(mode === 'valid');
+          expect(ok, mode + ':' + JSON.stringify(outcome)).toBe(false);
+          // Even fully credentialed old native H1 evidence cannot substitute
+          // for a completed ordinary delta. Each negative source/CI/Issue
+          // mode remains a non-success, independent of GPT source slots.
+          if (mode === 'valid') {
+            expect(outcome.reason).toBe('final_cap_delta_project_issue_base_unverified');
+          }
           expect(getPackReviewRun(f.run.id, f)?.reviewRound).toBeUndefined();
-          if (mode === 'valid') expect(f.getStatus()).toBe('success');
-          else expect(f.statusWrites).not.toContain('success');
+          expect(f.statusWrites).not.toContain('success');
+          expect(readPackReviewAuthority(f.prNumber, f)?.cycle?.reviewStageComplete).not.toBe(true);
         }
       }
     },
@@ -2107,11 +2123,14 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     expect(ambiguous.statusWrites).not.toContain('success');
   });
 
-  it('final-cap completed diverged-head start refuses amended body instead of publishing success', async () => {
+  it('final-cap diverged-head start refuses amended body without treating unreviewed H2 as complete', async () => {
     const f = fixture('codex');
-    const completed = await reconcileStalePackReviewRuns(f.request(originalBody));
-    expect(completed.results).toContainEqual(expect.objectContaining({ settled: true }));
+    const unreviewed = await reconcileStalePackReviewRuns(f.request(originalBody));
+    expect(unreviewed.results).toContainEqual(expect.objectContaining({
+      settled: false, reason: 'final_cap_original_reviewer_unverified',
+    }));
     const priorSuccessCount = f.statusWrites.filter((s) => s === 'success').length;
+    expect(priorSuccessCount).toBe(0);
     const diverged = '6'.repeat(40);
     const refused = await startPackReview({
       ...f.request(originalBody + 'Changed binding at unchanged r01\n'),
@@ -2125,7 +2144,9 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     });
     expect(f.statusWrites.filter((s) => s === 'success')).toHaveLength(priorSuccessCount);
     expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle)
-      .toMatchObject({ state: 'closed', reviewStageComplete: true, consumedRoundOrdinals: [1] });
+      .toMatchObject({ state: 'at_cap_open_findings', consumedRoundOrdinals: [1] });
+    expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle?.reviewStageComplete)
+      .not.toBe(true);
   });
 
   it.each(['codex', 'gpt'] as const)(
@@ -2344,8 +2365,10 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     // Comment text never enters computeBoundIssueSnapshotHash; only a folded body would differ.
     const result = await reconcileStalePackReviewRuns(f.request(originalBody));
     expect(result.results).toContainEqual(expect.objectContaining({
-      settled: true, reason: 'final_cap_descendant_settled',
+      settled: false, reason: 'final_cap_original_reviewer_unverified',
     }));
+    expect(f.statusWrites).not.toContain('success');
+    expect(readPackReviewAuthority(f.prNumber, f)?.cycle?.reviewStageComplete).not.toBe(true);
   });
 
   it.each(['codex', 'gpt'] as const)(
@@ -2371,11 +2394,15 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
         prHeadSha: f.reviewed, issueNumber: f.issueNumber,
       }).status).toBe('corrupted'); // Intentionally ambiguous without a digest.
       const settled = await reconcileStalePackReviewRuns(f.request(B1));
+      // Correct B1 digest resolution is necessary but still not an F..H2
+      // review; neither the historical B0 nor B1 grants descendant success.
       expect(settled.results).toContainEqual(expect.objectContaining({
-        reason: 'final_cap_descendant_settled', settled: true,
+        reason: 'final_cap_original_reviewer_unverified', settled: false,
       }));
-      expect(f.getStatus()).toBe('success');
+      expect(f.statusWrites).not.toContain('success');
       expect(readFileSync(original.snapshotPath!, 'utf8')).toBe(B0);
+      expect(readFileSync(amended.snapshotPath!, 'utf8')).toBe(B1);
+      expect(readPackReviewAuthority(f.prNumber, f)?.cycle?.reviewStageComplete).not.toBe(true);
     },
   );
 
@@ -2391,9 +2418,15 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     });
     const settled = await reconcileStalePackReviewRuns(f.request(B0));
     expect(settled.results).toContainEqual(expect.objectContaining({
-      reason: 'final_cap_descendant_settled', settled: true,
+      reason: 'final_cap_original_reviewer_unverified', settled: false,
     }));
-    expect(f.getStatus()).toBe('success');
+    expect(f.statusWrites).not.toContain('success');
+    expect(readPackReviewAuthority(f.prNumber, f)?.cycle?.reviewStageComplete).not.toBe(true);
+    expect(resolveBoundIssueSnapshot({
+      projectId: f.projectId, prNumber: f.prNumber,
+      prHeadSha: f.reviewed, issueNumber: f.issueNumber,
+      snapshotDigest: computeBoundIssueSnapshotHash(B0),
+    }).status).toBe('found');
   });
 
   it('Issue #2659: changed Binding with identical criteria deasserts the old clean green without minting review', async () => {
