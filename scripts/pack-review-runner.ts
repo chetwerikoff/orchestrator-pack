@@ -1,6 +1,7 @@
 import './toolchain/native-entrypoint-preflight.ts';
 import { resolvePrScopeGuardApplicability } from './pr-scope-declaration.ts';
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import {
   appendFileSync,
   existsSync,
@@ -6228,20 +6229,20 @@ async function finalCapPureSelectedBaseMerge(
     if (!await rebaseAncestor(root, fromSha, toSha)) return false;
     const firstParent = (await runGit(root,
       ['rev-list', '--first-parent', '--reverse', fromSha + '..' + toSha],
-      'reviewed merge chain')).trim().split(/\\r?\\n/).filter(Boolean);
+      'reviewed merge chain')).trim().split(/\r?\n/).filter(Boolean);
     if (firstParent.length === 0) return false;
     let cursor = fromSha;
     for (const mergeSha of firstParent) {
       if (!rebaseSha1.test(mergeSha)) return false;
       const parents = (await runGit(root, ['rev-list', '--parents', '-n', '1', mergeSha],
-        'merge parents')).trim().split(/\\s+/);
+        'merge parents')).trim().split(/\s+/);
       if (parents.length !== 3 || parents[0] !== mergeSha
           || parents[1] !== cursor || parents[2] !== baseTip) return false;
       const mergeTree = await runProcess({
         command: 'git', args: ['merge-tree', '--write-tree', cursor, baseTip],
         cwd: root, inheritParentEnv: true, allowEmptyStdout: false, timeoutMs: 30000,
       });
-      if (!mergeTree.ok || !/^[0-9a-f]{40}\\s*$/.test(mergeTree.stdout)) return false;
+      if (!mergeTree.ok || !/^[0-9a-f]{40}\s*$/.test(mergeTree.stdout)) return false;
       const realTree = await rebaseGitSha1(root,
         ['rev-parse', mergeSha + '^{tree}'], 'merge commit tree');
       if (mergeTree.stdout.trim() !== realTree) return false;
@@ -6648,16 +6649,6 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       settled: false,
       reason: 'final_cap_settlement_prior_findings_missing',
       nextAction: 'rerun or reconcile the final capped review before settling the fix head',
-    };
-  }
-
-  // A completed stage at H2 is not a review of new H3 commits. Old green
-  // may not be projected onto a head newer than the settled authority head.
-  if (completedFinalFindings && currentHead !== authority.currentHeadSha.toLowerCase()) {
-    return {
-      prNumber, headSha: currentHead, finalCapSettlement: true, settled: false,
-      reason: 'final_cap_delta_review_required',
-      nextAction: 'obtain the frozen ordinary F..T delta review before current-head status settlement',
     };
   }
 
@@ -7149,6 +7140,70 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
           nextAction: 'verify the original exact-run sources, canonical terminal REVIEW ID/timestamp, frozen Issue digest, corrected REST Issue scope, and one authorized post-terminal disposition COMMENT; recheck current-head CI and rerun scoped exact-head reconcile. Only a real code fix belongs on a strict descendant' };
       }
     }
+    // Rechecked original Issue, source/REVIEW and current-head CI above.
+    // At this point the original H1 final-cap terminal is immutable and T
+    // has been observed. A clean F..T review is still mandatory for code
+    // introduced on a strict descendant; earlier H2 success does not cover H3.
+    let deltaOutcome: FinalCapDeltaOutcome | undefined;
+    if (!rebasedC && authority.currentHeadSha !== reviewedHeadSha) {
+      if (!verifiedFinalIssue) {
+        return { prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
+          settled: false, reason: 'final_cap_delta_issue_binding_missing',
+          nextAction: 'restore exact original H1 Issue and source binding before running F..T' };
+      }
+      deltaOutcome = await runFinalCapOrdinaryDelta(input, {
+        projectId: options.projectId, storeRoot: options.storeRoot,
+        repoSlug: options.repoSlug, prNumber,
+        original: priorRun, originalCycleId: authority.cycle!.cycleId,
+        issueNumber: verifiedFinalIssue.issueNumber, issueDigest: verifiedFinalIssue.digest,
+        targetSha: authority.currentHeadSha,
+      });
+      if (deltaOutcome.state !== 'clean') {
+        // A durable FINDINGS result moves only F and is handed to the
+        // existing fixer. A missing/uncertain invocation never grants green.
+        const currentTarget = authority.currentHeadSha;
+        try {
+          if (await readCheckedReviewPrHead(input, options.repoSlug, prNumber, currentTarget)
+              === currentTarget) {
+            await (input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
+              repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
+              headSha: currentTarget, request,
+            })))({
+              state: deltaOutcome.state === 'findings' ? 'failure' : 'pending',
+              context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+              description: deltaOutcome.state === 'findings'
+                ? 'Final-cap ordinary delta has unresolved review findings.'
+                : 'Final-cap F..T ordinary review unresolved; no ancestry shortcut.',
+              idempotencyKey: 'final-cap-delta:' + priorRun.id + ':' + currentTarget
+                + ':' + (deltaOutcome.runId ?? 'unverified'),
+            });
+          }
+        } catch { /* a status write is not proof of disposition */ }
+        return {
+          prNumber, headSha: currentTarget, finalCapSettlement: true, settled: false,
+          reason: deltaOutcome.reason,
+          ...(deltaOutcome.runId ? { deltaRunId: deltaOutcome.runId } : {}),
+          nextAction: deltaOutcome.state === 'findings'
+            ? 'send the persisted ordinary delta findings to the existing fixer, then review only the next F..T'
+            : 'reconcile the existing exact-head delta run/source census or use the PR-led claimed runner; never resend uncertain output',
+        };
+      }
+      if (!deltaOutcome.zeroCall) {
+        const deltaRun = deltaOutcome.runId
+          ? getPackReviewRun(deltaOutcome.runId, { projectId: options.projectId, storeRoot: options.storeRoot })
+          : null;
+        if (!deltaRun || deltaRun.reviewVerdict !== 'clean'
+            || !hasPersistedPackReviewVerdict(deltaRun)
+            || deltaRun.targetSha !== authority.currentHeadSha
+            || deltaRun.finalCapDelta?.originalRunId !== priorRun.id
+            || deltaRun.finalCapDelta.fromSha !== deltaOutcome.fromSha
+            || deltaRun.finalCapDelta.originalCycleId !== authority.cycle?.cycleId) {
+          return { prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
+            settled: false, reason: 'final_cap_delta_clean_run_unverified',
+            nextAction: 'restore and reread the exact current-head ordinary clean delta run' };
+        }
+      }
+    }
     if (!completedFinalFindings) {
       const strictDescendant = await resolvePackReviewStrictDescendant({
         repoRoot: input.sourceRepoRoot,
@@ -7172,6 +7227,8 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
           prNumber, expectedTransitionSeq: authority.transitionSeq,
           reviewedHeadSha, currentHeadSha: authority.currentHeadSha,
           ...(rebasedC ? { ancestryAnchorSha: rebasedC.anchorSha } : {}),
+          ...(!rebasedC && deltaOutcome?.runId ? { verifiedDeltaRunId: deltaOutcome.runId } : {}),
+          ...(!rebasedC && deltaOutcome?.zeroCall ? { verifiedPureBaseMerge: true } : {}),
           reviewedHeadIsAncestor: true, options: { storeRoot: options.storeRoot },
         });
       } catch (error) {
@@ -7195,7 +7252,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
           + '; rebased descendant H2 ' + authority.currentHeadSha.slice(0, 8) + '.'
         : completedFinalFindings
           ? 'Required pack-review stage already completed; current-head status revalidated.'
-          : 'Required pack-review stage completed; strict descendant of reviewed findings.',
+          : 'Required pack-review stage completed; clean ordinary F..T delta review.',
       sameHeadPublicationDigest ?? sha256Bytes(stableJson({
         runId: priorRun.id, reviewedHeadSha, publicationHead: authority.currentHeadSha,
         settlementKind: 'strict_descendant',
@@ -9720,6 +9777,13 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         baseRef: target.prBaseRef,
         fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
         fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
+        deltaClaimOwned: ownsStartClaim,
+        deltaBindClaimRun: (runId: string) => claimLease?.bindRunId(runId),
+        fixtureReviewStdout: input.fixtureReviewStdout,
+        fixtureReviewExitCode: input.fixtureReviewExitCode,
+        fixtureReviewTimedOut: input.fixtureReviewTimedOut,
+        fixtureReviewBySourceSlot: input.fixtureReviewBySourceSlot,
+        fixtureUseRealReviewWorktree: input.fixtureUseRealReviewWorktree,
       }, { projectId, storeRoot, repoSlug: target.repoSlug });
       await releaseEarlyClaim(result?.settled === true ? 'final_cap_descendant_settled' : 'final_cap_settlement_refused');
       // reconcileFinalCapSettlement settles only after current-head required
