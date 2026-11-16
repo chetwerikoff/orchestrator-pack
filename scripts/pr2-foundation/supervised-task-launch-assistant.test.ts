@@ -7452,6 +7452,79 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
       expect(starts).toBe(0);
     });
 
+    it.each([
+      ['find', 1, 60_000], ['find', 2, 60_001], ['find', 3, 60_000],
+      ['show', 1, 60_001], ['show', 2, 60_000],
+      ['show', 3, 60_001], ['show', 4, 60_000],
+      ['liveness', 1, 60_000], ['screen', 1, 60_001],
+    ] as const)('refuses slow existing-native %s call #%i after %i ms without downstream start',
+      async (kind, ordinal, late) => {
+        let ticks = 0, starts = 0, spawns = 0, liveness = 0;
+        const counts: Record<string, number> = {};
+        const native = observedClaudeAdapter(command, 'Sonnet', 'high', { commandObserved: true });
+        const slow = (operation: string) => {
+          counts[operation] = (counts[operation] ?? 0) + 1;
+          if (operation === kind && counts[operation] === ordinal) ticks = late;
+        };
+        const adapter: RuntimeAdapter = {
+          ...native,
+          findWorkerById: (id, options) => {
+            const returned = native.findWorkerById(id, options);
+            slow('find'); return returned;
+          },
+          observeComposerFamily: (id, options) => {
+            const returned = native.observeComposerFamily!(id, options);
+            slow('show'); return returned;
+          },
+          liveness: (input, options) => {
+            liveness += 1;
+            const returned = native.liveness(input, options);
+            slow('liveness'); return returned;
+          },
+          readBoundedOutputAsync: async (input, options) => {
+            const returned = await native.readBoundedOutputAsync!(input, options);
+            slow('screen'); return returned;
+          },
+          spawnWorker: (input, options) => { spawns += 1; return native.spawnWorker(input, options); },
+        };
+        const result = await runSupervisedTaskLaunchAssistant({
+          ...launchInput('manager'), env, issueNumber: 2842, existingTerminal: worker.identity.id,
+        }, { ...deps({ adapter, onSupervised: () => { starts += 1; } }),
+          now: () => 0, monotonicNow: () => ticks,
+        });
+        expect(counts[kind]).toBe(ordinal);
+        expect(result).toMatchObject({
+          outcome: 'continue', observedCause: 'terminal_observation_deadline',
+          nextAction: { kind: 'remediate_terminal' },
+        });
+        expect(spawns).toBe(0);
+        expect(starts).toBe(0);
+        if (kind === 'find' && ordinal < 2 || kind === 'show' && ordinal < 3) {
+          expect(liveness).toBe(0);
+        }
+      });
+
+    it.each(['failed', 'unsupported'] as const)(
+      'refuses fresh outer spawn %s result without a second spawn or liveness', async (status) => {
+        let spawns = 0, starts = 0, liveness = 0;
+        const native = observedClaudeAdapter(command, 'Sonnet', 'high', { commandObserved: true });
+        const adapter: RuntimeAdapter = {
+          ...native,
+          spawnWorker: () => {
+            spawns += 1;
+            return { status, operation: 'spawn_worker', reason: 'synthetic-no-native-identity' };
+          },
+          liveness: (input, options) => { liveness += 1; return native.liveness(input, options); },
+        };
+        const result = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), env, issueNumber: 2842 },
+          deps({ adapter, onSupervised: () => { starts += 1; } }));
+        expect(result).toMatchObject({ outcome: 'continue', stage: 'terminal_prepare',
+          observedCause: `terminal_spawn_${status}`, nextAction: { kind: 'remediate_terminal' } });
+        expect(spawns).toBe(1);
+        expect(liveness).toBe(0);
+        expect(starts).toBe(0);
+      });
+
     it('limits frozen-clock read attempts to 121 and yields at least 500ms between failed reads', async () => {
       let reads = 0, gaps = 0;
       const native = observedClaudeAdapter(command, 'Sonnet', 'high', {
