@@ -7372,11 +7372,16 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
       const profile = resolveExecutorProfile('manager', env, 'exact_terminal_worktree');
       if (profile.status !== 'ok') throw Error('selected Claude profile missing');
       const native = observedClaudeAdapter(sonnet, 'Sonnet', 'high', { commandObserved: true });
-      const contradictory = ['Claude Code', 'Sonnet 5.5', 'effort: medium', 'effort: high'];
+      const contradictory = ['Claude Code', 'effort: medium', 'Sonnet 5.5', 'effort: high'];
       for (const [lines, accepted] of [
         [contradictory, false],
+        [['Claude Code', 'Sonnet 5.5', 'effort: medium', 'effort: high'], false],
+        [['Claude Code', 'effort: high', 'Sonnet 5.5'], true],
         [['Claude Code', 'Sonnet 5.5', 'effort: high'], true],
+        [['Claude Code', 'effort: high', 'Sonnet 5.5', 'effort: high'], false],
         [['Claude Code', 'Sonnet 5.5', 'effort: high', 'effort: high'], false],
+        [['Claude Code', 'effort: medium', 'Sonnet 5.5 · effort: high'], false],
+        [['Claude Code', 'Sonnet 5.5 · effort: high'], true],
         [['Claude Code', 'Sonnet 5.5 · effort: high', 'effort: medium'], false],
       ] as const) {
         const adapter: RuntimeAdapter = { ...native, readBoundedOutputAsync: async (input, options) => {

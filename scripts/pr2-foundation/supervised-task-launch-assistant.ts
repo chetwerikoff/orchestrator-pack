@@ -896,10 +896,10 @@ export async function claudePaneProfileObserved(
   if (!modelLine.test(row)) return false;
   const effortLine = new RegExp(`^\\s*(?:effort\\s*[:=]\\s*${profile.effort}|${profile.effort}\\s+effort)\\s*$`, 'iu');
   const suffix = row.replace(modelLine, '').replace(/^\s*[·|•]\s*/u, '').trim();
-  // A separate model row admits exactly one compatible effort status; a later
-  // matching row cannot override an earlier contradictory one.
+  // A status footer admits only one compatible effort row anywhere, or a
+  // matching inline model/effort row without any separate effort status.
   const effortStatusRow = /^\s*(?:effort\s*[:=]\s*\S.*|\S+\s+effort)\s*$/iu;
-  const effortRows = footer.slice(modelIndex + 1).filter((line) => effortStatusRow.test(line));
+  const effortRows = footer.filter((line) => effortStatusRow.test(line));
   const inlineEffort = suffix.toLowerCase() === profile.effort?.toLowerCase() || effortLine.test(suffix);
   return suffix ? inlineEffort && effortRows.length === 0
     : effortRows.length === 1 && effortLine.test(effortRows[0]!);
