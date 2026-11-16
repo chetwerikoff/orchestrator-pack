@@ -7797,13 +7797,16 @@ describe('Issue #2835 final-cap protected non-consuming delta and F/S frontiers'
     authority = observePackReviewHead({
       prNumber: 2835, expectedTransitionSeq: authority.transitionSeq, headSha: h2, options,
     });
-    const identity = (fromSha: string, toSha: string, digest?: string) => {
+    const identity = (
+      fromSha: string, toSha: string, digest?: string,
+      priorFindings: unknown[] = [oldFinding],
+    ) => {
       const details = {
         originalRunId: original.id, originalCycleId: authority.cycle!.cycleId,
         repository: 'chetwerikoff/orchestrator-pack', prNumber: 2835,
         selectedBaseRef: 'origin/main', fromSha, toSha, reviewer,
         sourceSlotIds: [], issueDigest: originalIssueDigest,
-        priorFindings: [oldFinding],
+        priorFindings,
       };
       const contextDigest = digest ?? createHash('sha256').update(stableJson({
         originalRunId: details.originalRunId, cycleId: details.originalCycleId,
@@ -7814,7 +7817,10 @@ describe('Issue #2835 final-cap protected non-consuming delta and F/S frontiers'
       })).digest('hex');
       return { ...details, contextDigest };
     };
-    const create = (fromSha: string, toSha: string, digest?: string) =>
+    const create = (
+      fromSha: string, toSha: string, digest?: string,
+      priorFindings: unknown[] = [oldFinding],
+    ) =>
       createPackReviewRun({
         ...options, prNumber: 2835, headSha: toSha,
         sourceRepoRoot: process.cwd(), trustedPackRoot: process.cwd(),
@@ -7822,7 +7828,7 @@ describe('Issue #2835 final-cap protected non-consuming delta and F/S frontiers'
         surface: 'pack-review-runner', startReason: 'final-cap-delta',
         automaticBudgetDisposition: 'non_consuming_explicit',
         allowRunnerFinalCapDeltaStart: true,
-        finalCapDelta: identity(fromSha, toSha, digest),
+        finalCapDelta: identity(fromSha, toSha, digest, priorFindings),
         reviewCycleId: authority.cycle!.cycleId, resolvedReviewer: reviewer,
         boundIssueSnapshotDigest: originalIssueDigest,
       });
@@ -7914,6 +7920,53 @@ describe('Issue #2835 final-cap protected non-consuming delta and F/S frontiers'
     const state = readPackReviewAuthority(2835, f.options);
     expect(state?.cycle?.consumedRoundOrdinals).toEqual([1]);
     expect(state?.cycle?.reviewStageComplete).not.toBe(true);
+  });
+
+  it('persists H2 findings, advances only F to H2 and binds H1/H2 blockers on H3', () => {
+    const f = nativeDeltaFixture('claude');
+    const h2Review = f.create(f.h1, f.h2).run;
+    const h2Finding = {
+      severity: 'blocking', title: 'H2 still broken', path: 'scripts/worker-smoke-run.ts',
+    };
+    setPackReviewRunTerminal(h2Review.id, 'changes_requested', {
+      reviewVerdict: 'findings', findingCount: 1, findings: [h2Finding],
+      journalOutcome: {
+        state: 'persisted', recordedAtUtc: new Date().toISOString(),
+        reason: 'H2 delta findings', idempotencyKey: 'verdict:' + h2Review.id + ':' + f.h2,
+        attempts: 1,
+      },
+    }, f.options);
+    updatePackReviewRun(h2Review.id, { deliveryOutcomes: {
+      githubComment: {
+        state: 'succeeded', recordedAtUtc: new Date().toISOString(),
+        reason: 'comment_posted', idempotencyKey: 'github-comment:' + h2Review.id,
+      },
+    } }, f.options);
+    const before = readPackReviewAuthority(2835, f.options)!;
+    expect(before.cycle).toMatchObject({
+      state: 'at_cap_continuation_required', consumedRoundOrdinals: [1],
+    });
+    expect(before.cycle?.reviewStageComplete).not.toBe(true);
+    observePackReviewHead({
+      prNumber: 2835, expectedTransitionSeq: before.transitionSeq,
+      headSha: f.h3, options: f.options,
+    });
+    const outstanding = [f.oldFinding, h2Finding];
+    const next = f.create(f.h2, f.h3, undefined, outstanding);
+    expect(next.created).toBe(true);
+    expect(getPackReviewRun(next.run.id, f.options)?.finalCapDelta).toEqual(
+      f.identity(f.h2, f.h3, undefined, outstanding),
+    );
+    expect(f.create(f.h2, f.h3, undefined, outstanding)).toMatchObject({
+      created: false, reused: true, run: { id: next.run.id },
+    });
+    expect(() => f.create(f.h1, f.h3, undefined, outstanding))
+      .toThrow(/same-head F\/reviewer\/Issue\/context drift/);
+    expect(readPackReviewAuthority(2835, f.options)?.cycle).toMatchObject({
+      consumedRoundOrdinals: [1],
+    });
+    expect(readPackReviewAuthority(2835, f.options)?.cycle?.reviewStageComplete)
+      .not.toBe(true);
   });
 
   it('rejects unowned admission, does not alias changed F/context, or resend uncertain result', () => {
