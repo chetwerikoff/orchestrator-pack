@@ -7336,10 +7336,14 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         }
       }
     }
+    // A failed status POST must not settle the already closed delta cycle
+    // again on retry. A previously same-head-only closure needs precisely
+    // one transition to the ordinary descendant lane; later H2/H3 clean
+    // evidence is enforced above, while publication alone advances S.
     if (!completedFinalFindings
         || (!rebasedC && deltaOutcome?.state === 'clean'
           && authority.cycle?.reviewStageComplete === true
-          && authority.publication?.headSha !== authority.currentHeadSha)) {
+          && authority.cycle.settlementKind === 'same_head_issue_resolution')) {
       const strictDescendant = await resolvePackReviewStrictDescendant({
         repoRoot: input.sourceRepoRoot,
         repoSlug: options.repoSlug,
@@ -9909,7 +9913,9 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         fixtureRequiredCiPostProjectionBase: input.fixtureRequiredCiPostProjectionBase,
         fixtureRequiredCiHeadAfterGate: input.fixtureRequiredCiHeadAfterGate,
         fixtureRequiredCiBaseAfterGate: input.fixtureRequiredCiBaseAfterGate,
-        baseRef: target.prBaseRef,
+        // The PR's live base branch is already verified above. The frozen
+        // delta identity uses its canonical remote ref, not the short PR base.
+        baseRef: `origin/${target.prBaseRef}`,
         fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
         fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
         deltaClaimOwned: () => claimMode === 'preacquired'
@@ -10039,7 +10045,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
             fixtureRequiredCiPolicyHttpStatus: input.fixtureRequiredCiPolicyHttpStatus,
             fixtureRequiredCiHeadAfterGate: input.fixtureRequiredCiHeadAfterGate,
             fixtureRequiredCiBaseAfterGate: input.fixtureRequiredCiBaseAfterGate,
-            baseRef: target.prBaseRef,
+            baseRef: `origin/${target.prBaseRef}`,
           }, { projectId, storeRoot, repoSlug: target.repoSlug });
           return accepted?.settled === true;
         } catch { return false; }
