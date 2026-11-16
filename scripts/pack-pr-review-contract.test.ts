@@ -116,3 +116,22 @@ describe('pack PR review canonical contract (Issue #1031)', () => {
     expect(guardedPrompt).toContain('Report missing/invalid');
   });
 });
+
+describe('Issue #2835 ordinary templates remain unchanged in unbound mode', () => {
+  it('does not claim a F..T context without an authenticated persisted runner record', () => {
+    const scope = { hasScope: false, issueNumber: null, issueConstraints: null,
+      declaredPaths: [], declaredGlobs: [], unverifiedIssueConstraints: false } as const;
+    const gpt = buildGptReviewPrompt({
+      prUrl: 'https://github.com/example/repo/pull/2835',
+      headSha: '1'.repeat(40), scope: { ...scope, declaredPaths: [], declaredGlobs: [] },
+    });
+    const native = buildReviewPrompt({
+      scope: { ...scope, declaredPaths: [], declaredGlobs: [] },
+      source: 'codex-local', baseRef: 'origin/main',
+    });
+    expect(gpt).not.toContain('Authenticated final-cap delta review');
+    expect(native).not.toContain('Authenticated final-cap delta');
+    expect(gpt).toContain('read every changed file and the whole diff at the bound head');
+    expect(native).toContain('Review **only** the changes between `origin/main` and `HEAD`');
+  });
+});

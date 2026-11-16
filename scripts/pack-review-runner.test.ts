@@ -49,6 +49,8 @@ import {
   applyCliTargetProject,
   parseArgs,
   resolveGithubCommitIsStrictDescendant,
+  finalCapPureSelectedBaseMerge,
+  handoffFinalCapDeltaFindings,
   startPackReview,
   PACK_REVIEW_REVIEWER_KILL_GRACE_MS,
 } from './pack-review-runner.ts';
@@ -72,6 +74,9 @@ import {
 } from './lib/pack-review-delivery.ts';
 import type { CarryoverReplayResult } from './pack-review-carryover.ts';
 import { runProcess, runProcessSync } from './kernel/subprocess.ts';
+import { parseArgs as parseSelectedGptReviewArgs } from './run-pack-review-gpt.ts';
+import { parseReviewArgs as parseSelectedNativeReviewArgs } from '../plugins/codex-pr-reviewer/lib/review_cli.ts';
+import { buildReviewPrompt as buildSelectedNativePrompt } from '../plugins/codex-pr-reviewer/lib/prompt.ts';
 
 // Behavior-preserving spy: lets a test read the reviewer child's real options.
 vi.mock('./kernel/subprocess.ts', async (importOriginal) => {
@@ -1707,7 +1712,7 @@ describe('Issue #2719 primary start result with secondary claim release', () => 
 });
 
 describe('Issue #1887 immediate final-cap descendant reconciliation', () => {
-  it('observes a live strict descendant and settles without prior smoke or review-start observation', async () => {
+  it('observes a strict descendant but refuses unreviewed H1..H2 without smoke or start observation', async () => {
     const parent = mkdtempSync(join(tmpdir(), 'pack-review-1887-immediate-settlement-'));
     roots.push(parent);
     const storeRoot = join(parent, 'store');
@@ -1793,20 +1798,24 @@ describe('Issue #1887 immediate final-cap descendant reconciliation', () => {
       fixtureRequiredStatusWriter: async (request) => { publishedStatus = request.state; },
     });
 
+    // An observed strict descendant without an authenticated F..T ordinary
+    // reviewer result must not close the original capped FINDINGS stage.
     expect(reconciled.results).toContainEqual(expect.objectContaining({
       prNumber,
       headSha: current,
       finalCapSettlement: true,
-      settled: true,
-      reason: 'final_cap_descendant_settled',
+      settled: false,
+      reason: 'final_cap_original_reviewer_unverified',
+      nextAction: expect.stringContaining('delta run/source census'),
     }));
-    const settled = readPackReviewAuthority(prNumber, authorityOptions);
-    expect(settled?.currentHeadSha).toBe(current);
-    expect(settled?.cycle).toMatchObject({
-      state: 'closed',
+    const unsettled = readPackReviewAuthority(prNumber, authorityOptions);
+    expect(unsettled?.terminal?.runId).toBe(run.id);
+    expect(unsettled?.cycle).toMatchObject({
+      state: 'at_cap_continuation_required',
       consumedRoundOrdinals: [1],
-      reviewStageComplete: true,
     });
+    expect(unsettled?.cycle?.reviewStageComplete).not.toBe(true);
+    expect(publishedStatus).not.toBe('success');
   });
 });
 
@@ -1941,12 +1950,18 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     'final-cap unchanged Issue strict descendant, exact preflight %s snapshot', async (reviewer) => {
       const f = fixture(reviewer);
       const settled = await reconcileStalePackReviewRuns(f.request(originalBody));
+      // Snapshot equivalence alone does not supply an H1..T ordinary reviewer
+      // result or resolve the original blocking findings.
       expect(settled.results).toContainEqual(expect.objectContaining({
-        prNumber: f.prNumber, settled: true, reason: 'final_cap_descendant_settled',
+        prNumber: f.prNumber, settled: false,
+        reason: 'final_cap_original_reviewer_unverified',
+        nextAction: expect.stringContaining('delta run/source census'),
       }));
       expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle)
-        .toMatchObject({ state: 'closed', reviewStageComplete: true, consumedRoundOrdinals: [1] });
-      expect(f.getStatus()).toBe('success');
+        .toMatchObject({ state: 'at_cap_continuation_required', consumedRoundOrdinals: [1] });
+      expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle?.reviewStageComplete)
+        .not.toBe(true);
+      expect(f.statusWrites).not.toContain('success');
     },
   );
 
@@ -1987,10 +2002,16 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
             : await startPackReview({ ...input, headSha: f.current, claimMode: 'preacquired',
               fixturePostReviewHeadSha: f.current, fixturePostReviewPrBody: input.fixturePrBody });
           const ok = 'settled' in outcome ? outcome.settled : outcome.ok;
-          expect(ok, mode + ':' + JSON.stringify(outcome)).toBe(mode === 'valid');
+          expect(ok, mode + ':' + JSON.stringify(outcome)).toBe(false);
+          // Even fully credentialed old native H1 evidence cannot substitute
+          // for a completed ordinary delta. Each negative source/CI/Issue
+          // mode remains a non-success, independent of GPT source slots.
+          if (mode === 'valid') {
+            expect(outcome.reason).toBe('final_cap_delta_project_issue_base_unverified');
+          }
           expect(getPackReviewRun(f.run.id, f)?.reviewRound).toBeUndefined();
-          if (mode === 'valid') expect(f.getStatus()).toBe('success');
-          else expect(f.statusWrites).not.toContain('success');
+          expect(f.statusWrites).not.toContain('success');
+          expect(readPackReviewAuthority(f.prNumber, f)?.cycle?.reviewStageComplete).not.toBe(true);
         }
       }
     },
@@ -2103,11 +2124,14 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     expect(ambiguous.statusWrites).not.toContain('success');
   });
 
-  it('final-cap completed diverged-head start refuses amended body instead of publishing success', async () => {
+  it('final-cap diverged-head start refuses amended body without treating unreviewed H2 as complete', async () => {
     const f = fixture('codex');
-    const completed = await reconcileStalePackReviewRuns(f.request(originalBody));
-    expect(completed.results).toContainEqual(expect.objectContaining({ settled: true }));
+    const unreviewed = await reconcileStalePackReviewRuns(f.request(originalBody));
+    expect(unreviewed.results).toContainEqual(expect.objectContaining({
+      settled: false, reason: 'final_cap_original_reviewer_unverified',
+    }));
     const priorSuccessCount = f.statusWrites.filter((s) => s === 'success').length;
+    expect(priorSuccessCount).toBe(0);
     const diverged = '6'.repeat(40);
     const refused = await startPackReview({
       ...f.request(originalBody + 'Changed binding at unchanged r01\n'),
@@ -2117,11 +2141,13 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
       fixturePostReviewPrBody: 'Closes #' + f.issueNumber,
     });
     expect(refused).toMatchObject({
-      ok: false, created: false, reason: 'final_cap_issue_body_amended',
+      ok: false, created: false, reason: 'final_cap_strict_descendant_required',
     });
     expect(f.statusWrites.filter((s) => s === 'success')).toHaveLength(priorSuccessCount);
     expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle)
-      .toMatchObject({ state: 'closed', reviewStageComplete: true, consumedRoundOrdinals: [1] });
+      .toMatchObject({ state: 'at_cap_continuation_required', consumedRoundOrdinals: [1] });
+    expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle?.reviewStageComplete)
+      .not.toBe(true);
   });
 
   it.each(['codex', 'gpt'] as const)(
@@ -2340,8 +2366,10 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     // Comment text never enters computeBoundIssueSnapshotHash; only a folded body would differ.
     const result = await reconcileStalePackReviewRuns(f.request(originalBody));
     expect(result.results).toContainEqual(expect.objectContaining({
-      settled: true, reason: 'final_cap_descendant_settled',
+      settled: false, reason: 'final_cap_original_reviewer_unverified',
     }));
+    expect(f.statusWrites).not.toContain('success');
+    expect(readPackReviewAuthority(f.prNumber, f)?.cycle?.reviewStageComplete).not.toBe(true);
   });
 
   it.each(['codex', 'gpt'] as const)(
@@ -2367,11 +2395,15 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
         prHeadSha: f.reviewed, issueNumber: f.issueNumber,
       }).status).toBe('corrupted'); // Intentionally ambiguous without a digest.
       const settled = await reconcileStalePackReviewRuns(f.request(B1));
+      // Correct B1 digest resolution is necessary but still not an F..H2
+      // review; neither the historical B0 nor B1 grants descendant success.
       expect(settled.results).toContainEqual(expect.objectContaining({
-        reason: 'final_cap_descendant_settled', settled: true,
+        reason: 'final_cap_delta_frontier_not_ancestor', settled: false,
       }));
-      expect(f.getStatus()).toBe('success');
+      expect(f.statusWrites).not.toContain('success');
       expect(readFileSync(original.snapshotPath!, 'utf8')).toBe(B0);
+      expect(readFileSync(amended.snapshotPath!, 'utf8')).toBe(B1);
+      expect(readPackReviewAuthority(f.prNumber, f)?.cycle?.reviewStageComplete).not.toBe(true);
     },
   );
 
@@ -2387,9 +2419,15 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     });
     const settled = await reconcileStalePackReviewRuns(f.request(B0));
     expect(settled.results).toContainEqual(expect.objectContaining({
-      reason: 'final_cap_descendant_settled', settled: true,
+      reason: 'final_cap_delta_project_issue_base_unverified', settled: false,
     }));
-    expect(f.getStatus()).toBe('success');
+    expect(f.statusWrites).not.toContain('success');
+    expect(readPackReviewAuthority(f.prNumber, f)?.cycle?.reviewStageComplete).not.toBe(true);
+    expect(resolveBoundIssueSnapshot({
+      projectId: f.projectId, prNumber: f.prNumber,
+      prHeadSha: f.reviewed, issueNumber: f.issueNumber,
+      snapshotDigest: computeBoundIssueSnapshotHash(B0),
+    }).status).toBe('found');
   });
 
   it('Issue #2659: changed Binding with identical criteria deasserts the old clean green without minting review', async () => {
@@ -2540,13 +2578,19 @@ describe('Issue #2565 selected-target reset and immutable H1/B0 to H2/B1 review'
         findingsDigest: 'immutable-final', automaticBudgetDisposition: 'consume' },
       status: 'changes_requested', findingCount: 1, options: opts,
     });
-    authority = observePackReviewHead({
-      prNumber, expectedTransitionSeq: authority.transitionSeq, headSha: H1, options: opts,
-    });
+    // Reset coverage needs a previously completed cycle, not the newly
+    // prohibited ancestry-only findings settlement. Use the independently
+    // verified same-head Issue-resolution lane for this synthetic fixture.
     authority = settleLogicalPackReviewFindingsByStrictDescendant({
       prNumber, expectedTransitionSeq: authority.transitionSeq,
-      reviewedHeadSha: H0, currentHeadSha: H1,
-      reviewedHeadIsAncestor: true, options: opts,
+      reviewedHeadSha: H0, currentHeadSha: H0, reviewedHeadIsAncestor: false,
+      sameHeadIssueResolution: {
+        runId: run.id, cycleId: authority.cycle!.cycleId, logicalRoundOrdinal: 1,
+      },
+      options: opts,
+    });
+    authority = observePackReviewHead({
+      prNumber, expectedTransitionSeq: authority.transitionSeq, headSha: H1, options: opts,
     });
     const priorCycleId = authority.cycle!.cycleId;
     expect(authority.cycle).toMatchObject({
@@ -2875,7 +2919,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
             source_comment_receipt: sourceProofs[ordinal - 1]!.receipt } };
       }),
     } }, options);
-    setPackReviewRunTerminal(run.id, 'changes_requested', { reviewVerdict: 'findings', findingCount: 2, findings }, { ...options, now: new Date('2026-10-08T20:46:00Z') });
+    setPackReviewRunTerminal(run.id, 'changes_requested',
+      { reviewVerdict: 'findings', findingCount: 2, findings },
+      { ...options, now: new Date('2026-10-08T20:46:00Z') });
     authority = commitPackReviewTerminal({
       prNumber, expectedTransitionSeq: authority.transitionSeq, status: 'changes_requested', findingCount: 2, options,
       terminal: { schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal', runId: run.id,
@@ -2955,6 +3001,172 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     return f;
   }
 
+  // A completed runner-owned ordinary delta is created by the same protected
+  // run-store API as production, rather than an ad-hoc in-memory verdict.
+  // Each frozen GPT source slot has ordinary clean terminal evidence. This
+  // fixture proves reloaded exact-F/T reuse; no reviewer is sent again.
+  function completeFinalCapDelta(
+    f: ReturnType<typeof fixture>,
+    toSha: string,
+    issueBody: string,
+    fromSha: string = f.authority.terminal!.targetSha,
+    outstanding?: unknown[],
+  ) {
+    // Only delta tests need authenticated stored original H1 review evidence.
+    // Preserve the legacy same-head scope disposition fixtures unchanged.
+    updatePackReviewRun(f.run.id, {
+      boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(f.frozenBody),
+      journalOutcome: {
+        state: 'persisted', recordedAtUtc: '2026-10-08T20:46:00Z',
+        reason: 'original-authenticated-review',
+        idempotencyKey: 'verdict:' + f.run.id + ':' + f.authority.terminal!.targetSha,
+        attempts: 1,
+      },
+      deliveryOutcomes: {
+        githubComment: {
+          state: 'succeeded', recordedAtUtc: '2026-10-08T20:46:00Z',
+          reason: 'comment_posted',
+          idempotencyKey: 'github-comment:' + f.run.id + ':' + f.authority.terminal!.targetSha,
+        },
+        requiredStatus: {
+          state: 'succeeded', recordedAtUtc: '2026-10-08T20:46:00Z',
+          reason: 'status_failure',
+          idempotencyKey: 'required-status:orchestrator-pack/pack-review:' + f.authority.terminal!.targetSha,
+        },
+      },
+    }, f.options);
+    const original = getPackReviewRun(f.run.id, f.options)!;
+    const oldRound = original.reviewRound!;
+    const outstandingFindings = outstanding ?? [...original.findings];
+    let authority = readPackReviewAuthority(prNumber, f.options)!;
+    if (authority.currentHeadSha !== toSha) {
+      authority = observePackReviewHead({
+        prNumber, expectedTransitionSeq: authority.transitionSeq, headSha: toSha,
+        options: f.options,
+      });
+    }
+    const digest = computeBoundIssueSnapshotHash(issueBody);
+    const identityInput = {
+      originalRunId: original.id, originalCycleId: authority.cycle!.cycleId,
+      repository: f.input.repoSlug, prNumber,
+      selectedBaseRef: 'origin/main', fromSha, toSha,
+      reviewer: 'gpt' as const,
+      sourceSlotIds: oldRound.sourceSlots.map((slot) => slot.slotId),
+      issueDigest: digest, priorFindings: outstandingFindings,
+    };
+    const contextDigest = createHash('sha256').update(stableJson({
+      originalRunId: identityInput.originalRunId,
+      cycleId: identityInput.originalCycleId,
+      repository: identityInput.repository.toLowerCase(),
+      prNumber: identityInput.prNumber,
+      selectedBaseRef: identityInput.selectedBaseRef,
+      fromSha: identityInput.fromSha, toSha: identityInput.toSha,
+      reviewer: identityInput.reviewer,
+      sourceSlotIds: identityInput.sourceSlotIds,
+      issueDigest: identityInput.issueDigest, unresolved: identityInput.priorFindings,
+    })).digest('hex');
+    const deltaIdentity = { ...identityInput, contextDigest };
+    const plannedRound = {
+      ...oldRound, boundIssueSnapshotDigest: digest, settledSourceCount: undefined,
+      sourceSlots: oldRound.sourceSlots.map((slot) =>
+        ({ slotId: slot.slotId, ordinal: slot.ordinal, lifecycle: 'planned' as const })),
+    };
+    const delta = createPackReviewRun({
+      ...f.options, prNumber, headSha: toSha,
+      sourceRepoRoot: f.input.sourceRepoRoot, trustedPackRoot: process.cwd(),
+      canonicalRepository: f.input.repoSlug, resolvedReviewer: 'gpt',
+      reviewCycleId: authority.cycle!.cycleId,
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      surface: 'pack-review-runner', startReason: 'final-cap-delta',
+      automaticBudgetDisposition: 'non_consuming_explicit',
+      allowRunnerFinalCapDeltaStart: true, boundIssueSnapshotDigest: digest,
+      finalCapDelta: deltaIdentity, reviewRound: plannedRound,
+    });
+    expect(delta.created, JSON.stringify(delta)).toBe(true);
+    const sourceSlots = oldRound.sourceSlots.map((slot) => {
+      const invocationId = `28350000-0000-4000-8000-${String(slot.ordinal).padStart(12, '0')}`;
+      const commentIdentity = {
+        repository: f.input.repoSlug, prNumber, headSha: toSha,
+        runId: delta.run.id, slotId: slot.slotId, invocationId,
+      };
+      const sourceBody = formatPackGptSourceCommentEnvelope(commentIdentity, 'NO_FINDINGS');
+      return {
+        slotId: slot.slotId, ordinal: slot.ordinal, lifecycle: 'terminal' as const,
+        invocationId, attemptOrdinal: 1, terminalClass: 'complete_clean',
+        payload: { verdict: 'clean', findingCount: 0, findings: [] },
+        terminalResult: {
+          schema: 'turn-result/v1', state: 'ok', scope: 'none', send_count: 1,
+          cause: 'github_source_comment_credentialed', invocation_id: invocationId,
+          source_comment_authority: 'credentialed_github',
+          source_comment_receipt: {
+            ...commentIdentity, commentId: 28350000 + slot.ordinal,
+            commentUrl: `https://github.com/${f.input.repoSlug}/pull/${prNumber}#issuecomment-${28350000 + slot.ordinal}`,
+            actorLogin: 'chetwerikoff', createdAt: '2026-10-14T01:00:00Z',
+            updatedAt: '2026-10-14T01:00:00Z',
+            bodySha256: createHash('sha256').update(sourceBody).digest('hex'),
+          },
+        },
+      };
+    });
+    updatePackReviewRun(delta.run.id, {
+      reviewRound: { ...plannedRound, settledSourceCount: sourceSlots.length, sourceSlots },
+    }, f.options);
+    const deltaReviewId = 28360000 + (toSha === fromSha ? 0 : 1);
+    const deltaReviewUrl = `https://github.com/${f.input.repoSlug}/pull/${prNumber}#pullrequestreview-${deltaReviewId}`;
+    setPackReviewRunTerminal(delta.run.id, 'up_to_date', {
+      reviewVerdict: 'clean', findingCount: 0, findings: [],
+      githubReviewId: deltaReviewId, githubReviewUrl: deltaReviewUrl,
+      githubReviewEvent: 'COMMENT',
+      githubReviewReconciliation: {
+        schemaVersion: 1, event: 'COMMENT', phase: 'complete',
+        actorLogin: 'chetwerikoff',
+        commentBody: `## Pack review — no findings\n\nRun: \`${delta.run.id}\`\nHead: \`${toSha}\`\n`,
+        commentReviewId: deltaReviewId, commentReviewUrl: deltaReviewUrl,
+        pendingDismissalReviewIds: [], dismissedReviewIds: [],
+        preparedAtUtc: '2026-10-14T01:00:00Z', updatedAtUtc: '2026-10-14T01:00:00Z',
+      },
+      journalOutcome: {
+        state: 'persisted', recordedAtUtc: new Date().toISOString(),
+        reason: 'ordinary-delta-source-census', idempotencyKey: 'verdict:' + delta.run.id + ':' + toSha,
+        attempts: 1,
+      },
+      deliveryOutcomes: {
+        githubComment: {
+          state: 'succeeded', recordedAtUtc: new Date().toISOString(),
+          reason: 'comment_posted', idempotencyKey: 'github-comment:' + delta.run.id,
+        },
+      },
+    }, f.options);
+    const reloaded = getPackReviewRun(delta.run.id, f.options)!;
+    expect(reloaded.finalCapDelta).toEqual(deltaIdentity);
+    expect(reloaded.reviewVerdict).toBe('clean');
+    expect(reloaded.reviewRound?.sourceSlots.map((slot) => slot.terminalClass))
+      .toEqual(sourceSlots.map(() => 'complete_clean'));
+    expect(reloaded.automaticBudgetDisposition).toBe('non_consuming_explicit');
+    expect(readPackReviewAuthority(prNumber, f.options)?.cycle?.consumedRoundOrdinals).toEqual([1, 2]);
+    return reloaded;
+  }
+
+  it('Issue #2835: a persisted clean T that omitted H1 blocking findings cannot settle', async () => {
+    const f = unchangedDescendantFixture();
+    const delta = completeFinalCapDelta(f, HEAD, revisedBody, reviewedHead, []);
+    // This is a fully journaled, source-complete, self-digest-consistent
+    // ordinary result, but its prompt context omitted the outstanding H1
+    // blocker. Neither current-head ancestry nor an accepted COMMENT erases it.
+    expect(delta.finalCapDelta?.priorFindings).toEqual([]);
+    expect(getPackReviewRun(f.run.id, f.options)?.findings.length).toBeGreaterThan(0);
+    f.input.fixtureCurrentPrHeadSha = HEAD;
+    f.input.fixtureReviewCompareStatus = 'ahead';
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({
+      prNumber, headSha: HEAD, finalCapSettlement: true, settled: false,
+      reason: 'final_cap_delta_review_chain_unverified',
+    }));
+    expect(f.statuses.some((status) => status.state === 'success')).toBe(false);
+    expect(readPackReviewAuthority(prNumber, f.options)?.cycle?.reviewStageComplete).not.toBe(true);
+    expect(listPackReviewRuns(f.options)).toHaveLength(2);
+  });
+
   it.each(['scoped reconcile', 'PR-led start', 'unauthorized', 'wrong-head', 'wrong-diff',
     'changed-behavior', 'body-drift', 'not-descendant', 'outside-scope', 'red-ci',
     'guarded-declaration', 'guarded-declaration-start', 'guard-free-declaration',
@@ -2994,6 +3206,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       };
       const positive = mode === 'scoped reconcile' || mode === 'PR-led start'
         || mode === 'guarded-declaration' || mode === 'guarded-declaration-start';
+      if (positive) completeFinalCapDelta(f, HEAD, f.transports.issue.body);
       if (mode === 'PR-led start' || mode === 'guarded-declaration-start') {
         const result = await startPackReview({ ...target, headSha: HEAD, claimMode: 'acquire',
           fixtureRepoSlug: repository, fixturePostReviewHeadSha: HEAD,
@@ -3008,7 +3221,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       expect(f.statuses.some((status) => status.state === 'success')).toBe(positive);
       expect(getPackReviewRun(f.run.id, f.options)?.reviewRound).toEqual(before.reviewRound);
       expect(readPackReviewAuthority(prNumber, f.options)?.terminal).toEqual(f.authority.terminal);
-      expect(listPackReviewRuns(f.options)).toHaveLength(1);
+      expect(listPackReviewRuns(f.options)).toHaveLength(positive ? 2 : 1);
       if (positive) {
         const again = await reconcileStalePackReviewRuns(target);
         expect(again.results, JSON.stringify(again)).toContainEqual(expect.objectContaining({ settled: true }));
@@ -3262,6 +3475,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       // Synthetic REST PR and the independent current-head fixture must
       // describe the same actual H2 PR; a stale H1 REST row must fail closed.
       f.transports.pr.head.sha = HEAD;
+      completeFinalCapDelta(f, HEAD, revisedBody);
       const target = {
         ...f.input, fixtureCurrentPrHeadSha: HEAD,
         fixturePrState: 'OPEN', fixturePrBody: 'Closes #' + issueNumber,
@@ -3287,9 +3501,11 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       expect(statusesByHead.get(HEAD)).toBe('success');
       expect(readPackReviewAuthority(prNumber, f.options)?.cycle).toMatchObject({
         state: 'closed', reviewStageComplete: true,
-        settlementKind: 'same_head_issue_resolution',
         consumedRoundOrdinals: [1, 2],
       });
+      // Delta evidence is a protected ordinary run, not a new settlementKind
+      // receipt value or another required logical review round.
+      expect(readPackReviewAuthority(prNumber, f.options)?.cycle?.settlementKind).toBeUndefined();
       expect(getPackReviewRun(f.run.id, f.options)?.reviewVerdict).toBe('findings');
     },
   );
@@ -3298,6 +3514,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     'Issue #2719: PR-led start keeps verified H2 settlement primary with %s secondary claim cleanup',
     async (variation) => {
       const f = unchangedDescendantFixture();
+    // Ancestry alone is not enough: this is the persisted, authenticated
+    // ordinary delta result from the real protected run store.
+    completeFinalCapDelta(f, HEAD, revisedBody);
       const statusesByHead = new Map<string, string>();
       const activeClaim = claimPath(resolveReviewStartClaimNamespace({ projectId: 'orchestrator-pack' }), prNumber, HEAD);
       f.input.fixtureRequiredStatusReader = async (head) => statusesByHead.get(head);
@@ -3353,6 +3572,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
 
   it('Issue #2719: an unverified H2 settlement stays primary non-success despite a released claim', async () => {
     const f = unchangedDescendantFixture();
+    // Ancestry alone is not enough: this is the persisted, authenticated
+    // ordinary delta result from the real protected run store.
+    completeFinalCapDelta(f, HEAD, revisedBody);
     f.input.fixtureRequiredStatusReader = async () => undefined;
     f.input.fixtureRequiredStatusWriter = async (request) => { f.statuses.push(request); };
     const outcome = await startPackReview({
@@ -3569,6 +3791,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
 
   it('keeps changed-head settlement on the observed strict-descendant route', async () => {
     const f = unchangedDescendantFixture();
+    // Ancestry alone is not enough: this is the persisted, authenticated
+    // ordinary delta result from the real protected run store.
+    completeFinalCapDelta(f, HEAD, revisedBody);
     f.input.fixtureCurrentPrHeadSha = HEAD;
     f.input.fixtureReviewCompareStatus = 'ahead';
     const result = await reconcileStalePackReviewRuns(f.input);
@@ -3596,6 +3821,33 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(f.read).not.toHaveBeenCalled();
   });
 
+  it.each(['required CI', 'selected PR base'] as const)(
+    'Issue #2835: refuses final-cap success when %s drifts at status publication',
+    async (kind) => {
+      const f = unchangedDescendantFixture();
+      completeFinalCapDelta(f, HEAD, revisedBody);
+      f.input.fixtureCurrentPrHeadSha = HEAD;
+      f.input.fixtureReviewCompareStatus = 'ahead';
+      let reads = 0;
+      f.input.fixtureRequiredStatusReader = async () => {
+        if (++reads === 1) {
+          if (kind === 'required CI') {
+            f.input.fixtureRequiredCiChecks = [{ name: 'CI', state: 'FAILURE' }];
+          } else {
+            f.input.fixtureRequiredCiBaseAfterGate = 'other-base';
+          }
+        }
+        return undefined;
+      };
+      const result = await reconcileStalePackReviewRuns(f.input);
+      expect(result.results).toContainEqual(expect.objectContaining({
+        settled: false, reason: 'status_not_published',
+      }));
+      expect(f.statuses.some((status) => status.state === 'success')).toBe(false);
+      expect(readPackReviewAuthority(prNumber, f.options)?.publication?.status).not.toBe('succeeded');
+    },
+  );
+
   it('Issue #2451: head moving during final-cap success cannot produce a settled receipt', async () => {
     const f = fixture();
     let currentHead = reviewedHead;
@@ -3617,6 +3869,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
 
   it('Issue #2451: strict descendant retries failed publication without a second settlement', async () => {
     const f = unchangedDescendantFixture();
+    // Ancestry alone is not enough: this is the persisted, authenticated
+    // ordinary delta result from the real protected run store.
+    completeFinalCapDelta(f, HEAD, revisedBody);
     f.input.fixtureCurrentPrHeadSha = HEAD;
     f.input.fixtureReviewCompareStatus = 'ahead';
     f.input.fixtureRequiredStatusWriter = async () => { throw new Error('offline descendant status failure'); };
@@ -3641,6 +3896,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
 
   it('Issue #2451: a closed descendant with a missing GitHub status retries, then confirms without duplicate publication', async () => {
     const f = unchangedDescendantFixture();
+    // Ancestry alone is not enough: this is the persisted, authenticated
+    // ordinary delta result from the real protected run store.
+    completeFinalCapDelta(f, HEAD, revisedBody);
     f.input.fixtureCurrentPrHeadSha = HEAD;
     f.input.fixtureReviewCompareStatus = 'ahead';
     const statusesByHead = new Map<string, string>();
@@ -3679,8 +3937,11 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(readPackReviewAuthority(prNumber, f.options)?.transitionSeq).toBe(closed?.transitionSeq);
   });
 
-  it('Issue #2451: a settled strict descendant projects a later live head without reopening the review cap', async () => {
+  it('Issue #2451: completed H2 never projects success on H3 before its exact ordinary delta review', async () => {
     const f = unchangedDescendantFixture();
+    // Ancestry alone is not enough: this is the persisted, authenticated
+    // ordinary delta result from the real protected run store.
+    completeFinalCapDelta(f, HEAD, revisedBody);
     let liveHead = HEAD;
     const statusByHead = new Map<string, string>();
     f.input.fixtureCurrentPrHeadSha = HEAD;
@@ -3701,6 +3962,25 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
 
     liveHead = 'd'.repeat(40);
     f.input.fixtureCurrentPrHeadSha = liveHead;
+    const unreviewedH3 = await reconcileStalePackReviewRuns(f.input);
+    expect(unreviewedH3.results).toContainEqual(expect.objectContaining({
+      headSha: liveHead, settled: false,
+      reason: 'final_cap_delta_frontier_not_ancestor',
+      nextAction: expect.any(String),
+    }));
+    expect(statusByHead.get(liveHead)).not.toBe('success');
+    expect(f.statuses.filter((status) => status.state === 'success')).toHaveLength(1);
+    expect(readPackReviewAuthority(prNumber, f.options)?.cycle).toMatchObject({
+      cycleId: beforeHeadAdvance?.cycle?.cycleId,
+      state: 'closed', reviewStageComplete: true, consumedRoundOrdinals: [1, 2],
+    });
+
+    // A second authenticated ordinary review is non-consuming and compares
+    // only H2..H3; H1's previously fixed finding is not reintroduced.
+    const reviewedH3 = completeFinalCapDelta(f, liveHead, revisedBody, HEAD, []);
+    expect(reviewedH3.finalCapDelta).toMatchObject({
+      fromSha: HEAD, toSha: liveHead, priorFindings: [],
+    });
     const second = await reconcileStalePackReviewRuns(f.input);
     expect(second.results).toContainEqual(expect.objectContaining({
       settled: true, statusPublished: true, publicationHeadSha: liveHead,
@@ -3713,18 +3993,21 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       state: 'closed', reviewStageComplete: true, consumedRoundOrdinals: [1, 2],
     });
     expect(statusByHead.get(liveHead)).toBe('success');
-    expect(f.statuses).toHaveLength(2);
+    expect(f.statuses.filter((status) => status.state === 'success')).toHaveLength(2);
 
     const third = await reconcileStalePackReviewRuns(f.input);
     expect(third.results).toContainEqual(expect.objectContaining({
       settled: true, statusPublished: true, publicationHeadSha: liveHead,
     }));
-    expect(f.statuses).toHaveLength(2);
+    expect(f.statuses.filter((status) => status.state === 'success')).toHaveLength(2);
     expect(readPackReviewAuthority(prNumber, f.options)?.transitionSeq).toBe(current?.transitionSeq);
   });
 
   it('Issue #2451: an acknowledged write without a GitHub success status stays unsettled and is retryable', async () => {
     const f = unchangedDescendantFixture();
+    // Ancestry alone is not enough: this is the persisted, authenticated
+    // ordinary delta result from the real protected run store.
+    completeFinalCapDelta(f, HEAD, revisedBody);
     f.input.fixtureCurrentPrHeadSha = HEAD;
     f.input.fixtureReviewCompareStatus = 'ahead';
     let githubStatus: string | undefined;
@@ -3755,6 +4038,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
 
   it('Issue #2451: changing the selected run verdict authority during awaited publication cannot claim success', async () => {
     const f = unchangedDescendantFixture();
+    // Ancestry alone is not enough: this is the persisted, authenticated
+    // ordinary delta result from the real protected run store.
+    completeFinalCapDelta(f, HEAD, revisedBody);
     f.input.fixtureCurrentPrHeadSha = HEAD;
     f.input.fixtureReviewCompareStatus = 'ahead';
     let githubStatus: string | undefined;
@@ -3840,6 +4126,31 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       sourceRepoRoot: graph.checkout,
       settledSourceCount,
     });
+    // The real Git C topology is the test subject, not incomplete delivery of
+    // the earlier H1 GPT terminal. Its source-census journal and ordinary
+    // COMMENT/failure-status writes were completed before H2 was constructed.
+    updatePackReviewRun(f.run.id, {
+      boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(revisedBody),
+      journalOutcome: {
+        state: 'persisted', recordedAtUtc: '2026-10-08T20:46:00Z',
+        reason: 'original-c-rebase-terminal',
+        idempotencyKey: 'verdict:' + f.run.id + ':' + graph.h1,
+        attempts: 1,
+      },
+      deliveryOutcomes: {
+        githubComment: {
+          state: 'succeeded', recordedAtUtc: '2026-10-08T20:46:00Z',
+          reason: 'h1-comment-published',
+          idempotencyKey: 'github-comment:' + f.run.id + ':' + graph.h1,
+        },
+        requiredStatus: {
+          state: 'succeeded', recordedAtUtc: '2026-10-08T20:46:00Z',
+          reason: 'h1-blocker-status-published',
+          idempotencyKey: 'required-status:orchestrator-pack/pack-review:' + graph.h1,
+        },
+      },
+    }, f.options);
+    expect(getPackReviewRun(f.run.id, f.options)?.journalOutcome?.state).toBe('persisted');
     const input: Parameters<typeof reconcileStalePackReviewRuns>[0] & { fixtureCurrentPrHeadSha: string } = {
       ...f.input, fixtureCurrentPrHeadSha: graph.h2,
       fixtureIssueBody: revisedBody, fixtureReviewCompareStatus: 'diverged',
@@ -3950,10 +4261,16 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
           const f = eligibleRebaseCase({ ...g, h2 });
           f.input.fixtureReviewCompareStatus = undefined;
           const result = await enterRebase(f, entry);
+          expectRebaseRefusal(f, result);
           if (changed) {
-            expect(result.reason, JSON.stringify(result)).toBe('final_cap_descendant_settled');
-            expect('settled' in result ? result.settled : result.ok).toBe(true);
-          } else expectRebaseRefusal(f, result);
+            // An actual changed-tree strict descendant needs the ordinary
+            // reviewer; tree difference by itself cannot settle H1 findings.
+            expect(result.reason, JSON.stringify(result)).not.toBe('final_cap_descendant_settled');
+            expect(result.reason).not.toBe('final_cap_strict_descendant_required');
+          } else {
+            // Even an ancestor-only no-op is not the clean merge-tree exception.
+            expect(result.reason).toBe('final_cap_strict_descendant_required');
+          }
         }
       } finally { vi.mocked(runProcess).mockImplementation(actual.runProcess); }
     },
@@ -3970,9 +4287,13 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
         '-p', g.b2, '-m', 'later unequal-tree rewritten head');
       f.input.fixtureCurrentPrHeadSha = h3;
       const result = await enterRebase(f, entry);
-      expect('settled' in result ? result.settled : result.ok).toBe(true);
-      if (entry === 'start') expect(result.reason).toBe('review_stage_complete');
+      expect('settled' in result ? result.settled : result.ok).toBe(false);
+      expect(result.reason).not.toBe('final_cap_descendant_settled');
+      expect(result.nextAction).toBeTruthy();
       expect(readPackReviewAuthority(prNumber, f.options)?.terminal).toEqual(f.authority.terminal);
+      // Original C settlement is retained for H2 only, never projected onto
+      // unrelated new H3 code without an H2..H3 ordinary review.
+      expect(f.statuses.filter((row) => row.state === 'success')).toHaveLength(1);
     },
   );
 
@@ -7738,4 +8059,413 @@ describe('Issue #2777 historical logical round cap on read', () => {
     expect(() => t3Run(storeRoot, { ordinal: 2, cap: 1, roundOrdinal: 2 }))
       .toThrow(/logicalRoundOrdinal exceeds logicalRoundCap/);
   });
+});
+
+describe('Issue #2835 final-cap protected non-consuming delta and F/S frontiers', () => {
+  const fixtureRoots: string[] = [];
+  afterEach(() => {
+    for (const root of fixtureRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  function nativeDeltaFixture(reviewer: 'codex' | 'claude' = 'codex') {
+    const storeRoot = mkdtempSync(join(tmpdir(), 'pack-2835-store-'));
+    fixtureRoots.push(storeRoot);
+    const options = { projectId: 'orchestrator-pack', storeRoot };
+    const h1 = '1'.repeat(40), h2 = '2'.repeat(40), h3 = '3'.repeat(40);
+    const originalIssueDigest = 'reviewed-issue-2835';
+    let authority = initializePackReviewAuthority({
+      prNumber: 2835, headSha: h1, tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      options,
+    });
+    const original = createPackReviewRun({
+      ...options, prNumber: 2835, headSha: h1,
+      sourceRepoRoot: process.cwd(), trustedPackRoot: process.cwd(),
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      reviewCycleId: authority.cycle!.cycleId,
+      logicalRoundOrdinal: 1, logicalRoundCap: 1,
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      automaticBudgetDisposition: 'consume',
+      resolvedReviewer: reviewer,
+      boundIssueSnapshotDigest: originalIssueDigest,
+    }).run;
+    const oldFinding = { severity: 'blocking', title: 'H1 blocker', path: 'scripts/pack-review-runner.ts' };
+    setPackReviewRunTerminal(original.id, 'changes_requested', {
+      reviewVerdict: 'findings', findingCount: 1, findings: [oldFinding],
+      journalOutcome: { state: 'persisted', recordedAtUtc: new Date().toISOString(),
+        reason: 'test-original-final-cap',
+        idempotencyKey: 'verdict:' + original.id + ':' + h1, attempts: 1 },
+    }, options);
+    authority = commitPackReviewTerminal({
+      prNumber: 2835, expectedTransitionSeq: authority.transitionSeq,
+      terminal: { schemaVersion: 1, terminalContractVersion: 2,
+        terminalSource: 'normal', runId: original.id, targetSha: h1,
+        logicalRoundOrdinal: 1, reviewVerdict: 'findings', findingCount: 1,
+        findingsDigest: 'original-2835',
+        automaticBudgetDisposition: 'consume' },
+      status: 'changes_requested', findingCount: 1, options,
+    });
+    authority = observePackReviewHead({
+      prNumber: 2835, expectedTransitionSeq: authority.transitionSeq, headSha: h2, options,
+    });
+    const identity = (
+      fromSha: string, toSha: string, digest?: string,
+      priorFindings: unknown[] = [oldFinding],
+    ) => {
+      const details = {
+        originalRunId: original.id, originalCycleId: authority.cycle!.cycleId,
+        repository: 'chetwerikoff/orchestrator-pack', prNumber: 2835,
+        selectedBaseRef: 'origin/main', fromSha, toSha, reviewer,
+        sourceSlotIds: [], issueDigest: originalIssueDigest,
+        priorFindings,
+      };
+      const contextDigest = digest ?? createHash('sha256').update(stableJson({
+        originalRunId: details.originalRunId, cycleId: details.originalCycleId,
+        repository: details.repository, prNumber: details.prNumber,
+        selectedBaseRef: details.selectedBaseRef, fromSha, toSha,
+        reviewer: details.reviewer, sourceSlotIds: details.sourceSlotIds,
+        issueDigest: details.issueDigest, unresolved: details.priorFindings,
+      })).digest('hex');
+      return { ...details, contextDigest };
+    };
+    const create = (
+      fromSha: string, toSha: string, digest?: string,
+      priorFindings: unknown[] = [oldFinding],
+    ) =>
+      createPackReviewRun({
+        ...options, prNumber: 2835, headSha: toSha,
+        sourceRepoRoot: process.cwd(), trustedPackRoot: process.cwd(),
+        canonicalRepository: 'chetwerikoff/orchestrator-pack',
+        surface: 'pack-review-runner', startReason: 'final-cap-delta',
+        automaticBudgetDisposition: 'non_consuming_explicit',
+        allowRunnerFinalCapDeltaStart: true,
+        finalCapDelta: identity(fromSha, toSha, digest, priorFindings),
+        reviewCycleId: authority.cycle!.cycleId, resolvedReviewer: reviewer,
+        boundIssueSnapshotDigest: originalIssueDigest,
+      });
+    return { options, original, oldFinding, h1, h2, h3, create, identity };
+  }
+
+
+  it('hands off persisted H2 blocking findings once through the existing claimed worker channel', async () => {
+    const f = nativeDeltaFixture();
+    const delta = f.create(f.h1, f.h2).run;
+    setPackReviewRunTerminal(delta.id, 'changes_requested', {
+      reviewVerdict: 'findings', findingCount: 1,
+      findings: [{ severity: 'blocking', title: 'H2 defect' }],
+      journalOutcome: {
+        state: 'persisted', recordedAtUtc: new Date().toISOString(),
+        reason: 'verdict_persisted', idempotencyKey: 'verdict:' + delta.id + ':' + f.h2,
+        attempts: 1,
+      },
+      deliveryOutcomes: { githubComment: {
+        state: 'succeeded', recordedAtUtc: new Date().toISOString(),
+        reason: 'comment_posted', idempotencyKey: 'github-comment:' + delta.id + ':' + f.h2,
+      } },
+    }, f.options);
+    const messages: string[] = [];
+    const notifier = vi.fn(async (request: { message: string; idempotencyKey: string; reviewRunId: string }) => {
+      messages.push(request.message);
+      expect(request.reviewRunId).toBe(delta.id);
+      expect(request.idempotencyKey).toBe('worker-notification:' + delta.id + ':' + f.h2);
+      return { state: 'submitted' as const, reason: 'offline_claimed_send' };
+    });
+    const request = {
+      runId: delta.id, originalRunId: f.original.id,
+      projectId: f.options.projectId, storeRoot: f.options.storeRoot,
+      notifier,
+    };
+    expect(await handoffFinalCapDeltaFindings(request)).toMatchObject({
+      state: 'submitted', reason: 'offline_claimed_send',
+    });
+    expect(await handoffFinalCapDeltaFindings(request)).toMatchObject({
+      state: 'submitted', reason: 'persisted_worker_notification_submission',
+    });
+    expect(notifier).toHaveBeenCalledTimes(1);
+    expect(messages[0]).toContain('Verdict: findings');
+    expect(getPackReviewRun(delta.id, f.options)?.deliveryOutcomes.workerNotification)
+      .toMatchObject({ state: 'succeeded', idempotencyKey: 'worker-notification:' + delta.id + ':' + f.h2 });
+    expect(getPackReviewRun(delta.id, f.options)?.deliveryOutcomes.requiredStatus).toBeUndefined();
+    expect(readPackReviewAuthority(2835, f.options)?.cycle?.consumedRoundOrdinals).toEqual([1]);
+  });
+
+  it('never repeats a possibly-dispatched H2 findings handoff on reconciliation', async () => {
+    const f = nativeDeltaFixture();
+    const delta = f.create(f.h1, f.h2).run;
+    setPackReviewRunTerminal(delta.id, 'changes_requested', {
+      reviewVerdict: 'findings', findingCount: 1, findings: [{ severity: 'blocking', title: 'H2' }],
+      journalOutcome: { state: 'persisted', recordedAtUtc: new Date().toISOString(),
+        reason: 'verdict_persisted', idempotencyKey: 'verdict:' + delta.id + ':' + f.h2, attempts: 1 },
+      deliveryOutcomes: { githubComment: { state: 'succeeded', recordedAtUtc: new Date().toISOString(),
+        reason: 'comment_posted', idempotencyKey: 'github-comment:' + delta.id + ':' + f.h2 } },
+    }, f.options);
+    let attempts = 0;
+    const request = { runId: delta.id, originalRunId: f.original.id,
+      projectId: f.options.projectId, storeRoot: f.options.storeRoot,
+      notifier: async () => { attempts++; throw new Error('send outcome unknown'); } };
+    expect(await handoffFinalCapDeltaFindings(request)).toMatchObject({ state: 'unverified' });
+    expect(await handoffFinalCapDeltaFindings(request)).toMatchObject({
+      state: 'unverified', reason: 'prior_worker_notification_outcome_unconfirmed',
+    });
+    expect(attempts).toBe(1);
+    expect(getPackReviewRun(delta.id, f.options)?.deliveryOutcomes.workerNotification?.state)
+      .toBe('escalated');
+  });
+
+  it('accepts authentic F for the selected native Codex/Claude parser and native prompt', () => {
+    const cardHome = mkdtempSync(join(tmpdir(), 'opk-2835-selected-cli-'));
+    fixtureRoots.push(cardHome);
+    const directory = join(cardHome, 'orchestrator-pack', 'projects');
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, 'orchestrator-pack.json'), JSON.stringify({
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      primaryRoot: process.cwd(), defaultBranch: 'main',
+      orcaWorkspacePattern: '^fixture$', orchestratorTitlePattern: '^fixture$',
+      browserGpt: { projectUrl: 'https://example.invalid/opk' },
+    }));
+    process.env.OPK_PROJECT_ID = 'orchestrator-pack';
+    process.env.XDG_CONFIG_HOME = cardHome;
+    process.env.PACK_REVIEW_PROJECT_ID = 'orchestrator-pack';
+    const scope = { hasScope: false, issueNumber: null, issueConstraints: null,
+      declaredPaths: [], declaredGlobs: [], unverifiedIssueConstraints: false };
+    for (const reviewer of ['codex', 'claude'] as const) {
+      const f = nativeDeltaFixture(reviewer);
+      const saved = f.create(f.h1, f.h2).run;
+      process.env.PACK_REVIEW_RUN_STORE_ROOT = f.options.storeRoot;
+      process.env.PACK_REVIEW_RUN_ID = saved.id;
+      process.env.PACK_REVIEW_TARGET_HEAD_SHA = f.h2;
+      process.env.PACK_REVIEWER = reviewer;
+      const parsed = parseSelectedNativeReviewArgs([
+        '--repo-root', process.cwd(), '--pr-number', '2835', '--base', f.h1,
+      ]);
+      expect(parsed.baseRef).toBe(f.h1);
+      const prompt = buildSelectedNativePrompt({ scope, source: 'codex-local', baseRef: parsed.baseRef });
+      expect(prompt).toContain('F=');
+      expect(prompt).toContain(f.h1);
+      expect(prompt).toContain(f.h2);
+      expect(prompt).toContain('H1 blocker');
+      expect(prompt).toContain('F..T changes');
+      expect(() => parseSelectedNativeReviewArgs([
+        '--repo-root', process.cwd(), '--base', f.h3,
+      ])).toThrow(/does not match selected target base/);
+      delete process.env.PACK_REVIEW_RUN_ID;
+      expect(() => parseSelectedNativeReviewArgs([
+        '--repo-root', process.cwd(), '--base', f.h1,
+      ])).toThrow(/does not match selected target base/);
+    }
+  });
+
+  it('keeps normal selected GPT base and rejects untrusted native final-cap F', () => {
+    const cardHome = mkdtempSync(join(tmpdir(), 'opk-2835-gpt-cli-'));
+    fixtureRoots.push(cardHome);
+    const directory = join(cardHome, 'orchestrator-pack', 'projects');
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, 'orchestrator-pack.json'), JSON.stringify({
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      primaryRoot: process.cwd(), defaultBranch: 'main',
+      orcaWorkspacePattern: '^fixture$', orchestratorTitlePattern: '^fixture$',
+      browserGpt: { projectUrl: 'https://example.invalid/opk' },
+    }));
+    process.env.OPK_PROJECT_ID = 'orchestrator-pack';
+    process.env.XDG_CONFIG_HOME = cardHome;
+    const f = nativeDeltaFixture('codex');
+    const saved = f.create(f.h1, f.h2).run;
+    process.env.PACK_REVIEW_PROJECT_ID = 'orchestrator-pack';
+    process.env.PACK_REVIEW_RUN_STORE_ROOT = f.options.storeRoot;
+    process.env.PACK_REVIEW_RUN_ID = saved.id;
+    process.env.PACK_REVIEW_TARGET_HEAD_SHA = f.h2;
+    expect(parseSelectedGptReviewArgs(['--base', 'origin/main']).baseRef).toBe('origin/main');
+    expect(() => parseSelectedGptReviewArgs(['--base', f.h1]))
+      .toThrow(/does not match selected target base/);
+  });
+  it('serializes, reloads and exactly reuses a clean H1..H2 review without charging cap', () => {
+    const f = nativeDeltaFixture();
+    const delta = f.create(f.h1, f.h2);
+    expect(delta.created).toBe(true);
+    expect(delta.run.finalCapDelta).toEqual(f.identity(f.h1, f.h2));
+    const completed = setPackReviewRunTerminal(delta.run.id, 'up_to_date', {
+      reviewVerdict: 'clean', findingCount: 0, findings: [],
+      journalOutcome: { state: 'persisted', recordedAtUtc: new Date().toISOString(),
+        reason: 'final_cap_ordinary_delta_result',
+        idempotencyKey: 'verdict:' + delta.run.id + ':' + f.h2, attempts: 1 },
+    }, f.options);
+    expect(completed.finalCapDelta).toEqual(f.identity(f.h1, f.h2));
+    expect(getPackReviewRun(delta.run.id, f.options)?.finalCapDelta).toEqual(f.identity(f.h1, f.h2));
+    expect(f.create(f.h1, f.h2)).toMatchObject({ created: false, reused: true,
+      reason: 'terminal_run_exists', run: { id: delta.run.id } });
+    const state = readPackReviewAuthority(2835, f.options);
+    expect(state?.cycle?.consumedRoundOrdinals).toEqual([1]);
+    expect(state?.cycle?.reviewStageComplete).not.toBe(true);
+  });
+
+  it('persists H2 findings, advances only F to H2 and binds H1/H2 blockers on H3', () => {
+    const f = nativeDeltaFixture('claude');
+    const h2Review = f.create(f.h1, f.h2).run;
+    const h2Finding = {
+      severity: 'blocking', title: 'H2 still broken', path: 'scripts/worker-smoke-run.ts',
+    };
+    setPackReviewRunTerminal(h2Review.id, 'changes_requested', {
+      reviewVerdict: 'findings', findingCount: 1, findings: [h2Finding],
+      journalOutcome: {
+        state: 'persisted', recordedAtUtc: new Date().toISOString(),
+        reason: 'H2 delta findings', idempotencyKey: 'verdict:' + h2Review.id + ':' + f.h2,
+        attempts: 1,
+      },
+    }, f.options);
+    updatePackReviewRun(h2Review.id, { deliveryOutcomes: {
+      githubComment: {
+        state: 'succeeded', recordedAtUtc: new Date().toISOString(),
+        reason: 'comment_posted', idempotencyKey: 'github-comment:' + h2Review.id,
+      },
+    } }, f.options);
+    const before = readPackReviewAuthority(2835, f.options)!;
+    expect(before.cycle).toMatchObject({
+      state: 'at_cap_continuation_required', consumedRoundOrdinals: [1],
+    });
+    expect(before.cycle?.reviewStageComplete).not.toBe(true);
+    observePackReviewHead({
+      prNumber: 2835, expectedTransitionSeq: before.transitionSeq,
+      headSha: f.h3, options: f.options,
+    });
+    const outstanding = [f.oldFinding, h2Finding];
+    const next = f.create(f.h2, f.h3, undefined, outstanding);
+    expect(next.created).toBe(true);
+    expect(getPackReviewRun(next.run.id, f.options)?.finalCapDelta).toEqual(
+      f.identity(f.h2, f.h3, undefined, outstanding),
+    );
+    expect(f.create(f.h2, f.h3, undefined, outstanding)).toMatchObject({
+      created: false, reused: true, run: { id: next.run.id },
+    });
+    expect(() => f.create(f.h1, f.h3, undefined, outstanding))
+      .toThrow(/same-head F\/reviewer\/Issue\/context drift/);
+    expect(readPackReviewAuthority(2835, f.options)?.cycle).toMatchObject({
+      consumedRoundOrdinals: [1],
+    });
+    expect(readPackReviewAuthority(2835, f.options)?.cycle?.reviewStageComplete)
+      .not.toBe(true);
+  });
+
+  it('rejects unowned admission, does not alias changed F/context, or resend uncertain result', () => {
+    const f = nativeDeltaFixture();
+    const incomplete = f.create(f.h1, f.h2);
+    expect(() => createPackReviewRun({
+      ...f.options, prNumber: 2835, headSha: f.h2,
+      sourceRepoRoot: process.cwd(), trustedPackRoot: process.cwd(),
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      surface: 'pack-review-runner', startReason: 'final-cap-delta',
+      automaticBudgetDisposition: 'non_consuming_explicit',
+      finalCapDelta: f.identity(f.h1, f.h2),
+      reviewCycleId: f.identity(f.h1, f.h2).originalCycleId,
+      resolvedReviewer: 'codex',
+      boundIssueSnapshotDigest: 'reviewed-issue-2835',
+    })).toThrow(/runner-owned|runner-only|finalCapDelta|non_consuming_explicit/);
+    const incumbent = f.create(f.h1, f.h2);
+    expect(incumbent.created).toBe(false);
+    expect(incumbent.run.id).toBe(incomplete.run.id);
+    expect(() => f.create(f.h1, f.h2, 'b'.repeat(64)))
+      .toThrow(/contextDigest is not the frozen input digest/);
+    expect(getPackReviewRun(incomplete.run.id, f.options)?.finalCapDelta)
+      .toEqual(f.identity(f.h1, f.h2));
+  });
+});
+
+describe('Issue #2835 pure base-merge safety proof', () => {
+  it('accepts only a clean selected-base merge tree and refuses PR edits or later base drift', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pack-2835-merge-'));
+    const git = (args: string[]): string => {
+      const r = runProcessSync({ command: 'git', args, cwd: root,
+        inheritParentEnv: true });
+      expect(r.ok, r.stderr).toBe(true);
+      return r.stdout.trim();
+    };
+    try {
+      git(['init', '--quiet']);
+      git(['config', 'user.name', 'pack-fixture']);
+      git(['config', 'user.email', 'pack@example.invalid']);
+      writeFileSync(join(root, 'base.txt'), 'base A\n');
+      git(['add', 'base.txt']);
+      git(['commit', '--quiet', '-m', 'base A']);
+      git(['branch', '-M', 'main']);
+      git(['checkout', '-q', '-b', 'feature']);
+      writeFileSync(join(root, 'feature.txt'), 'owned F\n');
+      git(['add', 'feature.txt']);
+      git(['commit', '--quiet', '-m', 'owned F']);
+      const f = git(['rev-parse', 'HEAD']);
+      git(['checkout', '-q', 'main']);
+      writeFileSync(join(root, 'base.txt'), 'base B\n');
+      git(['add', 'base.txt']);
+      git(['commit', '--quiet', '-m', 'base B']);
+      git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+      git(['checkout', '-q', 'feature']);
+      git(['merge', '--no-ff', '--quiet', '-m', 'merge selected base', 'main']);
+      const merged = git(['rev-parse', 'HEAD']);
+      expect(await finalCapPureSelectedBaseMerge(root, f, merged, 'origin/main')).toBe(true);
+      // A second genuine base merge remains zero-owned-change despite using
+      // a different base tip from the first merge.
+      git(['checkout', '-q', 'main']);
+      writeFileSync(join(root, 'base.txt'), 'base C\n');
+      git(['add', 'base.txt']);
+      git(['commit', '--quiet', '-m', 'base C']);
+      git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+      git(['checkout', '-q', 'feature']);
+      git(['merge', '--no-ff', '--quiet', '-m', 'merge second selected base', 'main']);
+      const secondMerge = git(['rev-parse', 'HEAD']);
+      expect(await finalCapPureSelectedBaseMerge(root, f, secondMerge, 'origin/main')).toBe(true);
+      writeFileSync(join(root, 'owned.txt'), 'new owned code\n');
+      git(['add', 'owned.txt']);
+      git(['commit', '--quiet', '-m', 'PR-owned after merge']);
+      expect(await finalCapPureSelectedBaseMerge(root, f, git(['rev-parse', 'HEAD']),
+        'origin/main')).toBe(false);
+      git(['checkout', '-q', 'main']);
+      writeFileSync(join(root, 'base.txt'), 'base D\n');
+      git(['add', 'base.txt']);
+      git(['commit', '--quiet', '-m', 'later base movement']);
+      git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+      expect(await finalCapPureSelectedBaseMerge(root, f, merged, 'origin/main')).toBe(false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  it('refuses a foreign first merge even when the selected base later adopts that side commit', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pack-2835-later-adopted-'));
+    const git = (args: string[]) => {
+      const result = runProcessSync({ command: 'git', args, cwd: root, inheritParentEnv: true });
+      expect(result.ok, result.stderr).toBe(true);
+      return result.stdout.trim();
+    };
+    try {
+      git(['init', '--quiet']);
+      git(['config', 'user.name', 'pack-fixture']);
+      git(['config', 'user.email', 'pack@example.invalid']);
+      writeFileSync(join(root, 'base.txt'), 'base 0\n');
+      git(['add', '.']);
+      git(['commit', '--quiet', '-m', 'base 0']);
+      git(['branch', '-M', 'main']);
+      git(['checkout', '-q', '-b', 'feature']);
+      writeFileSync(join(root, 'feature.txt'), 'reviewed F\n');
+      git(['add', '.']);
+      git(['commit', '--quiet', '-m', 'reviewed F']);
+      const reviewedF = git(['rev-parse', 'HEAD']);
+      git(['checkout', '-q', 'main']);
+      git(['checkout', '-q', '-b', 'foreign']);
+      writeFileSync(join(root, 'foreign.txt'), 'foreign owned code\n');
+      git(['add', '.']);
+      git(['commit', '--quiet', '-m', 'foreign side S']);
+      git(['checkout', '-q', 'feature']);
+      git(['merge', '--no-ff', '--quiet', '-m', 'PR adopts foreign S', 'foreign']);
+      const firstMerge = git(['rev-parse', 'HEAD']);
+      git(['checkout', '-q', 'main']);
+      git(['merge', '--no-ff', '--quiet', '-m', 'main later adopts S', 'foreign']);
+      const selectedBaseTip = git(['rev-parse', 'HEAD']);
+      git(['update-ref', 'refs/remotes/origin/main', selectedBaseTip]);
+      git(['checkout', '-q', 'feature']);
+      git(['merge', '--no-ff', '--quiet', '-m', 'PR merges selected base', 'main']);
+      const secondMerge = git(['rev-parse', 'HEAD']);
+      expect(git(['rev-list', '--parents', '-n', '1', firstMerge]).split(' ')).toHaveLength(3);
+      expect(git(['rev-list', '--parents', '-n', '1', secondMerge]).split(' ')).toHaveLength(3);
+      // Both merges have clean trees. Only the actual history of the first
+      // merged parent reveals that it was foreign when merged.
+      expect(await finalCapPureSelectedBaseMerge(root, reviewedF, secondMerge, 'origin/main'))
+        .toBe(false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
 });

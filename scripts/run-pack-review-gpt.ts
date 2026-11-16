@@ -11,6 +11,7 @@ import {
 import type { ResolvedScopeContext } from '../plugins/codex-pr-reviewer/lib/scope_context.ts';
 import { runProcess } from './kernel/subprocess.ts';
 import { resolveTargetContext } from './lib/target-context.ts';
+import { authenticatedPackReviewFinalCapDelta } from './lib/pack-review-run-store.ts';
 import { isDirectCliExecution } from './lib/reviewer-ts-cli.ts';
 
 function trim(value: unknown): string {
@@ -126,9 +127,16 @@ export function parseArgs(argv: string[]): {
   if (selected) {
     const selectedBaseRef = `origin/${selected.defaultBranch}`;
     if (explicitBaseRef && baseRef !== selectedBaseRef) {
-      throw new Error(`pack review base ${baseRef} does not match selected target base ${selectedBaseRef}`);
+      const delta = authenticatedPackReviewFinalCapDelta({
+        repository: selected.repository, selectedBaseRef,
+        headSha: process.env.PACK_REVIEW_TARGET_HEAD_SHA, reviewer: 'gpt',
+      });
+      if (!delta || baseRef !== delta.fromSha) {
+        throw new Error(`pack review base ${baseRef} does not match selected target base ${selectedBaseRef}`);
+      }
+    } else {
+      baseRef = selectedBaseRef;
     }
-    baseRef = selectedBaseRef;
   }
   return { repoRoot, baseRef, prNumber, issueNumber, headSha };
 }

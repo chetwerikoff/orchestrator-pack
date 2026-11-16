@@ -152,7 +152,7 @@ export interface PackReviewCycle {
   atCapHash?: string;
   reviewStageComplete?: boolean;
   reviewStageCompletedAtUtc?: string;
-  settlementKind?: 'same_head_issue_resolution' | 'rewritten_head';
+  settlementKind?: 'same_head_issue_resolution' | 'rewritten_head' | 'delta_review';
   reviewStartConsumed?: boolean;
   resetProvenance?: PackReviewResetProvenance;
 }
@@ -1383,6 +1383,10 @@ export function settleLogicalPackReviewFindingsByStrictDescendant(input: {
   ancestryAnchorSha?: string;
   /** Validated by scoped reconcile from live Issue/disposition/source/CI evidence. */
   sameHeadIssueResolution?: { runId: string; cycleId: string; logicalRoundOrdinal: number };
+  /** Runner-verified ordinary clean F..T terminal on exactly currentHeadSha. */
+  verifiedDeltaRunId?: string;
+  /** Runner-verified clean merge tree AND previously resolved H1 blockers. */
+  verifiedPureBaseMerge?: boolean;
   options: PackReviewAuthorityOptions;
 }): PackReviewAuthorityDocument {
   const reviewedHeadSha = normalizeSha(input.reviewedHeadSha, 'reviewedHeadSha');
@@ -1422,6 +1426,19 @@ export function settleLogicalPackReviewFindingsByStrictDescendant(input: {
       }
 
       const consumedCount = cycleConsumedCount(cycle);
+      // The final capped findings terminal never becomes clean from ancestry.
+      // Only the runner's exact T ordinary delta verdict, or an independently
+      // verified pure-base-merge after prior clean assessment, permits closure.
+      if (!sameHead && ancestryAnchorSha === reviewedHeadSha
+          && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(cycle.state)
+          && consumedCount === cycle.frozenCap
+          && !input.verifiedPureBaseMerge
+          && !input.verifiedDeltaRunId) {
+        throw new PackReviewAuthorityError(
+          'final_cap_delta_review_required',
+          'the strict descendant requires a bound ordinary delta review before final-cap settlement',
+        );
+      }
       if (sameHead && (reviewedHeadSha !== currentHeadSha
           || current.terminal.runId !== sameHead.runId
           || cycle.cycleId !== sameHead.cycleId
@@ -1444,6 +1461,21 @@ export function settleLogicalPackReviewFindingsByStrictDescendant(input: {
         cycle.atCapHash = undefined;
         markReviewStageComplete(current, cycle.closedAtUtc);
         if (sameHead) cycle.settlementKind = 'same_head_issue_resolution';
+        // Original strict-descendant settlements have no settlementKind.
+        // Authenticated delta evidence changes eligibility, not the
+        // persisted receipt grammar or capped-round identity.
+      } else if (
+        cycle.state === 'closed' && cycle.reviewStageComplete === true
+        && consumedCount === cycle.frozenCap
+        && (input.verifiedDeltaRunId || input.verifiedPureBaseMerge)
+      ) {
+        // After an accepted clean H2, a newly reviewed H3 can update S
+        // without reopening or consuming a required round. The runner must
+        // still verify the exact ordinary delta result and current-head gates.
+        // The only exceptional receipt shape was the independently proven
+        // same-head Issue correction. Once H2 has an ordinary clean delta,
+        // current-head publication (not a second cycle/round) owns settlement.
+        cycle.settlementKind = undefined;
       } else {
         throw new PackReviewAuthorityError(
           'findings_settlement_invalid',

@@ -3,6 +3,7 @@ import { executeReview, type ReviewOptions } from './review_core.ts';
 import type { ReviewSource } from './types.ts';
 import { originSlugFromGitConfig } from '../../../scripts/lib/git-origin-slug.mjs';
 import { resolveTargetContext } from '../../../scripts/lib/target-context.ts';
+import { authenticatedPackReviewFinalCapDelta } from '../../../scripts/lib/pack-review-run-store.ts';
 
 function usage(): string {
   return [
@@ -112,9 +113,17 @@ export function parseReviewArgs(argv: string[]): ReviewOptions & { promptOnly?: 
     }
     const selectedBaseRef = `origin/${selected.defaultBranch}`;
     if (explicitBaseRef && baseRef !== selectedBaseRef) {
-      throw new Error(`Codex review base ${baseRef} does not match selected target base ${selectedBaseRef}`);
+      const delta = authenticatedPackReviewFinalCapDelta({
+        repository: selected.repository, selectedBaseRef,
+        headSha: process.env.PACK_REVIEW_TARGET_HEAD_SHA,
+      });
+      if (!delta || (delta.reviewer !== 'codex' && delta.reviewer !== 'claude')
+          || baseRef !== delta.fromSha) {
+        throw new Error(`Codex review base ${baseRef} does not match selected target base ${selectedBaseRef}`);
+      }
+    } else {
+      baseRef = selectedBaseRef;
     }
-    baseRef = selectedBaseRef;
   }
   return {
     repoRoot,

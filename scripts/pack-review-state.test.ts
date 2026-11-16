@@ -141,9 +141,18 @@ describe('Issue #2565 completed findings logical reset', () => {
     state = observePackReviewHead({
       prNumber, expectedTransitionSeq: state.transitionSeq, headSha: descendant, options: config,
     });
-    state = settleLogicalPackReviewFindingsByStrictDescendant({
+    // Ancestry alone is no longer evidence that the original blockers were fixed.
+    // The dedicated runner must first authenticate an ordinary delta verdict.
+    expect(() => settleLogicalPackReviewFindingsByStrictDescendant({
       prNumber, expectedTransitionSeq: state.transitionSeq, reviewedHeadSha: terminalHead,
       currentHeadSha: descendant, reviewedHeadIsAncestor: true, options: config,
+    })).toThrow(/final_cap_delta_review_required/);
+    expect(readPackReviewAuthority(prNumber, config)?.cycle?.reviewStageComplete).not.toBe(true);
+    state = settleLogicalPackReviewFindingsByStrictDescendant({
+      prNumber, expectedTransitionSeq: state.transitionSeq, reviewedHeadSha: terminalHead,
+      currentHeadSha: descendant, reviewedHeadIsAncestor: true,
+      verifiedDeltaRunId: 'authenticated-ordinary-delta-at-' + descendant,
+      options: config,
     });
     expect(state.cycle).toMatchObject({
       state: 'closed', reviewStageComplete: true, frozenTier: tier,
@@ -228,10 +237,17 @@ describe('Issue #2565 completed findings logical reset', () => {
     state = observePackReviewHead({
       prNumber, expectedTransitionSeq: state.transitionSeq, headSha: sha('b'), options: config,
     });
-    state = settleLogicalPackReviewFindingsByStrictDescendant({
+    expect(() => settleLogicalPackReviewFindingsByStrictDescendant({
       prNumber, expectedTransitionSeq: state.transitionSeq,
       reviewedHeadSha: sha('a'), currentHeadSha: sha('b'),
       reviewedHeadIsAncestor: true, options: config,
+    })).toThrow(/final_cap_delta_review_required/);
+    expect(readPackReviewAuthority(prNumber, config)?.cycle?.reviewStageComplete).not.toBe(true);
+    state = settleLogicalPackReviewFindingsByStrictDescendant({
+      prNumber, expectedTransitionSeq: state.transitionSeq,
+      reviewedHeadSha: sha('a'), currentHeadSha: sha('b'),
+      reviewedHeadIsAncestor: true, verifiedDeltaRunId: 'verified-gpt-source-t1-delta',
+      options: config,
     });
     expect(state.cycle).toMatchObject({ state: 'closed', frozenTier: 'T1',
       reviewStageComplete: true, consumedRoundOrdinals: [1] });
@@ -1064,12 +1080,22 @@ describe('Issue #1887 strict-descendant findings settlement', () => {
     });
     expect(state.cycle?.state).toBe('at_cap_continuation_required');
 
+    expect(() => settleLogicalPackReviewFindingsByStrictDescendant({
+      prNumber: 1887,
+      expectedTransitionSeq: state.transitionSeq,
+      reviewedHeadSha: reviewed,
+      currentHeadSha: current,
+      reviewedHeadIsAncestor: true,
+      options: storeOptions,
+    })).toThrow(/final_cap_delta_review_required/);
+    expect(readPackReviewAuthority(1887, storeOptions)?.cycle?.state).toBe('at_cap_continuation_required');
     state = settleLogicalPackReviewFindingsByStrictDescendant({
       prNumber: 1887,
       expectedTransitionSeq: state.transitionSeq,
       reviewedHeadSha: reviewed,
       currentHeadSha: current,
       reviewedHeadIsAncestor: true,
+      verifiedDeltaRunId: 'verified-ordinary-delta-1887',
       options: storeOptions,
     });
     expect(state.cycle).toMatchObject({

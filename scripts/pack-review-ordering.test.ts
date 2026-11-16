@@ -226,21 +226,17 @@ describe('Issue #2250 retire smoke ordering without removing pack-review cycle a
     });
     expect(fixHead.publication).toBeUndefined();
 
-    const settled = settleLogicalPackReviewFindingsByStrictDescendant({
+    expect(() => settleLogicalPackReviewFindingsByStrictDescendant({
       prNumber: 1826,
       expectedTransitionSeq: fixHead.transitionSeq,
       reviewedHeadSha: HEAD,
       currentHeadSha: NEXT_HEAD,
       reviewedHeadIsAncestor: true,
       options,
-    });
-
-    expect(settled.cycle).toMatchObject({
-      state: 'closed',
-      reviewStageComplete: true,
-    });
-    expect(settled.triage).toBeUndefined();
-    expect(settled.cycle?.reviewStageComplete).toBe(true);
+    })).toThrow(/final_cap_delta_review_required/);
+    const unchanged = readPackReviewAuthority(1826, options);
+    expect(unchanged?.cycle?.state).toBe('at_cap_continuation_required');
+    expect(unchanged?.cycle?.reviewStageComplete).not.toBe(true);
   });
 
   it('reconciles a persisted T2 cycle before T3 review admission', () => {

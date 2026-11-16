@@ -1,6 +1,7 @@
 import './toolchain/native-entrypoint-preflight.ts';
 import { resolvePrScopeGuardApplicability } from './pr-scope-declaration.ts';
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import {
   appendFileSync,
   existsSync,
@@ -119,6 +120,7 @@ import {
   validatePersistedPackReviewGptAggregate,
   type PackReviewGptRoundRecord,
   type PackReviewRunRecord,
+  type PackReviewFinalCapDelta,
   type PackReviewRunStatus,
   type PackReviewSourceSlotRecord,
   type PackReviewSourceSlotAttemptHistory,
@@ -346,6 +348,14 @@ export interface ReconcileStalePackReviewRunsInput {
   immediate?: boolean;
   /** Internal pre-start switch: recover active GPT sources without public --immediate final-cap semantics. */
   recoverActiveGptSources?: boolean;
+  /** Only a PR-led owner holding the incumbent start claim can invoke a new reviewer. */
+  deltaClaimOwned?: () => boolean;
+  deltaBindClaimRun?: (runId: string) => void;
+  fixtureReviewStdout?: string;
+  fixtureReviewExitCode?: number;
+  fixtureReviewTimedOut?: boolean;
+  fixtureUseRealReviewWorktree?: boolean;
+  fixtureReviewBySourceSlot?: StartInput['fixtureReviewBySourceSlot'];
   /**
    * Controls whether this reconciliation invocation may create a new degraded
    * partial settlement after grace. Production entrypoints set this explicitly:
@@ -6203,6 +6213,520 @@ export async function maybeAdmitPackReviewBodyAmendment(
   }
 }
 
+
+/** Cheap merge-tree-only optimization, never a finding-resolution shortcut.
+ * Every PR-line commit is a clean merge of a selected-base ancestor, and the
+ * latest merge must bind the selected current base tip.
+ * A later-adopted foreign side branch or unverifiable topology is inspected
+ * by the ordinary reviewer, never silently classified as empty.
+ */
+export async function finalCapPureSelectedBaseMerge(
+  root: string, fromSha: string, toSha: string, selectedBaseRef: string,
+): Promise<boolean> {
+  try {
+    await ensureCommitAvailable(root, fromSha);
+    await ensureCommitAvailable(root, toSha);
+    const baseTip = await rebaseGitSha1(root, ['rev-parse', selectedBaseRef], 'selected base tip');
+    if (!await rebaseAncestor(root, fromSha, toSha)) return false;
+    const firstParent = (await runGit(root,
+      ['rev-list', '--first-parent', '--reverse', fromSha + '..' + toSha],
+      'reviewed merge chain')).trim().split(/\r?\n/).filter(Boolean);
+    if (firstParent.length === 0) return false;
+    // Transitive ancestry is insufficient: an earlier foreign side parent
+    // may be adopted by the selected base only AFTER it entered the PR.
+    const selectedBaseMainline = new Set((await runGit(root,
+      ['rev-list', '--first-parent', baseTip], 'selected base mainline'))
+      .trim().split(/\r?\n/).filter(Boolean));
+    let cursor = fromSha;
+    for (const mergeSha of firstParent) {
+      if (!rebaseSha1.test(mergeSha)) return false;
+      const parents = (await runGit(root, ['rev-list', '--parents', '-n', '1', mergeSha],
+        'merge parents')).trim().split(/\s+/);
+      if (parents.length !== 3 || parents[0] !== mergeSha
+          || parents[1] !== cursor) return false;
+      // Multiple successive clean merges may use successive base tips. Each
+      // second parent must belong to the selected base history; verify each
+      // clean merge-tree result rather than requiring the final base tip at
+      // every intermediate merge.
+      const mergedBase = parents[2]!;
+      if (mergeSha === firstParent[firstParent.length - 1] && mergedBase !== baseTip) {
+        // A previously clean merge is not a zero-call witness after the
+        // selected base tip has advanced again.
+        return false;
+      }
+      if (!selectedBaseMainline.has(mergedBase)
+          || !await rebaseAncestor(root, mergedBase, baseTip)) return false;
+      const mergeTree = await runProcess({
+        command: 'git', args: ['merge-tree', '--write-tree', cursor, mergedBase],
+        cwd: root, inheritParentEnv: true, allowEmptyStdout: false, timeoutMs: 30000,
+      });
+      if (!mergeTree.ok || !/^[0-9a-f]{40}\s*$/.test(mergeTree.stdout)) return false;
+      const realTree = await rebaseGitSha1(root,
+        ['rev-parse', mergeSha + '^{tree}'], 'merge commit tree');
+      if (mergeTree.stdout.trim() !== realTree) return false;
+      cursor = mergeSha;
+    }
+    return cursor === toSha;
+  } catch { return false; }
+}
+
+/** The original run-store worker-notification channel is claimed BEFORE
+ * sending a persisted non-consuming F..T findings verdict. Reconciliation
+ * cannot blindly resend a possibly dispatched message.
+ */
+export async function handoffFinalCapDeltaFindings(input: {
+  runId: string; originalRunId: string; projectId: string; storeRoot: string;
+  notifier?: PackReviewWorkerNotifier;
+}): Promise<{ state: 'submitted' | 'already_attempted' | 'unverified'; reason: string }> {
+  const options = { projectId: input.projectId, storeRoot: input.storeRoot };
+  const delta = getPackReviewRun(input.runId, options);
+  const original = getPackReviewRun(input.originalRunId, options);
+  if (!delta?.finalCapDelta || delta.finalCapDelta.originalRunId !== input.originalRunId
+      || delta.automaticBudgetDisposition !== 'non_consuming_explicit'
+      || !original || delta.linkedSessionId !== original.linkedSessionId
+      || delta.reviewVerdict !== 'findings' || !hasPersistedPackReviewVerdict(delta)
+      || delta.deliveryOutcomes.githubComment?.state !== 'succeeded') {
+    return { state: 'unverified', reason: 'delta_findings_or_original_binding_unverified' };
+  }
+  if (delta.deliveryOutcomes.workerNotification) {
+    const previous = delta.deliveryOutcomes.workerNotification;
+    return previous.state === 'succeeded' || previous.state === 'delivered'
+      ? { state: 'submitted', reason: 'persisted_worker_notification_submission' }
+      : { state: 'unverified', reason: 'prior_worker_notification_outcome_unconfirmed' };
+  }
+  const binding = parsePersistedWorkerNotificationBinding(original);
+  if (!input.notifier && (!delta.linkedSessionId || !binding)) {
+    return { state: 'unverified', reason: 'delta_worker_runtime_binding_unavailable' };
+  }
+  const key = `worker-notification:${delta.id}:${delta.targetSha}`;
+  const claimed = updatePackReviewRunIf(delta.id,
+    (records) => records.some((record) => record.id === delta.id
+      && record.finalCapDelta?.originalRunId === original.id
+      && record.reviewVerdict === 'findings'
+      && hasPersistedPackReviewVerdict(record)
+      && record.deliveryOutcomes.githubComment?.state === 'succeeded'
+      && !record.deliveryOutcomes.workerNotification),
+    (stored) => ({
+      ...(binding && !parsePersistedWorkerNotificationBinding(stored)
+        ? { workerNotificationBinding: { ...binding, headSha: stored.targetSha } } : {}),
+      deliveryOutcomes: {
+        ...stored.deliveryOutcomes,
+        workerNotification: {
+          state: 'escalated' as const, recordedAtUtc: new Date().toISOString(),
+          reason: 'submission_outcome_unresolved', idempotencyKey: key,
+        },
+      },
+    }), options);
+  if (!claimed) {
+    // Another reconcile may hold the claim. A recorded claim alone is never
+    // evidence of an accepted send, and it must not authorize a retry.
+    const latest = getPackReviewRun(delta.id, options)?.deliveryOutcomes.workerNotification;
+    return latest?.state === 'succeeded' || latest?.state === 'delivered'
+      ? { state: 'submitted', reason: 'persisted_worker_notification_submission' }
+      : { state: 'unverified', reason: 'prior_worker_notification_outcome_unconfirmed' };
+  }
+  const notify = input.notifier ?? ((request: Parameters<PackReviewWorkerNotifier>[0]) =>
+    sendPackReviewWorkerNotification({
+      trustedPackRoot: claimed.trustedPackRoot, sessionId: claimed.linkedSessionId,
+      projectId: input.projectId, storeRoot: input.storeRoot, request,
+    }));
+  let state: 'submitted' | 'unverified' = 'unverified';
+  let reason = 'dispatch_outcome_unknown';
+  let recordedState: 'succeeded' | 'failed' | 'escalated' = 'escalated';
+  try {
+    const result = await notify({
+      message: [
+        `Pack review completed for PR #${claimed.prNumber}.`,
+        `Run: ${claimed.id}`,
+        `Head: ${claimed.targetSha}`,
+        'Verdict: findings',
+        `Findings: ${claimed.findingCount}`,
+        'Pack-review status: failure',
+      ].join('\n'),
+      idempotencyKey: key, reviewRunId: claimed.id,
+    });
+    state = result.state === 'submitted' || result.state === 'delivered'
+      ? 'submitted' : 'unverified';
+    recordedState = state === 'submitted' ? 'succeeded'
+      : result.state === 'pre_dispatch_failure' || result.state === 'failed'
+        ? 'failed' : 'escalated';
+    reason = result.reason;
+  } catch (error) { reason = describeError(error); }
+  updatePackReviewRunIf(claimed.id,
+    (records) => records.some((record) => record.id === claimed.id
+      && record.deliveryOutcomes.workerNotification?.idempotencyKey === key
+      && record.deliveryOutcomes.workerNotification.reason === 'submission_outcome_unresolved'),
+    (stored) => ({ deliveryOutcomes: {
+      ...stored.deliveryOutcomes,
+      workerNotification: {
+        state: recordedState, recordedAtUtc: new Date().toISOString(),
+        reason, idempotencyKey: key,
+      },
+    } }), options);
+  return { state, reason };
+}
+
+interface FinalCapDeltaOutcome {
+  state: 'clean' | 'findings' | 'unverified';
+  reason: string;
+  runId?: string;
+  fromSha?: string;
+  zeroCall?: boolean;
+}
+
+/** The existing run-store, source identities, review parser and PR-led start
+ * claim own this non-consuming reviewer attempt; no second review protocol.
+ * F advances after every complete ordinary verdict; S advances only on clean.
+ */
+async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput, opts: {
+  projectId: string; storeRoot: string; repoSlug: string; prNumber: number;
+  original: PackReviewRunRecord; originalCycleId: string; issueNumber: number;
+  issueDigest: string; targetSha: string;
+  /** Already accepted, rechecked same-head Issue scope-only disposition. */
+  verifiedScopeCorrection?: boolean;
+}): Promise<FinalCapDeltaOutcome> {
+  const refused = (reason: string): FinalCapDeltaOutcome => ({ state: 'unverified', reason });
+  const original = opts.original;
+  const reviewer = original.executedReviewer ?? original.resolvedReviewer;
+  if (!reviewer || !['gpt', 'codex', 'claude'].includes(reviewer)
+      || original.reviewVerdict !== 'findings' || !hasPersistedPackReviewVerdict(original)) {
+    return refused('final_cap_original_reviewer_unverified');
+  }
+  const selected = resolveTargetContext({ projectId: opts.projectId });
+  const selectedBaseRef = 'origin/' + selected.defaultBranch;
+  if (selected.repository.toLowerCase() !== opts.repoSlug.toLowerCase()
+      || (input.baseRef && input.baseRef !== selectedBaseRef)
+      // An independently proved and currently rechecked scope-only Issue
+      // correction is the sole exception to B0/B1 digest equality. Never
+      // infer an amendment from current Issue bytes or from the delta record.
+      || (opts.issueDigest !== original.boundIssueSnapshotDigest
+        && opts.verifiedScopeCorrection !== true)
+      || original.canonicalRepository?.toLowerCase() !== opts.repoSlug.toLowerCase()) {
+    return refused('final_cap_delta_project_issue_base_unverified');
+  }
+  const currentAuthority = readPackReviewAuthority(opts.prNumber, { storeRoot: opts.storeRoot });
+  if (!currentAuthority?.cycle || currentAuthority.terminal?.runId !== original.id
+      || currentAuthority.terminal.reviewVerdict !== 'findings'
+      || currentAuthority.cycle.cycleId !== opts.originalCycleId
+      || currentAuthority.currentHeadSha !== opts.targetSha) {
+    return refused('final_cap_delta_current_authority_unverified');
+  }
+  if (currentAuthority.cycle.frozenTier === 'T1' && reviewer !== 'gpt') {
+    return refused('native_t1_final_cap_continuation_unchanged');
+  }
+  const sourceSlotIds = original.reviewRound?.sourceSlots.map((slot) => slot.slotId) ?? [];
+  if (reviewer === 'gpt' && (!original.reviewRound || !sourceSlotIds.length)) {
+    return refused('final_cap_gpt_original_slots_unverified');
+  }
+  const ancestry = async (fromSha: string, toSha: string): Promise<boolean> => {
+    try { return await rebaseAncestor(input.sourceRepoRoot, fromSha, toSha); }
+    catch { return false; } // Missing Git proof is non-success, not an uncaught exception.
+  };
+  const previous = listPackReviewRuns({ projectId: opts.projectId, storeRoot: opts.storeRoot })
+    .filter((r) => r.finalCapDelta?.originalRunId === original.id
+      && r.finalCapDelta.originalCycleId === opts.originalCycleId
+      && r.canonicalRepository?.toLowerCase() === opts.repoSlug.toLowerCase()
+      && r.prNumber === opts.prNumber
+      && r.resolvedReviewer === reviewer
+      && r.boundIssueSnapshotDigest === opts.issueDigest
+      && isDeepStrictEqual(r.finalCapDelta.sourceSlotIds, sourceSlotIds)
+      && hasPersistedPackReviewVerdict(r)
+      && r.deliveryOutcomes.githubComment?.state === 'succeeded')
+    .sort((a, b) => Date.parse(a.completedAtUtc ?? '') - Date.parse(b.completedAtUtc ?? ''));
+  let frontier = original.targetSha;
+  let unresolved: unknown[] = [...original.findings];
+  let lastComplete: PackReviewRunRecord | undefined;
+  // A previously verified F..T ordinary run authenticates its own parent
+  // frontier even after restart. Recover the exact stored T lineage backwards;
+  // only a NEW head lacking a completed delta still needs a fresh Git ancestry
+  // witness for earlier reviewed heads.
+  const completedLineage = new Set<string>([opts.targetSha]);
+  for (const r of [...previous].reverse()) {
+    if (completedLineage.has(r.targetSha) && r.finalCapDelta) {
+      completedLineage.add(r.finalCapDelta.fromSha);
+    }
+  }
+  // Ordered, fully completed original-run continuations form the only F
+  // chain. A divergent/missing predecessor cannot become reviewer authority.
+  for (const r of previous) {
+    // Completed reviews on a different descendant branch cannot advance F on
+    // this exact-T lineage; do not let them corrupt the current chain either.
+    // The exact stored chain is already protected; otherwise prove ancestry.
+    if (!completedLineage.has(r.targetSha)
+        && !await ancestry(r.targetSha, opts.targetSha)) continue;
+    if (r.finalCapDelta?.fromSha !== frontier
+        || r.finalCapDelta.toSha !== r.targetSha
+        || r.finalCapDelta.selectedBaseRef !== selectedBaseRef
+        // A self-consistent stored digest alone cannot prove that the ordinary
+        // reviewer actually received every unresolved H1/H2 finding. Bind the
+        // completed F..T result to the expected live frontier context.
+        || !isDeepStrictEqual(r.finalCapDelta.priorFindings, unresolved)) {
+      return refused('final_cap_delta_review_chain_unverified');
+    }
+    frontier = r.targetSha;
+    lastComplete = r;
+    unresolved = r.reviewVerdict === 'clean' ? [] : [...unresolved, ...r.findings];
+  }
+  if (frontier === opts.targetSha && lastComplete) {
+    return { state: lastComplete.reviewVerdict === 'clean' ? 'clean' : 'findings',
+      reason: 'final_cap_delta_exact_result_reused', runId: lastComplete.id,
+      fromSha: lastComplete.finalCapDelta!.fromSha };
+  }
+  if (!await ancestry(frontier, opts.targetSha)
+      || frontier === opts.targetSha) return refused('final_cap_delta_frontier_not_ancestor');
+  const pureMerge = await finalCapPureSelectedBaseMerge(
+    input.sourceRepoRoot, frontier, opts.targetSha, selectedBaseRef);
+  if (pureMerge) {
+    // The existing authenticated same-head Issue scope-only disposition is
+    // independently sufficient to resolve the ORIGINAL H1 blockers. It does
+    // not dispose of findings from any subsequent completed delta reviewer.
+    // Ordinary F..T reviews still receive original findings as context.
+    const originalDispositionResolved = opts.verifiedScopeCorrection === true && !lastComplete;
+    if (unresolved.length && !originalDispositionResolved) {
+      return { state: 'findings', reason: 'final_cap_pure_merge_original_findings_still_unresolved',
+        fromSha: frontier, zeroCall: true };
+    }
+    return { state: 'clean', reason: 'final_cap_pure_base_merge_verified',
+      fromSha: frontier, zeroCall: true };
+  }
+  const contextDigest = sha256Bytes(stableJson({
+    originalRunId: original.id, cycleId: opts.originalCycleId,
+    repository: opts.repoSlug.toLowerCase(), prNumber: opts.prNumber,
+    selectedBaseRef, fromSha: frontier, toSha: opts.targetSha,
+    reviewer, sourceSlotIds, issueDigest: opts.issueDigest, unresolved,
+  }));
+  const delta: PackReviewFinalCapDelta = {
+    originalRunId: original.id, originalCycleId: opts.originalCycleId,
+    repository: opts.repoSlug.toLowerCase(), prNumber: opts.prNumber,
+    selectedBaseRef, fromSha: frontier, toSha: opts.targetSha,
+    reviewer, sourceSlotIds, issueDigest: opts.issueDigest,
+    contextDigest, priorFindings: unresolved,
+  };
+  const existing = listPackReviewRuns({ projectId: opts.projectId, storeRoot: opts.storeRoot })
+    .filter((r) => r.finalCapDelta && r.prNumber === opts.prNumber
+      && r.targetSha === opts.targetSha);
+  if (existing.some((r) => !isDeepStrictEqual(r.finalCapDelta, delta))) {
+    return refused('final_cap_delta_same_head_context_changed');
+  }
+  if (existing.some((r) => !hasPersistedPackReviewVerdict(r))) {
+    return refused('final_cap_delta_original_attempt_requires_reconciliation');
+  }
+  if (!input.deltaClaimOwned?.()) {
+    return refused('final_cap_delta_requires_claimed_pr_led_review');
+  }
+  if (await readCheckedReviewPrHead(input, opts.repoSlug, opts.prNumber, opts.targetSha) !== opts.targetSha) {
+    return refused('final_cap_delta_head_drift_before_review');
+  }
+  const gptRound: PackReviewGptRoundRecord | undefined = reviewer === 'gpt' && original.reviewRound
+    ? { ...original.reviewRound, boundIssueSnapshotDigest: opts.issueDigest,
+        sourceSlots: original.reviewRound.sourceSlots.map((slot) => ({
+          slotId: slot.slotId, ordinal: slot.ordinal, lifecycle: 'planned' as const,
+        })),
+        settledSourceCount: undefined,
+      } : undefined;
+  let created: ReturnType<typeof createPackReviewRun>;
+  try {
+    created = createPackReviewRun({
+      projectId: opts.projectId, storeRoot: opts.storeRoot,
+      prNumber: opts.prNumber, headSha: opts.targetSha,
+      canonicalRepository: opts.repoSlug,
+      sourceRepoRoot: input.sourceRepoRoot,
+      trustedPackRoot: resolveTrustedRunnerPaths().trustedPackRoot,
+      linkedSessionId: original.linkedSessionId,
+      surface: 'pack-review-runner', startReason: 'final-cap-delta',
+      automaticBudgetDisposition: 'non_consuming_explicit',
+      allowRunnerFinalCapDeltaStart: true, finalCapDelta: delta,
+      reviewCycleId: opts.originalCycleId,
+      resolvedReviewer: reviewer, resolvedReviewerSource: original.resolvedReviewerSource,
+      boundIssueSnapshotDigest: opts.issueDigest,
+      ...(gptRound ? { reviewRound: gptRound,
+        accountingVersion: gptRound.accountingVersion } : {}),
+    });
+  } catch (error) { return refused('final_cap_delta_run_admission_failed: ' + describeError(error)); }
+  if (created.reused) {
+    let persisted = getPackReviewRun(created.run.id,
+      { projectId: opts.projectId, storeRoot: opts.storeRoot });
+    if (!persisted?.finalCapDelta || !isDeepStrictEqual(persisted.finalCapDelta, delta)
+        || !hasPersistedPackReviewVerdict(persisted)) {
+      return refused('final_cap_delta_incumbent_must_be_reconciled');
+    }
+    if (persisted.deliveryOutcomes.githubComment?.state !== 'succeeded') {
+      // Never reinvoke the reviewer for an existing journaled terminal.
+      // Existing GitHub COMMENT reconciliation owns the one-message election;
+      // a possibly-delivered mutation requires its original census, not a
+      // second arbitrary POST.
+      if (!input.deltaClaimOwned?.()
+          || await readCheckedReviewPrHead(input, opts.repoSlug, opts.prNumber, opts.targetSha)
+            !== opts.targetSha) return refused('final_cap_delta_resume_claim_or_head_unverified');
+      const journaled = packReviewJournaledPayload(persisted);
+      if (!journaled) return refused('final_cap_delta_journal_unavailable');
+      const transport = createGithubReviewTransport({
+        repoRoot: input.sourceRepoRoot, repoSlug: opts.repoSlug, prNumber: opts.prNumber,
+        fixtureReviewId: input.fixtureGithubReviewId,
+        fixtureTransport: input.fixtureGithubReviewTransport,
+      });
+      const incumbent = persisted;
+      try {
+        const resumed = await resumePackReviewVerdictDelivery({
+          run: incumbent, projectId: opts.projectId, storeRoot: opts.storeRoot,
+          postGithubComment: async () => {
+            const posted = await postGithubReview({
+              repoRoot: input.sourceRepoRoot, repoSlug: opts.repoSlug,
+              prNumber: opts.prNumber, headSha: opts.targetSha,
+              run: incumbent, payload: parseReviewPayload(JSON.stringify(journaled)), projectId: opts.projectId,
+              storeRoot: opts.storeRoot, transport,
+            });
+            return { id: posted.id, url: posted.url, event: 'COMMENT' };
+          },
+          writeRequiredStatus: async () => { throw new Error('delta status remains runner-owned'); },
+          notifyWorker: async () => { throw new Error('delta must not independently notify'); },
+        });
+        persisted = getPackReviewRun(incumbent.id,
+          { projectId: opts.projectId, storeRoot: opts.storeRoot });
+        if (resumed.reason !== 'completed' || !persisted
+            || persisted.deliveryOutcomes.githubComment?.state !== 'succeeded') {
+          return refused('final_cap_delta_original_comment_delivery_unconfirmed');
+        }
+      } catch (error) {
+        return refused('final_cap_delta_journal_delivery_requires_reconcile: ' + describeError(error));
+      }
+    }
+    return { state: persisted.reviewVerdict === 'clean' ? 'clean' : 'findings',
+      reason: 'final_cap_delta_exact_result_reused', runId: persisted.id, fromSha: frontier };
+  }
+  const run = created.run;
+  input.deltaBindClaimRun?.(run.id);
+  const trusted = resolveTrustedRunnerPaths();
+  const budgetLedger = createReviewerBudgetLedger(process.env, Date.now());
+  let worktree = '';
+  const ctx: ReviewWorktreeContext = {
+    repoRoot: input.sourceRepoRoot, repoSlug: opts.repoSlug,
+    projectId: opts.projectId, storeRoot: opts.storeRoot,
+  };
+  try {
+    updatePackReviewRun(run.id, { status: 'preparing', latestRunStatus: 'preparing',
+      runnerPid: process.pid }, { projectId: opts.projectId, storeRoot: opts.storeRoot });
+    if (!input.deltaClaimOwned()) throw new Error('final-cap reviewer claim lost');
+    if (process.env.OPK_VITEST_HARNESS === '1' && !input.fixtureUseRealReviewWorktree
+        && input.fixtureReviewStdout !== undefined) {
+      worktree = input.sourceRepoRoot;
+    } else {
+      worktree = await createReviewWorktree(
+        input.sourceRepoRoot, opts.storeRoot, run.id, opts.targetSha,
+        (allocated) => { worktree = allocated; });
+    }
+    updatePackReviewRun(run.id, { reviewTargetRoot: worktree },
+      { projectId: opts.projectId, storeRoot: opts.storeRoot });
+    const issueBody = process.env.OPK_VITEST_HARNESS === '1' ? input.fixtureIssueBody
+      : (await resolveCurrentIssueFields(input.sourceRepoRoot, opts.repoSlug, opts.issueNumber)).body;
+    if (typeof issueBody !== 'string'
+        || computeBoundIssueSnapshotHash(issueBody) !== opts.issueDigest) {
+      throw new Error('delta review current Issue not exact bound body');
+    }
+    const frozenScope: ResolvedScopeContext = {
+      issueNumber: opts.issueNumber, hasScope: true,
+      issueConstraints: parseIssueBody(issueBody), declaredPaths: [], declaredGlobs: [],
+      unverifiedIssueConstraints: false,
+    };
+    if (await readCheckedReviewPrHead(input, opts.repoSlug, opts.prNumber, opts.targetSha) !== opts.targetSha) {
+      throw new Error('delta review head changed before invocation');
+    }
+    updatePackReviewRun(run.id, { status: 'running', latestRunStatus: 'running',
+      executedReviewer: reviewer, reviewerExecutionRunId: run.id, reviewerInvokedForThisRun: true },
+    { projectId: opts.projectId, storeRoot: opts.storeRoot });
+    let payload: ReviewPayload;
+    if (reviewer === 'gpt' && gptRound) {
+      payload = await runGptSourceBatch({
+        run, round: gptRound, reviewerPath: trusted.reviewerPath,
+        trustedPackRoot: trusted.trustedPackRoot, reviewTargetRoot: worktree,
+        baseRef: frontier, target: { prNumber: opts.prNumber, headSha: opts.targetSha,
+          issueNumber: opts.issueNumber, sessionId: original.linkedSessionId,
+          repoSlug: opts.repoSlug, sourceRepoRoot: input.sourceRepoRoot },
+        budgetLedger, projectId: opts.projectId, storeRoot: opts.storeRoot,
+        input: input as StartInput, carryoverBundlePath: '',
+        frozenScope, reviewer,
+      });
+    } else {
+      updatePackReviewRun(run.id, { nativeAttempt: {
+        schema: 'pack-review-native-attempt/v1', reviewer: reviewer as 'codex' | 'claude',
+        invocationOrdinal: 1, startedAtUtc: new Date().toISOString(),
+        effectiveBudgetMs: budgetLedger.effectiveBudgetMs,
+      } }, { projectId: opts.projectId, storeRoot: opts.storeRoot });
+      const invocation = await invokeReviewer({
+        reviewerPath: trusted.reviewerPath, trustedPackRoot: trusted.trustedPackRoot,
+        reviewTargetRoot: worktree, baseRef: frontier,
+        prNumber: opts.prNumber, issueNumber: opts.issueNumber,
+        sessionId: original.linkedSessionId, budgetLedger,
+        runId: run.id, projectId: opts.projectId, storeRoot: opts.storeRoot,
+        headSha: opts.targetSha, reviewer,
+        frozenScope, fixtureReviewStdout: input.fixtureReviewStdout,
+        fixtureReviewExitCode: input.fixtureReviewExitCode,
+        fixtureReviewTimedOut: input.fixtureReviewTimedOut,
+        nativeInvocationOrdinal: 1,
+      });
+      if (invocation.result.timedOut || !invocation.result.ok) {
+        throw new Error('delta ordinary reviewer incomplete');
+      }
+      payload = parseReviewPayload(invocation.result.stdout);
+      writeRunLogs(opts.storeRoot, run.id, invocation.result.stdout, invocation.result.stderr);
+    }
+    if (await readCheckedReviewPrHead(input, opts.repoSlug, opts.prNumber, opts.targetSha) !== opts.targetSha) {
+      throw new Error('delta review completed on stale PR head');
+    }
+    // Ordinary journal/REVIEW delivery, with unchanged source payload grammar.
+    // The existing non-consuming disposition suppresses direct required-status
+    // and notification writes: this final-cap settlement branch owns status.
+    const transport = createGithubReviewTransport({
+      repoRoot: input.sourceRepoRoot, repoSlug: opts.repoSlug, prNumber: opts.prNumber,
+      fixtureReviewId: input.fixtureGithubReviewId,
+      fixtureTransport: input.fixtureGithubReviewTransport,
+    });
+    const delivered = await deliverPackReviewVerdict({
+      run, payload, projectId: opts.projectId, storeRoot: opts.storeRoot,
+      postGithubComment: async () => {
+        const posted = await postGithubReview({
+          repoRoot: input.sourceRepoRoot, repoSlug: opts.repoSlug,
+          prNumber: opts.prNumber, headSha: opts.targetSha,
+          run, payload, projectId: opts.projectId, storeRoot: opts.storeRoot,
+          transport,
+        });
+        return { id: posted.id, url: posted.url, event: 'COMMENT' };
+      },
+      writeRequiredStatus: async () => { throw new Error('delta cannot publish required status'); },
+      notifyWorker: async () => { throw new Error('delta delivery must not create worker notification'); },
+    });
+    const final = getPackReviewRun(run.id, { projectId: opts.projectId, storeRoot: opts.storeRoot });
+    if (!delivered.ok || delivered.reason !== 'completed' || !final
+        || !hasPersistedPackReviewVerdict(final)
+        || final.deliveryOutcomes.githubComment?.state !== 'succeeded'
+        || final.reviewVerdict !== payload.verdict) {
+      return refused('final_cap_delta_delivery_unconfirmed');
+    }
+    return { state: payload.verdict === 'clean' ? 'clean' : 'findings',
+      reason: payload.verdict === 'clean' ? 'final_cap_delta_clean'
+        : 'final_cap_delta_findings_existing_fixer_required',
+      runId: run.id, fromSha: frontier };
+  } catch (error) {
+    const persisted = getPackReviewRun(run.id,
+      { projectId: opts.projectId, storeRoot: opts.storeRoot });
+    if (persisted && !hasPersistedPackReviewVerdict(persisted)) {
+      try {
+        setPackReviewRunTerminal(run.id, 'failed', {
+          failureReason: 'final_cap_delta_incomplete:' + describeError(error),
+        }, { projectId: opts.projectId, storeRoot: opts.storeRoot });
+      } catch { /* preserve any possible source send for existing census */ }
+    }
+    return refused('final_cap_delta_review_unverified: ' + describeError(error));
+  } finally {
+    if (worktree && worktree !== input.sourceRepoRoot) {
+      const cleanup = await removeReviewWorktree(ctx, run.id, worktree, 'finally');
+      if (cleanup !== 'removed' && cleanup !== 'absent') {
+        process.stderr.write('[final-cap delta] checkout preserved for reconciliation: ' + cleanup + '\\n');
+      }
+    }
+  }
+}
+
 async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsInput, options: {
   projectId: string;
   storeRoot: string;
@@ -6618,6 +7142,30 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
   }
 
   let verifiedFinalCiSelectors: TargetContext['requiredCi'];
+  let selectedBaseTipBeforeDelta: string | undefined;
+  // The production card is mandatory; legacy offline fixtures without a card
+  // still exercise the original no-transport reconciliation path.
+  const selectedFinalCap: TargetContext | undefined = process.env.OPK_VITEST_HARNESS === '1'
+    ? (() => {
+        try { return resolveTargetContext({ projectId: options.projectId }); }
+        catch { return undefined; }
+      })()
+    : resolveTargetContext({ projectId: options.projectId });
+  const readSelectedBaseTip = async (): Promise<string> => {
+    if (!selectedFinalCap) throw new Error('selected base project card unavailable');
+    const ref = 'refs/heads/' + selectedFinalCap.defaultBranch;
+    const rows = (await runGit(input.sourceRepoRoot,
+      ['ls-remote', 'origin', ref], 'selected base live tip')).trim().split(/\r?\n/);
+    const parts = rows.length === 1 ? rows[0]!.split('\t') : [];
+    if (parts.length !== 2 || !rebaseSha1.test(parts[0] ?? '') || parts[1] !== ref) {
+      throw new Error('selected base remote tip unverified');
+    }
+    const local = await rebaseGitSha1(input.sourceRepoRoot,
+      ['rev-parse', '--verify', 'refs/remotes/origin/' + selectedFinalCap.defaultBranch + '^{commit}'],
+      'selected local base tip');
+    if (local !== parts[0]) throw new Error('selected base remote/local tip moved');
+    return parts[0]!;
+  };
   if (logicalAccounting && currentHead !== priorRun.targetSha
       && (process.env.OPK_VITEST_HARNESS !== '1' || rebasedC
         || input.fixtureGithubReviewTransport)) {
@@ -6635,6 +7183,15 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         throw new Error('current-head required CI not green');
       }
       verifiedFinalCiSelectors = requiredCi;
+      if (process.env.OPK_VITEST_HARNESS !== '1') {
+        if (!selectedFinalCap) throw new Error('selected base project card unavailable');
+        const pr = await resolveCurrentPrTarget(input.sourceRepoRoot, options.repoSlug, prNumber);
+        if (pr.headSha !== currentHead || pr.baseRef !== selectedFinalCap.defaultBranch
+            || selectedFinalCap.repository.toLowerCase() !== options.repoSlug.toLowerCase()) {
+          throw new Error('selected PR/base identity changed before delta review');
+        }
+        selectedBaseTipBeforeDelta = await readSelectedBaseTip();
+      }
     } catch (error) {
       return { prNumber, headSha: currentHead, finalCapSettlement: true, settled: false,
         reason: 'final_cap_review_binding_unverified', detail: describeError(error),
@@ -6703,7 +7260,37 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
           }
         } catch { currentIssueStillBound = false; }
       }
-      return currentIssueStillBound
+      // Refresh exact-T CI and selected-base identity/tip after the reviewer
+      // and immediately before POST/confirmation; an old green is not proof.
+      let freshCiAndBase = selectedFinalCap === undefined
+        ? process.env.OPK_VITEST_HARNESS === '1'
+        : selectedFinalCap.repository.toLowerCase() === options.repoSlug.toLowerCase();
+      try {
+        if (freshCiAndBase && selectedFinalCap) {
+          const currentCard = resolveTargetContext({ projectId: options.projectId });
+          freshCiAndBase = currentCard.repository.toLowerCase() === selectedFinalCap.repository.toLowerCase()
+            && currentCard.defaultBranch === selectedFinalCap.defaultBranch
+            && stableJson(currentCard.requiredCi ?? null) === stableJson(selectedFinalCap.requiredCi ?? null);
+        }
+        if (freshCiAndBase && process.env.OPK_VITEST_HARNESS !== '1') {
+          if (!selectedFinalCap) throw new Error('selected base project card unavailable');
+          const pr = await resolveCurrentPrTarget(input.sourceRepoRoot, options.repoSlug, prNumber);
+          const tip = await readSelectedBaseTip();
+          freshCiAndBase = pr.headSha === publicationHead.toLowerCase()
+            && pr.baseRef === selectedFinalCap.defaultBranch
+            && (selectedBaseTipBeforeDelta === undefined || tip === selectedBaseTipBeforeDelta);
+        }
+        if (freshCiAndBase && selectedFinalCap && (process.env.OPK_VITEST_HARNESS !== '1'
+            || input.fixtureRequiredCiChecks !== undefined
+            || input.fixtureRequiredCiPolicy !== undefined)) {
+          freshCiAndBase = await manualPackReviewRequiredCiGreen({
+            startInput: input, targetContext: selectedFinalCap,
+            target: { prNumber, headSha: publicationHead, repoSlug: options.repoSlug,
+              sourceRepoRoot: input.sourceRepoRoot, prBaseRef: selectedFinalCap.defaultBranch },
+          });
+        }
+      } catch { freshCiAndBase = false; }
+      return freshCiAndBase && currentIssueStillBound
         && liveHead === publicationHead.toLowerCase()
         && latest?.currentHeadSha.toLowerCase() === publicationHead.toLowerCase()
         && latest.terminal?.runId === priorRun.id
@@ -6828,7 +7415,108 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
           nextAction: 'verify the original exact-run sources, canonical terminal REVIEW ID/timestamp, frozen Issue digest, corrected REST Issue scope, and one authorized post-terminal disposition COMMENT; recheck current-head CI and rerun scoped exact-head reconcile. Only a real code fix belongs on a strict descendant' };
       }
     }
-    if (!completedFinalFindings) {
+    // Rechecked original Issue, source/REVIEW and current-head CI above.
+    // At this point the original H1 final-cap terminal is immutable and T
+    // has been observed. A clean F..T review is still mandatory for code
+    // introduced on a strict descendant; earlier H2 success does not cover H3.
+    let deltaOutcome: FinalCapDeltaOutcome | undefined;
+    // A historical success status may have been published by the old
+    // ancestry-only path; it does NOT authenticate review of the new code.
+    // The distinct rewritten-C lane can be reused on the exact already
+    // published head only after re-proving its original full C witness.
+    // A later H3 cannot inherit H2's publication or its C proof.
+    if (completedFinalFindings && !rebasedC
+        && authority.cycle?.settlementKind === undefined
+        && authority.publication?.headSha === authority.currentHeadSha
+        && authority.publication.terminalRunId === priorRun.id) {
+      try {
+        const checkedC = await proveUniqueRebasedC(input, options, prNumber,
+          reviewedHeadSha, authority.currentHeadSha);
+        await checkedC.recheck(verifiedFinalCiSelectors);
+        rebasedC = checkedC;
+      } catch {
+        // No rewritten-C proof: ordinary delta review is still mandatory.
+      }
+    }
+    if (!rebasedC && authority.currentHeadSha !== reviewedHeadSha) {
+      if (!verifiedFinalIssue) {
+        return { prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
+          settled: false, reason: 'final_cap_delta_issue_binding_missing',
+          nextAction: 'restore exact original H1 Issue and source binding before running F..T' };
+      }
+      deltaOutcome = await runFinalCapOrdinaryDelta(input, {
+        projectId: options.projectId, storeRoot: options.storeRoot,
+        repoSlug: options.repoSlug, prNumber,
+        original: priorRun, originalCycleId: authority.cycle!.cycleId,
+        issueNumber: verifiedFinalIssue.issueNumber, issueDigest: verifiedFinalIssue.digest,
+        targetSha: authority.currentHeadSha,
+        verifiedScopeCorrection: verifiedScopeCorrection
+          || (completedFinalFindings
+            && authority.cycle?.settlementKind === 'same_head_issue_resolution'
+            && sameHeadPublicationDigest !== undefined),
+      });
+      if (deltaOutcome.state !== 'clean') {
+        // Use the existing fixer/worker transport, once per persisted delta.
+        const findingsHandoff = deltaOutcome.state === 'findings' && deltaOutcome.runId
+          ? await handoffFinalCapDeltaFindings({
+              runId: deltaOutcome.runId, originalRunId: priorRun.id,
+              projectId: options.projectId, storeRoot: options.storeRoot,
+              notifier: input.fixtureWorkerNotifier,
+            }) : undefined;
+        const currentTarget = authority.currentHeadSha;
+        try {
+          if (await readCheckedReviewPrHead(input, options.repoSlug, prNumber, currentTarget)
+              === currentTarget) {
+            await (input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
+              repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
+              headSha: currentTarget, request,
+            })))({
+              state: deltaOutcome.state === 'findings' ? 'failure' : 'pending',
+              context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+              description: deltaOutcome.state === 'findings'
+                ? 'Final-cap ordinary delta has unresolved review findings.'
+                : 'Final-cap F..T ordinary review unresolved; no ancestry shortcut.',
+              idempotencyKey: 'final-cap-delta:' + priorRun.id + ':' + currentTarget
+                + ':' + (deltaOutcome.runId ?? 'unverified'),
+            });
+          }
+        } catch { /* a status write is not proof of disposition */ }
+        return {
+          prNumber, headSha: currentTarget, finalCapSettlement: true, settled: false,
+          reason: deltaOutcome.reason,
+          ...(deltaOutcome.runId ? { deltaRunId: deltaOutcome.runId } : {}),
+          ...(findingsHandoff ? { findingsHandoff } : {}),
+          nextAction: deltaOutcome.state === 'findings'
+            ? findingsHandoff?.state === 'submitted' || findingsHandoff?.state === 'already_attempted'
+              ? 'continue the existing fixer from the persisted delta REVIEW, then review only the next F..T'
+              : 'restore the bound worker notification route for persisted findings before fixer continuation'
+            : 'reconcile the existing exact-head delta run/source census or use the PR-led claimed runner; never resend uncertain output',
+        };
+      }
+      if (!deltaOutcome.zeroCall) {
+        const deltaRun = deltaOutcome.runId
+          ? getPackReviewRun(deltaOutcome.runId, { projectId: options.projectId, storeRoot: options.storeRoot })
+          : null;
+        if (!deltaRun || deltaRun.reviewVerdict !== 'clean'
+            || !hasPersistedPackReviewVerdict(deltaRun)
+            || deltaRun.targetSha !== authority.currentHeadSha
+            || deltaRun.finalCapDelta?.originalRunId !== priorRun.id
+            || deltaRun.finalCapDelta.fromSha !== deltaOutcome.fromSha
+            || deltaRun.finalCapDelta.originalCycleId !== authority.cycle?.cycleId) {
+          return { prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
+            settled: false, reason: 'final_cap_delta_clean_run_unverified',
+            nextAction: 'restore and reread the exact current-head ordinary clean delta run' };
+        }
+      }
+    }
+    // A failed status POST must not settle the already closed delta cycle
+    // again on retry. A previously same-head-only closure needs precisely
+    // one transition to the ordinary descendant lane; later H2/H3 clean
+    // evidence is enforced above, while publication alone advances S.
+    if (!completedFinalFindings
+        || (!rebasedC && deltaOutcome?.state === 'clean'
+          && authority.cycle?.reviewStageComplete === true
+          && authority.cycle.settlementKind === 'same_head_issue_resolution')) {
       const strictDescendant = await resolvePackReviewStrictDescendant({
         repoRoot: input.sourceRepoRoot,
         repoSlug: options.repoSlug,
@@ -6851,6 +7539,8 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
           prNumber, expectedTransitionSeq: authority.transitionSeq,
           reviewedHeadSha, currentHeadSha: authority.currentHeadSha,
           ...(rebasedC ? { ancestryAnchorSha: rebasedC.anchorSha } : {}),
+          ...(!rebasedC && deltaOutcome?.runId ? { verifiedDeltaRunId: deltaOutcome.runId } : {}),
+          ...(!rebasedC && deltaOutcome?.zeroCall ? { verifiedPureBaseMerge: true } : {}),
           reviewedHeadIsAncestor: true, options: { storeRoot: options.storeRoot },
         });
       } catch (error) {
@@ -6874,7 +7564,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
           + '; rebased descendant H2 ' + authority.currentHeadSha.slice(0, 8) + '.'
         : completedFinalFindings
           ? 'Required pack-review stage already completed; current-head status revalidated.'
-          : 'Required pack-review stage completed; strict descendant of reviewed findings.',
+          : 'Required pack-review stage completed; clean ordinary F..T delta review.',
       sameHeadPublicationDigest ?? sha256Bytes(stableJson({
         runId: priorRun.id, reviewedHeadSha, publicationHead: authority.currentHeadSha,
         settlementKind: 'strict_descendant',
@@ -9050,13 +9740,29 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
     }
   }
 
+  // A finished F..T review can already be in the protected store when this
+  // PR-led caller acquires a claim solely to reconcile its current-head
+  // publication. That historical exact-T verdict was NOT launched by this
+  // claim and must not be mistaken for a newly emitted review run on release.
+  // A newly created or still-active run remains visible to claim accounting.
+  const completedBeforeClaim = new Set(
+    claimLease?.acquired
+      ? listPackReviewRuns({ projectId, storeRoot })
+        .filter((run) => run.prNumber === target.prNumber
+          && run.targetSha === target.headSha
+          && hasPersistedPackReviewVerdict(run))
+        .map((run) => run.id)
+      : [],
+  );
   const releaseEarlyClaim = async (reason: string): Promise<void> => {
     if (!claimLease?.acquired) return;
     // Claim cleanup is secondary: a lost, ambiguous or throwing completion is
     // reported beside the primary result and never masks or inverts it.
     let observation: ClaimReleaseObservation;
     try {
-      const completed = await claimLease.release('failure', listPackReviewRuns({ projectId, storeRoot }), reason);
+      const eligibleRuns = listPackReviewRuns({ projectId, storeRoot })
+        .filter((run) => !completedBeforeClaim.has(run.id));
+      const completed = await claimLease.release('failure', eligibleRuns, reason);
       observation = completed?.outcome === 'released_for_retry'
         ? { ok: true, outcome: completed.outcome }
         : { ok: false, outcome: completed?.outcome ?? null, reason: 'claim_release_not_released_for_retry',
@@ -9396,9 +10102,19 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         fixtureRequiredCiPostProjectionBase: input.fixtureRequiredCiPostProjectionBase,
         fixtureRequiredCiHeadAfterGate: input.fixtureRequiredCiHeadAfterGate,
         fixtureRequiredCiBaseAfterGate: input.fixtureRequiredCiBaseAfterGate,
-        baseRef: target.prBaseRef,
+        // The PR's live base branch is already verified above. The frozen
+        // delta identity uses its canonical remote ref, not the short PR base.
+        baseRef: `origin/${target.prBaseRef}`,
         fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
         fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
+        deltaClaimOwned: () => claimMode === 'preacquired'
+          ? preacquiredClaimOwned() : claimLease?.owns() === true,
+        deltaBindClaimRun: (runId: string) => claimLease?.bindRunId(runId),
+        fixtureReviewStdout: input.fixtureReviewStdout,
+        fixtureReviewExitCode: input.fixtureReviewExitCode,
+        fixtureReviewTimedOut: input.fixtureReviewTimedOut,
+        fixtureReviewBySourceSlot: input.fixtureReviewBySourceSlot,
+        fixtureUseRealReviewWorktree: input.fixtureUseRealReviewWorktree,
       }, { projectId, storeRoot, repoSlug: target.repoSlug });
       await releaseEarlyClaim(result?.settled === true ? 'final_cap_descendant_settled' : 'final_cap_settlement_refused');
       // reconcileFinalCapSettlement settles only after current-head required
@@ -9473,6 +10189,12 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
           const bound = original.boundIssueSnapshotDigest
             ?? original.reviewRound?.boundIssueSnapshotDigest
             ?? authoritative.snapshotDigest;
+          // Completed H2 findings authority cannot be projected onto H3 after
+          // observePackReviewHead clears the old publication record.
+          if (authority.terminal.reviewVerdict === 'findings'
+              && authority.currentHeadSha !== authority.terminal.targetSha
+              && (authority.publication?.headSha !== target.headSha
+                || authority.publication?.status !== 'succeeded')) return false;
           const originalDigestMatches = Boolean(bound && bound === authoritative.snapshotDigest);
           if (!originalDigestMatches && !completedFinalCapVerified
               && authority.cycle?.settlementKind !== 'same_head_issue_resolution') return false;
@@ -9512,7 +10234,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
             fixtureRequiredCiPolicyHttpStatus: input.fixtureRequiredCiPolicyHttpStatus,
             fixtureRequiredCiHeadAfterGate: input.fixtureRequiredCiHeadAfterGate,
             fixtureRequiredCiBaseAfterGate: input.fixtureRequiredCiBaseAfterGate,
-            baseRef: target.prBaseRef,
+            baseRef: `origin/${target.prBaseRef}`,
           }, { projectId, storeRoot, repoSlug: target.repoSlug });
           return accepted?.settled === true;
         } catch { return false; }
