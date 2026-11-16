@@ -3123,6 +3123,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       };
       const positive = mode === 'scoped reconcile' || mode === 'PR-led start'
         || mode === 'guarded-declaration' || mode === 'guarded-declaration-start';
+      if (positive) completeFinalCapDelta(f, HEAD, f.transports.issue.body);
       if (mode === 'PR-led start' || mode === 'guarded-declaration-start') {
         const result = await startPackReview({ ...target, headSha: HEAD, claimMode: 'acquire',
           fixtureRepoSlug: repository, fixturePostReviewHeadSha: HEAD,
@@ -3137,7 +3138,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       expect(f.statuses.some((status) => status.state === 'success')).toBe(positive);
       expect(getPackReviewRun(f.run.id, f.options)?.reviewRound).toEqual(before.reviewRound);
       expect(readPackReviewAuthority(prNumber, f.options)?.terminal).toEqual(f.authority.terminal);
-      expect(listPackReviewRuns(f.options)).toHaveLength(1);
+      expect(listPackReviewRuns(f.options)).toHaveLength(positive ? 2 : 1);
       if (positive) {
         const again = await reconcileStalePackReviewRuns(target);
         expect(again.results, JSON.stringify(again)).toContainEqual(expect.objectContaining({ settled: true }));
@@ -3391,6 +3392,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       // Synthetic REST PR and the independent current-head fixture must
       // describe the same actual H2 PR; a stale H1 REST row must fail closed.
       f.transports.pr.head.sha = HEAD;
+      completeFinalCapDelta(f, HEAD, revisedBody);
       const target = {
         ...f.input, fixtureCurrentPrHeadSha: HEAD,
         fixturePrState: 'OPEN', fixturePrBody: 'Closes #' + issueNumber,
@@ -3416,7 +3418,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       expect(statusesByHead.get(HEAD)).toBe('success');
       expect(readPackReviewAuthority(prNumber, f.options)?.cycle).toMatchObject({
         state: 'closed', reviewStageComplete: true,
-        settlementKind: 'same_head_issue_resolution',
+        settlementKind: 'delta_review',
         consumedRoundOrdinals: [1, 2],
       });
       expect(getPackReviewRun(f.run.id, f.options)?.reviewVerdict).toBe('findings');
@@ -3427,6 +3429,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     'Issue #2719: PR-led start keeps verified H2 settlement primary with %s secondary claim cleanup',
     async (variation) => {
       const f = unchangedDescendantFixture();
+    // Ancestry alone is not enough: this is the persisted, authenticated
+    // ordinary delta result from the real protected run store.
+    completeFinalCapDelta(f, HEAD, revisedBody);
       const statusesByHead = new Map<string, string>();
       const activeClaim = claimPath(resolveReviewStartClaimNamespace({ projectId: 'orchestrator-pack' }), prNumber, HEAD);
       f.input.fixtureRequiredStatusReader = async (head) => statusesByHead.get(head);
@@ -3482,6 +3487,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
 
   it('Issue #2719: an unverified H2 settlement stays primary non-success despite a released claim', async () => {
     const f = unchangedDescendantFixture();
+    // Ancestry alone is not enough: this is the persisted, authenticated
+    // ordinary delta result from the real protected run store.
+    completeFinalCapDelta(f, HEAD, revisedBody);
     f.input.fixtureRequiredStatusReader = async () => undefined;
     f.input.fixtureRequiredStatusWriter = async (request) => { f.statuses.push(request); };
     const outcome = await startPackReview({
@@ -3698,6 +3706,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
 
   it('keeps changed-head settlement on the observed strict-descendant route', async () => {
     const f = unchangedDescendantFixture();
+    // Ancestry alone is not enough: this is the persisted, authenticated
+    // ordinary delta result from the real protected run store.
+    completeFinalCapDelta(f, HEAD, revisedBody);
     f.input.fixtureCurrentPrHeadSha = HEAD;
     f.input.fixtureReviewCompareStatus = 'ahead';
     const result = await reconcileStalePackReviewRuns(f.input);
@@ -3746,6 +3757,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
 
   it('Issue #2451: strict descendant retries failed publication without a second settlement', async () => {
     const f = unchangedDescendantFixture();
+    // Ancestry alone is not enough: this is the persisted, authenticated
+    // ordinary delta result from the real protected run store.
+    completeFinalCapDelta(f, HEAD, revisedBody);
     f.input.fixtureCurrentPrHeadSha = HEAD;
     f.input.fixtureReviewCompareStatus = 'ahead';
     f.input.fixtureRequiredStatusWriter = async () => { throw new Error('offline descendant status failure'); };
@@ -3770,6 +3784,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
 
   it('Issue #2451: a closed descendant with a missing GitHub status retries, then confirms without duplicate publication', async () => {
     const f = unchangedDescendantFixture();
+    // Ancestry alone is not enough: this is the persisted, authenticated
+    // ordinary delta result from the real protected run store.
+    completeFinalCapDelta(f, HEAD, revisedBody);
     f.input.fixtureCurrentPrHeadSha = HEAD;
     f.input.fixtureReviewCompareStatus = 'ahead';
     const statusesByHead = new Map<string, string>();
@@ -3810,6 +3827,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
 
   it('Issue #2451: a settled strict descendant projects a later live head without reopening the review cap', async () => {
     const f = unchangedDescendantFixture();
+    // Ancestry alone is not enough: this is the persisted, authenticated
+    // ordinary delta result from the real protected run store.
+    completeFinalCapDelta(f, HEAD, revisedBody);
     let liveHead = HEAD;
     const statusByHead = new Map<string, string>();
     f.input.fixtureCurrentPrHeadSha = HEAD;
@@ -3854,6 +3874,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
 
   it('Issue #2451: an acknowledged write without a GitHub success status stays unsettled and is retryable', async () => {
     const f = unchangedDescendantFixture();
+    // Ancestry alone is not enough: this is the persisted, authenticated
+    // ordinary delta result from the real protected run store.
+    completeFinalCapDelta(f, HEAD, revisedBody);
     f.input.fixtureCurrentPrHeadSha = HEAD;
     f.input.fixtureReviewCompareStatus = 'ahead';
     let githubStatus: string | undefined;
@@ -3884,6 +3907,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
 
   it('Issue #2451: changing the selected run verdict authority during awaited publication cannot claim success', async () => {
     const f = unchangedDescendantFixture();
+    // Ancestry alone is not enough: this is the persisted, authenticated
+    // ordinary delta result from the real protected run store.
+    completeFinalCapDelta(f, HEAD, revisedBody);
     f.input.fixtureCurrentPrHeadSha = HEAD;
     f.input.fixtureReviewCompareStatus = 'ahead';
     let githubStatus: string | undefined;
