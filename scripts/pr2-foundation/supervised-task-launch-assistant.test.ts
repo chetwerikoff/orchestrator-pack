@@ -7442,7 +7442,10 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
         { ...deps({ adapter, onSupervised: () => { starts += 1; } }), now: () => 0,
           monotonicNow: () => ticks });
       expect(result).toMatchObject({ outcome: 'continue', stage: 'terminal_prepare',
-        observedCause: 'terminal_observation_deadline' });
+        observedCause: 'terminal_observation_deadline',
+        evidence: { unverifiedSpawnReturn: { runtime: 'orca', id: worker.identity.id,
+          generation: worker.identity.generation } },
+      });
       expect(passedTimeout).toBe(60_000);
       expect(spawns).toBe(1);
       expect(liveness).toBe(0);
@@ -7500,6 +7503,44 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
       expect(submitted?.orcaArgs).toEqual([
         '--task', 'task-1', '--terminal', worker.identity.id, '--worktree', 'id:manager-worktree',
       ]);
+    });
+
+    it('passes selected project to production assistant-owned child environment without ambient selection', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'opk-2842-prod-project-'));
+      const cards = join(root, 'orchestrator-pack', 'projects');
+      mkdirSync(cards, { recursive: true });
+      writeFileSync(join(cards, 'orchestrator-pack.json'), JSON.stringify({
+        projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+        primaryRoot: process.cwd(), defaultBranch: 'main', orcaWorkspacePattern: '.*',
+        orchestratorTitlePattern: '.*', browserGpt: { projectUrl: 'https://example.test/project' },
+      }));
+      const ambient = { ...env, XDG_CONFIG_HOME: root, ORCA_TERMINAL_HANDLE: 'coordinator-pane' };
+      delete ambient.OPK_PROJECT_ID;
+      const observed: Array<{ argv: string[]; project?: string }> = [];
+      const mock = vi.spyOn(subprocess, 'runProcess').mockImplementation(async (options) => {
+        observed.push({ argv: [options.command, ...(options.args ?? [])],
+          project: options.env?.OPK_PROJECT_ID });
+        return { outcome: 'exit', ok: true, exitCode: 0, signal: null,
+          stdout: JSON.stringify({ ok: true, result: { run: {
+            id: 'run-1', coordinator_handle: 'coordinator-pane',
+          } } }), stderr: '', timedOut: false, cancelled: false };
+      });
+      try {
+        const parsed = parseLaunchAssistantCli([
+          '--project', 'orchestrator-pack', '--work-class', 'manager', '--run', 'run-1',
+          '--task', 'task-1', '--issue-number', '2842',
+          '--worktree', 'id:manager-worktree', '--existing-terminal', worker.identity.id,
+        ], ambient);
+        const production = await createProductionLaunchDependencies(parsed);
+        const result = await production.observeManagerRun('run-1');
+        expect(result).toMatchObject({ status: 'ok', value: { runId: 'run-1' } });
+        expect(observed).toEqual([{ argv: [
+          'orca', 'orchestration', 'run-show', '--id', 'run-1', '--full', '--json',
+        ], project: 'orchestrator-pack' }]);
+      } finally {
+        mock.mockRestore();
+        rmSync(root, { recursive: true, force: true });
+      }
     });
 
     it('refuses commandless existing terminal without liveness or start', async () => {
