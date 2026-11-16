@@ -6339,7 +6339,10 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
   for (const r of previous) {
     // Completed reviews on a different descendant branch cannot advance F on
     // this exact-T lineage; do not let them corrupt the current chain either.
-    if (!await ancestry(r.targetSha, opts.targetSha)) continue;
+    // Exact-T authenticated completion is a reusable protected-store fact;
+    // Git ancestry is needed only when carrying it forward to a NEW head.
+    if (r.targetSha !== opts.targetSha
+        && !await ancestry(r.targetSha, opts.targetSha)) continue;
     if (r.finalCapDelta?.fromSha !== frontier
         || r.finalCapDelta.toSha !== r.targetSha) {
       return refused('final_cap_delta_review_chain_unverified');
