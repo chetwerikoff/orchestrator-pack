@@ -6215,7 +6215,8 @@ export async function maybeAdmitPackReviewBodyAmendment(
 
 
 /** Cheap merge-tree-only optimization, never a finding-resolution shortcut.
- * Every PR-line commit is a clean merge of the *selected current* base tip.
+ * Every PR-line commit is a clean merge of a selected-base ancestor, and the
+ * latest merge must bind the selected current base tip.
  * A later-adopted foreign side branch or unverifiable topology is inspected
  * by the ordinary reviewer, never silently classified as empty.
  */
@@ -6243,6 +6244,11 @@ export async function finalCapPureSelectedBaseMerge(
       // clean merge-tree result rather than requiring the final base tip at
       // every intermediate merge.
       const mergedBase = parents[2]!;
+      if (mergeSha === firstParent[firstParent.length - 1] && mergedBase !== baseTip) {
+        // A previously clean merge is not a zero-call witness after the
+        // selected base tip has advanced again.
+        return false;
+      }
       if (!await rebaseAncestor(root, mergedBase, baseTip)) return false;
       const mergeTree = await runProcess({
         command: 'git', args: ['merge-tree', '--write-tree', cursor, mergedBase],
