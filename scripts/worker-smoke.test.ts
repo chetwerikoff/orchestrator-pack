@@ -20,10 +20,19 @@ import {
   type WorkerSmokeCommentRecord,
 } from './lib/worker-smoke-core.ts';
 import { publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath } from './lib/worker-assignment-store.ts';
+import {
+  PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+  commitPackReviewTerminal,
+  initializePackReviewAuthority,
+  observePackReviewHead,
+  recordPackReviewPublication,
+  settleLogicalPackReviewFindingsByStrictDescendant,
+} from './pack-review-state.ts';
 import { evaluateWorkerSmokeGate as evaluateBaseSmokeGate, scrubSmokeOutput } from './lib/worker-smoke-core-base.ts';
 import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
 import {
   emit,
+  evaluatePostSmokeReadiness,
   main,
   publishPrComment,
   runPublishSmoke,
@@ -1368,4 +1377,104 @@ describe('Issue #2319 terminal-free publish', () => {
     }
   });
 
+});
+
+
+describe('Issue #2835 worker-smoke exact-head post-smoke status POST', () => {
+  it('never POSTs H2 stage success onto unreviewed H3 but permits confirmed exact-H3 completion', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-2835-'));
+    const storeRoot = join(root, 'review-store');
+    const oldBase = process.env.OPK_BASE_DIR;
+    const oldStore = process.env.PACK_REVIEW_RUN_STORE_ROOT;
+    const h1 = HEAD_ONE, h2 = HEAD_TWO, h3 = '3'.repeat(40);
+    process.env.OPK_BASE_DIR = root;
+    process.env.PACK_REVIEW_RUN_STORE_ROOT = storeRoot;
+    const store = { projectId: 'orchestrator-pack', storeRoot };
+    try {
+      let authority = initializePackReviewAuthority({
+        prNumber: 2001, headSha: h1, tier: 'T2',
+        capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options: store,
+      });
+      authority = commitPackReviewTerminal({
+        prNumber: 2001, expectedTransitionSeq: authority.transitionSeq,
+        terminal: {
+          schemaVersion: 1, terminalContractVersion: 2,
+          terminalSource: 'normal', runId: 'original-h1-review',
+          targetSha: h1, logicalRoundOrdinal: 1,
+          reviewVerdict: 'findings', findingCount: 1,
+          findingsDigest: 'blocking-h1', automaticBudgetDisposition: 'consume',
+        },
+        status: 'changes_requested', findingCount: 1, options: store,
+      });
+      authority = observePackReviewHead({
+        prNumber: 2001, expectedTransitionSeq: authority.transitionSeq,
+        headSha: h2, options: store,
+      });
+      authority = settleLogicalPackReviewFindingsByStrictDescendant({
+        prNumber: 2001, expectedTransitionSeq: authority.transitionSeq,
+        reviewedHeadSha: h1, currentHeadSha: h2, reviewedHeadIsAncestor: true,
+        verifiedDeltaRunId: 'reviewed-clean-h1-to-h2', options: store,
+      });
+      authority = recordPackReviewPublication({
+        prNumber: 2001, expectedTransitionSeq: authority.transitionSeq,
+        publication: { headSha: h2, terminalRunId: 'original-h1-review',
+          status: 'succeeded', publicationDigest: 'completed-h2',
+          recordedAtUtc: '2026-11-16T00:00:00Z' },
+        options: store,
+      });
+      expect(authority.cycle?.reviewStageComplete).toBe(true);
+      authority = observePackReviewHead({
+        prNumber: 2001, expectedTransitionSeq: authority.transitionSeq,
+        headSha: h3, options: store,
+      });
+      expect(authority.publication).toBeUndefined();
+      const posted: string[] = [];
+      const dependencies = {
+        resolveCiGreen: () => true,
+        currentPackReviewStatusFact: () => ({
+          hasLegitimateReview: false, unresolvedBlockingFinding: false,
+          activeAttempt: false,
+        }),
+        fetchSmokeComments: () => [],
+        fetchCurrentHead: () => h3,
+        listDirectReviews: async () => [],
+        isAncestor: () => false,
+        publishRequiredStatus: async (request: {
+          repoRoot: string; repoSlug: string; headSha: string;
+          request: { state: string; context: string };
+        }) => {
+          expect(request.headSha).toBe(h3);
+          posted.push(request.request.state);
+        },
+      };
+      const opts = { ...gateOptions(root, join(root, 'issue.md')),
+        command: 'delegated-readiness', dryRun: false };
+      const target = { ...resolvedTarget(issueBody), headSha: h3 };
+      const adapter = new DeterministicRuntimeAdapter();
+      const unreviewed = await evaluatePostSmokeReadiness(opts, target, adapter, dependencies);
+      expect(unreviewed.reviewProjection.state).not.toBe('success');
+      expect(posted).not.toContain('success');
+
+      // A new exact-H3 clean REVIEW is the runner's prerequisite for
+      // recording exact-head publication; the smoke projection only consumes
+      // that durable current-head authority, never H2 ancestry.
+      authority = recordPackReviewPublication({
+        prNumber: 2001, expectedTransitionSeq: authority.transitionSeq,
+        publication: { headSha: h3, terminalRunId: 'original-h1-review',
+          status: 'succeeded', publicationDigest: 'reviewed-clean-h2-to-h3',
+          recordedAtUtc: '2026-11-16T00:01:00Z' },
+        options: store,
+      });
+      expect(authority.publication?.headSha).toBe(h3);
+      const reviewed = await evaluatePostSmokeReadiness(opts, target, adapter, dependencies);
+      expect(reviewed.reviewProjection.state).toBe('success');
+      expect(posted.filter((state) => state === 'success')).toHaveLength(1);
+    } finally {
+      if (oldBase === undefined) delete process.env.OPK_BASE_DIR;
+      else process.env.OPK_BASE_DIR = oldBase;
+      if (oldStore === undefined) delete process.env.PACK_REVIEW_RUN_STORE_ROOT;
+      else process.env.PACK_REVIEW_RUN_STORE_ROOT = oldStore;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
