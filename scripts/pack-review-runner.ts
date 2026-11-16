@@ -9567,13 +9567,29 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
     }
   }
 
+  // A finished F..T review can already be in the protected store when this
+  // PR-led caller acquires a claim solely to reconcile its current-head
+  // publication. That historical exact-T verdict was NOT launched by this
+  // claim and must not be mistaken for a newly emitted review run on release.
+  // A newly created or still-active run remains visible to claim accounting.
+  const completedBeforeClaim = new Set(
+    claimLease?.acquired
+      ? listPackReviewRuns({ projectId, storeRoot })
+        .filter((run) => run.prNumber === target.prNumber
+          && run.targetSha === target.headSha
+          && hasPersistedPackReviewVerdict(run))
+        .map((run) => run.id)
+      : [],
+  );
   const releaseEarlyClaim = async (reason: string): Promise<void> => {
     if (!claimLease?.acquired) return;
     // Claim cleanup is secondary: a lost, ambiguous or throwing completion is
     // reported beside the primary result and never masks or inverts it.
     let observation: ClaimReleaseObservation;
     try {
-      const completed = await claimLease.release('failure', listPackReviewRuns({ projectId, storeRoot }), reason);
+      const eligibleRuns = listPackReviewRuns({ projectId, storeRoot })
+        .filter((run) => !completedBeforeClaim.has(run.id));
+      const completed = await claimLease.release('failure', eligibleRuns, reason);
       observation = completed?.outcome === 'released_for_retry'
         ? { ok: true, outcome: completed.outcome }
         : { ok: false, outcome: completed?.outcome ?? null, reason: 'claim_release_not_released_for_retry',
