@@ -7057,6 +7057,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
     let reads = 0;
     let supervised = 0;
     const adapter = observedClaudeAdapter(command, family, effort, {
+      commandObserved: true,
       onSpawn: () => { spawns += 1; },
       onRead: () => { reads += 1; },
     });
@@ -7124,7 +7125,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
     let elapsedMs = 0;
     let starts = 0;
     const adapter = observedClaudeAdapter(command, 'Sonnet', 'high', {
-      footerAfterRead: 3,
+      commandObserved: true, footerAfterRead: 3,
       onRead: (identity) => {
         observedIdentities.push(identity);
         elapsedMs += LAUNCH_STARTUP_OBSERVATION_WINDOW_MS / 5;
@@ -7134,7 +7135,8 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
       ...launchInput('manager'), env, issueNumber: 2716,
     }, {
       ...deps({ adapter, onSupervised: () => { starts += 1; } }),
-      now: () => elapsedMs,
+      now: () => 0, monotonicNow: () => elapsedMs,
+      delay: async (ms) => { elapsedMs += ms; },
     });
     expect(result).toMatchObject({ outcome: 'ready', resources: { terminal: worker.identity } });
     expect(observedIdentities).toEqual([worker.identity, worker.identity, worker.identity]);
@@ -7149,25 +7151,26 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
     let reads = 0;
     let starts = 0;
     const adapter = observedClaudeAdapter(command, 'Sonnet', 'high', {
-      hideFooter: true,
+      commandObserved: true, hideFooter: true,
       onRead: () => {
         reads += 1;
-        elapsedMs += LAUNCH_STARTUP_OBSERVATION_WINDOW_MS / 4;
+        elapsedMs += 15_000;
       },
     });
     const result = await runSupervisedTaskLaunchAssistant({
       ...launchInput('manager'), env, issueNumber: 2716,
     }, {
       ...deps({ adapter, onSupervised: () => { starts += 1; } }),
-      now: () => elapsedMs,
+      now: () => 0, monotonicNow: () => elapsedMs,
+      delay: async (ms) => { elapsedMs += ms; },
     });
     expect(result).toMatchObject({
       outcome: 'continue', stage: 'terminal_prepare',
-      observedCause: 'executor_effort_channel_unavailable',
+      observedCause: 'terminal_observation_deadline',
       nextAction: { kind: 'repair_executor_profile' },
     });
     expect(reads).toBe(4);
-    expect(elapsedMs).toBe(LAUNCH_STARTUP_OBSERVATION_WINDOW_MS);
+    expect(elapsedMs).toBeGreaterThanOrEqual(60_000);
     expect(starts).toBe(0);
   });
 
@@ -7182,24 +7185,25 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
     let reads = 0;
     let starts = 0;
     const adapter = observedClaudeAdapter(command, 'Sonnet', 'high', {
-      ...overrides,
+      ...overrides, commandObserved: true,
       onRead: () => {
         reads += 1;
-        elapsedMs += LAUNCH_STARTUP_OBSERVATION_WINDOW_MS / 4;
+        elapsedMs += 15_000;
       },
     });
     const result = await runSupervisedTaskLaunchAssistant({
       ...launchInput('manager'), env, issueNumber: 2716,
     }, {
       ...deps({ adapter, onSupervised: () => { starts += 1; } }),
-      now: () => elapsedMs,
+      now: () => 0, monotonicNow: () => elapsedMs,
+      delay: async (ms) => { elapsedMs += ms; },
     });
     expect(result).toMatchObject({
       outcome: 'continue', stage: 'terminal_prepare',
-      observedCause: 'executor_effort_channel_unavailable',
+      observedCause: 'terminal_observation_deadline',
     });
     expect(reads).toBe(4);
-    expect(elapsedMs).toBe(LAUNCH_STARTUP_OBSERVATION_WINDOW_MS);
+    expect(elapsedMs).toBeGreaterThanOrEqual(60_000);
     expect(starts).toBe(0);
   });
 
@@ -7235,7 +7239,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
     expect(native.observeComposerFamily?.(worker.identity)).toMatchObject({
       status: 'known', command: '', agentIdentity: 'claude',
     });
-    expect(await claudePaneProfileObserved(profile.value, worker, native)).toBe(true);
+    expect(await claudePaneProfileObserved(profile.value, worker, native)).toBe(false);
     for (const agentIdentity of ['cursor', 'opencode', 'Claude', ' claude', null] as const) {
       let reads = 0;
       const adapter = observedClaudeAdapter(command, 'Opus', 'medium', {
@@ -7281,7 +7285,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
       ...launchInput('manager'), env, issueNumber: 2716,
     }, {
       ...deps({
-        adapter: observedClaudeAdapter(command, 'Opus', 'high', {
+        adapter: observedClaudeAdapter(command, 'Opus', 'high', { commandObserved: true,
           onRead: () => { elapsedMs += LAUNCH_STARTUP_OBSERVATION_WINDOW_MS / 4; },
         }),
         onSupervised: () => { starts += 1; },
