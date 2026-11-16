@@ -1673,6 +1673,14 @@ export async function runSupervisedTaskLaunchAssistant(
       evidence: {
         liveness: liveness?.status ?? 'not_observed',
         ...(profile.family === 'claude' ? { executorFamily: 'claude', route: profile.route } : {}),
+        ...(profile.family === 'claude' && terminalCause === 'terminal_observation_deadline'
+          && spawn?.status === 'ok' && spawn.value ? {
+            unverifiedSpawnReturn: {
+              runtime: spawn.value.identity.runtime,
+              id: spawn.value.identity.id,
+              generation: spawn.value.identity.generation,
+            },
+          } : {}),
         ...(spawn && spawn.status !== 'ok' ? {
           spawnReason: spawn.reason,
           spawnError: spawnNativeError?.message || spawnNativeError?.code || spawn.reason,
