@@ -31,11 +31,13 @@ The exact supported final park forms are:
   `(self-wake armed)` do not enter its exact-match ID);
 - `PARKED on GPT turns inv-a, inv-b, inv-c` (exactly three distinct IDs);
 - `PARKED on review run prr-<32 lowercase hex>` (exact run ID, with optional
-  ` (self-wake armed)` suffix; a unique selected-project run in a terminal status
-  wakes with that status, PR and head for the pane to re-check, never a success claim);
+  ` (self-wake armed)` suffix; the line carries no head — see **Producer
+  ownership** below for its H0 and status rules);
 - `PARKED on pack-review PR #N head <sha40>`;
 - `PARKED on PR #N review #M head <sha40>`;
-- `PARKED on CI PR #N head <sha40>` and `PARKED on CI on <sha40>`;
+- `PARKED on CI PR #N head <sha40>` (the PR-less `PARKED on CI on <sha>` and
+  headless `PARKED on pack-review #N` remain recognized only to ask for an exact
+  re-park, never as a completion source);
 - `PARKED on merge-N`, `PARKED on PR #N merged`,
   `PARKED on #N merged into main`;
 - `PARKED on terminal <handle> incarnation <id>` and
@@ -46,7 +48,7 @@ The exact supported final park forms are:
 - `PARKED on time YYYY-MM-DDTHH:MM:SSZ` (a real strict Gregorian UTC
   deadline with seconds and `Z`);
 - `PARKED on process pid <positive-PID> startticks <positive-decimal>`
-  (read-only Linux proc and same namespace).
+  (recognized, but never a completion source; see **Time and PID**).
 
 A GitHub API quota wait parks as `PARKED on time <core reset UTC>` from
 `scripts/gh api rate_limit`; on wake, re-read, and if quota is still exhausted,
@@ -63,20 +65,112 @@ question, `done`, `finished` or an unmarked status inventory cannot
 establish the new own-outcome alarm. When ownness is unproven, retain ordinary
 STOPPED/POLLING/busy paths, not a fabricated blocked verdict.
 
-**GPT terminal re-check.** An exact single turn is eligible with its independently
-parsed `TERMINAL_SCHEMA` artifact containing byte-exact
-`observed_invocation_id`, a coherent ended result (`ok`, `not-sent`,
+### Producer ownership (Issue #2840)
+
+A sweep `PARKED` classification is an observation, not direct-send authority.
+A direct named-producer Wake or correction for GPT, PR, CI, review, merge or
+review-run parks needs the **parking manager**: exactly one current
+selected-project/repository manager WorkerAssignment whose live exact
+`orchestration worker-show --dispatch <bindingKey> --full --json` worker is
+this pane's native handle, incarnation, worktree and branch, and whose park is
+positively its **own final outcome**: the provenance-aware own response, or a
+native OpenCode screen whose actual final `PARKED` occurrence is itself an
+assistant-rendered line outside every `┃` gutter (OpenCode renders incoming
+messages and tool output inside that gutter); an older equal assistant line
+never vouches for a later guttered copy. A raw last
+`PARKED` line from a tool result, quotation or `User:`/`Tool:` context is never
+recipient authority, at selection or at the pre-send check. Duplicate rows,
+an unreadable census, a replaced Dispatch/generation/incarnation or a
+suspected bare shell withhold the direct send. One verification runs
+immediately before the **single** native text+Enter call (assignment,
+worker-show, pane, own final park and, for PR producers, the own PR head); a
+`sent` mark needs the returned native `turn_started` receipt, otherwise the
+mark stays `attempted_unverified`. Replacement or head movement *inside* the
+native send is not observable here and is not claimed closed. Without a proven
+parking manager the only route is the coordinator-only warning with "reconcile
+this manager's live Task/Dispatch/pane, then re-park on a supported own
+producer"; never a borrowed or different pane.
+
+Every producer resolves to one of three findings: **own** (pending until its
+exact event, then one Wake), **positively foreign** (one per-episode "park on
+your own producer" correction to the verified parking manager only), or
+**unverified** (coordinator-only warning; no completion and no direct send).
+
+- **GPT.** The exact invocation ID selects the private
+  `browser-gpt-receipts/<sha256(id)>.json` index read by
+  `readPredecessorReceiptLocator`; its original handoff supplies
+  `owner_task_id`, `owner_dispatch_id`, `launching_terminal_handle` and
+  `child_cwd`. Own pending needs both owner fields equal to the manager's
+  Task+Dispatch, a launching handle equal to the manager's current native
+  terminal, and a child cwd in a selected-project linked worktree (it may be a
+  different linked worktree from the launcher). Only a coherent **different**
+  owner Task+Dispatch pair proves a foreign GPT turn. A matching pair with a
+  stale, changed, missing or unjoinable launching handle, a missing, partial
+  or unreadable owner pair, a missing/legacy index, an unproven cwd or an
+  attempt-ID-only park is **unverified**: the coordinator is asked to
+  reconcile the exact own invocation, named only as `sha256:<16 hex>` of the
+  park token (the private index file name) so no untrusted token bytes reach
+  the coordinator. A launcher mismatch never proves
+  foreignness. A copied ID on another pane does not veto the proven owner.
+- **CI, PR review and pack-review with an explicit head H0.** The live
+  `pulls/N` body must have one unique `Closes/Fixes/Resolves #Issue` equal to
+  the manager's Issue; a different closer is foreign, a missing or ambiguous
+  closer is unverified. An open, unmerged own PR at H1 ≠ H0 gets at most one
+  head-moved re-check/re-park advisory naming H1; H0 success, failure, pending
+  or cancellation never transfers to H1. A closed or merged PR at a different
+  head gets no moved-head advisory, only the coordinator re-park next step. At
+  H0 the incumbent exact-head CI and pack-review rules apply, also after the
+  PR closes or merges without moving. `PR #N review #M head H0` completes only
+  when review M's `commit_id` is H0 and it is submitted.
+- **PR-less and headless forms.** `PARKED on CI on <sha>` and `PARKED on
+  pack-review #N` cannot invent a historic H0 or inherit a current-head
+  result. A verified parking manager gets one request to re-park as
+  `CI PR #N head <sha40>` or `pack-review PR #N head <sha40>`.
+- **Review run `prr-<id>`.** One selected-project run record supplies H0 =
+  `targetSha`. `headSha` is normalized by the production record parser, and a
+  legacy record without a raw `headSha` reads back as `targetSha`; equal
+  normalized values are only an internal consistency check, and an actually
+  surfaced mismatch, parser-rejected record or unreadable selected-project
+  run store is unverified (coordinator-only, no direct Reminder). The run's PR is
+  joined through the live PR body closer above, then H0 is compared with the
+  **live** own PR head: unchanged H0 reports only the run's actual terminal
+  status (or the verified runner-dead diagnostic; active stays pending); an
+  open own PR at H1 ≠ H0 gets only the head-moved re-check, active or
+  terminal; a closed PR at a different head or a missing owner/head join goes
+  to the coordinator.
+- **Named merge.** `merge-N`, `PR #N merged` and `#N merged` complete only for
+  an own PR (same closer rule). Waiting for another Issue's merge uses a typed
+  external dependency or the coordinator, not a guessed Wake.
+- **Native or merge-agent terminal.** A bare terminal has no retained
+  producer Task or delegation origin, so every bare terminal park, **live or
+  exited**, is **unverified**, including apparently foreign or orphan
+  terminals: neither a completion Wake, a direct Reminder nor a direct foreign
+  correction, and never a silent pending. The coordinator gets the
+  supported next steps: the own GPT terminal envelope, an own PR merge or a
+  typed external dependency.
+- **Exceptions.** Strict UTC time, `orchestrator answer` and the named
+  systemd/smoke unit waits keep their own deadline, coordinator-answer and
+  shared-unit completion advisories without a Task ownership claim.
+
+**GPT terminal re-check.** An own single turn (above) is eligible with its independently
+parsed `TERMINAL_SCHEMA` artifact **at the indexed `terminal_envelope_path`**
+containing byte-exact `observed_invocation_id`, the indexed run/attempt identity
+and the present, equal indexed handoff receipt path, a recorded `cwd` equal to
+the indexed `child_cwd` and a `terminal_handle` equal to the verified launching
+manager terminal, and a coherent ended result
+(an explicit `lifecycle_outcome` of `success` or `incident` is required; a
+missing lifecycle, or `success` without a recorded turn-result state, is
+uncertain, never an inferred `ok`) (`ok`, `not-sent`,
 `driver_error:<cause>` or another positively terminal non-contradictory
-outcome), and `terminal_handle` equal to the selected current
-same-incarnation native launching pane. An unmarked terminal **already present
+outcome). An unmarked terminal **already present
 before the first own PARKED** triggers an outcome-naming advisory on the next
 tick; non-`ok` never asserts success. The existing
 `terminal-path:<handle>:<path>` `sent`/`attempted_unverified` mark prevents
 repeat sends across STOPPED-first delivery, PARKED/STOPPED transitions and
 identical re-parks, including original-owner incident notification. Only a
 distinct envelope path creates another terminal event; marks do not establish
-external harvest. A triplet resolves only with **three distinct** exact
-observed-ID/launching-handle/settled events and remains one advisory re-check,
+external harvest. A triplet resolves only with **three distinct** own, exact
+observed-ID/indexed-identity/settled events and remains one advisory re-check,
 not three success verdicts. The `invocationId` fallback,
 artifact basename/path, attempt identity, workspace regex and remote URL are
 not direct completion evidence. The incumbent STOPPED-pane terminal-envelope
@@ -84,7 +178,8 @@ GPT-completion advisory uses the same exact observed ID, settled non-failure,
 current native launching handle and linked selected-project Git evidence;
 missing fields or attempt/basename-only IDs cannot send a legacy Wake.
 
-For **both** routes the envelope `cwd` must be a present absolute path
+For the PARKED route the indexed handoff `child_cwd`, and for the STOPPED route the
+envelope `cwd`, must be a present absolute path
 resolving inside the selected project's **currently linked Git worktree**.
 The selected project card supplies `projectId`, verified
 `primaryRoot` and `repository`; compare real paths, exact nested Git root,
@@ -95,19 +190,20 @@ Reject foreign/nested repositories, symlink or path-prefix lookalikes and
 separate clones advertising the same origin. Missing/unreadable/conflicting
 selected Git evidence never licenses direct completion.
 
-**Pending versus uncertain versus settled.** A single in-flight GPT turn
-with zero relevant settled envelopes, or a triplet with zero/one/two
-corroborated settlements and the remainder still pending, retains the existing
-**30-minute Reminder**, not an immediate alarm or triplet completion. A global
-same-ID foreign event, filename or attempt hint alone is not evidence that the
-named producer has landed. Only a **positively associated landed artifact**
-with missing/conflicting observed ID, settled outcome, launching pane handle,
-selected-project `cwd` or duplicate evidence triggers one marked
-coordinator evidence-uncertain alarm. Positive alarm association requires
-either exact observed ID **and** exact native launching handle, or a validated
-original run/attempt/handoff receipt binding that invocation to the current
-Task/Dispatch/assignment's native launcher; receipts **never repair** missing
-direct-completion fields. Fully corroborated completed events Wake once unless the recipient/path
+**Pending versus uncertain versus settled.** A GPT turn with zero settled
+envelopes is ordinary own pending **only after the pre-terminal indexed owner
+proof above**; then a single in-flight turn, or a triplet with zero/one/two
+settlements, retains the existing **30-minute Reminder**, not an immediate
+alarm or triplet completion. That Reminder for a task-owned producer goes only
+to a verified parking manager on its own pending park, with the same pre-send
+check; an unverified or corrected park, and every bare terminal or PID park
+(live or exited), gets no direct Reminder and keeps only the coordinator route. A missing or unreadable index, or a matching
+owner Task+Dispatch with a stale, changed, absent or unjoinable launching
+handle, is unverified and gets the coordinator exact-invocation reconcile step,
+not a direct foreign correction. A global same-ID foreign event, filename or
+attempt hint alone is not evidence that the named producer has landed. A
+duplicate or contradictory associated artifact triggers one marked coordinator
+evidence-uncertain alarm. Fully corroborated completed events Wake once unless the recipient/path
 already has an attempted or sent mark. A coherent single non-`ok` terminal
 event Wakes only to re-check its **recorded ended state**, never as a green or
 successful completion assertion. Separately, the incumbent
@@ -116,36 +212,26 @@ original-receipt/current-native-owner-bound non-`ok`
 member; it shares the same recipient/path suppression without certifying
 triplet completion.
 
-**Named PR head changes.** For an **own** `PARKED on CI PR #N head H0` or
-`PARKED on pack-review PR #N head H0`, a **moved-head** advisory requires an
-open, unmerged selected-repository PR #N with current head H1. If H1 differs,
-send at most one marked **head-moved** advisory naming H1 and requiring a
-re-read of PR #N CI followed by a re-park on the current head. A completed,
-cancelled, pending or unknown H0 run cannot prove H1 green and never selects
-another recipient. Confirm the same live H1, exact own named park and native
-binding before text+Enter and again before the confirming Enter; a missed
-first effect is not marked delivered and an attempted first effect cannot be
-rearmed merely because the second was withheld. When H0 remains the head,
-the incumbent exact-head CI and pack-review producer rules apply **even after
-the PR closes or merges without changing that head**. A closed PR whose head
-moved cannot receive a head-moved advisory. Quoted/non-own named PR lines
-neither Wake nor trigger a 30-minute Reminder. The
-PR-less `PARKED on CI on <sha40>` form retains its original semantics.
-The separate #2731 STOPPED current-head CI fallback remains available for
+**Named PR head changes.** The own-PR, H0/H1 and closed-PR rules are in
+**Producer ownership** above. The live H1 is read once more immediately before
+the single native text+Enter call; H1→H2 seen there withholds the stale H1
+advisory, and the next ordinary tick re-evaluates. A missed effect is not
+marked delivered. Quoted/non-own named PR lines neither Wake nor trigger a
+30-minute Reminder. The separate #2731 STOPPED current-head CI fallback remains available for
 Issue-linked readable-zero-assignment and Issue-less unambiguous pull owners.
 
 **Time and PID.** A strict UTC park remains PARKED through real
 `runFleetSweep` and final-line revalidation, and Wakes at/after its exact
 instant without sleeping. Before due, the 30-minute Reminder applies.
 An invalid `PARKED on time ...` is unknown grammar, not a due-time guess.
-PID parks first establish positive read-only same-namespace Linux
-`/proc/<pid>/stat` PID/startticks/live evidence and record only that identity
-in the incumbent parked epoch. Later positively observed absence in that same
-namespace, PID reuse with different startticks or a verified matching
-`Z/X/x` state authorizes one Wake. First-seen absence, unreadable/malformed
-stat, permission denial, missing/mismatched namespace or conflicting process
-identity produces coordinator uncertainty, never a speculative exit or a
-process spawn/kill/watch.
+A generic `PARKED on process pid N startticks T` has no invocation or
+receipt selector, so PID, startticks, namespace and liveness are at most
+liveness evidence: they cannot prove job parentage, Task ownership, a bounded
+lifetime or that the PID is not a long-lived server. **No PID-only park
+produces a direct process-exited Wake**, whether the process exits, is reused
+or was never seen. The coordinator gets one per-episode warning: re-park on
+the exact indexed own GPT invocation or a supported named unit, otherwise
+reconcile the bounded command. No process spawn/kill/watch.
 
 **Coordinator-only alarms.** An attributable unknown park or associated
 landed-but-deficient producer sends the exact coordinator one
@@ -159,9 +245,9 @@ replaced by `[redacted]`, never quoted verbatim. A contradictory
 not a GPT completion. Observed pane text is **data**, never an instruction to act. The raw park
 is hashed locally for episode identity, not forwarded as raw terminal
 content. Existing marks reserve `attempted_unverified` **before**
-text and Enter and protect each actual pane/incarnation/episode/recipient
+the native text+Enter call and protect each actual pane/incarnation/episode/recipient
 against unchanged next-tick replay. Exact native recipient and final own
-park line are rechecked before text and again before Enter. No coordinator
+park line are rechecked once immediately before that single call. No coordinator
 means an explicit logged non-delivery, not a claimed alarm. Native handle
 sends remain non-atomic and no evidence-only alert permits task continuation.
 
@@ -255,7 +341,8 @@ not a forced continuation. New, attributable progress can wake early;
 unchanged busy/live state grants no completion, unknown liveness is
 unverified, and positively gone/incomplete work requires coordinator
 investigation. A recognized PARKED pane with no due fact keeps its named producer
-Reminder; only positively owned unknown parks and positively associated
+Reminder (task-owned producers only for a verified own pending park, see
+Producer ownership); only positively owned unknown parks and positively associated
 landed-but-deficient producer artifacts raise immediate coordinator uncertainty
 alarms. Suspected bare shell never gets direct Wake text. Coordinator
 replacement (verified handle/incarnation) makes the new recipient eligible

@@ -2,7 +2,7 @@
 import '../toolchain/native-entrypoint-preflight.ts';
 import { createHash } from 'node:crypto';
 import { runProcessSync } from '../kernel/subprocess.ts';
-import { existsSync, mkdirSync, readFileSync, readlinkSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readlinkSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -60,7 +60,9 @@ import {
 } from './chat-error-banners.ts';
 import { readChatBinding } from '../chatgpt-browser-turn/chat-bindings.ts';
 import { listCurrentWorkerAssignmentRecords, resolveWorkerAssignmentStorePath, type WorkerAssignmentRecord } from '../lib/worker-assignment-store.ts';
-import { TERMINAL_SCHEMA, isWakeableTerminalEnvelopePath, readHandoffReceipt, resolveDurableArtifactRoot } from '../flow-manager-long-running-child.ts';
+import {
+  TERMINAL_SCHEMA, isWakeableTerminalEnvelopePath, readHandoffReceipt, readPredecessorReceiptLocator, resolveDurableArtifactRoot,
+} from '../flow-manager-long-running-child.ts';
 
 export interface FleetWakeConfig {
   readonly projectId: string;
@@ -339,7 +341,10 @@ export interface FleetAlarmTickOptions {
   readonly readPackReviewStage?: (repository: string, sha: string) => PackReviewStageFact | undefined;
   /** Offline fixtures; production revalidates the selected registered card. */
   readonly resolveSelectedReviewProject?: () => Pick<TargetContext, 'projectId' | 'repository' | 'primaryRoot'>;
-  /** Read-only fake Git witness for selected-project membership in the existing test suite. */
+  /** Read-only Git witness for selected-project linked-worktree membership; offline test seam. */
+  readonly readGitCommonDir?: (path: string) => string | undefined;
+  /** Exact private invocation index reader; tests bind the production reader to a fixture root. */
+  readonly readInvocationLocator?: typeof readPredecessorReceiptLocator;
   /** Read-only fake Linux proc/namespace observation; never starts a child. */
   readonly probePid?: (pid: number) => ProcessObservation;
   readonly readPackReviewRuns?: () => readonly PackReviewRunRecord[];
@@ -713,6 +718,8 @@ export interface NativePull {
   readonly headSha: string;
   readonly state: 'open' | 'closed';
   readonly merged: boolean;
+  /** Live PR body; its unique closer is the only PR-to-Issue ownership link. */
+  readonly body?: string;
 }
 
 export interface NativeReview {
@@ -1053,7 +1060,8 @@ function readNativePull(repository: string, number: number): NativePull | undefi
   const head = row?.head as { sha?: unknown } | undefined;
   if (row?.number !== number || !SHA40.test(String(head?.sha ?? ''))
     || (row?.state !== 'open' && row?.state !== 'closed') || typeof row?.merged !== 'boolean') return undefined;
-  return { number, headSha: String(head!.sha), state: row.state, merged: row.merged };
+  return { number, headSha: String(head!.sha), state: row.state, merged: row.merged,
+    ...(typeof row.body === 'string' ? { body: row.body } : row.body === null ? { body: '' } : {}) };
 }
 
 function readNativeIssue(repository: string, number: number): { readonly number: number; readonly state: 'open' | 'closed' } | undefined {
@@ -1401,130 +1409,410 @@ function readLinuxProcess(pid: number): ProcessObservation {
   } catch { return { state: 'unverified' }; }
 }
 
+/** Exact current manager whose own native pane carries the final PARKED line (worker-show witnessed). */
+interface ParkingManager {
+  readonly assignment: WorkerAssignmentRecord;
+  readonly handle: string;
+  readonly incarnationId: string;
+  readonly worktreePath: string;
+  readonly branch: string;
+}
+
+type WorkerShowCache = Map<string, Record<string, unknown> | undefined>;
+
+/**
+ * Positive own-final-park witness for a direct named-manager send. Either the
+ * provenance-aware own outcome, or a native OpenCode assistant-rendered final
+ * line: OpenCode renders incoming messages and every tool output inside a
+ * gutter, so a final PARKED line outside any gutter is the agent's own text.
+ * A raw last line from a tool result or quotation never counts.
+ */
+export function ownFinalPark(screen: string, wait: string): boolean {
+  if (ownPaneOutcome(screen).wait === wait) return true;
+  if (lastFleetParkedLine(screen) !== wait) return false;
+  const raw = screen.split(/\r?\n/u).map((line) => line.replace(/\s+$/u, ''));
+  if (!raw.some((line) => /^\s*┃/u.test(line))) return false;
+  // The witness is the screen's actual final PARKED occurrence (the one the
+  // sweep read), framed or not; an older equal assistant line never counts.
+  const final = raw.filter((line) => line.replace(/^[\s┃│╹╻▀▄█▌▐⬝■▣◆●•·]+/u, '').trim() === wait).at(-1);
+  return final !== undefined && /^ +PARKED on /u.test(final);
+}
+
+function witnessedOwnPark(pane: FleetPaneObservation, executor: OrcaExecutor): boolean {
+  if (!pane.wait) return false;
+  if (pane.ownParkObservation) return true;
+  try { return ownFinalPark(readFleetScreen(pane.handle, executor), pane.wait); }
+  catch { return false; }
+}
+
+/**
+ * Recipient authority for a direct named-park correction or completion: one
+ * positively own final park plus exactly one selected-project manager
+ * assignment whose live exact Dispatch is this native pane. Anything else is
+ * unverified and may only reach the coordinator.
+ */
+function parkingManager(
+  pane: FleetPaneObservation,
+  options: FleetAlarmTickOptions,
+  terminals: readonly FleetTerminal[],
+  executor: OrcaExecutor,
+  assignments: readonly WorkerAssignmentRecord[] | null,
+  cache?: WorkerShowCache,
+): ParkingManager | undefined {
+  const repository = namedRepository(options.config);
+  // A raw last-line PARKED from a tool result or quotation is never recipient
+  // authority; the park itself must be positively the pane's own final outcome.
+  if (!repository || !assignments || pane.state !== 'PARKED' || !pane.wait
+    || !pane.incarnationId || !witnessedOwnPark(pane, executor)) return undefined;
+  const candidates = assignments.filter((row) => row.projectId === options.config.projectId
+    && row.repository.toLowerCase() === repository.toLowerCase() && row.role === 'orchestrator'
+    && row.kind === 'local' && row.provider === 'orca'
+    && row.taskId && row.bindingKey && row.assignmentId
+    && Number.isSafeInteger(row.generation) && row.generation > 0);
+  const bound: ParkingManager[] = [];
+  for (const assignment of candidates) {
+    let witness = cache?.get(assignment.bindingKey);
+    if (!cache?.has(assignment.bindingKey)) {
+      witness = orcaReceipt(executor, ['orchestration', 'worker-show', '--dispatch', assignment.bindingKey, '--full', '--json']);
+      cache?.set(assignment.bindingKey, witness);
+    }
+    const dispatch = witness?.dispatch as { id?: unknown; taskId?: unknown; status?: unknown } | undefined;
+    const native = witness?.terminal as {
+      handle?: unknown; worktreePath?: unknown; branch?: unknown; incarnationId?: unknown;
+    } | undefined;
+    const status = witness?.observation as { status?: unknown; exactWorker?: unknown } | undefined;
+    if (dispatch?.id !== assignment.bindingKey || dispatch.taskId !== assignment.taskId
+      || dispatch.status !== 'dispatched' || status?.status !== 'live' || status.exactWorker !== true
+      || typeof native?.handle !== 'string' || typeof native.incarnationId !== 'string'
+      || typeof native.worktreePath !== 'string' || typeof native.branch !== 'string') continue;
+    if (native.handle === pane.handle && native.incarnationId === pane.incarnationId
+      && native.worktreePath === pane.worktreePath && native.branch === pane.branch) {
+      bound.push({ assignment, handle: native.handle, incarnationId: native.incarnationId,
+        worktreePath: native.worktreePath, branch: native.branch });
+    }
+  }
+  if (bound.length !== 1) return undefined;
+  const manager = bound[0]!;
+  const current = terminals.filter((row) => row.handle === manager.handle
+    && row.incarnationId === manager.incarnationId && row.worktreePath === manager.worktreePath
+    && row.branch === manager.branch && row.status?.toLowerCase() !== 'exited');
+  return current.length === 1 ? manager : undefined;
+}
+
+function sameParkingManager(left: ParkingManager | undefined, right: ParkingManager): boolean {
+  return Boolean(left && left.assignment.assignmentId === right.assignment.assignmentId
+    && left.assignment.generation === right.assignment.generation
+    && left.assignment.taskId === right.assignment.taskId
+    && left.assignment.bindingKey === right.assignment.bindingKey
+    && left.assignment.issueNumber === right.assignment.issueNumber
+    && left.handle === right.handle && left.incarnationId === right.incarnationId
+    && left.worktreePath === right.worktreePath && left.branch === right.branch);
+}
+
+function readGitCommonDir(path: string): string | undefined {
+  const result = runProcessSync({
+    command: 'git', args: ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+    cwd: path, timeoutMs: 5_000, inheritParentEnv: true,
+  });
+  const dir = result.ok ? result.stdout.trim() : '';
+  return dir && isAbsolute(dir) ? resolve(dir) : undefined;
+}
+
+/** A child cwd is own only inside a linked worktree of the selected primary repository. */
+function selectedLinkedWorktree(cwd: string | undefined, options: FleetAlarmTickOptions): boolean {
+  if (!cwd || !isAbsolute(cwd)) return false;
+  const read = options.readGitCommonDir ?? readGitCommonDir;
+  try {
+    const child = read(cwd), selected = read(options.config.primary);
+    return Boolean(child && selected && child === selected);
+  } catch { return false; }
+}
+
+type GptOwnership =
+  | { readonly kind: 'own'; readonly runIdentity: string; readonly attemptIdentity: string;
+    readonly handoffReceiptPath: string; readonly terminalEnvelopePath: string;
+    readonly childCwd: string; readonly launcher: string }
+  | { readonly kind: 'foreign' }
+  | { readonly kind: 'unverified'; readonly reason: string };
+
+/**
+ * The private invocation index and its original handoff are the only GPT owner
+ * authority. Only a coherent different (Task, Dispatch) pair is foreign; the
+ * launching handle is a routing hint that can confirm own pending, never
+ * foreignness.
+ */
+function classifyGptInvocation(
+  id: string,
+  manager: ParkingManager | undefined,
+  options: FleetAlarmTickOptions,
+): GptOwnership {
+  const unverified = (reason: string): GptOwnership => ({ kind: 'unverified', reason });
+  let bound: ReturnType<typeof readPredecessorReceiptLocator>;
+  try { bound = (options.readInvocationLocator ?? readPredecessorReceiptLocator)({ invocationId: id }); }
+  catch { return unverified('GPT invocation index missing or unreadable'); }
+  const { locator, receipt } = bound;
+  const task = receipt.owner_task_id, dispatch = receipt.owner_dispatch_id;
+  if (locator.invocation_id !== id || receipt.invocation_id !== id
+    || receipt.run_identity !== locator.run_identity || receipt.attempt_identity !== locator.attempt_identity
+    || typeof task !== 'string' || !task.trim() || task.trim() !== task
+    || typeof dispatch !== 'string' || !dispatch.trim() || dispatch.trim() !== dispatch) {
+    return unverified('GPT owner Task+Dispatch pair incomplete or incoherent');
+  }
+  if (!manager) return unverified('parking manager Task/Dispatch unverified');
+  if (task !== manager.assignment.taskId || dispatch !== manager.assignment.bindingKey) return { kind: 'foreign' };
+  if (receipt.launching_terminal_handle !== manager.handle) {
+    return unverified('GPT launch handle does not join the current manager terminal');
+  }
+  const childCwd = receipt.child_cwd;
+  if (!childCwd || !selectedLinkedWorktree(childCwd, options)) {
+    return unverified('GPT child cwd is not a selected-project linked worktree');
+  }
+  return { kind: 'own', runIdentity: locator.run_identity, attemptIdentity: locator.attempt_identity,
+    handoffReceiptPath: locator.handoff_receipt_path, terminalEnvelopePath: locator.terminal_envelope_path,
+    childCwd, launcher: manager.handle };
+}
+
+type PullOwnership =
+  | { readonly kind: 'own'; readonly pull: NativePull; readonly issue: number }
+  | { readonly kind: 'foreign' }
+  | { readonly kind: 'unverified'; readonly reason: string };
+
+/** A PR is own only through its live body's unique closer to the manager's Issue. */
+function pullOwnership(
+  repository: string,
+  number: number,
+  manager: ParkingManager | undefined,
+  options: FleetAlarmTickOptions,
+): PullOwnership {
+  if (!manager) return { kind: 'unverified', reason: 'parking manager Task/Dispatch unverified' };
+  const issue = manager.assignment.issueNumber;
+  if (!issue) return { kind: 'unverified', reason: 'parking manager has no Issue for PR attribution' };
+  const pull = (options.readNamedPull ?? readNativePull)(repository, number);
+  if (!pull || pull.number !== number || !SHA40.test(pull.headSha) || typeof pull.body !== 'string') {
+    return { kind: 'unverified', reason: 'PR #' + number + ' body or head unreadable' };
+  }
+  const closer = uniqueClosingIssue(pull.body);
+  if (closer === undefined) return { kind: 'unverified', reason: 'PR #' + number + ' has no unique closing Issue' };
+  return closer === issue ? { kind: 'own', pull, issue } : { kind: 'foreign' };
+}
+
+type ParkDecision =
+  | { readonly kind: 'pending' }
+  | { readonly kind: 'wake'; readonly match: ProducerResolution; readonly manager?: ParkingManager; readonly recheck?: () => boolean }
+  | { readonly kind: 'correct'; readonly eventId: string; readonly text: string; readonly manager: ParkingManager; readonly recheck?: () => boolean }
+  | { readonly kind: 'unverified'; readonly reason: string };
+
+const PENDING: ParkDecision = { kind: 'pending' };
+
+function foreignCorrection(label: string, manager: ParkingManager): ParkDecision {
+  const atom = safeUnitAtom(label) ?? 'named-producer';
+  return { kind: 'correct', manager, eventId: 'foreign:' + label,
+    text: 'Wake: ' + atom + ' is not your own producer - park on your own producer - re-read your own Task/Dispatch'
+      + ' and its exact own GPT invocation or own PR head then re-park' };
+}
+
+function reparseCorrection(label: string, manager: ParkingManager): ParkDecision {
+  const atom = safeUnitAtom(label) ?? 'named-producer';
+  return { kind: 'correct', manager, eventId: 'reparse:' + label,
+    text: 'Wake: ' + atom + ' names no exact PR head - re-read your own PR and re-park as'
+      + ' CI PR #N head SHA40 or pack-review PR #N head SHA40' };
+}
+
+/** Exact own PR at an expected head (and open state for moved-head advisories), re-read before send. */
+function ownPullStill(
+  repository: string, number: number, manager: ParkingManager, options: FleetAlarmTickOptions,
+  headSha: string, requireOpen: boolean,
+): () => boolean {
+  return () => {
+    const owner = pullOwnership(repository, number, manager, options);
+    return owner.kind === 'own' && owner.pull.headSha === headSha
+      && (!requireOpen || (owner.pull.state === 'open' && !owner.pull.merged));
+  };
+}
+
+const UNVERIFIED_NEXT = ' - reconcile this manager live Task/Dispatch/pane, then re-park on a supported own producer';
+
+function decidePullPark(
+  producer: NamedProducer,
+  repository: string,
+  number: number,
+  parkedHead: string | undefined,
+  manager: ParkingManager | undefined,
+  options: FleetAlarmTickOptions,
+  atHead: (pull: NativePull, manager: ParkingManager) => ParkDecision,
+): ParkDecision {
+  const owner = pullOwnership(repository, number, manager, options);
+  if (owner.kind === 'unverified') return { kind: 'unverified', reason: owner.reason + UNVERIFIED_NEXT };
+  if (owner.kind === 'foreign') return foreignCorrection(producer.label, manager!);
+  const { pull } = owner;
+  if (parkedHead && pull.headSha !== parkedHead) {
+    // H0 status never transfers to H1; a closed or merged changed head has no moved-head advisory.
+    if (pull.state !== 'open' || pull.merged) {
+      return { kind: 'unverified', reason: 'PR #' + number + ' closed with a head other than the parked head'
+        + ' - re-read the own PR current head and re-park' };
+    }
+    return { kind: 'wake', manager: manager!,
+      recheck: ownPullStill(repository, number, manager!, options, pull.headSha, true),
+      match: { label: producer.label, terminalState: 'head-moved', evidence: pull.headSha,
+        eventId: 'head-moved:' + number + ':' + parkedHead, currentHeadSha: pull.headSha, pullNumber: number } };
+  }
+  return atHead(pull, manager!);
+}
+
 // Named, exact events alone can authorize a direct re-check; no substring or filename fallback.
-function resolveParkEvent(
-  wait: string,
+function decideNamedPark(
+  producer: NamedProducer,
+  pane: FleetPaneObservation,
+  manager: ParkingManager | undefined,
+  envelopes: readonly TerminalEnvelopeEvent[],
   terminals: readonly FleetTerminal[],
   options: FleetAlarmTickOptions,
   log: (line: string) => void,
-  pane?: FleetPaneObservation,
-): ProducerResolution | undefined {
-  const producer = parseNamedParkedProducer(wait);
-  if (!producer || producer.kind === 'gpt' || producer.kind === 'gpt-multi'
-    || producer.kind === 'time' || producer.kind === 'process') return undefined;
-  const repo = namedRepository(options.config);
+  now: number,
+): ParkDecision {
   const resolved = (state: string, evidence: string, eventId: string): ProducerResolution => ({
     label: producer.label, terminalState: state, evidence, eventId,
   });
-  if (producer.kind === 'terminal') {
-    const pane = terminals.find((term) => term.handle === producer.handle && term.incarnationId === producer.incarnation);
-    return pane?.status?.toLowerCase() === 'exited'
-      ? resolved('terminal-exited', producer.handle!, 'terminal-exit:' + producer.handle + ':' + producer.incarnation)
-      : undefined;
+  switch (producer.kind) {
+    case 'time':
+      return now >= producer.dueAt! ? { kind: 'wake', match: { label: producer.label,
+        terminalState: 'UTC-time-due', evidence: new Date(producer.dueAt!).toISOString(),
+        eventId: 'time:' + pane.wait } } : PENDING;
+    case 'unit': {
+      const fact = (options.readUnitState ?? readSystemdUnitState)(producer.unit!);
+      return fact && (fact.activeState === 'inactive' || fact.activeState === 'failed')
+        ? { kind: 'wake', match: resolved('unit-' + fact.activeState, producer.unit!,
+          'unit:' + producer.unit + ':' + fact.activeState + ':' + fact.result) } : PENDING;
+    }
+    case 'process':
+      // PID, startticks and liveness never prove a bounded own Task producer.
+      return { kind: 'unverified', reason: 'process pid park has no Task-bound producer selector'
+        + ' - re-park on the exact indexed own GPT invocation or a supported named unit,'
+        + ' otherwise reconcile the bounded command' };
+    case 'terminal': {
+      const exited = terminals.some((term) => term.handle === producer.handle
+        && term.incarnationId === producer.incarnation && term.status?.toLowerCase() === 'exited');
+      // A bare terminal, live or exited, has no Task-bound producer origin:
+      // coordinator-only reconcile, never a silent pending or a direct send.
+      return { kind: 'unverified', reason: (exited ? 'bare terminal exit is not producer Task evidence'
+        : 'bare live terminal park has no Task-bound producer origin')
+        + ' - use the own GPT terminal envelope, an own PR merge or a typed external dependency' };
+    }
+    case 'gpt':
+    case 'gpt-multi': {
+      const ids = producer.kind === 'gpt-multi' ? producer.ids ?? [] : [producer.id ?? ''];
+      if (ids.length === 0 || ids.some((id) => !id)) return PENDING;
+      const owned = new Map<string, Extract<GptOwnership, { kind: 'own' }>>();
+      let unverified: string | undefined;
+      let foreign = false;
+      for (const id of ids) {
+        const ownership = classifyGptInvocation(id, manager, options);
+        if (ownership.kind === 'own') owned.set(id, ownership);
+        else if (ownership.kind === 'foreign') foreign = true;
+        else unverified ??= ownership.reason;
+      }
+      if (foreign && manager) return foreignCorrection(producer.label, manager);
+      if (unverified || owned.size !== ids.length || !manager) {
+        return { kind: 'unverified', reason: (unverified ?? 'GPT producer ownership unverified')
+          + ' - reconcile this manager Task/Dispatch for the exact own GPT invocation '
+          + ids.map(inertInvocationId).join(',') };
+      }
+      const result = gptTerminalResolution(producer, ids, owned, envelopes);
+      if (result.deficient) return { kind: 'unverified', reason: 'GPT producer evidence uncertain' };
+      return result.match ? { kind: 'wake', match: result.match, manager } : PENDING;
+    }
+    default:
+      break;
   }
-  if (!repo) return undefined;
+  const repo = namedRepository(options.config);
+  if (!repo) return PENDING;
+  if (producer.kind === 'ci' && !producer.number) {
+    // PR-less CI cannot invent a historic H0 or inherit a current-head result.
+    return manager ? reparseCorrection(producer.label, manager)
+      : { kind: 'unverified', reason: 'PR-less CI park names no exact own PR head' + UNVERIFIED_NEXT };
+  }
+  if (producer.kind === 'pack-review' && !producer.sha) {
+    const owner = pullOwnership(repo, producer.number!, manager, options);
+    if (owner.kind === 'foreign') return foreignCorrection(producer.label, manager!);
+    return manager && owner.kind === 'own' ? reparseCorrection(producer.label, manager)
+      : { kind: 'unverified', reason: 'headless pack-review park names no exact own PR head' + UNVERIFIED_NEXT };
+  }
+  if (producer.kind === 'ci' || producer.kind === 'pack-review') {
+    return decidePullPark(producer, repo, producer.number!, producer.sha, manager, options, (pull, owner) => {
+      const recheck = ownPullStill(repo, producer.number!, owner, options, pull.headSha, false);
+      if (producer.kind === 'ci') {
+        const completed = (options.checkRunsFinishedAt ?? checkRunsFinishedAt)(repo, pull.headSha);
+        return completed !== undefined && Number.isFinite(completed)
+          ? { kind: 'wake', manager: owner, recheck, match: resolved('checks-completed', 'CI-' + pull.headSha,
+            'ci:' + producer.number + ':' + pull.headSha + ':' + completed) } : PENDING;
+      }
+      const stage = (options.readPackReviewStage ?? readPackReviewStatus)(repo, pull.headSha);
+      return stage && (stage.state === 'success' || stage.state === 'failure')
+        ? { kind: 'wake', manager: owner, recheck, match: resolved('stage-' + stage.state, 'pack-review-' + pull.headSha,
+          'pack-review:' + pull.headSha + ':' + stage.state) } : PENDING;
+    });
+  }
+  if (producer.kind === 'review') {
+    return decidePullPark(producer, repo, producer.number!, producer.sha, manager, options, (pull, owner) => {
+      const review = (options.readNamedReview ?? readNativeReview)(repo, producer.number!, producer.reviewId!);
+      // An older-commit review is not the parked head's completion.
+      return review && review.id === producer.reviewId && review.commitSha === producer.sha
+        && review.submittedAt && review.state !== 'PENDING'
+        ? { kind: 'wake', manager: owner, recheck: ownPullStill(repo, producer.number!, owner, options, pull.headSha, false),
+          match: resolved('review-submitted', 'review-' + producer.reviewId,
+            'review:' + producer.number + ':' + producer.reviewId) } : PENDING;
+    });
+  }
+  if (producer.kind === 'merge') {
+    const owner = pullOwnership(repo, producer.number!, manager, options);
+    if (owner.kind === 'foreign') return foreignCorrection(producer.label, manager!);
+    if (owner.kind === 'unverified') return { kind: 'unverified', reason: owner.reason
+      + ' - await another Issue merge through a typed external dependency or the coordinator' };
+    return owner.pull.merged ? { kind: 'wake', manager: manager!,
+      recheck: () => {
+        const again = pullOwnership(repo, producer.number!, manager, options);
+        return again.kind === 'own' && again.pull.merged;
+      },
+      match: resolved('merged', 'PR-' + producer.number, 'merge:' + producer.number) } : PENDING;
+  }
   if (producer.kind === 'review-run') {
     let matches: readonly PackReviewRunRecord[];
     try {
       matches = readSelectedProjectReviewRuns(options)?.records.filter((run) => run.id === producer.id) ?? [];
     } catch {
-      log('review-run Wake pending/unverified for ' + producer.id
+      log('review-run Wake unverified for ' + producer.id
         + ': selected-project run store unreadable - re-check the store before the next normal tick');
-      return undefined;
+      return { kind: 'unverified', reason: 'review run ' + producer.id + ' selected-project run store unreadable'
+        + ' - reconcile the selected-project review-run store' + UNVERIFIED_NEXT };
     }
-    const run = matches.length === 1 ? matches[0] : undefined;
-    if (!run) return undefined;
-    if (PACK_REVIEW_TERMINAL_STATUSES.has(run.status)) return resolved(
-      run.status, 'PR-' + run.prNumber + '-head-' + run.targetSha,
-      'review-run:' + run.id + ':' + run.status);
-    if (PACK_REVIEW_ACTIVE_STATUSES.has(run.status)
-      && Number.isSafeInteger(run.runnerPid) && run.runnerPid > 0) {
-      const now = new Date((options.now ?? Date.now)());
-      const pidState = (options.probePid ?? readLinuxProcess)(run.runnerPid).state;
-      const dead = pidState === 'absent' || pidState === 'exited';
-      const heartbeat = Date.parse(run.heartbeatAtUtc);
-      if (dead || (Number.isFinite(heartbeat) && packReviewRunGraceElapsed(run, now))) {
-        return resolved('runner-dead', 'PR-' + run.prNumber + '-head-' + run.targetSha,
-          'review-run:' + run.id + ':runner-dead');
+    if (matches.length !== 1) {
+      return { kind: 'unverified', reason: 'review run ' + producer.id + ' has no unique selected-project record'
+        + UNVERIFIED_NEXT };
+    }
+    const run = matches[0]!;
+    // H0 is the run's keyed target; the normalized head only corroborates it.
+    const h0 = run.targetSha;
+    if (!SHA40.test(h0) || run.headSha !== h0) {
+      return { kind: 'unverified', reason: 'review run ' + producer.id + ' target and head disagree' + UNVERIFIED_NEXT };
+    }
+    return decidePullPark(producer, repo, run.prNumber, h0, manager, options, (pull, owner) => {
+      const recheck = ownPullStill(repo, run.prNumber, owner, options, pull.headSha, false);
+      if (PACK_REVIEW_TERMINAL_STATUSES.has(run.status)) return { kind: 'wake', manager: owner, recheck,
+        match: resolved(run.status, 'PR-' + run.prNumber + '-head-' + h0, 'review-run:' + run.id + ':' + run.status) };
+      if (PACK_REVIEW_ACTIVE_STATUSES.has(run.status)
+        && Number.isSafeInteger(run.runnerPid) && run.runnerPid > 0) {
+        const pidState = (options.probePid ?? readLinuxProcess)(run.runnerPid).state;
+        const dead = pidState === 'absent' || pidState === 'exited';
+        const heartbeat = Date.parse(run.heartbeatAtUtc);
+        if (dead || (Number.isFinite(heartbeat) && packReviewRunGraceElapsed(run, new Date(now)))) {
+          return { kind: 'wake', manager: owner, recheck, match: resolved('runner-dead',
+            'PR-' + run.prNumber + '-head-' + h0, 'review-run:' + run.id + ':runner-dead') };
+        }
       }
-    }
-    return undefined;
+      return PENDING;
+    });
   }
-  if (producer.kind === 'unit' && producer.unit) {
-    const fact = (options.readUnitState ?? readSystemdUnitState)(producer.unit);
-    return fact && (fact.activeState === 'inactive' || fact.activeState === 'failed')
-      ? resolved('unit-' + fact.activeState, producer.unit,
-        'unit:' + producer.unit + ':' + fact.activeState + ':' + fact.result) : undefined;
-  }
-  if (producer.kind === 'merge' && producer.number) {
-    const pull = (options.readNamedPull ?? readNativePull)(repo, producer.number);
-    return pull?.merged === true ? resolved('merged', 'PR-' + producer.number, 'merge:' + producer.number) : undefined;
-  }
-  if (producer.kind === 'review' && producer.number && producer.reviewId) {
-    const review = (options.readNamedReview ?? readNativeReview)(repo, producer.number, producer.reviewId);
-    return review?.submittedAt && review.state !== 'PENDING'
-      ? resolved('review-submitted', 'review-' + producer.reviewId,
-        'review:' + producer.number + ':' + producer.reviewId) : undefined;
-  }
-  // Only a moved-head advisory requires an open PR. A closed/merged PR
-  // that retains the exact parked SHA still uses its incumbent terminal
-  // CI/pack-review producer result, never a fabricated head-moved event.
-  if ((producer.kind === 'ci' || producer.kind === 'pack-review') && producer.number && producer.sha) {
-    const pull = (options.readNamedPull ?? readNativePull)(repo, producer.number);
-    if (!pull || pull.number !== producer.number || !SHA40.test(pull.headSha)) return undefined;
-    if (pull.headSha !== producer.sha) {
-      if (pull.state !== 'open' || pull.merged) return undefined;
-      return {
-        label: producer.label, terminalState: 'head-moved', evidence: pull.headSha,
-        eventId: 'head-moved:' + producer.number + ':' + producer.sha,
-        currentHeadSha: pull.headSha,
-      };
-    }
-  }
-  if (producer.kind === 'pack-review') {
-    const sha = producer.sha ?? (producer.number
-      ? (options.readNamedPull ?? readNativePull)(repo, producer.number)?.headSha : undefined);
-    if (!sha || !SHA40.test(sha)) return undefined;
-    const stage = (options.readPackReviewStage ?? readPackReviewStatus)(repo, sha);
-    return stage && (stage.state === 'success' || stage.state === 'failure')
-      ? resolved('stage-' + stage.state, 'pack-review-' + sha,
-        'pack-review:' + sha + ':' + stage.state) : undefined;
-  }
-  if (producer.kind === 'ci') {
-    // An abbreviated "CI on SHA" must resolve to one exact live PR/head,
-    // optionally through the pane's actual branch when the head already moved.
-    if (producer.sha && !SHA40.test(producer.sha)) {
-      let pulls: readonly OpenPullHead[];
-      try { pulls = (options.listOpenPulls ?? listOpenPullHeads)(repo); }
-      catch { return undefined; }
-      const candidates = pulls.filter((pull) => SHA40.test(pull.sha)
-        && (pull.sha.startsWith(producer.sha!)
-          || (pane?.branch && (pane.branch === pull.ref || pane.branch === 'refs/heads/' + pull.ref))));
-      if (candidates.length !== 1) return undefined;
-      const candidate = candidates[0]!;
-      const current = (options.readNamedPull ?? readNativePull)(repo, candidate.number);
-      if (!current || current.number !== candidate.number || current.state !== 'open'
-        || current.merged || current.headSha !== candidate.sha) return undefined;
-      if (!current.headSha.startsWith(producer.sha)) return {
-        label: producer.label, terminalState: 'head-moved', evidence: current.headSha,
-        eventId: 'head-moved:' + candidate.number + ':' + producer.sha,
-        currentHeadSha: current.headSha, pullNumber: candidate.number,
-      };
-      const completed = (options.checkRunsFinishedAt ?? checkRunsFinishedAt)(repo, current.headSha);
-      return completed !== undefined && Number.isFinite(completed)
-        ? { ...resolved('checks-completed', 'CI-' + current.headSha,
-          'ci:' + candidate.number + ':' + current.headSha + ':' + completed),
-          pullNumber: candidate.number, currentHeadSha: current.headSha } : undefined;
-    }
-    const sha = producer.sha ?? (producer.number
-      ? (options.readNamedPull ?? readNativePull)(repo, producer.number)?.headSha : undefined);
-    if (!sha) return undefined;
-    const completed = (options.checkRunsFinishedAt ?? checkRunsFinishedAt)(repo, sha);
-    return completed !== undefined && Number.isFinite(completed)
-      ? resolved('checks-completed', 'CI-' + sha,
-        'ci:' + (producer.number ?? 'head') + ':' + sha + ':' + completed) : undefined;
-  }
-  return undefined;
+  return PENDING;
 }
 
 // All interpolations and the fixed words pass one physical-line whitelist.
@@ -1678,6 +1966,22 @@ function safeTerminalCauseCode(value: string | undefined): string | undefined {
     ? value : undefined;
 }
 
+/**
+ * Coordinator text never echoes untrusted park token bytes. The digest names
+ * the private `browser-gpt-receipts/<sha256(id)>.json` index entry for local
+ * exact-ID reconciliation.
+ */
+function inertInvocationId(id: string): string {
+  return 'sha256:' + createHash('sha256').update(id).digest('hex').slice(0, 16);
+}
+
+function sameChildCwd(cwd: string | undefined, childCwd: string): boolean {
+  if (!cwd || !isAbsolute(cwd)) return false;
+  if (resolve(cwd) === resolve(childCwd)) return true;
+  try { return realpathSync(cwd) === realpathSync(childCwd); }
+  catch { return false; }
+}
+
 function singleGptEndedState(event: TerminalEnvelopeEvent): string {
   const state = event.turnResultState
     ?? (event.lifecycleOutcome === 'incident' ? 'incident' : 'ok');
@@ -1690,39 +1994,38 @@ function singleGptEndedState(event: TerminalEnvelopeEvent): string {
 
 function gptTerminalResolution(
   producer: NamedProducer,
-  pane: FleetPaneObservation,
+  ids: readonly string[],
+  owned: ReadonlyMap<string, { readonly runIdentity: string; readonly attemptIdentity: string;
+    readonly handoffReceiptPath: string; readonly terminalEnvelopePath: string;
+    readonly childCwd: string; readonly launcher: string }>,
   events: readonly TerminalEnvelopeEvent[],
-  terminals: readonly FleetTerminal[],
-  sameIdParkCount: ReadonlyMap<string, number>,
 ): { readonly match?: ProducerResolution; readonly deficient: boolean } {
-  const ids = producer.kind === 'gpt-multi' ? producer.ids ?? [] : [producer.id ?? ''];
-  if (ids.some((id) => !id)) return { deficient: false };
-  const active = terminals.filter((row) => row.handle === pane.handle
-    && terminalsIdentity(row) === terminalsIdentity(pane) && row.status?.toLowerCase() !== 'exited');
-  if (active.length !== 1 || !pane.incarnationId) return { deficient: false };
-  // Another parked pane naming the same invocation makes the owner ambiguous.
-  if (ids.some((id) => (sameIdParkCount.get(id) ?? 0) > 1)) return { deficient: true };
   let deficient = false;
   const settled: TerminalEnvelopeEvent[] = [];
   for (const id of ids) {
-    // The exact invocation ID named by the pane's own final PARKED line binds the
-    // envelope; the launcher tab and the child cwd are incidental.
-    // Only an observed invocation can bind an alternate attempt-id park.
-    // A filename-only artifact or an explicitly foreign terminal is not its owner.
-    const associated = events.filter((event) => event.observedInvocationId === id
-      || (event.attemptIdentity === id && typeof event.observedInvocationId === 'string'
-        && event.observedInvocationId.length > 0
-        && (!event.terminalHandle || event.terminalHandle === pane.handle)));
-    if (associated.length === 0) continue; // No attributable landed artifact is ordinary pending.
+    const own = owned.get(id);
+    if (!own) return { deficient: true };
+    // Only the indexed terminal path, carrying the exact observed invocation and
+    // its indexed run/attempt/handoff receipt, binds the envelope; a stray,
+    // partial, attempt-only or copied-ID artifact elsewhere never does.
+    const associated = events.filter((event) => resolve(event.path) === resolve(own.terminalEnvelopePath)
+      && event.observedInvocationId === id
+      && event.runIdentity === own.runIdentity && event.attemptIdentity === own.attemptIdentity
+      && event.handoffReceiptPath === own.handoffReceiptPath
+      // The result artifact's own child origin must be the indexed child cwd and launcher.
+      && event.terminalHandle === own.launcher && sameChildCwd(event.cwd, own.childCwd));
+    if (associated.length === 0) continue; // Indexed own turn with no envelope yet is ordinary pending.
     if (associated.length !== 1) { deficient = true; continue; }
     const event = associated[0]!;
-    const settledOutcome = event.lifecycleOutcome === 'success' || event.lifecycleOutcome === 'incident'
-      || (typeof event.turnResultState === 'string' && event.turnResultState.length > 0
-        && !/^(?:pending|running|in_progress|unknown|unverified)$/iu.test(event.turnResultState));
+    // The producer's mandatory lifecycle field is required; a result state
+    // alone (partial or competing artifact) never grants completion.
+    const settledOutcome = event.lifecycleOutcome === 'success' || event.lifecycleOutcome === 'incident';
     const contradicts = (event.lifecycleOutcome === 'success' && failureTerminalEnvelope(event))
       || (event.lifecycleOutcome === 'incident' && event.turnResultState === 'ok')
       || (typeof event.turnResultState === 'string'
-        && /^(?:pending|running|in_progress|unknown|unverified)$/iu.test(event.turnResultState));
+        && /^(?:pending|running|in_progress|unknown|unverified)$/iu.test(event.turnResultState))
+      // Success never infers an ok result from a missing recorded turn-result state.
+      || (event.lifecycleOutcome === 'success' && !event.turnResultState);
     if (!settledOutcome || contradicts) { deficient = true; continue; }
     // A coherent terminal outcome means the producer ended, not that it
     // succeeded. Original-owner non-ok incident delivery remains independent.
@@ -1897,14 +2200,17 @@ async function wakeNamedParkedProducers(
 ): Promise<void> {
   const now = (options.now ?? Date.now)();
   const envelopes = (options.listTerminalEnvelopes ?? listTerminalEnvelopes)();
-  const sameIdParkCount = new Map<string, number>();
-  for (const pane of observations) {
-    if (pane.state !== 'PARKED' || !pane.wait || bareShellHandles.has(pane.handle)) continue;
-    const named = parseNamedParkedProducer(pane.wait);
-    for (const id of named?.kind === 'gpt' ? [named.id!] : named?.kind === 'gpt-multi' ? named.ids ?? [] : []) {
-      sameIdParkCount.set(id, (sameIdParkCount.get(id) ?? 0) + 1);
+  const readAssignments = options.readCurrentAssignments
+    ?? (() => listCurrentWorkerAssignmentRecords(resolveWorkerAssignmentStorePath(options.config.projectId)));
+  let assignments: readonly WorkerAssignmentRecord[] | null | undefined;
+  const tickAssignments = (): readonly WorkerAssignmentRecord[] | null => {
+    if (assignments === undefined) {
+      try { assignments = readAssignments(); }
+      catch { assignments = null; }
     }
-  }
+    return assignments;
+  };
+  const workerShows: WorkerShowCache = new Map();
   const observed = new Map<string, string>();
   for (const pane of observations) {
     if (pane.state !== 'PARKED' || !pane.wait) continue;
@@ -1918,11 +2224,11 @@ async function wakeNamedParkedProducers(
       store.writeParkedEpoch?.(pane.handle, epoch);
     }
     const producer = parseNamedParkedProducer(pane.wait);
-    let match: ProducerResolution | undefined;
+    let decision: ParkDecision = PENDING;
     // Re-observe this same native pane and its final PARKED line
-    // immediately before the combined prompt send. A recycled handle or
-    // newly bare shell cannot receive a stale parked event/reminder.
-    const stillParkedOwner = (): boolean => {
+    // immediately before the single native text+Enter call. A recycled
+    // handle or newly bare shell cannot receive a stale parked event/reminder.
+    const parkedOwner = (strict: boolean): boolean => {
       try {
         const census = listFleetTerminals(executor);
         const candidates = census.filter((row) => row.handle === pane.handle);
@@ -1937,63 +2243,45 @@ async function wakeNamedParkedProducers(
             + ': re-check selected coordinator and current worker-list/worker-show/run-show Dispatch binding');
           return false;
         }
-        if (match?.pullNumber && match.currentHeadSha) {
-          const repo = namedRepository(options.config);
-          const pull = repo && (options.readNamedPull ?? readNativePull)(repo, match.pullNumber);
-          if (!pull || pull.headSha !== match.currentHeadSha || pull.state !== 'open' || pull.merged) return false;
-        }
-        if ((producer?.kind === 'ci' || producer?.kind === 'pack-review')
-          && producer.number && producer.sha) {
-          const repo = namedRepository(options.config);
-          const pull = repo && (options.readNamedPull ?? readNativePull)(repo, producer.number);
-          if (!pull || pull.number !== producer.number || !SHA40.test(pull.headSha)
-            || pull.headSha !== (match?.currentHeadSha ?? producer.sha)
-            || (match?.currentHeadSha !== undefined && (pull.state !== 'open' || pull.merged))) {
-            log('named PR Wake withheld for ' + pane.handle
-              + ': re-check PR #' + producer.number + ' and its exact current head');
-            return false;
-          }
-        }
         const screen = readFleetScreen(pane.handle, executor);
+        if (strict) return ownFinalPark(screen, pane.wait!);
         return lastFleetParkedLine(screen) === pane.wait || ownPaneOutcome(screen).wait === pane.wait;
       } catch { return false; }
     };
-    let uncertainty: string | undefined;
-    if (producer?.kind === 'gpt' || producer?.kind === 'gpt-multi') {
-      const result = gptTerminalResolution(producer, pane, envelopes, terminals, sameIdParkCount);
-      match = result.match;
-      if (result.deficient) uncertainty = 'GPT producer evidence uncertain';
-    } else if (producer?.kind === 'time') {
-      if (now >= producer.dueAt!) {
-        match = { label: producer.label, terminalState: 'UTC-time-due',
-          evidence: new Date(producer.dueAt!).toISOString(), eventId: 'time:' + pane.wait };
-      }
-    } else if (producer?.kind === 'process') {
-      const observation = (options.probePid ?? readLinuxProcess)(producer.pid!);
-      const prior = epoch?.liveProcess;
-      if (observation.state === 'live' && observation.startticks === producer.startticks) {
-        if (!prior && epoch) store.writeParkedEpoch?.(pane.handle, {
-          ...epoch, liveProcess: { pid: producer.pid!, startticks: observation.startticks, namespace: observation.namespace },
-        });
-      } else if ((observation.state === 'exited' && observation.startticks === producer.startticks)
-        || (prior !== undefined && prior.pid === producer.pid && prior.startticks === producer.startticks
-          && ((observation.state === 'absent' && observation.namespace === prior.namespace)
-            || ((observation.state === 'live' || observation.state === 'exited')
-              && observation.namespace === prior.namespace && observation.startticks !== prior.startticks)))) {
-        match = { label: producer.label, terminalState: 'process-exited',
-          evidence: 'pid-' + producer.pid, eventId: 'process-exit:' + pane.wait };
-      } else {
-        uncertainty = 'process provenance unverified';
-      }
-    } else if (producer) {
-      match = resolveParkEvent(pane.wait, terminals, options, log, pane);
-      if (!match && (producer.kind === 'ci' || producer.kind === 'pack-review') && producer.number) {
-        log('named PR Wake pending/unverified for ' + pane.handle
-          + ': re-check exact PR #' + producer.number + ' open/current head and its current-head producer');
-      }
+    const stillParkedOwner = (): boolean => parkedOwner(false);
+    // A direct manager send additionally re-proves the exact Task/Dispatch,
+    // assignment generation, native incarnation, worktree and own final park,
+    // plus the decision's own PR/head, for every worktree.
+    const stillBoundManager = (manager: ParkingManager, recheck?: () => boolean) => (): boolean => {
+      try {
+        if (!parkedOwner(true)) return false;
+        const census = listFleetTerminals(executor);
+        let rows: readonly WorkerAssignmentRecord[] | null;
+        try { rows = readAssignments(); }
+        catch { rows = null; }
+        if (!sameParkingManager(parkingManager(pane, options, census, executor, rows), manager)
+          || !freshSendSafePane(pane, census, options, executor, store)) {
+          log('named Wake withheld for ' + pane.handle
+            + ': manager Task/Dispatch, assignment or pane changed - re-check it on the next tick');
+          return false;
+        }
+        if (recheck && !recheck()) {
+          log('named PR Wake withheld for ' + pane.handle + ': re-check the own PR and its exact current head');
+          return false;
+        }
+        return true;
+      } catch { return false; }
+    };
+    let manager: ParkingManager | undefined;
+    const needsManager = producer !== undefined && producer.kind !== 'time' && producer.kind !== 'unit'
+      && producer.kind !== 'process' && producer.kind !== 'terminal';
+    if (producer) {
+      manager = needsManager
+        ? parkingManager(pane, options, terminals, executor, tickAssignments(), workerShows) : undefined;
+      decision = decideNamedPark(producer, pane, manager, envelopes, terminals, options, log, now);
     }
-    if (uncertainty) {
-      await alarmParkUncertainty(uncertainty, pane, pane.wait, epoch, options, store,
+    if (decision.kind === 'unverified') {
+      await alarmParkUncertainty(decision.reason, pane, pane.wait, epoch, options, store,
         executor, sleepMs, log, counts, stillParkedOwner);
     }
     if (!producer) {
@@ -2005,9 +2293,16 @@ async function wakeNamedParkedProducers(
       }
       // Unknown grammar still gets the incumbent 30-minute reminder.
     }
-    if (match && producer) {
+    if (decision.kind === 'correct') {
+      // One actionable correction per observed park episode, to the verified parking manager only.
+      const key = 'correct:' + pane.handle + ':' + decision.eventId + ':episode:' + (epoch?.started ?? epoch?.since ?? now);
+      if (await sendMarkedUnitMessage(store, key, pane, decision.text, executor, sleepMs, log, counts,
+        stillBoundManager(decision.manager, decision.recheck))) continue;
+    }
+    if (decision.kind === 'wake' && producer) {
+      const match = decision.match;
       const eventKey = 'event:' + pane.handle + ':' + match.eventId
-        + ((producer.kind === 'time' || producer.kind === 'process') ? ':episode:' + (epoch?.started ?? epoch?.since ?? now) : '');
+        + (producer.kind === 'time' ? ':episode:' + (epoch?.started ?? epoch?.since ?? now) : '');
       // A terminal-envelope event also owns the shared (handle, path) mark; a gpt-multi
       // group reserves every member path so no member is later woken again as a single.
       // A group whose every member path was already woken elsewhere has nothing new to say.
@@ -2023,23 +2318,32 @@ async function wakeNamedParkedProducers(
         const shared: SharedWakeMarks | undefined = sharedMarks.length > 0
           ? { reserve: sharedMarks, ...(producer.kind === 'gpt' ? { suppressIfMarked: sharedMarks } : {}) }
           : undefined;
+        const selected = decision.manager ? stillBoundManager(decision.manager, decision.recheck) : stillParkedOwner;
         if (await sendMarkedUnitMessage(store, eventKey, pane, wakeText,
-          executor, sleepMs, log, counts, stillParkedOwner, match.eventId, shared)) {
+          executor, sleepMs, log, counts, selected, match.eventId, shared)) {
           if (epoch) store.writeParkedEpoch?.(pane.handle, { ...epoch, since: now });
           store.clearPaneWait?.(pane.handle);
           continue;
         }
       }
     }
-    // PARKED stays silent until its own elapsed 30-minute Reminder.
-    if (epoch && Number.isFinite(now) && now >= epoch.since + REMINDER_INTERVAL_MS) {
+    // PARKED stays silent until its own elapsed 30-minute Reminder. An unverified
+    // or corrected park keeps only the coordinator route; a task-owned producer
+    // reminds only a verified parking manager on its own pending park.
+    // A bare terminal or PID park has no Task-bound producer origin, live or
+    // exited, so it never gets a direct Reminder; only UTC time and shared units do.
+    const reminderGate = decision.kind === 'unverified' || decision.kind === 'correct'
+      || producer?.kind === 'terminal' || producer?.kind === 'process' ? undefined
+      : needsManager ? (decision.kind === 'pending' && manager ? stillBoundManager(manager) : undefined)
+        : stillParkedOwner;
+    if (reminderGate && epoch && Number.isFinite(now) && now >= epoch.since + REMINDER_INTERVAL_MS) {
       const slot = Math.floor((now - epoch.since) / REMINDER_INTERVAL_MS);
       const key = 'reminder:' + pane.handle + ':' + episode + ':' + epoch.since + ':' + slot;
       if (slot >= 1 && !store.hasParkedWakeEvent(key)) {
         const message = safeUnitReminderText(pane.wait.slice('PARKED on '.length))
           ?? 'Reminder: parked 30 min - re-check the named producer yourself before continuing';
         await sendMarkedUnitMessage(store, key, pane, message,
-          executor, sleepMs, log, counts, stillParkedOwner);
+          executor, sleepMs, log, counts, reminderGate);
       }
     }
   }
