@@ -2164,6 +2164,18 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       }
     }
     const key = packReviewRunKey(input.prNumber, headSha, canonicalRepository);
+    if (input.finalCapDelta) {
+      const requested = normalizePackReviewFinalCapDelta(input.finalCapDelta);
+      const conflicted = boundRecords.some((record) =>
+        record.projectId === projectId && record.prNumber === input.prNumber
+        && record.targetSha === headSha
+        && record.canonicalRepository === canonicalRepository
+        && record.finalCapDelta
+        && !isDeepStrictEqual(record.finalCapDelta, requested));
+      if (conflicted) {
+        throw new Error('finalCapDelta same-head F/reviewer/Issue/context drift; never alias or replace the previous run');
+      }
+    }
     const matchesTargetIdentity = (record: PackReviewRunRecord) => matchesPackReviewRunInput(
       record,
       projectId,
