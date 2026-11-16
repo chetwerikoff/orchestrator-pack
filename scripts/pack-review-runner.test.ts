@@ -7971,6 +7971,17 @@ describe('Issue #2835 pure base-merge safety proof', () => {
       git(['merge', '--no-ff', '--quiet', '-m', 'merge selected base', 'main']);
       const merged = git(['rev-parse', 'HEAD']);
       expect(await finalCapPureSelectedBaseMerge(root, f, merged, 'origin/main')).toBe(true);
+      // A second genuine base merge remains zero-owned-change despite using
+      // a different base tip from the first merge.
+      git(['checkout', '-q', 'main']);
+      writeFileSync(join(root, 'base.txt'), 'base C\n');
+      git(['add', 'base.txt']);
+      git(['commit', '--quiet', '-m', 'base C']);
+      git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+      git(['checkout', '-q', 'feature']);
+      git(['merge', '--no-ff', '--quiet', '-m', 'merge second selected base', 'main']);
+      const secondMerge = git(['rev-parse', 'HEAD']);
+      expect(await finalCapPureSelectedBaseMerge(root, f, secondMerge, 'origin/main')).toBe(true);
       writeFileSync(join(root, 'owned.txt'), 'new owned code\n');
       git(['add', 'owned.txt']);
       git(['commit', '--quiet', '-m', 'PR-owned after merge']);

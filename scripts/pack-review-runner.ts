@@ -6237,9 +6237,15 @@ export async function finalCapPureSelectedBaseMerge(
       const parents = (await runGit(root, ['rev-list', '--parents', '-n', '1', mergeSha],
         'merge parents')).trim().split(/\s+/);
       if (parents.length !== 3 || parents[0] !== mergeSha
-          || parents[1] !== cursor || parents[2] !== baseTip) return false;
+          || parents[1] !== cursor) return false;
+      // Multiple successive clean merges may use successive base tips. Each
+      // second parent must belong to the selected base history; verify each
+      // clean merge-tree result rather than requiring the final base tip at
+      // every intermediate merge.
+      const mergedBase = parents[2]!;
+      if (!await rebaseAncestor(root, mergedBase, baseTip)) return false;
       const mergeTree = await runProcess({
-        command: 'git', args: ['merge-tree', '--write-tree', cursor, baseTip],
+        command: 'git', args: ['merge-tree', '--write-tree', cursor, mergedBase],
         cwd: root, inheritParentEnv: true, allowEmptyStdout: false, timeoutMs: 30000,
       });
       if (!mergeTree.ok || !/^[0-9a-f]{40}\s*$/.test(mergeTree.stdout)) return false;
@@ -6298,6 +6304,10 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
   if (reviewer === 'gpt' && (!original.reviewRound || !sourceSlotIds.length)) {
     return refused('final_cap_gpt_original_slots_unverified');
   }
+  const ancestry = async (fromSha: string, toSha: string): Promise<boolean> => {
+    try { return await rebaseAncestor(input.sourceRepoRoot, fromSha, toSha); }
+    catch { return false; } // Missing Git proof is non-success, not an uncaught exception.
+  };
   const previous = listPackReviewRuns({ projectId: opts.projectId, storeRoot: opts.storeRoot })
     .filter((r) => r.finalCapDelta?.originalRunId === original.id
       && r.finalCapDelta.originalCycleId === opts.originalCycleId
@@ -6315,9 +6325,11 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
   // Ordered, fully completed original-run continuations form the only F
   // chain. A divergent/missing predecessor cannot become reviewer authority.
   for (const r of previous) {
+    // Completed reviews on a different descendant branch cannot advance F on
+    // this exact-T lineage; do not let them corrupt the current chain either.
+    if (!await ancestry(r.targetSha, opts.targetSha)) continue;
     if (r.finalCapDelta?.fromSha !== frontier
-        || r.finalCapDelta.toSha !== r.targetSha
-        || !await rebaseAncestor(input.sourceRepoRoot, r.targetSha, opts.targetSha)) {
+        || r.finalCapDelta.toSha !== r.targetSha) {
       return refused('final_cap_delta_review_chain_unverified');
     }
     frontier = r.targetSha;
@@ -6329,7 +6341,7 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
       reason: 'final_cap_delta_exact_result_reused', runId: lastComplete.id,
       fromSha: lastComplete.finalCapDelta!.fromSha };
   }
-  if (!await rebaseAncestor(input.sourceRepoRoot, frontier, opts.targetSha)
+  if (!await ancestry(frontier, opts.targetSha)
       || frontier === opts.targetSha) return refused('final_cap_delta_frontier_not_ancestor');
   const pureMerge = await finalCapPureSelectedBaseMerge(
     input.sourceRepoRoot, frontier, opts.targetSha, selectedBaseRef);
@@ -6389,7 +6401,8 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
       reviewCycleId: opts.originalCycleId,
       resolvedReviewer: reviewer, resolvedReviewerSource: original.resolvedReviewerSource,
       boundIssueSnapshotDigest: opts.issueDigest,
-      ...(gptRound ? { reviewRound: gptRound } : {}),
+      ...(gptRound ? { reviewRound: gptRound,
+        accountingVersion: gptRound.accountingVersion } : {}),
     });
   } catch (error) { return refused('final_cap_delta_run_admission_failed: ' + describeError(error)); }
   if (created.reused) {
@@ -7265,7 +7278,10 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         }
       }
     }
-    if (!completedFinalFindings) {
+    if (!completedFinalFindings
+        || (!rebasedC && deltaOutcome?.state === 'clean'
+          && authority.cycle?.reviewStageComplete === true
+          && authority.publication?.headSha !== authority.currentHeadSha)) {
       const strictDescendant = await resolvePackReviewStrictDescendant({
         repoRoot: input.sourceRepoRoot,
         repoSlug: options.repoSlug,

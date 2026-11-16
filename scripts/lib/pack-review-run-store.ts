@@ -2276,6 +2276,11 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
     // A legacy replay may return an existing run, never manufacture an advisory one.
     if (legacyReplayOnly) normalizeNewAutomaticBudgetDisposition(input.automaticBudgetDisposition, input);
     const now = (input.now ?? new Date()).toISOString();
+    // A runner-owned non-consuming GPT delta retains the original source
+    // accounting version even though it has no required-round ordinal.
+    // Preserve the cross-field parser invariant rather than relaxing it.
+    const accountingVersion = input.accountingVersion
+      ?? (input.finalCapDelta ? input.reviewRound?.accountingVersion : undefined);
     const sameKeyOrders = boundRecords
       .filter((record) => matchesTargetIdentity(record) && record.sameKeyOrder !== undefined)
       .map((record) => record.sameKeyOrder!);
@@ -2299,7 +2304,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       sourceRepoRoot: resolve(input.sourceRepoRoot),
       automaticBudgetDisposition: disposition,
       canonicalRepository,
-      ...(input.accountingVersion ? { accountingVersion: input.accountingVersion } : {}),
+      ...(accountingVersion ? { accountingVersion } : {}),
       ...(input.reviewCycleId ? { reviewCycleId: input.reviewCycleId } : {}),
       ...(input.logicalRoundOrdinal ? { logicalRoundOrdinal: input.logicalRoundOrdinal } : {}),
       ...(input.logicalRoundCap ? { logicalRoundCap: input.logicalRoundCap } : {}),
@@ -2311,8 +2316,8 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       ...(input.finalCapDelta ? { finalCapDelta: normalizePackReviewFinalCapDelta(input.finalCapDelta) } : {}),
       ...(input.reviewRound ? { reviewRound: {
         ...input.reviewRound,
-        ...(input.reviewRound.accountingVersion === undefined && input.accountingVersion
-          ? { accountingVersion: input.accountingVersion } : {}),
+        ...(input.reviewRound.accountingVersion === undefined && accountingVersion
+          ? { accountingVersion } : {}),
       } } : {}),
       ...(input.boundIssueSnapshotDigest ? { boundIssueSnapshotDigest: input.boundIssueSnapshotDigest } : {}),
       runnerPid: process.pid,

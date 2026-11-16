@@ -1464,6 +1464,15 @@ export function settleLogicalPackReviewFindingsByStrictDescendant(input: {
         else if (input.verifiedDeltaRunId || input.verifiedPureBaseMerge) {
           cycle.settlementKind = 'delta_review';
         }
+      } else if (
+        cycle.state === 'closed' && cycle.reviewStageComplete === true
+        && consumedCount === cycle.frozenCap
+        && (input.verifiedDeltaRunId || input.verifiedPureBaseMerge)
+      ) {
+        // After an accepted clean H2, a newly reviewed H3 can update S
+        // without reopening or consuming a required round. The runner must
+        // still verify the exact ordinary delta result and current-head gates.
+        cycle.settlementKind = 'delta_review';
       } else {
         throw new PackReviewAuthorityError(
           'findings_settlement_invalid',

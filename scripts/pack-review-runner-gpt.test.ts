@@ -8458,6 +8458,10 @@ describe('Issue #2835 selected GPT final-cap F..T parser, prompt, protected sour
       },
     }).run;
     expect(getPackReviewRun(delta.id, opts)?.finalCapDelta?.sourceSlotIds).toHaveLength(3);
+    // The real create -> parse -> readback path must not reject its own
+    // GPT logical source version when the delta has no consuming ordinal.
+    expect(getPackReviewRun(delta.id, opts)?.accountingVersion)
+      .toBe(PACK_REVIEW_LOGICAL_CAP_MAP_VERSION);
     process.env.PACK_REVIEW_RUN_ID = delta.id;
     process.env.PACK_REVIEW_TARGET_HEAD_SHA = HEAD_B;
     process.env.PACK_REVIEWER = 'gpt';
