@@ -6306,7 +6306,8 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
       && r.resolvedReviewer === reviewer
       && r.boundIssueSnapshotDigest === opts.issueDigest
       && isDeepStrictEqual(r.finalCapDelta.sourceSlotIds, sourceSlotIds)
-      && hasPersistedPackReviewVerdict(r))
+      && hasPersistedPackReviewVerdict(r)
+      && r.deliveryOutcomes.githubComment?.state === 'succeeded')
     .sort((a, b) => Date.parse(a.completedAtUtc ?? '') - Date.parse(b.completedAtUtc ?? ''));
   let frontier = original.targetSha;
   let unresolved: unknown[] = [...original.findings];
@@ -6395,7 +6396,8 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
     const persisted = getPackReviewRun(created.run.id,
       { projectId: opts.projectId, storeRoot: opts.storeRoot });
     if (!persisted?.finalCapDelta || !isDeepStrictEqual(persisted.finalCapDelta, delta)
-        || !hasPersistedPackReviewVerdict(persisted)) {
+        || !hasPersistedPackReviewVerdict(persisted)
+        || persisted.deliveryOutcomes.githubComment?.state !== 'succeeded') {
       return refused('final_cap_delta_incumbent_must_be_reconciled');
     }
     return { state: persisted.reviewVerdict === 'clean' ? 'clean' : 'findings',
@@ -6480,16 +6482,35 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
     if (await readCheckedReviewPrHead(input, opts.repoSlug, opts.prNumber, opts.targetSha) !== opts.targetSha) {
       throw new Error('delta review completed on stale PR head');
     }
-    const now = new Date().toISOString();
-    setPackReviewRunTerminal(run.id,
-      payload.verdict === 'clean' ? 'up_to_date' : 'changes_requested', {
-        reviewVerdict: payload.verdict, findingCount: payload.findingCount,
-        findings: payload.findings,
-        journalOutcome: { state: 'persisted', recordedAtUtc: now,
-          reason: 'final_cap_ordinary_delta_result',
-          idempotencyKey: 'verdict:' + run.id + ':' + opts.targetSha, attempts: 1 },
-        exitCode: 0,
-      }, { projectId: opts.projectId, storeRoot: opts.storeRoot });
+    // Ordinary journal/REVIEW delivery, with unchanged source payload grammar.
+    // The existing non-consuming disposition suppresses direct required-status
+    // and notification writes: this final-cap settlement branch owns status.
+    const transport = createGithubReviewTransport({
+      repoRoot: input.sourceRepoRoot, repoSlug: opts.repoSlug, prNumber: opts.prNumber,
+      fixtureReviewId: input.fixtureGithubReviewId,
+      fixtureTransport: input.fixtureGithubReviewTransport,
+    });
+    const delivered = await deliverPackReviewVerdict({
+      run, payload, projectId: opts.projectId, storeRoot: opts.storeRoot,
+      postGithubComment: async () => {
+        const posted = await postGithubReview({
+          repoRoot: input.sourceRepoRoot, repoSlug: opts.repoSlug,
+          prNumber: opts.prNumber, headSha: opts.targetSha,
+          run, payload, projectId: opts.projectId, storeRoot: opts.storeRoot,
+          transport,
+        });
+        return { id: posted.id, url: posted.url, event: 'COMMENT' };
+      },
+      writeRequiredStatus: async () => { throw new Error('delta cannot publish required status'); },
+      notifyWorker: async () => { throw new Error('delta delivery must not create worker notification'); },
+    });
+    const final = getPackReviewRun(run.id, { projectId: opts.projectId, storeRoot: opts.storeRoot });
+    if (!delivered.ok || delivered.reason !== 'completed' || !final
+        || !hasPersistedPackReviewVerdict(final)
+        || final.deliveryOutcomes.githubComment?.state !== 'succeeded'
+        || final.reviewVerdict !== payload.verdict) {
+      return refused('final_cap_delta_delivery_unconfirmed');
+    }
     return { state: payload.verdict === 'clean' ? 'clean' : 'findings',
       reason: payload.verdict === 'clean' ? 'final_cap_delta_clean'
         : 'final_cap_delta_findings_existing_fixer_required',
