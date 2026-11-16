@@ -239,7 +239,7 @@ function objectType(cwd: string, oid: string): string {
   return trimmed(git(cwd, ['cat-file', '-t', oid]).stdout);
 }
 
-async function evaluateTuples(cwd: string, endpointUrl: string, stdin: string): Promise<Denial[]> {
+async function evaluateTuples(cwd: string, endpointUrl: string, stdin: string): Denial[] {
   const endpoint = normalizeEndpoint(endpointUrl, cwd);
   const shownEndpoint = redactEndpoint(endpointUrl);
   const defaultBranch = worktreeConfig(cwd, KEY.defaultBranch);
