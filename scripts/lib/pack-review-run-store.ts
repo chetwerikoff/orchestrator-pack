@@ -590,9 +590,6 @@ export function authenticatedPackReviewFinalCapDelta(input: {
         || run.reviewCycleId !== delta.originalCycleId
         || run.boundIssueSnapshotDigest !== delta.issueDigest) return null;
     const original = getPackReviewRun(delta.originalRunId, { projectId, storeRoot });
-    const authority = readPackReviewAuthorityUnderHeldStoreLock;
-    // getPackReviewRun released the store lock. Read authority through its
-    // public reader in this scope rather than nesting the protected lock.
     // Original immutable run identity remains the fundamental credential.
     if (!original || !hasPersistedPackReviewVerdict(original)
         || original.reviewVerdict !== 'findings'
@@ -602,7 +599,6 @@ export function authenticatedPackReviewFinalCapDelta(input: {
         || original.canonicalRepository !== delta.repository
         || original.resolvedReviewer !== delta.reviewer
         || !isDeepStrictEqual(original.reviewRound?.sourceSlots.map((slot) => slot.slotId) ?? [], delta.sourceSlotIds)) return null;
-    void authority;
     return delta;
   } catch { return null; }
 }
