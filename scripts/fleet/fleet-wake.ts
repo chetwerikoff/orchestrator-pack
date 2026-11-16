@@ -1421,6 +1421,29 @@ interface ParkingManager {
 type WorkerShowCache = Map<string, Record<string, unknown> | undefined>;
 
 /**
+ * Positive own-final-park witness for a direct named-manager send. Either the
+ * provenance-aware own outcome, or a native OpenCode assistant-rendered final
+ * line: OpenCode renders incoming messages and every tool output inside a
+ * gutter, so a final PARKED line outside any gutter is the agent's own text.
+ * A raw last line from a tool result or quotation never counts.
+ */
+export function ownFinalPark(screen: string, wait: string): boolean {
+  if (ownPaneOutcome(screen).wait === wait) return true;
+  if (lastFleetParkedLine(screen) !== wait) return false;
+  const raw = screen.split(/\r?\n/u);
+  if (!raw.some((line) => /^\s*┃/u.test(line))) return false;
+  const final = raw.map((line) => line.replace(/\s+$/u, '')).filter((line) => line.trim() === wait).at(-1);
+  return final !== undefined && /^ +PARKED on /u.test(final);
+}
+
+function witnessedOwnPark(pane: FleetPaneObservation, executor: OrcaExecutor): boolean {
+  if (!pane.wait) return false;
+  if (pane.ownParkObservation) return true;
+  try { return ownFinalPark(readFleetScreen(pane.handle, executor), pane.wait); }
+  catch { return false; }
+}
+
+/**
  * Recipient authority for a direct named-park correction or completion: one
  * positively own final park plus exactly one selected-project manager
  * assignment whose live exact Dispatch is this native pane. Anything else is
@@ -1435,10 +1458,10 @@ function parkingManager(
   cache?: WorkerShowCache,
 ): ParkingManager | undefined {
   const repository = namedRepository(options.config);
-  // The sweep's own-last-line PARKED is native-screen observation only; the
-  // exact Dispatch join below and the pre-send screen recheck add authority.
+  // A raw last-line PARKED from a tool result or quotation is never recipient
+  // authority; the park itself must be positively the pane's own final outcome.
   if (!repository || !assignments || pane.state !== 'PARKED' || !pane.wait
-    || !pane.incarnationId) return undefined;
+    || !pane.incarnationId || !witnessedOwnPark(pane, executor)) return undefined;
   const candidates = assignments.filter((row) => row.projectId === options.config.projectId
     && row.repository.toLowerCase() === repository.toLowerCase() && row.role === 'orchestrator'
     && row.kind === 'local' && row.provider === 'orca'
@@ -1504,7 +1527,8 @@ function selectedLinkedWorktree(cwd: string | undefined, options: FleetAlarmTick
 }
 
 type GptOwnership =
-  | { readonly kind: 'own'; readonly runIdentity: string; readonly attemptIdentity: string; readonly handoffReceiptPath: string }
+  | { readonly kind: 'own'; readonly runIdentity: string; readonly attemptIdentity: string;
+    readonly handoffReceiptPath: string; readonly terminalEnvelopePath: string }
   | { readonly kind: 'foreign' }
   | { readonly kind: 'unverified'; readonly reason: string };
 
@@ -1540,7 +1564,7 @@ function classifyGptInvocation(
     return unverified('GPT child cwd is not a selected-project linked worktree');
   }
   return { kind: 'own', runIdentity: locator.run_identity, attemptIdentity: locator.attempt_identity,
-    handoffReceiptPath: locator.handoff_receipt_path };
+    handoffReceiptPath: locator.handoff_receipt_path, terminalEnvelopePath: locator.terminal_envelope_path };
 }
 
 type PullOwnership =
@@ -1682,7 +1706,8 @@ function decideNamedPark(
       if (foreign && manager) return foreignCorrection(producer.label, manager);
       if (unverified || owned.size !== ids.length || !manager) {
         return { kind: 'unverified', reason: (unverified ?? 'GPT producer ownership unverified')
-          + ' - reconcile this manager Task/Dispatch for the exact own GPT invocation ' + ids.join(',') };
+          + ' - reconcile this manager Task/Dispatch for the exact own GPT invocation '
+          + ids.map(inertInvocationId).join(',') };
       }
       const result = gptTerminalResolution(producer, ids, owned, envelopes);
       if (result.deficient) return { kind: 'unverified', reason: 'GPT producer evidence uncertain' };
@@ -1932,6 +1957,13 @@ function safeTerminalCauseCode(value: string | undefined): string | undefined {
     ? value : undefined;
 }
 
+/** Coordinator text carries only an inert identifier shape, never an arbitrary park token. */
+function inertInvocationId(id: string): string {
+  return /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/u.test(id)
+    && !/(?:token|secret|passw|credential|private|apikey|bearer|^sk-|^gh[pousr]-?)/iu.test(id)
+    ? id : '[redacted]';
+}
+
 function singleGptEndedState(event: TerminalEnvelopeEvent): string {
   const state = event.turnResultState
     ?? (event.lifecycleOutcome === 'incident' ? 'incident' : 'ok');
@@ -1945,7 +1977,8 @@ function singleGptEndedState(event: TerminalEnvelopeEvent): string {
 function gptTerminalResolution(
   producer: NamedProducer,
   ids: readonly string[],
-  owned: ReadonlyMap<string, { readonly runIdentity: string; readonly attemptIdentity: string; readonly handoffReceiptPath: string }>,
+  owned: ReadonlyMap<string, { readonly runIdentity: string; readonly attemptIdentity: string;
+    readonly handoffReceiptPath: string; readonly terminalEnvelopePath: string }>,
   events: readonly TerminalEnvelopeEvent[],
 ): { readonly match?: ProducerResolution; readonly deficient: boolean } {
   let deficient = false;
@@ -1953,11 +1986,13 @@ function gptTerminalResolution(
   for (const id of ids) {
     const own = owned.get(id);
     if (!own) return { deficient: true };
-    // The exact observed invocation plus its indexed run/attempt/receipt binds
-    // the envelope; a filename, attempt-only or copied-ID artifact never does.
-    const associated = events.filter((event) => event.observedInvocationId === id
+    // Only the indexed terminal path, carrying the exact observed invocation and
+    // its indexed run/attempt/handoff receipt, binds the envelope; a stray,
+    // partial, attempt-only or copied-ID artifact elsewhere never does.
+    const associated = events.filter((event) => resolve(event.path) === resolve(own.terminalEnvelopePath)
+      && event.observedInvocationId === id
       && event.runIdentity === own.runIdentity && event.attemptIdentity === own.attemptIdentity
-      && (event.handoffReceiptPath === undefined || event.handoffReceiptPath === own.handoffReceiptPath));
+      && event.handoffReceiptPath === own.handoffReceiptPath);
     if (associated.length === 0) continue; // Indexed own turn with no envelope yet is ordinary pending.
     if (associated.length !== 1) { deficient = true; continue; }
     const event = associated[0]!;
@@ -1967,7 +2002,9 @@ function gptTerminalResolution(
     const contradicts = (event.lifecycleOutcome === 'success' && failureTerminalEnvelope(event))
       || (event.lifecycleOutcome === 'incident' && event.turnResultState === 'ok')
       || (typeof event.turnResultState === 'string'
-        && /^(?:pending|running|in_progress|unknown|unverified)$/iu.test(event.turnResultState));
+        && /^(?:pending|running|in_progress|unknown|unverified)$/iu.test(event.turnResultState))
+      // Success never infers an ok result from a missing recorded turn-result state.
+      || (event.lifecycleOutcome === 'success' && !event.turnResultState);
     if (!settledOutcome || contradicts) { deficient = true; continue; }
     // A coherent terminal outcome means the producer ended, not that it
     // succeeded. Original-owner non-ok incident delivery remains independent.
@@ -2170,7 +2207,7 @@ async function wakeNamedParkedProducers(
     // Re-observe this same native pane and its final PARKED line
     // immediately before the single native text+Enter call. A recycled
     // handle or newly bare shell cannot receive a stale parked event/reminder.
-    const stillParkedOwner = (): boolean => {
+    const parkedOwner = (strict: boolean): boolean => {
       try {
         const census = listFleetTerminals(executor);
         const candidates = census.filter((row) => row.handle === pane.handle);
@@ -2186,15 +2223,17 @@ async function wakeNamedParkedProducers(
           return false;
         }
         const screen = readFleetScreen(pane.handle, executor);
+        if (strict) return ownFinalPark(screen, pane.wait!);
         return lastFleetParkedLine(screen) === pane.wait || ownPaneOutcome(screen).wait === pane.wait;
       } catch { return false; }
     };
+    const stillParkedOwner = (): boolean => parkedOwner(false);
     // A direct manager send additionally re-proves the exact Task/Dispatch,
     // assignment generation, native incarnation, worktree and own final park,
     // plus the decision's own PR/head, for every worktree.
     const stillBoundManager = (manager: ParkingManager, recheck?: () => boolean) => (): boolean => {
       try {
-        if (!stillParkedOwner()) return false;
+        if (!parkedOwner(true)) return false;
         const census = listFleetTerminals(executor);
         let rows: readonly WorkerAssignmentRecord[] | null;
         try { rows = readAssignments(); }
@@ -2212,10 +2251,11 @@ async function wakeNamedParkedProducers(
         return true;
       } catch { return false; }
     };
+    let manager: ParkingManager | undefined;
+    const needsManager = producer !== undefined && producer.kind !== 'time' && producer.kind !== 'unit'
+      && producer.kind !== 'process' && producer.kind !== 'terminal';
     if (producer) {
-      const needsManager = producer.kind !== 'time' && producer.kind !== 'unit'
-        && producer.kind !== 'process' && producer.kind !== 'terminal';
-      const manager = needsManager
+      manager = needsManager
         ? parkingManager(pane, options, terminals, executor, tickAssignments(), workerShows) : undefined;
       decision = decideNamedPark(producer, pane, manager, envelopes, terminals, options, log, now);
     }
@@ -2266,15 +2306,20 @@ async function wakeNamedParkedProducers(
         }
       }
     }
-    // PARKED stays silent until its own elapsed 30-minute Reminder.
-    if (epoch && Number.isFinite(now) && now >= epoch.since + REMINDER_INTERVAL_MS) {
+    // PARKED stays silent until its own elapsed 30-minute Reminder. An unverified
+    // or corrected park keeps only the coordinator route; a task-owned producer
+    // reminds only a verified parking manager on its own pending park.
+    const reminderGate = decision.kind === 'unverified' || decision.kind === 'correct' ? undefined
+      : needsManager ? (decision.kind === 'pending' && manager ? stillBoundManager(manager) : undefined)
+        : stillParkedOwner;
+    if (reminderGate && epoch && Number.isFinite(now) && now >= epoch.since + REMINDER_INTERVAL_MS) {
       const slot = Math.floor((now - epoch.since) / REMINDER_INTERVAL_MS);
       const key = 'reminder:' + pane.handle + ':' + episode + ':' + epoch.since + ':' + slot;
       if (slot >= 1 && !store.hasParkedWakeEvent(key)) {
         const message = safeUnitReminderText(pane.wait.slice('PARKED on '.length))
           ?? 'Reminder: parked 30 min - re-check the named producer yourself before continuing';
         await sendMarkedUnitMessage(store, key, pane, message,
-          executor, sleepMs, log, counts, stillParkedOwner);
+          executor, sleepMs, log, counts, reminderGate);
       }
     }
   }
