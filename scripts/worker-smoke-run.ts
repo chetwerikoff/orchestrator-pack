@@ -40,10 +40,8 @@ import {
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 import {
-  packReviewFindingsSatisfiedByStrictDescendant,
   PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
   readPackReviewAuthority,
-  settleLogicalPackReviewFindingsByStrictDescendant,
 } from './pack-review-state.ts';
 import {
   resolvePackReviewRunStoreRoot,
@@ -549,27 +547,14 @@ function currentPackReviewCompletionCycle(
   prNumber: number,
   currentHeadSha: string,
   projectId: string,
-  isAncestor: (ancestorSha: string, descendantSha: string) => boolean,
+  _isAncestor: (ancestorSha: string, descendantSha: string) => boolean,
 ): PostSmokePackReviewAuthorityCycle | null {
   try {
     const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: process.env.PACK_REVIEW_RUN_STORE_ROOT });
-    let authority = readPackReviewAuthority(prNumber, { storeRoot });
-    if (!authority?.cycle) return null;
-    const reviewedHeadSha = authority.terminal?.reviewVerdict === 'findings' ? authority.terminal.targetSha : '';
-    if (authority.cycle.capMapVersion === PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
-        && authority.cycle.reviewStageComplete !== true
-        && authority.currentHeadSha === currentHeadSha.toLowerCase()
-        && reviewedHeadSha
-        && ['open_findings', 'at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)) {
-      let reviewedHeadIsAncestor = false;
-      try { reviewedHeadIsAncestor = isAncestor(reviewedHeadSha, currentHeadSha); } catch { reviewedHeadIsAncestor = false; }
-      if (packReviewFindingsSatisfiedByStrictDescendant({ reviewedHeadSha, currentHeadSha, reviewedHeadIsAncestor })) {
-        authority = settleLogicalPackReviewFindingsByStrictDescendant({
-          prNumber, expectedTransitionSeq: authority.transitionSeq, reviewedHeadSha, currentHeadSha,
-          reviewedHeadIsAncestor: true, options: { storeRoot },
-        });
-      }
-    }
+    const authority = readPackReviewAuthority(prNumber, { storeRoot });
+    // Post-smoke never creates review authority from ancestry and never
+    // projects a completed stage onto an unobserved newer PR head.
+    if (!authority?.cycle || authority.currentHeadSha !== currentHeadSha.toLowerCase()) return null;
     const cycle = authority.cycle;
     if (!cycle) return null;
     return { cycleId: cycle.cycleId, capMapVersion: cycle.capMapVersion, reviewStageComplete: cycle.reviewStageComplete };
@@ -722,7 +707,16 @@ export async function evaluatePostSmokeReadiness(
   });
   const reviewProjection = postSmokeReview.reviewProjection;
   const directOwnsSemanticProjection = postSmokeReview.completedLogicalCycleId !== null || direct.hasLegitimateReview || direct.state === 'blocked';
-  if (!options.dryRun && (directOwnsSemanticProjection || (!runner.hasLegitimateReview && runner.activeAttempt !== true))) {
+  // The initial target snapshot is not sufficient authority for a POST.
+  let exactStatusHead = false;
+  if (!options.dryRun) {
+    try {
+      exactStatusHead = fetchCurrentHead(target.prNumber, target.repositorySlug, options.repoRoot)
+        .toLowerCase() === target.headSha.toLowerCase();
+    } catch { /* unavailable current-head evidence cannot authorize a status POST */ }
+  }
+  if (!options.dryRun && exactStatusHead
+      && (directOwnsSemanticProjection || (!runner.hasLegitimateReview && runner.activeAttempt !== true))) {
     await publishPackReviewRequiredStatus({
       repoRoot: options.repoRoot, repoSlug: target.repositorySlug, headSha: target.headSha,
       request: postSmokeReview.completedLogicalCycleId ? {

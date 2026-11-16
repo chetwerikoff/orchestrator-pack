@@ -6340,6 +6340,16 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
     };
   }
 
+  // A completed stage at H2 is not a review of new H3 commits. Old green
+  // may not be projected onto a head newer than the settled authority head.
+  if (completedFinalFindings && currentHead !== authority.currentHeadSha.toLowerCase()) {
+    return {
+      prNumber, headSha: currentHead, finalCapSettlement: true, settled: false,
+      reason: 'final_cap_delta_review_required',
+      nextAction: 'obtain the frozen ordinary F..T delta review before current-head status settlement',
+    };
+  }
+
   // Preserve native T1's established continuation refusal; the authenticated
   // GPT T1 source-final path uses the same strict-descendant proof as T2/T3.
   const sourceBoundT1 = priorRun.resolvedReviewer === 'gpt'

@@ -1422,6 +1422,18 @@ export function settleLogicalPackReviewFindingsByStrictDescendant(input: {
       }
 
       const consumedCount = cycleConsumedCount(cycle);
+      // Ancestry is not a clean verdict on changes introduced after H1.
+      // This incomplete safety boundary keeps final-cap FINDINGS open until
+      // an authenticated ordinary F..T delta review is integrated. Preserve
+      // the separate proven rewritten-C and same-head Issue resolution lanes.
+      if (!sameHead && ancestryAnchorSha === reviewedHeadSha
+          && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(cycle.state)
+          && consumedCount === cycle.frozenCap) {
+        throw new PackReviewAuthorityError(
+          'final_cap_delta_review_required',
+          'the strict descendant requires a bound ordinary delta review before final-cap settlement',
+        );
+      }
       if (sameHead && (reviewedHeadSha !== currentHeadSha
           || current.terminal.runId !== sameHead.runId
           || cycle.cycleId !== sameHead.cycleId
