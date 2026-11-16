@@ -119,6 +119,7 @@ import {
   validatePersistedPackReviewGptAggregate,
   type PackReviewGptRoundRecord,
   type PackReviewRunRecord,
+  type PackReviewFinalCapDelta,
   type PackReviewRunStatus,
   type PackReviewSourceSlotRecord,
   type PackReviewSourceSlotAttemptHistory,
@@ -346,6 +347,14 @@ export interface ReconcileStalePackReviewRunsInput {
   immediate?: boolean;
   /** Internal pre-start switch: recover active GPT sources without public --immediate final-cap semantics. */
   recoverActiveGptSources?: boolean;
+  /** Only a PR-led owner holding the incumbent start claim can invoke a new reviewer. */
+  deltaClaimOwned?: () => boolean;
+  deltaBindClaimRun?: (runId: string) => void;
+  fixtureReviewStdout?: string;
+  fixtureReviewExitCode?: number;
+  fixtureReviewTimedOut?: boolean;
+  fixtureUseRealReviewWorktree?: boolean;
+  fixtureReviewBySourceSlot?: StartInput['fixtureReviewBySourceSlot'];
   /**
    * Controls whether this reconciliation invocation may create a new degraded
    * partial settlement after grace. Production entrypoints set this explicitly:
@@ -6200,6 +6209,308 @@ export async function maybeAdmitPackReviewBodyAmendment(
     };
   } catch (error) {
     return failure('amendment_admission_unverified', describeError(error));
+  }
+}
+
+
+/** Cheap merge-tree-only optimization, never a finding-resolution shortcut.
+ * Every PR-line commit is a clean merge of the *selected current* base tip.
+ * A later-adopted foreign side branch or unverifiable topology is inspected
+ * by the ordinary reviewer, never silently classified as empty.
+ */
+async function finalCapPureSelectedBaseMerge(
+  root: string, fromSha: string, toSha: string, selectedBaseRef: string,
+): Promise<boolean> {
+  try {
+    await ensureCommitAvailable(root, fromSha);
+    await ensureCommitAvailable(root, toSha);
+    const baseTip = await rebaseGitSha1(root, ['rev-parse', selectedBaseRef], 'selected base tip');
+    if (!await rebaseAncestor(root, fromSha, toSha)) return false;
+    const firstParent = (await runGit(root,
+      ['rev-list', '--first-parent', '--reverse', fromSha + '..' + toSha],
+      'reviewed merge chain')).trim().split(/\\r?\\n/).filter(Boolean);
+    if (firstParent.length === 0) return false;
+    let cursor = fromSha;
+    for (const mergeSha of firstParent) {
+      if (!rebaseSha1.test(mergeSha)) return false;
+      const parents = (await runGit(root, ['rev-list', '--parents', '-n', '1', mergeSha],
+        'merge parents')).trim().split(/\\s+/);
+      if (parents.length !== 3 || parents[0] !== mergeSha
+          || parents[1] !== cursor || parents[2] !== baseTip) return false;
+      const mergeTree = await runProcess({
+        command: 'git', args: ['merge-tree', '--write-tree', cursor, baseTip],
+        cwd: root, inheritParentEnv: true, allowEmptyStdout: false, timeoutMs: 30000,
+      });
+      if (!mergeTree.ok || !/^[0-9a-f]{40}\\s*$/.test(mergeTree.stdout)) return false;
+      const realTree = await rebaseGitSha1(root,
+        ['rev-parse', mergeSha + '^{tree}'], 'merge commit tree');
+      if (mergeTree.stdout.trim() !== realTree) return false;
+      cursor = mergeSha;
+    }
+    return cursor === toSha;
+  } catch { return false; }
+}
+
+interface FinalCapDeltaOutcome {
+  state: 'clean' | 'findings' | 'unverified';
+  reason: string;
+  runId?: string;
+  fromSha?: string;
+  zeroCall?: boolean;
+}
+
+/** The existing run-store, source identities, review parser and PR-led start
+ * claim own this non-consuming reviewer attempt; no second review protocol.
+ * F advances after every complete ordinary verdict; S advances only on clean.
+ */
+async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput, opts: {
+  projectId: string; storeRoot: string; repoSlug: string; prNumber: number;
+  original: PackReviewRunRecord; originalCycleId: string; issueNumber: number;
+  issueDigest: string; targetSha: string;
+}): Promise<FinalCapDeltaOutcome> {
+  const refused = (reason: string): FinalCapDeltaOutcome => ({ state: 'unverified', reason });
+  const original = opts.original;
+  const reviewer = original.executedReviewer ?? original.resolvedReviewer;
+  if (!reviewer || !['gpt', 'codex', 'claude'].includes(reviewer)
+      || original.reviewVerdict !== 'findings' || !hasPersistedPackReviewVerdict(original)) {
+    return refused('final_cap_original_reviewer_unverified');
+  }
+  const selected = resolveTargetContext({ projectId: opts.projectId });
+  const selectedBaseRef = 'origin/' + selected.defaultBranch;
+  if (selected.repository.toLowerCase() !== opts.repoSlug.toLowerCase()
+      || (input.baseRef && input.baseRef !== selectedBaseRef)
+      || opts.issueDigest !== original.boundIssueSnapshotDigest
+      || original.canonicalRepository?.toLowerCase() !== opts.repoSlug.toLowerCase()) {
+    return refused('final_cap_delta_project_issue_base_unverified');
+  }
+  const currentAuthority = readPackReviewAuthority(opts.prNumber, { storeRoot: opts.storeRoot });
+  if (!currentAuthority?.cycle || currentAuthority.terminal?.runId !== original.id
+      || currentAuthority.terminal.reviewVerdict !== 'findings'
+      || currentAuthority.cycle.cycleId !== opts.originalCycleId
+      || currentAuthority.currentHeadSha !== opts.targetSha) {
+    return refused('final_cap_delta_current_authority_unverified');
+  }
+  if (currentAuthority.cycle.frozenTier === 'T1' && reviewer !== 'gpt') {
+    return refused('native_t1_final_cap_continuation_unchanged');
+  }
+  const sourceSlotIds = original.reviewRound?.sourceSlots.map((slot) => slot.slotId) ?? [];
+  if (reviewer === 'gpt' && (!original.reviewRound || !sourceSlotIds.length)) {
+    return refused('final_cap_gpt_original_slots_unverified');
+  }
+  const previous = listPackReviewRuns({ projectId: opts.projectId, storeRoot: opts.storeRoot })
+    .filter((r) => r.finalCapDelta?.originalRunId === original.id
+      && r.finalCapDelta.originalCycleId === opts.originalCycleId
+      && r.canonicalRepository?.toLowerCase() === opts.repoSlug.toLowerCase()
+      && r.prNumber === opts.prNumber
+      && r.resolvedReviewer === reviewer
+      && r.boundIssueSnapshotDigest === opts.issueDigest
+      && isDeepStrictEqual(r.finalCapDelta.sourceSlotIds, sourceSlotIds)
+      && hasPersistedPackReviewVerdict(r))
+    .sort((a, b) => Date.parse(a.completedAtUtc ?? '') - Date.parse(b.completedAtUtc ?? ''));
+  let frontier = original.targetSha;
+  let unresolved: unknown[] = [...original.findings];
+  let lastComplete: PackReviewRunRecord | undefined;
+  // Ordered, fully completed original-run continuations form the only F
+  // chain. A divergent/missing predecessor cannot become reviewer authority.
+  for (const r of previous) {
+    if (r.finalCapDelta?.fromSha !== frontier
+        || r.finalCapDelta.toSha !== r.targetSha
+        || !await rebaseAncestor(input.sourceRepoRoot, r.targetSha, opts.targetSha)) {
+      return refused('final_cap_delta_review_chain_unverified');
+    }
+    frontier = r.targetSha;
+    lastComplete = r;
+    unresolved = r.reviewVerdict === 'clean' ? [] : [...unresolved, ...r.findings];
+  }
+  if (frontier === opts.targetSha && lastComplete) {
+    return { state: lastComplete.reviewVerdict === 'clean' ? 'clean' : 'findings',
+      reason: 'final_cap_delta_exact_result_reused', runId: lastComplete.id,
+      fromSha: lastComplete.finalCapDelta!.fromSha };
+  }
+  if (!await rebaseAncestor(input.sourceRepoRoot, frontier, opts.targetSha)
+      || frontier === opts.targetSha) return refused('final_cap_delta_frontier_not_ancestor');
+  const pureMerge = await finalCapPureSelectedBaseMerge(
+    input.sourceRepoRoot, frontier, opts.targetSha, selectedBaseRef);
+  if (pureMerge) {
+    if (unresolved.length) return { state: 'findings', reason: 'final_cap_pure_merge_original_findings_still_unresolved',
+      fromSha: frontier, zeroCall: true };
+    return { state: 'clean', reason: 'final_cap_pure_base_merge_verified',
+      fromSha: frontier, zeroCall: true };
+  }
+  const contextDigest = sha256Bytes(stableJson({
+    originalRunId: original.id, cycleId: opts.originalCycleId,
+    repository: opts.repoSlug.toLowerCase(), prNumber: opts.prNumber,
+    selectedBaseRef, fromSha: frontier, toSha: opts.targetSha,
+    reviewer, sourceSlotIds, issueDigest: opts.issueDigest, unresolved,
+  }));
+  const delta: PackReviewFinalCapDelta = {
+    originalRunId: original.id, originalCycleId: opts.originalCycleId,
+    repository: opts.repoSlug.toLowerCase(), prNumber: opts.prNumber,
+    selectedBaseRef, fromSha: frontier, toSha: opts.targetSha,
+    reviewer, sourceSlotIds, issueDigest: opts.issueDigest,
+    contextDigest, priorFindings: unresolved,
+  };
+  const existing = listPackReviewRuns({ projectId: opts.projectId, storeRoot: opts.storeRoot })
+    .filter((r) => r.finalCapDelta && r.prNumber === opts.prNumber
+      && r.targetSha === opts.targetSha);
+  if (existing.some((r) => !isDeepStrictEqual(r.finalCapDelta, delta))) {
+    return refused('final_cap_delta_same_head_context_changed');
+  }
+  if (existing.some((r) => !hasPersistedPackReviewVerdict(r))) {
+    return refused('final_cap_delta_original_attempt_requires_reconciliation');
+  }
+  if (!input.deltaClaimOwned?.()) {
+    return refused('final_cap_delta_requires_claimed_pr_led_review');
+  }
+  if (await readCheckedReviewPrHead(input, opts.repoSlug, opts.prNumber, opts.targetSha) !== opts.targetSha) {
+    return refused('final_cap_delta_head_drift_before_review');
+  }
+  const gptRound: PackReviewGptRoundRecord | undefined = reviewer === 'gpt' && original.reviewRound
+    ? { ...original.reviewRound, boundIssueSnapshotDigest: opts.issueDigest,
+        sourceSlots: original.reviewRound.sourceSlots.map((slot) => ({
+          slotId: slot.slotId, ordinal: slot.ordinal, lifecycle: 'planned' as const,
+        })),
+        settledSourceCount: undefined,
+      } : undefined;
+  let created: ReturnType<typeof createPackReviewRun>;
+  try {
+    created = createPackReviewRun({
+      projectId: opts.projectId, storeRoot: opts.storeRoot,
+      prNumber: opts.prNumber, headSha: opts.targetSha,
+      canonicalRepository: opts.repoSlug,
+      sourceRepoRoot: input.sourceRepoRoot,
+      trustedPackRoot: resolveTrustedRunnerPaths().trustedPackRoot,
+      linkedSessionId: original.linkedSessionId,
+      surface: 'pack-review-runner', startReason: 'final-cap-delta',
+      automaticBudgetDisposition: 'non_consuming_explicit',
+      allowRunnerFinalCapDeltaStart: true, finalCapDelta: delta,
+      reviewCycleId: opts.originalCycleId,
+      resolvedReviewer: reviewer, resolvedReviewerSource: original.resolvedReviewerSource,
+      boundIssueSnapshotDigest: opts.issueDigest,
+      ...(gptRound ? { reviewRound: gptRound } : {}),
+    });
+  } catch (error) { return refused('final_cap_delta_run_admission_failed: ' + describeError(error)); }
+  if (created.reused) {
+    const persisted = getPackReviewRun(created.run.id,
+      { projectId: opts.projectId, storeRoot: opts.storeRoot });
+    if (!persisted?.finalCapDelta || !isDeepStrictEqual(persisted.finalCapDelta, delta)
+        || !hasPersistedPackReviewVerdict(persisted)) {
+      return refused('final_cap_delta_incumbent_must_be_reconciled');
+    }
+    return { state: persisted.reviewVerdict === 'clean' ? 'clean' : 'findings',
+      reason: 'final_cap_delta_exact_result_reused', runId: persisted.id, fromSha: frontier };
+  }
+  const run = created.run;
+  input.deltaBindClaimRun?.(run.id);
+  const trusted = resolveTrustedRunnerPaths();
+  const budgetLedger = createReviewerBudgetLedger(process.env, Date.now());
+  let worktree = '';
+  const ctx: ReviewWorktreeContext = {
+    repoRoot: input.sourceRepoRoot, repoSlug: opts.repoSlug,
+    projectId: opts.projectId, storeRoot: opts.storeRoot,
+  };
+  try {
+    updatePackReviewRun(run.id, { status: 'preparing', latestRunStatus: 'preparing',
+      runnerPid: process.pid }, { projectId: opts.projectId, storeRoot: opts.storeRoot });
+    if (!input.deltaClaimOwned()) throw new Error('final-cap reviewer claim lost');
+    if (process.env.OPK_VITEST_HARNESS === '1' && !input.fixtureUseRealReviewWorktree
+        && input.fixtureReviewStdout !== undefined) {
+      worktree = input.sourceRepoRoot;
+    } else {
+      worktree = await createReviewWorktree(
+        input.sourceRepoRoot, opts.storeRoot, run.id, opts.targetSha,
+        (allocated) => { worktree = allocated; });
+    }
+    updatePackReviewRun(run.id, { reviewTargetRoot: worktree },
+      { projectId: opts.projectId, storeRoot: opts.storeRoot });
+    const issueBody = process.env.OPK_VITEST_HARNESS === '1' ? input.fixtureIssueBody
+      : (await resolveCurrentIssueFields(input.sourceRepoRoot, opts.repoSlug, opts.issueNumber)).body;
+    if (typeof issueBody !== 'string'
+        || computeBoundIssueSnapshotHash(issueBody) !== opts.issueDigest) {
+      throw new Error('delta review current Issue not exact bound body');
+    }
+    const frozenScope: ResolvedScopeContext = {
+      issueNumber: opts.issueNumber, hasScope: true,
+      issueConstraints: parseIssueBody(issueBody), declaredPaths: [], declaredGlobs: [],
+      unverifiedIssueConstraints: false,
+    };
+    if (await readCheckedReviewPrHead(input, opts.repoSlug, opts.prNumber, opts.targetSha) !== opts.targetSha) {
+      throw new Error('delta review head changed before invocation');
+    }
+    updatePackReviewRun(run.id, { status: 'running', latestRunStatus: 'running',
+      executedReviewer: reviewer, reviewerExecutionRunId: run.id, reviewerInvokedForThisRun: true },
+    { projectId: opts.projectId, storeRoot: opts.storeRoot });
+    let payload: ReviewPayload;
+    if (reviewer === 'gpt' && gptRound) {
+      payload = await runGptSourceBatch({
+        run, round: gptRound, reviewerPath: trusted.reviewerPath,
+        trustedPackRoot: trusted.trustedPackRoot, reviewTargetRoot: worktree,
+        baseRef: frontier, target: { prNumber: opts.prNumber, headSha: opts.targetSha,
+          issueNumber: opts.issueNumber, sessionId: original.linkedSessionId,
+          repoSlug: opts.repoSlug, sourceRepoRoot: input.sourceRepoRoot },
+        budgetLedger, projectId: opts.projectId, storeRoot: opts.storeRoot,
+        input: input as StartInput, carryoverBundlePath: '',
+        frozenScope, reviewer,
+      });
+    } else {
+      updatePackReviewRun(run.id, { nativeAttempt: {
+        schema: 'pack-review-native-attempt/v1', reviewer: reviewer as 'codex' | 'claude',
+        invocationOrdinal: 1, startedAtUtc: new Date().toISOString(),
+        effectiveBudgetMs: budgetLedger.effectiveBudgetMs,
+      } }, { projectId: opts.projectId, storeRoot: opts.storeRoot });
+      const invocation = await invokeReviewer({
+        reviewerPath: trusted.reviewerPath, trustedPackRoot: trusted.trustedPackRoot,
+        reviewTargetRoot: worktree, baseRef: frontier,
+        prNumber: opts.prNumber, issueNumber: opts.issueNumber,
+        sessionId: original.linkedSessionId, budgetLedger,
+        runId: run.id, projectId: opts.projectId, storeRoot: opts.storeRoot,
+        headSha: opts.targetSha, reviewer,
+        frozenScope, fixtureReviewStdout: input.fixtureReviewStdout,
+        fixtureReviewExitCode: input.fixtureReviewExitCode,
+        fixtureReviewTimedOut: input.fixtureReviewTimedOut,
+        nativeInvocationOrdinal: 1,
+      });
+      if (invocation.result.timedOut || !invocation.result.ok) {
+        throw new Error('delta ordinary reviewer incomplete');
+      }
+      payload = parseReviewPayload(invocation.result.stdout);
+      writeRunLogs(opts.storeRoot, run.id, invocation.result.stdout, invocation.result.stderr);
+    }
+    if (await readCheckedReviewPrHead(input, opts.repoSlug, opts.prNumber, opts.targetSha) !== opts.targetSha) {
+      throw new Error('delta review completed on stale PR head');
+    }
+    const now = new Date().toISOString();
+    setPackReviewRunTerminal(run.id,
+      payload.verdict === 'clean' ? 'up_to_date' : 'changes_requested', {
+        reviewVerdict: payload.verdict, findingCount: payload.findingCount,
+        findings: payload.findings,
+        journalOutcome: { state: 'persisted', recordedAtUtc: now,
+          reason: 'final_cap_ordinary_delta_result',
+          idempotencyKey: 'verdict:' + run.id + ':' + opts.targetSha, attempts: 1 },
+        exitCode: 0,
+      }, { projectId: opts.projectId, storeRoot: opts.storeRoot });
+    return { state: payload.verdict === 'clean' ? 'clean' : 'findings',
+      reason: payload.verdict === 'clean' ? 'final_cap_delta_clean'
+        : 'final_cap_delta_findings_existing_fixer_required',
+      runId: run.id, fromSha: frontier };
+  } catch (error) {
+    const persisted = getPackReviewRun(run.id,
+      { projectId: opts.projectId, storeRoot: opts.storeRoot });
+    if (persisted && !hasPersistedPackReviewVerdict(persisted)) {
+      try {
+        setPackReviewRunTerminal(run.id, 'failed', {
+          failureReason: 'final_cap_delta_incomplete:' + describeError(error),
+        }, { projectId: opts.projectId, storeRoot: opts.storeRoot });
+      } catch { /* preserve any possible source send for existing census */ }
+    }
+    return refused('final_cap_delta_review_unverified: ' + describeError(error));
+  } finally {
+    if (worktree && worktree !== input.sourceRepoRoot) {
+      const cleanup = await removeReviewWorktree(ctx, run.id, worktree, 'finally');
+      if (cleanup !== 'removed' && cleanup !== 'absent') {
+        process.stderr.write('[final-cap delta] checkout preserved for reconciliation: ' + cleanup + '\\n');
+      }
+    }
   }
 }
 
