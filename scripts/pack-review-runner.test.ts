@@ -50,6 +50,7 @@ import {
   parseArgs,
   resolveGithubCommitIsStrictDescendant,
   finalCapPureSelectedBaseMerge,
+  handoffFinalCapDeltaFindings,
   startPackReview,
   PACK_REVIEW_REVIEWER_KILL_GRACE_MS,
 } from './pack-review-runner.ts';
@@ -3819,6 +3820,33 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(readPackReviewAuthority(prNumber, f.options)?.cycle?.reviewStageComplete).not.toBe(true);
     expect(f.read).not.toHaveBeenCalled();
   });
+
+  it.each(['required CI', 'selected PR base'] as const)(
+    'Issue #2835: refuses final-cap success when %s drifts at status publication',
+    async (kind) => {
+      const f = unchangedDescendantFixture();
+      completeFinalCapDelta(f, HEAD, revisedBody);
+      f.input.fixtureCurrentPrHeadSha = HEAD;
+      f.input.fixtureReviewCompareStatus = 'ahead';
+      let reads = 0;
+      f.input.fixtureRequiredStatusReader = async () => {
+        if (++reads === 1) {
+          if (kind === 'required CI') {
+            f.input.fixtureRequiredCiChecks = [{ name: 'CI', state: 'FAILURE' }];
+          } else {
+            f.input.fixtureRequiredCiBaseAfterGate = 'other-base';
+          }
+        }
+        return undefined;
+      };
+      const result = await reconcileStalePackReviewRuns(f.input);
+      expect(result.results).toContainEqual(expect.objectContaining({
+        settled: false, reason: 'status_not_published',
+      }));
+      expect(f.statuses.some((status) => status.state === 'success')).toBe(false);
+      expect(readPackReviewAuthority(prNumber, f.options)?.publication?.status).not.toBe('succeeded');
+    },
+  );
 
   it('Issue #2451: head moving during final-cap success cannot produce a settled receipt', async () => {
     const f = fixture();
@@ -8119,6 +8147,69 @@ describe('Issue #2835 final-cap protected non-consuming delta and F/S frontiers'
   }
 
 
+  it('hands off persisted H2 blocking findings once through the existing claimed worker channel', async () => {
+    const f = nativeDeltaFixture();
+    const delta = f.create(f.h1, f.h2).run;
+    setPackReviewRunTerminal(delta.id, 'changes_requested', {
+      reviewVerdict: 'findings', findingCount: 1,
+      findings: [{ severity: 'blocking', title: 'H2 defect' }],
+      journalOutcome: {
+        state: 'persisted', recordedAtUtc: new Date().toISOString(),
+        reason: 'verdict_persisted', idempotencyKey: 'verdict:' + delta.id + ':' + f.h2,
+        attempts: 1,
+      },
+      deliveryOutcomes: { githubComment: {
+        state: 'succeeded', recordedAtUtc: new Date().toISOString(),
+        reason: 'comment_posted', idempotencyKey: 'github-comment:' + delta.id + ':' + f.h2,
+      } },
+    }, f.options);
+    const messages: string[] = [];
+    const notifier = vi.fn(async (request: { message: string; idempotencyKey: string; reviewRunId: string }) => {
+      messages.push(request.message);
+      expect(request.reviewRunId).toBe(delta.id);
+      expect(request.idempotencyKey).toBe('worker-notification:' + delta.id + ':' + f.h2);
+      return { state: 'submitted' as const, reason: 'offline_claimed_send' };
+    });
+    const request = {
+      runId: delta.id, originalRunId: f.original.id,
+      projectId: f.options.projectId, storeRoot: f.options.storeRoot,
+      notifier,
+    };
+    expect(await handoffFinalCapDeltaFindings(request)).toMatchObject({
+      state: 'submitted', reason: 'offline_claimed_send',
+    });
+    expect(await handoffFinalCapDeltaFindings(request)).toMatchObject({
+      state: 'already_attempted',
+    });
+    expect(notifier).toHaveBeenCalledTimes(1);
+    expect(messages[0]).toContain('Verdict: findings');
+    expect(getPackReviewRun(delta.id, f.options)?.deliveryOutcomes.workerNotification)
+      .toMatchObject({ state: 'succeeded', idempotencyKey: 'worker-notification:' + delta.id + ':' + f.h2 });
+    expect(getPackReviewRun(delta.id, f.options)?.deliveryOutcomes.requiredStatus).toBeUndefined();
+    expect(readPackReviewAuthority(2835, f.options)?.cycle?.consumedRoundOrdinals).toEqual([1]);
+  });
+
+  it('never repeats a possibly-dispatched H2 findings handoff on reconciliation', async () => {
+    const f = nativeDeltaFixture();
+    const delta = f.create(f.h1, f.h2).run;
+    setPackReviewRunTerminal(delta.id, 'changes_requested', {
+      reviewVerdict: 'findings', findingCount: 1, findings: [{ severity: 'blocking', title: 'H2' }],
+      journalOutcome: { state: 'persisted', recordedAtUtc: new Date().toISOString(),
+        reason: 'verdict_persisted', idempotencyKey: 'verdict:' + delta.id + ':' + f.h2, attempts: 1 },
+      deliveryOutcomes: { githubComment: { state: 'succeeded', recordedAtUtc: new Date().toISOString(),
+        reason: 'comment_posted', idempotencyKey: 'github-comment:' + delta.id + ':' + f.h2 } },
+    }, f.options);
+    let attempts = 0;
+    const request = { runId: delta.id, originalRunId: f.original.id,
+      projectId: f.options.projectId, storeRoot: f.options.storeRoot,
+      notifier: async () => { attempts++; throw new Error('send outcome unknown'); } };
+    expect(await handoffFinalCapDeltaFindings(request)).toMatchObject({ state: 'unverified' });
+    expect(await handoffFinalCapDeltaFindings(request)).toMatchObject({ state: 'already_attempted' });
+    expect(attempts).toBe(1);
+    expect(getPackReviewRun(delta.id, f.options)?.deliveryOutcomes.workerNotification?.state)
+      .toBe('escalated');
+  });
+
   it('accepts authentic F for the selected native Codex/Claude parser and native prompt', () => {
     const cardHome = mkdtempSync(join(tmpdir(), 'opk-2835-selected-cli-'));
     fixtureRoots.push(cardHome);
@@ -8331,4 +8422,48 @@ describe('Issue #2835 pure base-merge safety proof', () => {
       expect(await finalCapPureSelectedBaseMerge(root, f, merged, 'origin/main')).toBe(false);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
+  it('refuses a foreign first merge even when the selected base later adopts that side commit', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pack-2835-later-adopted-'));
+    const git = (args: string[]) => {
+      const result = runProcessSync({ command: 'git', args, cwd: root, inheritParentEnv: true });
+      expect(result.ok, result.stderr).toBe(true);
+      return result.stdout.trim();
+    };
+    try {
+      git(['init', '--quiet']);
+      git(['config', 'user.name', 'pack-fixture']);
+      git(['config', 'user.email', 'pack@example.invalid']);
+      writeFileSync(join(root, 'base.txt'), 'base 0\n');
+      git(['add', '.']);
+      git(['commit', '--quiet', '-m', 'base 0']);
+      git(['branch', '-M', 'main']);
+      git(['checkout', '-q', '-b', 'feature']);
+      writeFileSync(join(root, 'feature.txt'), 'reviewed F\n');
+      git(['add', '.']);
+      git(['commit', '--quiet', '-m', 'reviewed F']);
+      const reviewedF = git(['rev-parse', 'HEAD']);
+      git(['checkout', '-q', 'main']);
+      git(['checkout', '-q', '-b', 'foreign']);
+      writeFileSync(join(root, 'foreign.txt'), 'foreign owned code\n');
+      git(['add', '.']);
+      git(['commit', '--quiet', '-m', 'foreign side S']);
+      git(['checkout', '-q', 'feature']);
+      git(['merge', '--no-ff', '--quiet', '-m', 'PR adopts foreign S', 'foreign']);
+      const firstMerge = git(['rev-parse', 'HEAD']);
+      git(['checkout', '-q', 'main']);
+      git(['merge', '--no-ff', '--quiet', '-m', 'main later adopts S', 'foreign']);
+      const selectedBaseTip = git(['rev-parse', 'HEAD']);
+      git(['update-ref', 'refs/remotes/origin/main', selectedBaseTip]);
+      git(['checkout', '-q', 'feature']);
+      git(['merge', '--no-ff', '--quiet', '-m', 'PR merges selected base', 'main']);
+      const secondMerge = git(['rev-parse', 'HEAD']);
+      expect(git(['rev-list', '--parents', '-n', '1', firstMerge]).split(' ')).toHaveLength(3);
+      expect(git(['rev-list', '--parents', '-n', '1', secondMerge]).split(' ')).toHaveLength(3);
+      // Both merges have clean trees. Only the actual history of the first
+      // merged parent reveals that it was foreign when merged.
+      expect(await finalCapPureSelectedBaseMerge(root, reviewedF, secondMerge, 'origin/main'))
+        .toBe(false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
 });
