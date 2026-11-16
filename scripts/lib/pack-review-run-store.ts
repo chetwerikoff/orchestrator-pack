@@ -10,7 +10,7 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import type { PackReviewer, PackReviewerResolutionSource } from './resolve-pack-reviewer.ts';
 import { TURN_STATES } from '../chatgpt-browser-turn/contracts.ts';
@@ -25,6 +25,7 @@ import {
   PACK_REVIEW_LEGACY_CAP_MAP_VERSION,
   selectPackReviewGptSourceCardinality,
   readPackReviewAuthorityUnderHeldStoreLock,
+  stableJson,
   type PackReviewAutomaticBudgetDisposition,
 } from '../pack-review-state.ts';
 
@@ -552,6 +553,15 @@ function normalizePackReviewFinalCapDelta(value: unknown, path = ''): PackReview
   if (!Array.isArray(v.priorFindings)
       || !v.priorFindings.every((f) => f && typeof f === 'object' && !Array.isArray(f))) {
     throw new Error('invalid finalCapDelta priorFindings');
+  }
+  // Context is the exact ordinary review input, not a caller-supplied label.
+  const expectedContext = createHash('sha256').update(stableJson({
+    originalRunId, cycleId: originalCycleId, repository, prNumber,
+    selectedBaseRef, fromSha, toSha, reviewer, sourceSlotIds,
+    issueDigest, unresolved: v.priorFindings,
+  })).digest('hex');
+  if (expectedContext !== contextDigest) {
+    throw new Error('finalCapDelta contextDigest is not the frozen input digest');
   }
   return { originalRunId, originalCycleId, repository, prNumber, selectedBaseRef,
     fromSha, toSha, reviewer: reviewer as PackReviewer, sourceSlotIds, issueDigest, contextDigest,
@@ -2116,7 +2126,15 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       const delta = normalizePackReviewFinalCapDelta(input.finalCapDelta);
       const authority = readPackReviewAuthorityUnderHeldStoreLock(input.prNumber, { storeRoot });
       const original = boundRecords.find((record) => record.id === delta.originalRunId);
-      if (!authority?.cycle || !authority.terminal
+      const hasCompletedFrontier = delta.fromSha === original?.targetSha
+        || boundRecords.some((record) => record.finalCapDelta?.originalRunId === delta.originalRunId
+          && record.finalCapDelta.originalCycleId === delta.originalCycleId
+          && record.targetSha === delta.fromSha
+          && record.canonicalRepository === delta.repository
+          && record.resolvedReviewer === delta.reviewer
+          && record.deliveryOutcomes.githubComment?.state === 'succeeded'
+          && hasPersistedPackReviewVerdict(record));
+      if (!hasCompletedFrontier || !authority?.cycle || !authority.terminal
           || authority.cycle.capMapVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
           || !(['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)
             || (authority.cycle.state === 'closed' && authority.cycle.reviewStageComplete === true
