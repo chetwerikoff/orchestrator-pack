@@ -6219,7 +6219,7 @@ export async function maybeAdmitPackReviewBodyAmendment(
  * A later-adopted foreign side branch or unverifiable topology is inspected
  * by the ordinary reviewer, never silently classified as empty.
  */
-async function finalCapPureSelectedBaseMerge(
+export async function finalCapPureSelectedBaseMerge(
   root: string, fromSha: string, toSha: string, selectedBaseRef: string,
 ): Promise<boolean> {
   try {

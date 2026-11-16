@@ -49,6 +49,7 @@ import {
   applyCliTargetProject,
   parseArgs,
   resolveGithubCommitIsStrictDescendant,
+  finalCapPureSelectedBaseMerge,
   startPackReview,
   PACK_REVIEW_REVIEWER_KILL_GRACE_MS,
 } from './pack-review-runner.ts';
@@ -7743,5 +7744,164 @@ describe('Issue #2777 historical logical round cap on read', () => {
       .toThrow(/GPT logical source version\/round identity mismatch/);
     expect(() => t3Run(storeRoot, { ordinal: 2, cap: 1, roundOrdinal: 2 }))
       .toThrow(/logicalRoundOrdinal exceeds logicalRoundCap/);
+  });
+});
+
+describe('Issue #2835 final-cap protected non-consuming delta and F/S frontiers', () => {
+  const fixtureRoots: string[] = [];
+  afterEach(() => {
+    for (const root of fixtureRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  function nativeDeltaFixture() {
+    const storeRoot = mkdtempSync(join(tmpdir(), 'pack-2835-store-'));
+    fixtureRoots.push(storeRoot);
+    const options = { projectId: 'orchestrator-pack', storeRoot };
+    const h1 = '1'.repeat(40), h2 = '2'.repeat(40), h3 = '3'.repeat(40);
+    const originalIssueDigest = 'reviewed-issue-2835';
+    let authority = initializePackReviewAuthority({
+      prNumber: 2835, headSha: h1, tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      options,
+    });
+    const original = createPackReviewRun({
+      ...options, prNumber: 2835, headSha: h1,
+      sourceRepoRoot: process.cwd(), trustedPackRoot: process.cwd(),
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      reviewCycleId: authority.cycle!.cycleId,
+      logicalRoundOrdinal: 1, logicalRoundCap: 1,
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      automaticBudgetDisposition: 'consume',
+      resolvedReviewer: 'codex',
+      boundIssueSnapshotDigest: originalIssueDigest,
+    }).run;
+    const oldFinding = { severity: 'blocking', title: 'H1 blocker', path: 'scripts/pack-review-runner.ts' };
+    setPackReviewRunTerminal(original.id, 'changes_requested', {
+      reviewVerdict: 'findings', findingCount: 1, findings: [oldFinding],
+      journalOutcome: { state: 'persisted', recordedAtUtc: new Date().toISOString(),
+        reason: 'test-original-final-cap',
+        idempotencyKey: 'verdict:' + original.id + ':' + h1, attempts: 1 },
+    }, options);
+    authority = commitPackReviewTerminal({
+      prNumber: 2835, expectedTransitionSeq: authority.transitionSeq,
+      terminal: { schemaVersion: 1, terminalContractVersion: 2,
+        terminalSource: 'normal', runId: original.id, targetSha: h1,
+        logicalRoundOrdinal: 1, reviewVerdict: 'findings', findingCount: 1,
+        findingsDigest: 'original-2835',
+        automaticBudgetDisposition: 'consume' },
+      status: 'changes_requested', findingCount: 1, options,
+    });
+    authority = observePackReviewHead({
+      prNumber: 2835, expectedTransitionSeq: authority.transitionSeq, headSha: h2, options,
+    });
+    const identity = (fromSha: string, toSha: string, digest = 'a'.repeat(64)) => ({
+      originalRunId: original.id, originalCycleId: authority.cycle!.cycleId,
+      repository: 'chetwerikoff/orchestrator-pack', prNumber: 2835,
+      selectedBaseRef: 'origin/main', fromSha, toSha, reviewer: 'codex' as const,
+      sourceSlotIds: [], issueDigest: originalIssueDigest,
+      contextDigest: digest, priorFindings: [oldFinding],
+    });
+    const create = (fromSha: string, toSha: string, digest?: string) =>
+      createPackReviewRun({
+        ...options, prNumber: 2835, headSha: toSha,
+        sourceRepoRoot: process.cwd(), trustedPackRoot: process.cwd(),
+        canonicalRepository: 'chetwerikoff/orchestrator-pack',
+        surface: 'pack-review-runner', startReason: 'final-cap-delta',
+        automaticBudgetDisposition: 'non_consuming_explicit',
+        allowRunnerFinalCapDeltaStart: true,
+        finalCapDelta: identity(fromSha, toSha, digest),
+        reviewCycleId: authority.cycle!.cycleId, resolvedReviewer: 'codex',
+        boundIssueSnapshotDigest: originalIssueDigest,
+      });
+    return { options, original, oldFinding, h1, h2, h3, create, identity };
+  }
+
+  it('serializes, reloads and exactly reuses a clean H1..H2 review without charging cap', () => {
+    const f = nativeDeltaFixture();
+    const delta = f.create(f.h1, f.h2);
+    expect(delta.created).toBe(true);
+    expect(delta.run.finalCapDelta).toEqual(f.identity(f.h1, f.h2));
+    const completed = setPackReviewRunTerminal(delta.run.id, 'up_to_date', {
+      reviewVerdict: 'clean', findingCount: 0, findings: [],
+      journalOutcome: { state: 'persisted', recordedAtUtc: new Date().toISOString(),
+        reason: 'final_cap_ordinary_delta_result',
+        idempotencyKey: 'verdict:' + delta.run.id + ':' + f.h2, attempts: 1 },
+    }, f.options);
+    expect(completed.finalCapDelta).toEqual(f.identity(f.h1, f.h2));
+    expect(getPackReviewRun(delta.run.id, f.options)?.finalCapDelta).toEqual(f.identity(f.h1, f.h2));
+    expect(f.create(f.h1, f.h2)).toMatchObject({ created: false, reused: true,
+      reason: 'terminal_run_exists', run: { id: delta.run.id } });
+    const state = readPackReviewAuthority(2835, f.options);
+    expect(state?.cycle?.consumedRoundOrdinals).toEqual([1]);
+    expect(state?.cycle?.reviewStageComplete).not.toBe(true);
+  });
+
+  it('rejects unowned admission, does not alias changed F/context, or resend uncertain result', () => {
+    const f = nativeDeltaFixture();
+    const incomplete = f.create(f.h1, f.h2);
+    expect(() => createPackReviewRun({
+      ...f.options, prNumber: 2835, headSha: f.h2,
+      sourceRepoRoot: process.cwd(), trustedPackRoot: process.cwd(),
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      surface: 'pack-review-runner', startReason: 'final-cap-delta',
+      automaticBudgetDisposition: 'non_consuming_explicit',
+      finalCapDelta: f.identity(f.h1, f.h2),
+      reviewCycleId: f.identity(f.h1, f.h2).originalCycleId,
+      resolvedReviewer: 'codex',
+      boundIssueSnapshotDigest: 'reviewed-issue-2835',
+    })).toThrow(/runner-owned|runner-only|finalCapDelta|non_consuming_explicit/);
+    const incumbent = f.create(f.h1, f.h2);
+    expect(incumbent.created).toBe(false);
+    expect(incumbent.run.id).toBe(incomplete.run.id);
+    const mismatch = f.create(f.h1, f.h2, 'b'.repeat(64));
+    expect(mismatch.created).toBe(false);
+    expect(mismatch.run.id).toBe(incomplete.run.id);
+    expect(mismatch.run.finalCapDelta).not.toEqual(f.identity(f.h1, f.h2, 'b'.repeat(64)));
+  });
+});
+
+describe('Issue #2835 pure base-merge safety proof', () => {
+  it('accepts only a clean selected-base merge tree and refuses PR edits or later base drift', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pack-2835-merge-'));
+    const git = (args: string[]): string => {
+      const r = runProcessSync({ command: 'git', args, cwd: root,
+        inheritParentEnv: true });
+      expect(r.ok, r.stderr).toBe(true);
+      return r.stdout.trim();
+    };
+    try {
+      git(['init', '--quiet']);
+      git(['config', 'user.name', 'pack-fixture']);
+      git(['config', 'user.email', 'pack@example.invalid']);
+      writeFileSync(join(root, 'base.txt'), 'base A\n');
+      git(['add', 'base.txt']);
+      git(['commit', '--quiet', '-m', 'base A']);
+      git(['branch', '-M', 'main']);
+      git(['checkout', '-q', '-b', 'feature']);
+      writeFileSync(join(root, 'feature.txt'), 'owned F\n');
+      git(['add', 'feature.txt']);
+      git(['commit', '--quiet', '-m', 'owned F']);
+      const f = git(['rev-parse', 'HEAD']);
+      git(['checkout', '-q', 'main']);
+      writeFileSync(join(root, 'base.txt'), 'base B\n');
+      git(['add', 'base.txt']);
+      git(['commit', '--quiet', '-m', 'base B']);
+      git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+      git(['checkout', '-q', 'feature']);
+      git(['merge', '--no-ff', '--quiet', '-m', 'merge selected base', 'main']);
+      const merged = git(['rev-parse', 'HEAD']);
+      expect(await finalCapPureSelectedBaseMerge(root, f, merged, 'origin/main')).toBe(true);
+      writeFileSync(join(root, 'owned.txt'), 'new owned code\n');
+      git(['add', 'owned.txt']);
+      git(['commit', '--quiet', '-m', 'PR-owned after merge']);
+      expect(await finalCapPureSelectedBaseMerge(root, f, git(['rev-parse', 'HEAD']),
+        'origin/main')).toBe(false);
+      git(['checkout', '-q', 'main']);
+      writeFileSync(join(root, 'base.txt'), 'base C\n');
+      git(['add', 'base.txt']);
+      git(['commit', '--quiet', '-m', 'later base movement']);
+      git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+      expect(await finalCapPureSelectedBaseMerge(root, f, merged, 'origin/main')).toBe(false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
