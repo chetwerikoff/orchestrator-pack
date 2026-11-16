@@ -6289,7 +6289,10 @@ export async function handoffFinalCapDeltaFindings(input: {
     return { state: 'unverified', reason: 'delta_findings_or_original_binding_unverified' };
   }
   if (delta.deliveryOutcomes.workerNotification) {
-    return { state: 'already_attempted', reason: 'worker_notification_attempt_already_recorded' };
+    const previous = delta.deliveryOutcomes.workerNotification;
+    return previous.state === 'succeeded' || previous.state === 'delivered'
+      ? { state: 'submitted', reason: 'persisted_worker_notification_submission' }
+      : { state: 'unverified', reason: 'prior_worker_notification_outcome_unconfirmed' };
   }
   const binding = parsePersistedWorkerNotificationBinding(original);
   if (!input.notifier && (!delta.linkedSessionId || !binding)) {
@@ -6315,7 +6318,12 @@ export async function handoffFinalCapDeltaFindings(input: {
       },
     }), options);
   if (!claimed) {
-    return { state: 'already_attempted', reason: 'worker_notification_attempt_already_recorded' };
+    // Another reconcile may hold the claim. A recorded claim alone is never
+    // evidence of an accepted send, and it must not authorize a retry.
+    const latest = getPackReviewRun(delta.id, options)?.deliveryOutcomes.workerNotification;
+    return latest?.state === 'succeeded' || latest?.state === 'delivered'
+      ? { state: 'submitted', reason: 'persisted_worker_notification_submission' }
+      : { state: 'unverified', reason: 'prior_worker_notification_outcome_unconfirmed' };
   }
   const notify = input.notifier ?? ((request: Parameters<PackReviewWorkerNotifier>[0]) =>
     sendPackReviewWorkerNotification({
