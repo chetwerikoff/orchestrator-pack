@@ -6274,6 +6274,8 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
   projectId: string; storeRoot: string; repoSlug: string; prNumber: number;
   original: PackReviewRunRecord; originalCycleId: string; issueNumber: number;
   issueDigest: string; targetSha: string;
+  /** Already accepted, rechecked same-head Issue scope-only disposition. */
+  verifiedScopeCorrection?: boolean;
 }): Promise<FinalCapDeltaOutcome> {
   const refused = (reason: string): FinalCapDeltaOutcome => ({ state: 'unverified', reason });
   const original = opts.original;
@@ -6286,7 +6288,11 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
   const selectedBaseRef = 'origin/' + selected.defaultBranch;
   if (selected.repository.toLowerCase() !== opts.repoSlug.toLowerCase()
       || (input.baseRef && input.baseRef !== selectedBaseRef)
-      || opts.issueDigest !== original.boundIssueSnapshotDigest
+      // An independently proved and currently rechecked scope-only Issue
+      // correction is the sole exception to B0/B1 digest equality. Never
+      // infer an amendment from current Issue bytes or from the delta record.
+      || (opts.issueDigest !== original.boundIssueSnapshotDigest
+        && opts.verifiedScopeCorrection !== true)
       || original.canonicalRepository?.toLowerCase() !== opts.repoSlug.toLowerCase()) {
     return refused('final_cap_delta_project_issue_base_unverified');
   }
@@ -7231,6 +7237,10 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         original: priorRun, originalCycleId: authority.cycle!.cycleId,
         issueNumber: verifiedFinalIssue.issueNumber, issueDigest: verifiedFinalIssue.digest,
         targetSha: authority.currentHeadSha,
+        verifiedScopeCorrection: verifiedScopeCorrection
+          || (completedFinalFindings
+            && authority.cycle?.settlementKind === 'same_head_issue_resolution'
+            && sameHeadPublicationDigest !== undefined),
       });
       if (deltaOutcome.state !== 'clean') {
         // A durable FINDINGS result moves only F and is handed to the
