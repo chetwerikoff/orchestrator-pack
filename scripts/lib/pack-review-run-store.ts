@@ -2118,7 +2118,9 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       const original = boundRecords.find((record) => record.id === delta.originalRunId);
       if (!authority?.cycle || !authority.terminal
           || authority.cycle.capMapVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
-          || !['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)
+          || !(['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)
+            || (authority.cycle.state === 'closed' && authority.cycle.reviewStageComplete === true
+              && authority.terminal.targetSha !== delta.toSha))
           || authority.cycle.consumedRoundOrdinals?.length !== authority.cycle.frozenCap
           || authority.terminal.runId !== delta.originalRunId
           || authority.terminal.reviewVerdict !== 'findings'

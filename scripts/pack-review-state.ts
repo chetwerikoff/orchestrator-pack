@@ -152,7 +152,7 @@ export interface PackReviewCycle {
   atCapHash?: string;
   reviewStageComplete?: boolean;
   reviewStageCompletedAtUtc?: string;
-  settlementKind?: 'same_head_issue_resolution' | 'rewritten_head';
+  settlementKind?: 'same_head_issue_resolution' | 'rewritten_head' | 'delta_review';
   reviewStartConsumed?: boolean;
   resetProvenance?: PackReviewResetProvenance;
 }
@@ -1383,6 +1383,10 @@ export function settleLogicalPackReviewFindingsByStrictDescendant(input: {
   ancestryAnchorSha?: string;
   /** Validated by scoped reconcile from live Issue/disposition/source/CI evidence. */
   sameHeadIssueResolution?: { runId: string; cycleId: string; logicalRoundOrdinal: number };
+  /** Runner-verified ordinary clean F..T terminal on exactly currentHeadSha. */
+  verifiedDeltaRunId?: string;
+  /** Runner-verified clean merge tree AND previously resolved H1 blockers. */
+  verifiedPureBaseMerge?: boolean;
   options: PackReviewAuthorityOptions;
 }): PackReviewAuthorityDocument {
   const reviewedHeadSha = normalizeSha(input.reviewedHeadSha, 'reviewedHeadSha');
@@ -1422,13 +1426,14 @@ export function settleLogicalPackReviewFindingsByStrictDescendant(input: {
       }
 
       const consumedCount = cycleConsumedCount(cycle);
-      // Ancestry is not a clean verdict on changes introduced after H1.
-      // This incomplete safety boundary keeps final-cap FINDINGS open until
-      // an authenticated ordinary F..T delta review is integrated. Preserve
-      // the separate proven rewritten-C and same-head Issue resolution lanes.
+      // The final capped findings terminal never becomes clean from ancestry.
+      // Only the runner's exact T ordinary delta verdict, or an independently
+      // verified pure-base-merge after prior clean assessment, permits closure.
       if (!sameHead && ancestryAnchorSha === reviewedHeadSha
           && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(cycle.state)
-          && consumedCount === cycle.frozenCap) {
+          && consumedCount === cycle.frozenCap
+          && !input.verifiedPureBaseMerge
+          && !input.verifiedDeltaRunId) {
         throw new PackReviewAuthorityError(
           'final_cap_delta_review_required',
           'the strict descendant requires a bound ordinary delta review before final-cap settlement',
@@ -1456,6 +1461,9 @@ export function settleLogicalPackReviewFindingsByStrictDescendant(input: {
         cycle.atCapHash = undefined;
         markReviewStageComplete(current, cycle.closedAtUtc);
         if (sameHead) cycle.settlementKind = 'same_head_issue_resolution';
+        else if (input.verifiedDeltaRunId || input.verifiedPureBaseMerge) {
+          cycle.settlementKind = 'delta_review';
+        }
       } else {
         throw new PackReviewAuthorityError(
           'findings_settlement_invalid',
