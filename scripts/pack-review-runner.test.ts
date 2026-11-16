@@ -3500,9 +3500,11 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       expect(statusesByHead.get(HEAD)).toBe('success');
       expect(readPackReviewAuthority(prNumber, f.options)?.cycle).toMatchObject({
         state: 'closed', reviewStageComplete: true,
-        settlementKind: 'delta_review',
         consumedRoundOrdinals: [1, 2],
       });
+      // Delta evidence is a protected ordinary run, not a new settlementKind
+      // receipt value or another required logical review round.
+      expect(readPackReviewAuthority(prNumber, f.options)?.cycle?.settlementKind).toBeUndefined();
       expect(getPackReviewRun(f.run.id, f.options)?.reviewVerdict).toBe('findings');
     },
   );
