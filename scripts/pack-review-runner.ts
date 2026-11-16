@@ -6358,8 +6358,15 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
   const pureMerge = await finalCapPureSelectedBaseMerge(
     input.sourceRepoRoot, frontier, opts.targetSha, selectedBaseRef);
   if (pureMerge) {
-    if (unresolved.length) return { state: 'findings', reason: 'final_cap_pure_merge_original_findings_still_unresolved',
-      fromSha: frontier, zeroCall: true };
+    // The existing authenticated same-head Issue scope-only disposition is
+    // independently sufficient to resolve the ORIGINAL H1 blockers. It does
+    // not dispose of findings from any subsequent completed delta reviewer.
+    // Ordinary F..T reviews still receive original findings as context.
+    const originalDispositionResolved = opts.verifiedScopeCorrection === true && !lastComplete;
+    if (unresolved.length && !originalDispositionResolved) {
+      return { state: 'findings', reason: 'final_cap_pure_merge_original_findings_still_unresolved',
+        fromSha: frontier, zeroCall: true };
+    }
     return { state: 'clean', reason: 'final_cap_pure_base_merge_verified',
       fromSha: frontier, zeroCall: true };
   }
