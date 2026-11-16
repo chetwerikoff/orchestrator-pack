@@ -7794,13 +7794,23 @@ describe('Issue #2835 final-cap protected non-consuming delta and F/S frontiers'
     authority = observePackReviewHead({
       prNumber: 2835, expectedTransitionSeq: authority.transitionSeq, headSha: h2, options,
     });
-    const identity = (fromSha: string, toSha: string, digest = 'a'.repeat(64)) => ({
-      originalRunId: original.id, originalCycleId: authority.cycle!.cycleId,
-      repository: 'chetwerikoff/orchestrator-pack', prNumber: 2835,
-      selectedBaseRef: 'origin/main', fromSha, toSha, reviewer: 'codex' as const,
-      sourceSlotIds: [], issueDigest: originalIssueDigest,
-      contextDigest: digest, priorFindings: [oldFinding],
-    });
+    const identity = (fromSha: string, toSha: string, digest?: string) => {
+      const details = {
+        originalRunId: original.id, originalCycleId: authority.cycle!.cycleId,
+        repository: 'chetwerikoff/orchestrator-pack', prNumber: 2835,
+        selectedBaseRef: 'origin/main', fromSha, toSha, reviewer: 'codex' as const,
+        sourceSlotIds: [], issueDigest: originalIssueDigest,
+        priorFindings: [oldFinding],
+      };
+      const contextDigest = digest ?? createHash('sha256').update(stableJson({
+        originalRunId: details.originalRunId, cycleId: details.originalCycleId,
+        repository: details.repository, prNumber: details.prNumber,
+        selectedBaseRef: details.selectedBaseRef, fromSha, toSha,
+        reviewer: details.reviewer, sourceSlotIds: details.sourceSlotIds,
+        issueDigest: details.issueDigest, unresolved: details.priorFindings,
+      })).digest('hex');
+      return { ...details, contextDigest };
+    };
     const create = (fromSha: string, toSha: string, digest?: string) =>
       createPackReviewRun({
         ...options, prNumber: 2835, headSha: toSha,
@@ -7853,10 +7863,10 @@ describe('Issue #2835 final-cap protected non-consuming delta and F/S frontiers'
     const incumbent = f.create(f.h1, f.h2);
     expect(incumbent.created).toBe(false);
     expect(incumbent.run.id).toBe(incomplete.run.id);
-    const mismatch = f.create(f.h1, f.h2, 'b'.repeat(64));
-    expect(mismatch.created).toBe(false);
-    expect(mismatch.run.id).toBe(incomplete.run.id);
-    expect(mismatch.run.finalCapDelta).not.toEqual(f.identity(f.h1, f.h2, 'b'.repeat(64)));
+    expect(() => f.create(f.h1, f.h2, 'b'.repeat(64)))
+      .toThrow(/contextDigest is not the frozen input digest/);
+    expect(getPackReviewRun(incomplete.run.id, f.options)?.finalCapDelta)
+      .toEqual(f.identity(f.h1, f.h2));
   });
 });
 
