@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { parseArgs as parseSelectedGptReviewArgs } from './run-pack-review-gpt.ts';
+import { buildGptReviewPrompt } from './lib/pack-pr-review-contract.ts';
 import {
   chmodSync,
   existsSync,
@@ -39,6 +41,8 @@ import {
   PACK_REVIEW_DISTINCT_HEAD_CAP_MAP_VERSION,
   commitPackReviewTerminal,
   initializePackReviewAuthority,
+  observePackReviewHead,
+  stableJson,
   readPackReviewAuthority,
   reconcilePackReviewTier,
 } from './pack-review-state.js';
@@ -8332,5 +8336,149 @@ describe('Issue #2761: legacy unversioned source-accounting recovery identity', 
     expect(frozenSavedGptSourceIdentity({
       reviewRound: tiered, accountingVersion: PACK_REVIEW_TIERED_SOURCE_ACCOUNTING_VERSION,
     } as PackReviewRunRecord)).toBe(true);
+  });
+});
+
+
+describe('Issue #2835 selected GPT final-cap F..T parser, prompt, protected source slots', () => {
+  it('uses actual existing GPT run-store evidence to admit F and retain original source cardinality', () => {
+    const storeRoot = tempRoot('pack-2835-gpt-input-');
+    harnessEnv(storeRoot, path.join(storeRoot, 'capture.json'));
+    const configHome = path.join(storeRoot, 'config');
+    const cardDir = path.join(configHome, 'orchestrator-pack', 'projects');
+    mkdirSync(cardDir, { recursive: true });
+    writeFileSync(path.join(cardDir, 'orchestrator-pack.json'), JSON.stringify({
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      primaryRoot: repoRoot, defaultBranch: 'main',
+      orcaWorkspacePattern: '^fixture$', orchestratorTitlePattern: '^fixture$',
+      browserGpt: { projectUrl: 'https://example.invalid/pack' },
+    }));
+    process.env.XDG_CONFIG_HOME = configHome;
+    process.env.OPK_PROJECT_ID = 'orchestrator-pack';
+    process.env.PACK_REVIEW_PROJECT_ID = 'orchestrator-pack';
+    process.env.PACK_REVIEW_RUN_STORE_ROOT = storeRoot;
+    const opts = { projectId: 'orchestrator-pack', storeRoot };
+    const prNumber = 2835;
+    const digest = 'gpt-2835-reviewed-issue';
+    const originalFinding = {
+      type: 'quality', code: 'gpt:original-blocker', severity: 'blocking',
+      path: 'scripts/pack-review-runner.ts', summary: 'H1 GPT blocker', source: 'gpt-browser',
+    };
+    const sourceSlots = Array.from({ length: 3 }, (_, index) => {
+      const ordinal = index + 1;
+      const invocationId = 'original-gpt-' + ordinal;
+      const first = ordinal === 1;
+      return {
+        slotId: 'source-0' + ordinal, ordinal, lifecycle: 'terminal' as const,
+        invocationId, attemptOrdinal: 1,
+        terminalClass: first ? 'complete_findings' : 'complete_clean',
+        terminalResult: {
+          schema: 'turn-result/v1', state: 'ok', scope: 'invocation',
+          cause: 'completed_page_only', invocation_id: invocationId, send_count: 1,
+        },
+        payload: first
+          ? { verdict: 'findings', findingCount: 1, findings: [originalFinding] }
+          : { verdict: 'clean', findingCount: 0, findings: [] },
+      };
+    });
+    const originalRound: PackReviewGptRoundRecord = {
+      schema: 'pack-review-gpt-round/v1',
+      reviewer: 'gpt', tier: 'T1', roundOrdinal: 1, cardinality: 3,
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      issueNumber: prNumber, boundIssueSnapshotDigest: digest,
+      sourceSlots, settledSourceCount: 3,
+    };
+    let authority = initializePackReviewAuthority({
+      prNumber, headSha: HEAD_A, tier: 'T1',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      options: opts,
+    });
+    const original = createPackReviewRun({
+      ...opts, prNumber, headSha: HEAD_A,
+      trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      reviewCycleId: authority.cycle!.cycleId,
+      logicalRoundOrdinal: 1, logicalRoundCap: 1,
+      accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      automaticBudgetDisposition: 'consume',
+      resolvedReviewer: 'gpt', reviewRound: originalRound,
+      boundIssueSnapshotDigest: digest,
+    }).run;
+    const ordinaryFinding = { ...originalFinding, sourceSlotId: 'source-01' };
+    setPackReviewRunTerminal(original.id, 'changes_requested', {
+      reviewVerdict: 'findings', findingCount: 1,
+      findings: [ordinaryFinding],
+      journalOutcome: { state: 'persisted', reason: 'test H1', recordedAtUtc: new Date().toISOString(),
+        idempotencyKey: 'verdict:' + original.id + ':' + HEAD_A, attempts: 1 },
+    }, opts);
+    authority = commitPackReviewTerminal({
+      prNumber, expectedTransitionSeq: authority.transitionSeq,
+      terminal: { schemaVersion: 1, terminalContractVersion: 2,
+        terminalSource: 'normal', runId: original.id, targetSha: HEAD_A,
+        logicalRoundOrdinal: 1, reviewVerdict: 'findings',
+        findingCount: 1, findingsDigest: 'gpt-original-findings',
+        automaticBudgetDisposition: 'consume' },
+      status: 'changes_requested', findingCount: 1, options: opts,
+    });
+    authority = observePackReviewHead({
+      prNumber, expectedTransitionSeq: authority.transitionSeq,
+      headSha: HEAD_B, options: opts,
+    });
+    const selectedBaseRef = 'origin/main';
+    const context = {
+      originalRunId: original.id, cycleId: authority.cycle!.cycleId,
+      repository: 'chetwerikoff/orchestrator-pack', prNumber,
+      selectedBaseRef, fromSha: HEAD_A, toSha: HEAD_B,
+      reviewer: 'gpt', sourceSlotIds: sourceSlots.map(slot => slot.slotId),
+      issueDigest: digest, unresolved: [ordinaryFinding],
+    };
+    const contextDigest = createHash('sha256').update(stableJson(context)).digest('hex');
+    const deltaRound: PackReviewGptRoundRecord = {
+      ...originalRound, settledSourceCount: undefined,
+      sourceSlots: sourceSlots.map(({ slotId, ordinal }) => ({
+        slotId, ordinal, lifecycle: 'planned' as const,
+      })),
+    };
+    const delta = createPackReviewRun({
+      ...opts, prNumber, headSha: HEAD_B,
+      trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot,
+      canonicalRepository: context.repository,
+      surface: 'pack-review-runner', startReason: 'final-cap-delta',
+      automaticBudgetDisposition: 'non_consuming_explicit',
+      allowRunnerFinalCapDeltaStart: true,
+      reviewCycleId: authority.cycle!.cycleId,
+      resolvedReviewer: 'gpt', reviewRound: deltaRound,
+      boundIssueSnapshotDigest: digest,
+      finalCapDelta: {
+        originalRunId: original.id, originalCycleId: authority.cycle!.cycleId,
+        repository: context.repository, prNumber, selectedBaseRef,
+        fromSha: HEAD_A, toSha: HEAD_B, reviewer: 'gpt',
+        sourceSlotIds: context.sourceSlotIds,
+        issueDigest: digest, contextDigest, priorFindings: [ordinaryFinding],
+      },
+    }).run;
+    expect(getPackReviewRun(delta.id, opts)?.finalCapDelta?.sourceSlotIds).toHaveLength(3);
+    process.env.PACK_REVIEW_RUN_ID = delta.id;
+    process.env.PACK_REVIEW_TARGET_HEAD_SHA = HEAD_B;
+    process.env.PACK_REVIEWER = 'gpt';
+    const selected = parseSelectedGptReviewArgs(['--base', HEAD_A, '--pr-number', String(prNumber)]);
+    expect(selected.baseRef).toBe(HEAD_A);
+    const scope = { hasScope: false, issueNumber: null, issueConstraints: null,
+      declaredPaths: [], declaredGlobs: [], unverifiedIssueConstraints: false };
+    const prompt = buildGptReviewPrompt({
+      prUrl: 'https://github.com/chetwerikoff/orchestrator-pack/pull/' + prNumber,
+      headSha: HEAD_B, scope,
+    });
+    expect(prompt).toContain('Authenticated final-cap delta review');
+    expect(prompt).toContain(HEAD_A);
+    expect(prompt).toContain(HEAD_B);
+    expect(prompt).toContain('H1 GPT blocker');
+    expect(prompt).toContain('F..T delta');
+    expect(() => parseSelectedGptReviewArgs(['--base', 'f'.repeat(40)]))
+      .toThrow(/does not match selected target base/);
+    delete process.env.PACK_REVIEW_RUN_ID;
+    expect(() => parseSelectedGptReviewArgs(['--base', HEAD_A]))
+      .toThrow(/does not match selected target base/);
+    expect(parseSelectedGptReviewArgs(['--base', 'origin/main']).baseRef).toBe('origin/main');
   });
 });
