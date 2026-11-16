@@ -229,6 +229,25 @@ export interface PackReviewNativeAttemptBinding {
   childStartedAtUtc?: string;
 }
 
+/** Identity for a frozen, non-cap-consuming final FINDINGS delta review.
+ * This is an ordinary persisted review run; its verdict, sources and journal
+ * stay in the existing run fields and existing claim/recovery path.
+ */
+export interface PackReviewFinalCapDelta {
+  originalRunId: string;
+  originalCycleId: string;
+  repository: string;
+  prNumber: number;
+  selectedBaseRef: string;
+  fromSha: string;
+  toSha: string;
+  reviewer: PackReviewer;
+  sourceSlotIds: string[];
+  issueDigest: string;
+  contextDigest: string;
+  priorFindings: unknown[];
+}
+
 export interface PackReviewRunRecord {
   schemaVersion: 1;
   id: string;
@@ -277,6 +296,7 @@ export interface PackReviewRunRecord {
   deliveryOutcomes: Partial<Record<PackReviewDeliveryChannel, PackReviewDeliveryOutcome>>;
   canonicalRepository?: string;
   reviewRound?: PackReviewGptRoundRecord;
+  finalCapDelta?: PackReviewFinalCapDelta;
   /** Immutable exact body for native as well as GPT verdicts. */
   boundIssueSnapshotDigest?: string;
   stale?: boolean;
@@ -358,6 +378,9 @@ export interface CreatePackReviewRunInput extends PackReviewStoreOptions {
   canonicalRepository?: string;
   legacyRepositoryBySourceRoot?: Record<string, string>;
   reviewRound?: PackReviewGptRoundRecord;
+  finalCapDelta?: PackReviewFinalCapDelta;
+  /** Not persisted; the runner's positive final-cap admission. */
+  allowRunnerFinalCapDeltaStart?: boolean;
   boundIssueSnapshotDigest?: string;
   accountingVersion?: string;
   reviewCycleId?: string;
@@ -490,12 +513,112 @@ function normalizeAutomaticBudgetDisposition(
   return disposition;
 }
 
+function normalizePackReviewFinalCapDelta(value: unknown, path = ''): PackReviewFinalCapDelta {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`corrupt pack review run record at ${path}: invalid finalCapDelta`);
+  }
+  const v = value as Record<string, unknown>;
+  const required = (key: string) => requiredJsonString(v[key], `finalCapDelta ${key}`, path);
+  const sha = (key: string) => {
+    const text = required(key).toLowerCase();
+    if (!/^[0-9a-f]{40}$/.test(text)) throw new Error(`invalid finalCapDelta ${key}`);
+    return text;
+  };
+  const originalRunId = required('originalRunId');
+  if (!/^prr-[a-zA-Z0-9._-]+$/.test(originalRunId)) throw new Error('invalid finalCapDelta originalRunId');
+  const originalCycleId = required('originalCycleId');
+  const repository = normalizePackReviewCanonicalRepository(required('repository'));
+  const prNumber = requiredJsonPositiveInteger(v.prNumber, 'finalCapDelta prNumber', path);
+  const selectedBaseRef = required('selectedBaseRef');
+  if (!/^origin\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(selectedBaseRef)
+      || selectedBaseRef.includes('..') || selectedBaseRef.endsWith('.lock')) {
+    throw new Error('invalid finalCapDelta selectedBaseRef');
+  }
+  const fromSha = sha('fromSha'), toSha = sha('toSha');
+  if (fromSha === toSha) throw new Error('finalCapDelta from/to must differ');
+  const reviewer = required('reviewer');
+  if (!['gpt', 'codex', 'claude'].includes(reviewer)) throw new Error('invalid finalCapDelta reviewer');
+  if (!Array.isArray(v.sourceSlotIds)
+      || !v.sourceSlotIds.every((slot) => typeof slot === 'string' && slot.trim().length > 0)
+      || new Set(v.sourceSlotIds).size !== v.sourceSlotIds.length
+      || (reviewer === 'gpt' && v.sourceSlotIds.length === 0)
+      || (reviewer !== 'gpt' && v.sourceSlotIds.length !== 0)) {
+    throw new Error('invalid finalCapDelta sourceSlotIds');
+  }
+  const sourceSlotIds = [...v.sourceSlotIds] as string[];
+  const issueDigest = required('issueDigest');
+  const contextDigest = required('contextDigest').toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(contextDigest)) throw new Error('invalid finalCapDelta contextDigest');
+  if (!Array.isArray(v.priorFindings)
+      || !v.priorFindings.every((f) => f && typeof f === 'object' && !Array.isArray(f))) {
+    throw new Error('invalid finalCapDelta priorFindings');
+  }
+  return { originalRunId, originalCycleId, repository, prNumber, selectedBaseRef,
+    fromSha, toSha, reviewer: reviewer as PackReviewer, sourceSlotIds, issueDigest, contextDigest,
+    priorFindings: structuredClone(v.priorFindings) };
+}
+
+/** Shared by the two selected-project CLIs and their existing prompt builders.
+ * No arbitrary CLI flag can opt into delta mode: the persisted run, original
+ * capped terminal, selected repository/base, frozen reviewer and exact T must match.
+ */
+export function authenticatedPackReviewFinalCapDelta(input: {
+  env?: NodeJS.ProcessEnv;
+  repository: string;
+  selectedBaseRef: string;
+  headSha?: string;
+  reviewer?: PackReviewer;
+}): PackReviewFinalCapDelta | null {
+  const env = input.env ?? process.env;
+  const runId = (env.PACK_REVIEW_RUN_ID ?? '').trim();
+  const projectId = (env.PACK_REVIEW_PROJECT_ID ?? '').trim();
+  const configuredRoot = (env.PACK_REVIEW_RUN_STORE_ROOT ?? '').trim();
+  const headSha = (input.headSha ?? env.PACK_REVIEW_TARGET_HEAD_SHA ?? '').trim().toLowerCase();
+  if (!runId || !projectId || !configuredRoot || !/^[0-9a-f]{40}$/.test(headSha)
+      || env.PACK_REVIEW_TARGET_HEAD_SHA?.toLowerCase() !== headSha) return null;
+  try {
+    const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: configuredRoot });
+    const run = getPackReviewRun(runId, { projectId, storeRoot });
+    if (!run?.finalCapDelta || run.projectId !== projectId || run.id !== runId
+        || run.targetSha !== headSha || run.canonicalRepository !== input.repository.toLowerCase()
+        || run.automaticBudgetDisposition !== 'non_consuming_explicit') return null;
+    const delta = run.finalCapDelta;
+    if (delta.repository !== input.repository.toLowerCase()
+        || delta.selectedBaseRef !== input.selectedBaseRef || delta.toSha !== headSha
+        || (input.reviewer && delta.reviewer !== input.reviewer)
+        || run.resolvedReviewer !== delta.reviewer
+        || run.reviewCycleId !== delta.originalCycleId
+        || run.boundIssueSnapshotDigest !== delta.issueDigest) return null;
+    const original = getPackReviewRun(delta.originalRunId, { projectId, storeRoot });
+    const authority = readPackReviewAuthorityUnderHeldStoreLock;
+    // getPackReviewRun released the store lock. Read authority through its
+    // public reader in this scope rather than nesting the protected lock.
+    // Original immutable run identity remains the fundamental credential.
+    if (!original || !hasPersistedPackReviewVerdict(original)
+        || original.reviewVerdict !== 'findings'
+        || original.prNumber !== run.prNumber
+        || original.targetSha === delta.toSha
+        || original.reviewCycleId !== delta.originalCycleId
+        || original.canonicalRepository !== delta.repository
+        || original.resolvedReviewer !== delta.reviewer
+        || !isDeepStrictEqual(original.reviewRound?.sourceSlots.map((slot) => slot.slotId) ?? [], delta.sourceSlotIds)) return null;
+    void authority;
+    return delta;
+  } catch { return null; }
+}
+
 function normalizeNewAutomaticBudgetDisposition(
   value: unknown,
   input: CreatePackReviewRunInput,
 ): PackReviewAutomaticBudgetDisposition {
   const disposition = normalizeAutomaticBudgetDisposition(value);
-  if (disposition === 'non_consuming_explicit' && !(
+  const delta = input.finalCapDelta;
+  const runnerDelta = Boolean(input.allowRunnerFinalCapDeltaStart === true && delta
+    && input.surface === 'pack-review-runner' && input.startReason === 'final-cap-delta'
+    && input.logicalRoundOrdinal === undefined && input.logicalRoundCap === undefined
+    && input.reviewCycleId === delta.originalCycleId
+    && input.resolvedReviewer === delta.reviewer);
+  if (disposition === 'non_consuming_explicit' && !runnerDelta && !(
     input.allowExplicitSupplementalStart === true
     && input.surface === 'pack-gpt-review'
     && input.startReason === 'manual-browser-gpt'
@@ -1525,6 +1648,24 @@ function parseRecord(
   const boundIssueSnapshotDigest = raw.boundIssueSnapshotDigest === undefined
     ? undefined
     : requiredJsonString(raw.boundIssueSnapshotDigest, 'boundIssueSnapshotDigest', path);
+  const finalCapDelta = raw.finalCapDelta === undefined
+    ? undefined : normalizePackReviewFinalCapDelta(raw.finalCapDelta, path);
+  if (finalCapDelta && (automaticBudgetDisposition !== 'non_consuming_explicit'
+      || raw.surface !== 'pack-review-runner' || raw.startReason !== 'final-cap-delta'
+      || logicalRoundOrdinal !== undefined || logicalRoundCap !== undefined
+      || reviewCycleId !== finalCapDelta.originalCycleId
+      || resolvedReviewer !== finalCapDelta.reviewer
+      || prNumber !== finalCapDelta.prNumber || targetSha !== finalCapDelta.toSha
+      || canonicalRepository !== finalCapDelta.repository
+      || boundIssueSnapshotDigest !== finalCapDelta.issueDigest
+      || (reviewRound && (finalCapDelta.reviewer !== 'gpt'
+        || !isDeepStrictEqual(reviewRound.sourceSlots.map((slot) => slot.slotId), finalCapDelta.sourceSlotIds)))
+      || (finalCapDelta.reviewer === 'gpt' && !reviewRound))) {
+    throw new Error(`corrupt pack review run record at ${path}: unbound finalCapDelta`);
+  }
+  if (!finalCapDelta && raw.startReason === 'final-cap-delta') {
+    throw new Error(`corrupt pack review run record at ${path}: missing finalCapDelta`);
+  }
   if (reviewRound && boundIssueSnapshotDigest !== undefined
       && boundIssueSnapshotDigest !== reviewRound.boundIssueSnapshotDigest) {
     throw new Error(`corrupt pack review run record at ${path}: GPT/native bound Issue digest differs`);
@@ -1609,6 +1750,7 @@ function parseRecord(
     reviewerInvokedForThisRun: reviewerInvokedForThisRun as PackReviewRunRecord['reviewerInvokedForThisRun'],
     nativeAttempt,
     reviewRound,
+    finalCapDelta,
     boundIssueSnapshotDigest,
     runnerPid: Number(raw.runnerPid ?? 0),
     createdAt,
@@ -1954,6 +2096,9 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
   const disposition = legacyReplayOnly
     ? 'consume'
     : normalizeNewAutomaticBudgetDisposition(input.automaticBudgetDisposition, input);
+  if (input.finalCapDelta && !input.allowRunnerFinalCapDeltaStart) {
+    throw new Error('finalCapDelta creation requires runner-owned final-cap admission');
+  }
   return withStoreLock(storeRoot, () => {
     const records = readRecordsUnlocked(storeRoot);
     const legacyRepositoryBindings = new Map(
@@ -1971,6 +2116,37 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
     const canonicalRepository = input.canonicalRepository
       ? normalizePackReviewCanonicalRepository(input.canonicalRepository)
       : undefined;
+    if (input.finalCapDelta) {
+      const delta = normalizePackReviewFinalCapDelta(input.finalCapDelta);
+      const authority = readPackReviewAuthorityUnderHeldStoreLock(input.prNumber, { storeRoot });
+      const original = boundRecords.find((record) => record.id === delta.originalRunId);
+      if (!authority?.cycle || !authority.terminal
+          || authority.cycle.capMapVersion !== PACK_REVIEW_LOGICAL_CAP_MAP_VERSION
+          || !['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)
+          || authority.cycle.consumedRoundOrdinals?.length !== authority.cycle.frozenCap
+          || authority.terminal.runId !== delta.originalRunId
+          || authority.terminal.reviewVerdict !== 'findings'
+          || authority.terminal.targetSha !== original?.targetSha
+          || authority.currentHeadSha !== delta.toSha
+          || authority.cycle.cycleId !== delta.originalCycleId
+          || !original || !hasPersistedPackReviewVerdict(original)
+          || original.reviewVerdict !== 'findings'
+          || original.reviewCycleId !== delta.originalCycleId
+          || original.resolvedReviewer !== delta.reviewer
+          || !isDeepStrictEqual(original.reviewRound?.sourceSlots.map((slot) => slot.slotId) ?? [], delta.sourceSlotIds)
+          || !canonicalRepository || canonicalRepository !== delta.repository
+          || original.canonicalRepository !== delta.repository
+          || delta.prNumber !== input.prNumber || delta.toSha !== headSha
+          || input.boundIssueSnapshotDigest !== delta.issueDigest
+          || input.reviewCycleId !== delta.originalCycleId
+          || input.resolvedReviewer !== delta.reviewer
+          || (delta.reviewer === 'gpt' && !input.reviewRound)
+          || (input.reviewRound && !isDeepStrictEqual(
+            input.reviewRound.sourceSlots.map((slot) => slot.slotId), delta.sourceSlotIds))
+          || (delta.reviewer === 'gpt' && input.reviewRound?.boundIssueSnapshotDigest !== delta.issueDigest)) {
+        throw new Error('runner final-cap delta admission does not match original review and current authority');
+      }
+    }
     const key = packReviewRunKey(input.prNumber, headSha, canonicalRepository);
     const matchesTargetIdentity = (record: PackReviewRunRecord) => matchesPackReviewRunInput(
       record,
@@ -1990,6 +2166,9 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       input.reviewCycleId,
       input.logicalRoundOrdinal,
     ) && record.automaticBudgetDisposition === disposition
+      && (input.finalCapDelta
+        ? isDeepStrictEqual(record.finalCapDelta, normalizePackReviewFinalCapDelta(input.finalCapDelta))
+        : record.finalCapDelta === undefined)
       // Only the proof-backed dead foreign owner may be bypassed by a DIFFERENT
       // selected reviewer. Its source slots and old journal remain immutable.
       && !(record.failureReason === 'explicit_reviewer_superseded_proven_dead_original'
@@ -2101,6 +2280,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       // Freeze the caller-selected source generation together with the round
       // when creating a record. An omitted round version is only filled at
       // creation; previously persisted versions are never migrated on read.
+      ...(input.finalCapDelta ? { finalCapDelta: normalizePackReviewFinalCapDelta(input.finalCapDelta) } : {}),
       ...(input.reviewRound ? { reviewRound: {
         ...input.reviewRound,
         ...(input.reviewRound.accountingVersion === undefined && input.accountingVersion
@@ -2213,6 +2393,7 @@ function buildUpdatedPackReviewRun(
     logicalRoundOrdinal: existing.logicalRoundOrdinal ?? fields.logicalRoundOrdinal,
     logicalRoundCap: existing.logicalRoundCap ?? fields.logicalRoundCap,
     boundIssueSnapshotDigest: existing.boundIssueSnapshotDigest ?? fields.boundIssueSnapshotDigest,
+    finalCapDelta: existing.finalCapDelta,
     schemaVersion: 1,
     updatedAt,
     heartbeatAtUtc: PACK_REVIEW_ACTIVE_STATUSES.has(String(fields.status ?? existing.status))
