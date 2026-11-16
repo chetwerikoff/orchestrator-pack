@@ -6422,7 +6422,7 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
             const posted = await postGithubReview({
               repoRoot: input.sourceRepoRoot, repoSlug: opts.repoSlug,
               prNumber: opts.prNumber, headSha: opts.targetSha,
-              run: incumbent, payload: journaled, projectId: opts.projectId,
+              run: incumbent, payload: parseReviewPayload(JSON.stringify(journaled)), projectId: opts.projectId,
               storeRoot: opts.storeRoot, transport,
             });
             return { id: posted.id, url: posted.url, event: 'COMMENT' };
