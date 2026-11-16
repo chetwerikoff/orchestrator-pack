@@ -1456,7 +1456,7 @@ export async function runSupervisedTaskLaunchAssistant(
   if (input.existingTerminal) {
     const unprefixedSonnet = profile.family === 'claude' && profile.model === 'claude-sonnet-5-5'
       && profile.effort === 'high' && reusedCommand === canonicalClaudeCommand(profile);
-    if (profile.launchCommand !== reusedCommand && !unprefixedSonnet) return continued(input, 'dispatch_admission_final', {
+    if (!reusedCommand || (profile.launchCommand !== reusedCommand && !unprefixedSonnet)) return continued(input, 'dispatch_admission_final', {
       cause: 'existing_terminal_generation_changed', actor: 'orchestrator', evidence: {},
       nextAction: { kind: 'remediate_terminal',
         note: 'the original native command does not reproduce the selected profile and current baseline; inspect read-only rather than replacing its process environment' },
@@ -1572,6 +1572,7 @@ export async function runSupervisedTaskLaunchAssistant(
     creationTerminals = await deps.captureLaunchShells(prepared.value);
   }
   let terminal: RuntimeWorker | undefined;
+  let nativeClaudeCommand: string | undefined;
   if (providerMode) {
     const terminalStartedAt = deps.now();
     const terminalFinishedAt = deps.now();
@@ -1585,7 +1586,6 @@ export async function runSupervisedTaskLaunchAssistant(
     const terminalStartedAt = deps.now();
     let terminalCause = '';
     let liveness: ReturnType<RuntimeAdapter['liveness']> | null = null;
-    let nativeClaudeCommand: string | undefined;
     const freshClaude = profile.family === 'claude' && !input.existingTerminal;
     if (freshClaude) freshClaudeDeadline = monotonicNow() + CLAUDE_ADMISSION_DEADLINE_MS;
     const spawnBudget = profile.family === 'claude'
@@ -1609,7 +1609,7 @@ export async function runSupervisedTaskLaunchAssistant(
     if (expired()) terminalCause = 'terminal_observation_deadline';
     const spawnNativeError = spawn && spawn.status !== 'ok' ? nativeRuntimeError(spawn) : null;
     if (!terminalCause && spawn?.status !== 'ok') terminalCause = `terminal_spawn_${spawn?.status ?? 'unavailable'}`;
-    else if (!terminalCause && (!spawn || !spawn.value || !text(spawn.value.identity.runtime)
+    else if (!terminalCause && spawn?.status === 'ok' && (!spawn.value || !text(spawn.value.identity.runtime)
       || !text(spawn.value.identity.id) || !text(spawn.value.identity.generation))) terminalCause = 'terminal_identity_invalid';
     else if (!terminalCause && spawn?.status === 'ok' && spawn.value) {
       resources = { ...resources, terminal: spawn.value.identity };
@@ -1729,7 +1729,7 @@ export async function runSupervisedTaskLaunchAssistant(
     if (expired()) return continued(input, 'dispatch_admission_final', deadlineEdge(), resources, startedAtMs, timings, deps.now);
     if (!observed || observed.status !== 'known' || observed.family !== 'non-opencode'
       || observed.command !== nativeClaudeCommand) return continued(input, 'dispatch_admission_final', {
-        status: 'continue', cause: 'terminal_native_command_changed', actor: 'orchestrator',
+        cause: 'terminal_native_command_changed', actor: 'orchestrator',
         nextAction: { kind: 'remediate_terminal',
           note: 'Reobserve the original Task-owned direct Claude command and exact generation before retry; do not start an ambiguous recovered process' },
       }, resources, startedAtMs, timings, deps.now);
@@ -3183,7 +3183,7 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
   if (input.projectId && inheritedEnv.OPK_PROJECT_ID?.trim()
     && inheritedEnv.OPK_PROJECT_ID.trim() !== input.projectId) throw new Error('project_selector_mismatch');
   const routedEnv = input.workClass === 'merge' ? withMergeExecutorProfileDefaults(inheritedEnv) : inheritedEnv;
-  const env = { ...routedEnv, ...(input.projectId ? { OPK_PROJECT_ID: input.projectId } : {}) };
+  const env: NodeJS.ProcessEnv = { ...routedEnv, ...(input.projectId ? { OPK_PROJECT_ID: input.projectId } : {}) };
   const target = resolveTargetContext({ projectId: input.projectId, env });
   const adapter = await selectRuntimeAdapter({ env: { ...env } }, { cwd, transport: { env: { ...env } } });
   return {
