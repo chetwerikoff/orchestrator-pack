@@ -1,0 +1,29 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2841,
+  "declared_paths": [
+    "scripts/pr2-foundation/manager-push-guard.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts"
+  ],
+  "denylist": [
+    ".github/workflows/",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "credentials/",
+    "packages/core/",
+    "plugins/",
+    "prompts/",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/pr-scope-check.ts",
+    "scripts/pr-scope-declaration.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "scripts/pr2-foundation/manager-push-guard.ts",
+    "scripts/pr2-foundation/supervised-task-launch-assistant.test.ts"
+  ],
+  "source_revision": "0d759e5853b39266cc6540e201d74733a57678b6"
+}
