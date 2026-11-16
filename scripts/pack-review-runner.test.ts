@@ -1810,7 +1810,7 @@ describe('Issue #1887 immediate final-cap descendant reconciliation', () => {
     const unsettled = readPackReviewAuthority(prNumber, authorityOptions);
     expect(unsettled?.terminal?.runId).toBe(run.id);
     expect(unsettled?.cycle).toMatchObject({
-      state: 'at_cap_open_findings',
+      state: 'at_cap_continuation_required',
       consumedRoundOrdinals: [1],
     });
     expect(unsettled?.cycle?.reviewStageComplete).not.toBe(true);
@@ -1957,7 +1957,7 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
         nextAction: expect.stringContaining('delta run/source census'),
       }));
       expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle)
-        .toMatchObject({ state: 'at_cap_open_findings', consumedRoundOrdinals: [1] });
+        .toMatchObject({ state: 'at_cap_continuation_required', consumedRoundOrdinals: [1] });
       expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle?.reviewStageComplete)
         .not.toBe(true);
       expect(f.statusWrites).not.toContain('success');
@@ -2140,11 +2140,11 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
       fixturePostReviewPrBody: 'Closes #' + f.issueNumber,
     });
     expect(refused).toMatchObject({
-      ok: false, created: false, reason: 'final_cap_issue_body_amended',
+      ok: false, created: false, reason: 'final_cap_strict_descendant_required',
     });
     expect(f.statusWrites.filter((s) => s === 'success')).toHaveLength(priorSuccessCount);
     expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle)
-      .toMatchObject({ state: 'at_cap_open_findings', consumedRoundOrdinals: [1] });
+      .toMatchObject({ state: 'at_cap_continuation_required', consumedRoundOrdinals: [1] });
     expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle?.reviewStageComplete)
       .not.toBe(true);
   });
@@ -2397,7 +2397,7 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
       // Correct B1 digest resolution is necessary but still not an F..H2
       // review; neither the historical B0 nor B1 grants descendant success.
       expect(settled.results).toContainEqual(expect.objectContaining({
-        reason: 'final_cap_original_reviewer_unverified', settled: false,
+        reason: 'final_cap_delta_frontier_not_ancestor', settled: false,
       }));
       expect(f.statusWrites).not.toContain('success');
       expect(readFileSync(original.snapshotPath!, 'utf8')).toBe(B0);
@@ -2418,7 +2418,7 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     });
     const settled = await reconcileStalePackReviewRuns(f.request(B0));
     expect(settled.results).toContainEqual(expect.objectContaining({
-      reason: 'final_cap_original_reviewer_unverified', settled: false,
+      reason: 'final_cap_delta_project_issue_base_unverified', settled: false,
     }));
     expect(f.statusWrites).not.toContain('success');
     expect(readPackReviewAuthority(f.prNumber, f)?.cycle?.reviewStageComplete).not.toBe(true);
