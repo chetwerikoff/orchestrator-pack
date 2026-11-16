@@ -9777,7 +9777,8 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         baseRef: target.prBaseRef,
         fixtureRequiredStatusReader: input.fixtureRequiredStatusReader,
         fixtureRequiredStatusWriter: input.fixtureRequiredStatusWriter,
-        deltaClaimOwned: ownsStartClaim,
+        deltaClaimOwned: () => claimMode === 'preacquired'
+          ? preacquiredClaimOwned() : claimLease?.owns() === true,
         deltaBindClaimRun: (runId: string) => claimLease?.bindRunId(runId),
         fixtureReviewStdout: input.fixtureReviewStdout,
         fixtureReviewExitCode: input.fixtureReviewExitCode,
