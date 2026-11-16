@@ -7250,7 +7250,16 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
     // has been observed. A clean F..T review is still mandatory for code
     // introduced on a strict descendant; earlier H2 success does not cover H3.
     let deltaOutcome: FinalCapDeltaOutcome | undefined;
-    if (!rebasedC && authority.currentHeadSha !== reviewedHeadSha) {
+    // An already accepted, persisted exact-head settlement is authoritative
+    // for status-only readback/republication on that SAME T. This covers the
+    // separate rewritten-C lane as well as completed ordinary deltas. Neither
+    // the stage-complete bit nor a status for an earlier H2 is reusable on H3.
+    const exactPublishedSettlement = completedFinalFindings
+      && authority.publication?.status === 'succeeded'
+      && authority.publication.headSha === authority.currentHeadSha
+      && authority.publication.terminalRunId === priorRun.id;
+    if (!rebasedC && !exactPublishedSettlement
+        && authority.currentHeadSha !== reviewedHeadSha) {
       if (!verifiedFinalIssue) {
         return { prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
           settled: false, reason: 'final_cap_delta_issue_binding_missing',
