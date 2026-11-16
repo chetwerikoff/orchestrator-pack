@@ -73,6 +73,9 @@ import {
 } from './lib/pack-review-delivery.ts';
 import type { CarryoverReplayResult } from './pack-review-carryover.ts';
 import { runProcess, runProcessSync } from './kernel/subprocess.ts';
+import { parseArgs as parseSelectedGptReviewArgs } from './run-pack-review-gpt.ts';
+import { parseReviewArgs as parseSelectedNativeReviewArgs } from '../plugins/codex-pr-reviewer/lib/review_cli.ts';
+import { buildReviewPrompt as buildSelectedNativePrompt } from '../plugins/codex-pr-reviewer/lib/prompt.ts';
 
 // Behavior-preserving spy: lets a test read the reviewer child's real options.
 vi.mock('./kernel/subprocess.ts', async (importOriginal) => {
@@ -7753,7 +7756,7 @@ describe('Issue #2835 final-cap protected non-consuming delta and F/S frontiers'
     for (const root of fixtureRoots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
-  function nativeDeltaFixture() {
+  function nativeDeltaFixture(reviewer: 'codex' | 'claude' = 'codex') {
     const storeRoot = mkdtempSync(join(tmpdir(), 'pack-2835-store-'));
     fixtureRoots.push(storeRoot);
     const options = { projectId: 'orchestrator-pack', storeRoot };
@@ -7772,7 +7775,7 @@ describe('Issue #2835 final-cap protected non-consuming delta and F/S frontiers'
       logicalRoundOrdinal: 1, logicalRoundCap: 1,
       accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
       automaticBudgetDisposition: 'consume',
-      resolvedReviewer: 'codex',
+      resolvedReviewer: reviewer,
       boundIssueSnapshotDigest: originalIssueDigest,
     }).run;
     const oldFinding = { severity: 'blocking', title: 'H1 blocker', path: 'scripts/pack-review-runner.ts' };
@@ -7798,7 +7801,7 @@ describe('Issue #2835 final-cap protected non-consuming delta and F/S frontiers'
       const details = {
         originalRunId: original.id, originalCycleId: authority.cycle!.cycleId,
         repository: 'chetwerikoff/orchestrator-pack', prNumber: 2835,
-        selectedBaseRef: 'origin/main', fromSha, toSha, reviewer: 'codex' as const,
+        selectedBaseRef: 'origin/main', fromSha, toSha, reviewer,
         sourceSlotIds: [], issueDigest: originalIssueDigest,
         priorFindings: [oldFinding],
       };
@@ -7820,12 +7823,79 @@ describe('Issue #2835 final-cap protected non-consuming delta and F/S frontiers'
         automaticBudgetDisposition: 'non_consuming_explicit',
         allowRunnerFinalCapDeltaStart: true,
         finalCapDelta: identity(fromSha, toSha, digest),
-        reviewCycleId: authority.cycle!.cycleId, resolvedReviewer: 'codex',
+        reviewCycleId: authority.cycle!.cycleId, resolvedReviewer: reviewer,
         boundIssueSnapshotDigest: originalIssueDigest,
       });
     return { options, original, oldFinding, h1, h2, h3, create, identity };
   }
 
+
+  it('accepts authentic F for the selected native Codex/Claude parser and native prompt', () => {
+    const cardHome = mkdtempSync(join(tmpdir(), 'opk-2835-selected-cli-'));
+    fixtureRoots.push(cardHome);
+    const directory = join(cardHome, 'orchestrator-pack', 'projects');
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, 'orchestrator-pack.json'), JSON.stringify({
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      primaryRoot: process.cwd(), defaultBranch: 'main',
+      orcaWorkspacePattern: '^fixture$', orchestratorTitlePattern: '^fixture$',
+      browserGpt: { projectUrl: 'https://example.invalid/opk' },
+    }));
+    process.env.OPK_PROJECT_ID = 'orchestrator-pack';
+    process.env.XDG_CONFIG_HOME = cardHome;
+    process.env.PACK_REVIEW_PROJECT_ID = 'orchestrator-pack';
+    const scope = { hasScope: false, issueNumber: null, issueConstraints: null,
+      declaredPaths: [], declaredGlobs: [], unverifiedIssueConstraints: false };
+    for (const reviewer of ['codex', 'claude'] as const) {
+      const f = nativeDeltaFixture(reviewer);
+      const saved = f.create(f.h1, f.h2).run;
+      process.env.PACK_REVIEW_RUN_STORE_ROOT = f.options.storeRoot;
+      process.env.PACK_REVIEW_RUN_ID = saved.id;
+      process.env.PACK_REVIEW_TARGET_HEAD_SHA = f.h2;
+      process.env.PACK_REVIEWER = reviewer;
+      const parsed = parseSelectedNativeReviewArgs([
+        '--repo-root', process.cwd(), '--pr-number', '2835', '--base', f.h1,
+      ]);
+      expect(parsed.baseRef).toBe(f.h1);
+      const prompt = buildSelectedNativePrompt({ scope, source: 'codex-local', baseRef: parsed.baseRef });
+      expect(prompt).toContain('F=');
+      expect(prompt).toContain(f.h1);
+      expect(prompt).toContain(f.h2);
+      expect(prompt).toContain('H1 blocker');
+      expect(prompt).toContain('F..T changes');
+      expect(() => parseSelectedNativeReviewArgs([
+        '--repo-root', process.cwd(), '--base', f.h3,
+      ])).toThrow(/does not match selected target base/);
+      delete process.env.PACK_REVIEW_RUN_ID;
+      expect(() => parseSelectedNativeReviewArgs([
+        '--repo-root', process.cwd(), '--base', f.h1,
+      ])).toThrow(/does not match selected target base/);
+    }
+  });
+
+  it('keeps normal selected GPT base and rejects untrusted native final-cap F', () => {
+    const cardHome = mkdtempSync(join(tmpdir(), 'opk-2835-gpt-cli-'));
+    fixtureRoots.push(cardHome);
+    const directory = join(cardHome, 'orchestrator-pack', 'projects');
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, 'orchestrator-pack.json'), JSON.stringify({
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      primaryRoot: process.cwd(), defaultBranch: 'main',
+      orcaWorkspacePattern: '^fixture$', orchestratorTitlePattern: '^fixture$',
+      browserGpt: { projectUrl: 'https://example.invalid/opk' },
+    }));
+    process.env.OPK_PROJECT_ID = 'orchestrator-pack';
+    process.env.XDG_CONFIG_HOME = cardHome;
+    const f = nativeDeltaFixture('codex');
+    const saved = f.create(f.h1, f.h2).run;
+    process.env.PACK_REVIEW_PROJECT_ID = 'orchestrator-pack';
+    process.env.PACK_REVIEW_RUN_STORE_ROOT = f.options.storeRoot;
+    process.env.PACK_REVIEW_RUN_ID = saved.id;
+    process.env.PACK_REVIEW_TARGET_HEAD_SHA = f.h2;
+    expect(parseSelectedGptReviewArgs(['--base', 'origin/main']).baseRef).toBe('origin/main');
+    expect(() => parseSelectedGptReviewArgs(['--base', f.h1]))
+      .toThrow(/does not match selected target base/);
+  });
   it('serializes, reloads and exactly reuses a clean H1..H2 review without charging cap', () => {
     const f = nativeDeltaFixture();
     const delta = f.create(f.h1, f.h2);
