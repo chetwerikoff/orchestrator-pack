@@ -7255,16 +7255,25 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
     // has been observed. A clean F..T review is still mandatory for code
     // introduced on a strict descendant; earlier H2 success does not cover H3.
     let deltaOutcome: FinalCapDeltaOutcome | undefined;
-    // An already accepted, persisted exact-head settlement is authoritative
-    // for status-only readback/republication on that SAME T. This covers the
-    // separate rewritten-C lane as well as completed ordinary deltas. Neither
-    // the stage-complete bit nor a status for an earlier H2 is reusable on H3.
-    const exactPublishedSettlement = completedFinalFindings
-      && authority.publication?.status === 'succeeded'
-      && authority.publication.headSha === authority.currentHeadSha
-      && authority.publication.terminalRunId === priorRun.id;
-    if (!rebasedC && !exactPublishedSettlement
-        && authority.currentHeadSha !== reviewedHeadSha) {
+    // A historical success status may have been published by the old
+    // ancestry-only path; it does NOT authenticate review of the new code.
+    // The distinct rewritten-C lane can be reused on the exact already
+    // published head only after re-proving its original full C witness.
+    // A later H3 cannot inherit H2's publication or its C proof.
+    if (completedFinalFindings && !rebasedC
+        && authority.cycle?.settlementKind === undefined
+        && authority.publication?.headSha === authority.currentHeadSha
+        && authority.publication.terminalRunId === priorRun.id) {
+      try {
+        const checkedC = await proveUniqueRebasedC(input, options, prNumber,
+          reviewedHeadSha, authority.currentHeadSha);
+        await checkedC.recheck(verifiedFinalCiSelectors);
+        rebasedC = checkedC;
+      } catch {
+        // No rewritten-C proof: ordinary delta review is still mandatory.
+      }
+    }
+    if (!rebasedC && authority.currentHeadSha !== reviewedHeadSha) {
       if (!verifiedFinalIssue) {
         return { prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
           settled: false, reason: 'final_cap_delta_issue_binding_missing',
