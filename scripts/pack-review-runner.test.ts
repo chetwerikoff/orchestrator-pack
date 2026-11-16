@@ -3110,8 +3110,20 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     updatePackReviewRun(delta.run.id, {
       reviewRound: { ...plannedRound, settledSourceCount: sourceSlots.length, sourceSlots },
     }, f.options);
+    const deltaReviewId = 28360000 + (toSha === fromSha ? 0 : 1);
+    const deltaReviewUrl = `https://github.com/${f.input.repoSlug}/pull/${prNumber}#pullrequestreview-${deltaReviewId}`;
     setPackReviewRunTerminal(delta.run.id, 'up_to_date', {
       reviewVerdict: 'clean', findingCount: 0, findings: [],
+      githubReviewId: deltaReviewId, githubReviewUrl: deltaReviewUrl,
+      githubReviewEvent: 'COMMENT',
+      githubReviewReconciliation: {
+        schemaVersion: 1, event: 'COMMENT', phase: 'complete',
+        actorLogin: 'chetwerikoff',
+        commentBody: `## Pack review — no findings\n\nRun: \`${delta.run.id}\`\nHead: \`${toSha}\`\n`,
+        commentReviewId: deltaReviewId, commentReviewUrl: deltaReviewUrl,
+        pendingDismissalReviewIds: [], dismissedReviewIds: [],
+        preparedAtUtc: '2026-10-14T01:00:00Z', updatedAtUtc: '2026-10-14T01:00:00Z',
+      },
       journalOutcome: {
         state: 'persisted', recordedAtUtc: new Date().toISOString(),
         reason: 'ordinary-delta-source-census', idempotencyKey: 'verdict:' + delta.run.id + ':' + toSha,
