@@ -7284,22 +7284,45 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
     }
     let starts = 0;
     let elapsedMs = 0;
+    let reads = 0;
+    const gaps: number[] = [];
+    const native = observedClaudeAdapter(command, 'Opus', 'high', {
+      commandObserved: true,
+      onRead: () => {
+        reads += 1;
+        elapsedMs += LAUNCH_STARTUP_OBSERVATION_WINDOW_MS / 4;
+      },
+    });
+    const adapter: RuntimeAdapter = {
+      ...native,
+      observeComposerFamily: (identity, options) => {
+        expect(options?.timeoutMs).toBeGreaterThan(0);
+        expect(options?.timeoutMs).toBeLessThanOrEqual(2_000);
+        return native.observeComposerFamily!(identity, options);
+      },
+      readBoundedOutputAsync: async (input, options) => {
+        expect(options?.timeoutMs).toBeGreaterThan(0);
+        expect(options?.timeoutMs).toBeLessThanOrEqual(2_000);
+        return native.readBoundedOutputAsync!(input, options);
+      },
+    };
     const failed = await runSupervisedTaskLaunchAssistant({
       ...launchInput('manager'), env, issueNumber: 2716,
     }, {
-      ...deps({
-        adapter: observedClaudeAdapter(command, 'Opus', 'high', { commandObserved: true,
-          onRead: () => { elapsedMs += LAUNCH_STARTUP_OBSERVATION_WINDOW_MS / 4; },
-        }),
-        onSupervised: () => { starts += 1; },
-      }),
-      now: () => elapsedMs,
+      ...deps({ adapter, onSupervised: () => { starts += 1; } }),
+      now: () => 0,
+      monotonicNow: () => elapsedMs,
+      delay: async (ms) => { gaps.push(ms); elapsedMs += ms; },
     });
     expect(failed).toMatchObject({
       outcome: 'continue', stage: 'terminal_prepare',
-      observedCause: 'executor_effort_channel_unavailable',
-      nextAction: { kind: 'repair_executor_profile', note: expect.any(String) },
+      observedCause: 'terminal_observation_deadline',
+      nextAction: { kind: 'remediate_terminal', note: expect.any(String) },
     });
+    expect(reads).toBe(4);
+    expect(gaps).toHaveLength(3);
+    expect(gaps.every((ms) => ms >= 500)).toBe(true);
+    expect(elapsedMs).toBeGreaterThanOrEqual(LAUNCH_STARTUP_OBSERVATION_WINDOW_MS);
     expect(starts).toBe(0);
   });
 
