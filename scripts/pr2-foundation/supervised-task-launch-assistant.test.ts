@@ -65,7 +65,7 @@ import {
   resolveSemanticExecutorProfile,
   withMergeExecutorProfileDefaults,
 } from '../executor-profile-policy.ts';
-import { overlayExecutorProfileEnv, readExecutorProfileStore } from '../executor-profile-store.ts';
+import { executorProfileStorePath, overlayExecutorProfileEnv, readExecutorProfileStore } from '../executor-profile-store.ts';
 
 describe('Issue #2754 AC5 serialized worktree restoration', () => {
   it('Issue #2810 filters foreign native rows before actual adapter identity normalization, retaining complete-list and target proof', async () => {
@@ -7366,6 +7366,47 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
       expect(livenessCalls).toBe(0);
     });
 
+
+    it('rejects conflicting split effort status rows and never starts on that pane', async () => {
+      const env = claudeEnv('claude-sonnet-5-5', 'high');
+      const profile = resolveExecutorProfile('manager', env, 'exact_terminal_worktree');
+      if (profile.status !== 'ok') throw Error('selected Claude profile missing');
+      const native = observedClaudeAdapter(sonnet, 'Sonnet', 'high', { commandObserved: true });
+      const contradictory = ['Claude Code', 'Sonnet 5.5', 'effort: medium', 'effort: high'];
+      for (const [lines, accepted] of [
+        [contradictory, false],
+        [['Claude Code', 'Sonnet 5.5', 'effort: high'], true],
+        [['Claude Code', 'Sonnet 5.5', 'effort: high', 'effort: high'], false],
+        [['Claude Code', 'Sonnet 5.5 · effort: high', 'effort: medium'], false],
+      ] as const) {
+        const adapter: RuntimeAdapter = { ...native, readBoundedOutputAsync: async (input, options) => {
+          const observed = await native.readBoundedOutputAsync!(input, options);
+          return observed.status === 'ok' ? { ...observed, value: { ...observed.value, lines } } : observed;
+        } };
+        expect(await claudePaneProfileObserved(profile.value, worker, adapter)).toBe(accepted);
+      }
+      let elapsedMs = 0, starts = 0;
+      const adapter: RuntimeAdapter = { ...native, readBoundedOutputAsync: async (input, options) => {
+        const observed = await native.readBoundedOutputAsync!(input, options);
+        elapsedMs += 15_000;
+        return observed.status === 'ok'
+          ? { ...observed, value: { ...observed.value, lines: contradictory } } : observed;
+      } };
+      const result = await runSupervisedTaskLaunchAssistant({
+        ...launchInput('manager'), env, issueNumber: 2842,
+      }, {
+        ...deps({ adapter, onSupervised: () => { starts += 1; } }),
+        now: () => 0, monotonicNow: () => elapsedMs,
+        delay: async (ms) => { expect(ms).toBeGreaterThanOrEqual(500); elapsedMs += ms; },
+      });
+      expect(result).toMatchObject({
+        outcome: 'continue', stage: 'terminal_prepare',
+        observedCause: 'terminal_observation_deadline',
+      });
+      expect(elapsedMs).toBeGreaterThanOrEqual(60_000);
+      expect(starts).toBe(0);
+    });
+
     it('accepts normal standalone input glyph, rejects editor and transcript status facsimiles', async () => {
       const env = claudeEnv('claude-sonnet-5-5', 'high');
       const profile = resolveExecutorProfile('manager', env, 'exact_terminal_worktree');
@@ -7603,6 +7644,77 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
       expect(submitted?.orcaArgs).toEqual([
         '--task', 'task-1', '--terminal', worker.identity.id, '--worktree', 'id:manager-worktree',
       ]);
+    });
+
+
+    it('reads the stored Claude manager selection through parsed CLI and production dependencies', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'opk-2842-stored-cli-'));
+      const config = join(root, 'cards');
+      const cards = join(config, 'orchestrator-pack', 'projects');
+      const storeDir = join(root, '.local', 'state', 'orchestrator-session');
+      mkdirSync(cards, { recursive: true });
+      mkdirSync(storeDir, { recursive: true });
+      writeFileSync(join(storeDir, 'executor-profiles.env'), [
+        'PACK_EXECUTOR_MANAGER_AGENT=claude',
+        'PACK_EXECUTOR_MANAGER_MODEL=claude-sonnet-5-5',
+        'PACK_EXECUTOR_MANAGER_EFFORT=high',
+      ].join('\n'));
+      writeFileSync(join(cards, 'orchestrator-pack.json'), JSON.stringify({
+        projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+        primaryRoot: process.cwd(), defaultBranch: 'main', orcaWorkspacePattern: '.*',
+        orchestratorTitlePattern: '.*', browserGpt: { projectUrl: 'https://example.test/project' },
+      }));
+      const previousHome = process.env.HOME;
+      const observed: Array<{ argv: string[]; env: NodeJS.ProcessEnv }> = [];
+      const mock = vi.spyOn(subprocess, 'runProcess').mockImplementation(async (options) => {
+        observed.push({ argv: [options.command, ...(options.args ?? [])], env: { ...options.env } });
+        return { outcome: 'exit', ok: true, exitCode: 0, signal: null,
+          stdout: options.command === 'claude' ? nativeHelp : '',
+          stderr: '', timedOut: false, cancelled: false };
+      });
+      try {
+        process.env.HOME = root;
+        expect(executorProfileStorePath()).toBe(join(storeDir, 'executor-profiles.env'));
+        const cliArgs = [
+          '--project', 'orchestrator-pack', '--work-class', 'manager', '--run', 'run-1',
+          '--task', 'task-1', '--issue-number', '2842', '--worktree', 'id:manager-worktree',
+          '--existing-terminal', worker.identity.id,
+        ];
+        const baseEnv: NodeJS.ProcessEnv = { XDG_CONFIG_HOME: config, ORCA_TERMINAL_HANDLE: 'coordinator-pane' };
+        for (const [ambient, model, effort] of [
+          [baseEnv, 'claude-sonnet-5-5', 'high'],
+          [{ ...baseEnv, PACK_EXECUTOR_MANAGER_AGENT: 'claude',
+            PACK_EXECUTOR_MANAGER_MODEL: 'claude-opus-5-5',
+            PACK_EXECUTOR_MANAGER_EFFORT: 'medium' }, 'claude-opus-5-5', 'medium'],
+        ] as const) {
+          const parsed = parseLaunchAssistantCli(cliArgs, ambient);
+          expect(parsed.env?.OPK_PROJECT_ID).toBe('orchestrator-pack');
+          if (model === 'claude-sonnet-5-5') {
+            expect(parsed.env?.PACK_EXECUTOR_MANAGER_AGENT).toBeUndefined();
+          }
+          const production = await createProductionLaunchDependencies(parsed);
+          const before = observed.length;
+          const selected = await production.resolveProfile('manager', parsed.env ?? {}, 'exact_terminal_worktree');
+          expect(selected).toMatchObject({ status: 'ok', value: {
+            family: 'claude', model, effort, route: 'exact_terminal_worktree',
+          } });
+          const calls = observed.slice(before);
+          expect(calls).toHaveLength(2);
+          expect(calls[0]?.argv).toEqual(['claude', '--help']);
+          expect(calls[1]?.argv[0]).toBe(process.execPath);
+          for (const call of calls) {
+            expect(call.env.OPK_PROJECT_ID).toBe('orchestrator-pack');
+            expect(call.env.PACK_EXECUTOR_MANAGER_AGENT).toBe('claude');
+            expect(call.env.PACK_EXECUTOR_MANAGER_MODEL).toBe(model);
+            expect(call.env.PACK_EXECUTOR_MANAGER_EFFORT).toBe(effort);
+          }
+        }
+      } finally {
+        mock.mockRestore();
+        if (previousHome === undefined) delete process.env.HOME;
+        else process.env.HOME = previousHome;
+        rmSync(root, { recursive: true, force: true });
+      }
     });
 
     it('passes selected project to production assistant-owned child environment without ambient selection', async () => {
