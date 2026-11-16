@@ -8179,7 +8179,7 @@ describe('Issue #2835 final-cap protected non-consuming delta and F/S frontiers'
       state: 'submitted', reason: 'offline_claimed_send',
     });
     expect(await handoffFinalCapDeltaFindings(request)).toMatchObject({
-      state: 'already_attempted',
+      state: 'submitted', reason: 'persisted_worker_notification_submission',
     });
     expect(notifier).toHaveBeenCalledTimes(1);
     expect(messages[0]).toContain('Verdict: findings');
@@ -8204,7 +8204,9 @@ describe('Issue #2835 final-cap protected non-consuming delta and F/S frontiers'
       projectId: f.options.projectId, storeRoot: f.options.storeRoot,
       notifier: async () => { attempts++; throw new Error('send outcome unknown'); } };
     expect(await handoffFinalCapDeltaFindings(request)).toMatchObject({ state: 'unverified' });
-    expect(await handoffFinalCapDeltaFindings(request)).toMatchObject({ state: 'already_attempted' });
+    expect(await handoffFinalCapDeltaFindings(request)).toMatchObject({
+      state: 'unverified', reason: 'prior_worker_notification_outcome_unconfirmed',
+    });
     expect(attempts).toBe(1);
     expect(getPackReviewRun(delta.id, f.options)?.deliveryOutcomes.workerNotification?.state)
       .toBe('escalated');
