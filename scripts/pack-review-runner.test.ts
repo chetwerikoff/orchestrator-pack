@@ -2870,7 +2870,6 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       sourceRepoRoot: settings.sourceRepoRoot ?? process.cwd(), canonicalRepository: selectedRepository, resolvedReviewer: 'gpt',
       accountingVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, reviewCycleId: authority.cycle!.cycleId,
       logicalRoundOrdinal: 2, logicalRoundCap: 2, now: new Date(terminalAt),
-      boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(frozenBody),
     }).run;
     const sourceProofs = [1, 2, 3].map((ordinal) => {
       const slotId = `source-${String(ordinal).padStart(2, '0')}`;
@@ -2919,14 +2918,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
             source_comment_receipt: sourceProofs[ordinal - 1]!.receipt } };
       }),
     } }, options);
-    setPackReviewRunTerminal(run.id, 'changes_requested', {
-      reviewVerdict: 'findings', findingCount: 2, findings,
-      journalOutcome: {
-        state: 'persisted', recordedAtUtc: '2026-10-08T20:46:00Z',
-        reason: 'original-authenticated-review', idempotencyKey: 'verdict:' + run.id + ':' + selectedHead,
-        attempts: 1,
-      },
-    }, { ...options, now: new Date('2026-10-08T20:46:00Z') });
+    setPackReviewRunTerminal(run.id, 'changes_requested',
+      { reviewVerdict: 'findings', findingCount: 2, findings },
+      { ...options, now: new Date('2026-10-08T20:46:00Z') });
     authority = commitPackReviewTerminal({
       prNumber, expectedTransitionSeq: authority.transitionSeq, status: 'changes_requested', findingCount: 2, options,
       terminal: { schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal', runId: run.id,
@@ -3017,6 +3011,29 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     fromSha: string = f.authority.terminal!.targetSha,
     outstanding?: unknown[],
   ) {
+    // Only delta tests need authenticated stored original H1 review evidence.
+    // Preserve the legacy same-head scope disposition fixtures unchanged.
+    updatePackReviewRun(f.run.id, {
+      boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(f.frozenBody),
+      journalOutcome: {
+        state: 'persisted', recordedAtUtc: '2026-10-08T20:46:00Z',
+        reason: 'original-authenticated-review',
+        idempotencyKey: 'verdict:' + f.run.id + ':' + f.authority.terminal!.targetSha,
+        attempts: 1,
+      },
+      deliveryOutcomes: {
+        githubComment: {
+          state: 'succeeded', recordedAtUtc: '2026-10-08T20:46:00Z',
+          reason: 'comment_posted',
+          idempotencyKey: 'github-comment:' + f.run.id + ':' + f.authority.terminal!.targetSha,
+        },
+        requiredStatus: {
+          state: 'succeeded', recordedAtUtc: '2026-10-08T20:46:00Z',
+          reason: 'status_failure',
+          idempotencyKey: 'required-status:orchestrator-pack/pack-review:' + f.authority.terminal!.targetSha,
+        },
+      },
+    }, f.options);
     const original = getPackReviewRun(f.run.id, f.options)!;
     const oldRound = original.reviewRound!;
     const outstandingFindings = outstanding ?? [...original.findings];
