@@ -1,7 +1,7 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 60
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseEnv } from 'node:util';
@@ -29,7 +29,10 @@ import {
   type PublishedIssueFact,
 } from './fleet-wake.ts';
 import { resolveWakeSupervisorStateRoot } from '../pr2-foundation/wake-supervisor-state-root.ts';
-import { HANDOFF_SCHEMA, COMPLETION_MODE, TERMINAL_SCHEMA, type HandoffReceipt } from '../flow-manager-long-running-child.ts';
+import {
+  HANDOFF_SCHEMA, COMPLETION_MODE, RECEIPT_LOCATOR_SCHEMA, TERMINAL_SCHEMA, invocationReceiptLocatorPath,
+  readPredecessorReceiptLocator, type HandoffReceipt,
+} from '../flow-manager-long-running-child.ts';
 import {
   currentWorkerAssignment, listCurrentWorkerAssignmentRecords, resolveWorkerAssignmentStorePath,
   type WorkerAssignmentRecord,
@@ -45,7 +48,7 @@ import type { ChatErrorBanner, ProjectChat } from './chat-error-banners.ts';
 import { FileFleetStateStore, formatFleetSweep, lastFleetParkedLine, runFleetSweep, visibleOpenCodePermission, type FleetPaneObservation, type FleetTerminal, type OrcaCommandResult, type OrcaExecutor } from './fleet-sweep.ts';
 import { runLaunch, readTerminalEnvelope } from '../flow-manager-long-running-child.ts';
 import { configuredProfileKey } from '../chatgpt-browser-turn/storage-common.ts';
-import type { PackReviewRunRecord } from '../lib/pack-review-run-store.ts';
+import { createPackReviewRun, type PackReviewRunRecord } from '../lib/pack-review-run-store.ts';
 import { writeChatBinding } from '../chatgpt-browser-turn/chat-bindings.ts';
 import { admitStateLightTurnObservation, transitionStateLightTurnObservation } from '../chatgpt-browser-turn/state-light-turn-observation.ts';
 
@@ -196,6 +199,8 @@ async function tick(input: {
   reconcilePackReview?: FleetAlarmTickOptions['reconcilePackReview'];
   sleepMs?: (ms: number) => void | Promise<void>;
   now?: () => number;
+  /** Issue #2840 owner seams (indexed locator reader, Git witness). */
+  extra?: Partial<FleetAlarmTickOptions>;
 }) {
   const calls: string[][] = [];
   const logs: string[] = [];
@@ -213,24 +218,127 @@ async function tick(input: {
     listTerminalEnvelopes: input.listTerminalEnvelopes ?? (() => []),
     ...(input.readOriginalHandoffReceipt ? { readOriginalHandoffReceipt: input.readOriginalHandoffReceipt } : {}),
     ...(input.readCurrentAssignments ? { readCurrentAssignments: input.readCurrentAssignments } : {}),
-    ...(input.listPublishedIssueFacts ? { listPublishedIssueFacts: input.listPublishedIssueFacts } : {}),
+    // Hermetic default: an assigned manager must never trigger a live GitHub read.
+    listPublishedIssueFacts: input.listPublishedIssueFacts ?? (() => []),
     ...(input.listUnreadRunMessages ? { listUnreadRunMessages: input.listUnreadRunMessages } : {}),
-    ...(input.listOpenPulls ? { listOpenPulls: input.listOpenPulls } : {}),
-    ...(input.checkRunsFinishedAt ? { checkRunsFinishedAt: input.checkRunsFinishedAt } : {}),
+    listOpenPulls: input.listOpenPulls ?? (() => []),
+    checkRunsFinishedAt: input.checkRunsFinishedAt ?? (() => undefined),
     ...(input.supervisedPullOwner ? { supervisedPullOwner: input.supervisedPullOwner } : {}),
     readWorktreeHead: input.readWorktreeHead ?? (() => undefined),
-    ...(input.readNamedPull ? { readNamedPull: input.readNamedPull } : {}),
-    ...(input.readNamedIssue ? { readNamedIssue: input.readNamedIssue } : {}),
-    ...(input.readNamedReview ? { readNamedReview: input.readNamedReview } : {}),
-    ...(input.readPackReviewStage ? { readPackReviewStage: input.readPackReviewStage } : {}),
+    readNamedPull: input.readNamedPull ?? (() => undefined),
+    readNamedIssue: input.readNamedIssue ?? (() => undefined),
+    readNamedReview: input.readNamedReview ?? (() => undefined),
+    readPackReviewStage: input.readPackReviewStage ?? (() => undefined),
     ...(input.resolveSelectedReviewProject ? { resolveSelectedReviewProject: input.resolveSelectedReviewProject } : {}),
     ...(input.probePid ? { probePid: input.probePid } : {}),
     ...(input.readPackReviewRuns ? { readPackReviewRuns: input.readPackReviewRuns } : {}),
     ...(input.readUnitState ? { readUnitState: input.readUnitState } : {}),
     ...(input.reconcilePackReview ? { reconcilePackReview: input.reconcilePackReview } : {}),
     ...(input.now ? { now: input.now } : {}),
+    // Hermetic defaults: no real private index or Git witness is ever read.
+    readInvocationLocator: () => { throw new Error('fixture_no_invocation_index'); },
+    readGitCommonDir: () => undefined,
+    ...input.extra,
   });
   return { result, calls, logs, sleeps, store };
+}
+
+/**
+ * Issue #2840 production-shaped owner evidence: selected-project manager
+ * assignments answered by native `worker-show`, plus actual private
+ * invocation-index/handoff files read by the production
+ * `readPredecessorReceiptLocator` from a fixture root.
+ */
+interface ManagerSpec { readonly pane: FleetTerminal; readonly issue?: number; readonly key?: string }
+interface InvocationSpec {
+  readonly id: string;
+  readonly task?: string | undefined;
+  readonly dispatch?: string | undefined;
+  readonly launcher?: string | undefined;
+  readonly childCwd?: string;
+}
+function parkFixture(managers: readonly ManagerSpec[], repository = 'test/project') {
+  const root = mkdtempSync(join(tmpdir(), 'fleet-wake-2840-'));
+  chmodSync(root, 0o700);
+  const assignments: WorkerAssignmentRecord[] = managers.map((manager, index) => {
+    const key = manager.key ?? manager.pane.handle + '-' + index;
+    return {
+      schema: 'orchestrator-pack/worker-assignment/v1', projectId: 'orchestrator-pack', repository,
+      issueNumber: manager.issue ?? 2840 + index, taskId: 'task-' + key, assignmentId: 'assignment-' + key,
+      generation: 1, kind: 'local', provider: 'orca', bindingKey: 'dispatch-' + key, role: 'orchestrator',
+      createdAtUtc: '2026-11-16T00:00:00.000Z',
+    } as WorkerAssignmentRecord;
+  });
+  const identity = (id: string) => ({ run: 'run-' + id, attempt: 'attempt-' + id,
+    handoff: join(root, 'handoffs', createHash('sha256').update(id).digest('hex') + '-handoff.json'),
+    terminal: join(root, 'envelopes', createHash('sha256').update(id).digest('hex') + '-terminal.json') });
+  const fixture = {
+    root, assignments,
+    /** Write the actual private locator and original handoff for one invocation. */
+    index(spec: InvocationSpec): void {
+      const ids = identity(spec.id);
+      mkdirSync(join(root, 'browser-gpt-receipts'), { recursive: true, mode: 0o700 });
+      chmodSync(join(root, 'browser-gpt-receipts'), 0o700);
+      mkdirSync(join(root, 'handoffs'), { recursive: true, mode: 0o700 });
+      const receipt: Record<string, unknown> = {
+        schema: HANDOFF_SCHEMA, run_identity: ids.run, attempt_identity: ids.attempt,
+        launcher_started_at: '2026-11-16T00:00:00Z', handoff_committed_at: '2026-11-16T00:00:01Z',
+        completion_mode: COMPLETION_MODE, invocation_id: spec.id, launcher_pid: 4242,
+        child_cwd: spec.childCwd ?? workerBase + '/child-' + spec.id,
+        ...(spec.task !== undefined ? { owner_task_id: spec.task } : {}),
+        ...(spec.dispatch !== undefined ? { owner_dispatch_id: spec.dispatch } : {}),
+        ...(spec.launcher !== undefined ? { launching_terminal_handle: spec.launcher } : {}),
+      };
+      writeFileSync(ids.handoff, JSON.stringify(receipt), { mode: 0o600 });
+      writeFileSync(invocationReceiptLocatorPath(spec.id, root), JSON.stringify({
+        schema: RECEIPT_LOCATOR_SCHEMA, invocation_id: spec.id, run_identity: ids.run,
+        attempt_identity: ids.attempt, handoff_receipt_path: ids.handoff, terminal_envelope_path: ids.terminal,
+      }), { mode: 0o600 });
+    },
+    /** Index an invocation as launched by manager `index` (own to that manager). */
+    own(id: string, index = 0, overrides: Partial<InvocationSpec> = {}): void {
+      const assignment = assignments[index]!;
+      fixture.index({ id, task: assignment.taskId, dispatch: assignment.bindingKey,
+        launcher: managers[index]!.pane.handle, ...overrides });
+    },
+    envelope(id: string, overrides: Partial<TerminalEnvelopeEvent> = {}): TerminalEnvelopeEvent {
+      const ids = identity(id);
+      return { path: ids.terminal, invocationId: id, observedInvocationId: id,
+        runIdentity: ids.run, attemptIdentity: ids.attempt, handoffReceiptPath: ids.handoff,
+        lifecycleOutcome: 'success', turnResultState: 'ok', ...overrides };
+    },
+    executor(base: OrcaExecutor): OrcaExecutor {
+      return (args) => {
+        if (args[0] === 'orchestration' && args[1] === 'worker-show') {
+          const dispatch = args[args.indexOf('--dispatch') + 1];
+          const index = assignments.findIndex((row) => row.bindingKey === dispatch);
+          if (index < 0) return commandResult('', false);
+          const pane = managers[index]!.pane;
+          return commandResult(JSON.stringify({ ok: true, result: {
+            dispatch: { id: dispatch, taskId: assignments[index]!.taskId, status: 'dispatched' },
+            terminal: { handle: pane.handle, incarnationId: pane.incarnationId ?? 'fixture-incarnation',
+              worktreePath: pane.worktreePath, branch: pane.branch },
+            observation: { status: 'live', exactWorker: true },
+          } }));
+        }
+        return base(args);
+      };
+    },
+    options: {
+      readCurrentAssignments: () => assignments,
+      readInvocationLocator: ((input) => readPredecessorReceiptLocator({ ...input, terminalEnvelopeRoot: root })) as
+        FleetAlarmTickOptions['readInvocationLocator'],
+      // Selected linked worktrees share the primary common dir; anything else is foreign.
+      readGitCommonDir: (path: string) => path === primary || path.startsWith(workerBase + '/') ? primary + '/.git' : undefined,
+    } satisfies Partial<FleetAlarmTickOptions>,
+  };
+  return fixture;
+}
+
+/** Live PR body naming exactly one closing Issue. */
+function closingPull(number: number, issue: number, headSha: string,
+  state: 'open' | 'closed' = 'open', merged = false) {
+  return { number, headSha, state, merged, body: 'Closes #' + issue + '\n\nSummary.' } as const;
 }
 
 function sends(calls: readonly string[][]): string[][] {
@@ -261,8 +369,10 @@ describe('fleet alarm', () => {
     'Issue #2808: an unverified unit wake (%s) retains its attempt and never clears the wait or replays', async (kind) => {
       const store = new MemoryWakeStore();
       const screens = { coord: 'idle', one: 'PARKED on GPT turn receipt-test' };
-      const rows = [terminals[0]!, { ...terminals[1]!, incarnationId: 'receipt-test-incarnation' }];
-      const base = fakeOrca(screens, [], rows);
+      const rows = [terminals[0]!, { ...terminals[1]!, incarnationId: 'receipt-test-incarnation', branch: 'refs/heads/receipt' }];
+      const owned = parkFixture([{ pane: rows[1]! }]);
+      owned.own('receipt-test');
+      const base = owned.executor(fakeOrca(screens, [], rows));
       const executor: OrcaExecutor = (args) => args[1] === 'send'
         ? commandResult(kind === 'malformed' ? '{' : JSON.stringify({ ok: kind !== 'failed', result: {
           send: { handle: 'one', accepted: true, prompt: { requestId: 'r', processIncarnation: 'i',
@@ -273,8 +383,8 @@ describe('fleet alarm', () => {
       const clear = vi.fn();
       Object.assign(store, { clearPaneWait: clear });
       const input = { store, screens, terminals: rows, executor, now: () => 0,
-        listTerminalEnvelopes: () => [{ path: '/tmp/opencode/receipt-test-terminal.json',
-          invocationId: 'receipt-test', observedInvocationId: 'receipt-test', turnResultState: 'ok' }],
+        config: config({ selectedRepository: 'test/project' }), extra: owned.options,
+        listTerminalEnvelopes: () => [owned.envelope('receipt-test', { lifecycleOutcome: undefined })],
       };
       const first = await tick(input);
       expect(sendsTo(first.calls, 'one')).toHaveLength(1);
@@ -433,13 +543,17 @@ describe('fleet alarm', () => {
   });
 
 
-  it('r05: final park line is accepted without a Task or receipt and stays coordinator-quiet', async () => {
+  it('r05: a final GPT park with no private index is unverified, coordinator-only and never wakes the pane (#2840)', async () => {
     const store = new MemoryWakeStore();
     const parked = { coord: 'idle', one: 'work\nPARKED on GPT turn unknown-event' };
     const rows = [terminals[0]!, { ...terminals[1]!, incarnationId: undefined }];
     const first = await tick({ terminals: rows, screens: parked, store });
     expect(first.result.state).toBe('nothing_stopped');
-    expect(sends(first.calls)).toHaveLength(0);
+    // Exactly one coordinator-only uncertainty alarm; the pane itself is never sent to.
+    expect(sendsTo(first.calls, 'one')).toHaveLength(0);
+    expect(sendsTo(first.calls, 'coord')).toHaveLength(1);
+    expect(sendsTo(first.calls, 'coord')[0]?.join(' ')).toContain('UNTRUSTED PANE OBSERVATION');
+    expect(sendsTo(first.calls, 'coord')[0]?.join(' ')).toContain('GPT invocation index missing or unreadable');
     expect(first.calls.filter((args) => args[0] === 'orchestration'
       && ['worker-list', 'worker-show'].includes(args[1] ?? ''))).toHaveLength(0);
     const repeated = await tick({ terminals: rows, screens: parked, store });
@@ -459,7 +573,7 @@ describe('fleet alarm', () => {
     const screens = {
       coord: 'idle prompt',
       one: 'finished\n>',
-      two: 'PARKED on GPT turn pending-coordinator-throttle',
+      two: 'PARKED on time 2099-01-01T00:00:00Z',
     };
     const first = await tick({ screens, store });
     expect(first.result).toMatchObject({ state: 'sent', coordinatorState: 'idle', count: 1 });
@@ -566,10 +680,18 @@ describe('fleet alarm', () => {
   it('r05: PARKED does not alarm on an unknown producer or unrelated STOPPED set changes', async () => {
     const store = new MemoryWakeStore();
     const screens = { coord: 'idle', one: 'working\nesc interrupt', two: 'PARKED on GPT turn missing-event' };
-    const first = await tick({ screens, store });
+    // An own indexed invocation with no envelope yet is pending, never an alarm.
+    const two = { ...terminals[2]!, branch: 'refs/heads/two' };
+    const owned = parkFixture([{ pane: two }]);
+    owned.own('missing-event');
+    const rows = [terminals[0]!, terminals[1]!, two];
+    const shared = { terminals: rows, config: config({ selectedRepository: 'test/project' }), extra: owned.options };
+    const first = await tick({ ...shared, screens, store, executor: owned.executor(fakeOrca(screens, [], rows)) });
     expect(first.result.state).toBe('nothing_stopped');
     expect(sends(first.calls)).toHaveLength(0);
-    const changed = await tick({ screens: { ...screens, one: 'done' }, store });
+    const changedScreens = { ...screens, one: 'done' };
+    const changed = await tick({ ...shared, screens: changedScreens, store,
+      executor: owned.executor(fakeOrca(changedScreens, [], rows)) });
     expect(changed.result.state).toBe('sent');
     expect(sendsTo(changed.calls, 'coord')[0]?.join(' ')).toContain('STOPPED one');
     expect(sendsTo(changed.calls, 'coord')[0]?.join(' ')).not.toContain('unresolvable');
@@ -709,15 +831,18 @@ describe('fleet alarm', () => {
 
   it('r05: old post-send/generation proof is not a Wake gate once exact landed GPT evidence exists', async () => {
     const token = '24852485-1111-4111-8111-248524852485';
-    const agent = { ...terminals[1]!, incarnationId: 'r05-owner' };
-    const event: TerminalEnvelopeEvent = { path: '/tmp/opencode/r05-' + token + '-terminal.json',
-      invocationId: token, observedInvocationId: token, terminalHandle: 'one',
-      cwd: workerBase + '/two/child', lifecycleOutcome: 'success', turnResultState: 'ok' };
-    const parked = await tick({ terminals: [terminals[0]!, agent],
-      screens: { coord: 'idle', one: 'PARKED on GPT turn ' + token },
+    const agent = { ...terminals[1]!, incarnationId: 'r05-owner', branch: 'refs/heads/r05' };
+    const owned = parkFixture([{ pane: agent }]);
+    owned.own(token);
+    const screens = { coord: 'idle', one: 'PARKED on GPT turn ' + token };
+    const event = owned.envelope(token, { path: owned.envelope(token).path, terminalHandle: 'one',
+      cwd: workerBase + '/two/child' });
+    const parked = await tick({ terminals: [terminals[0]!, agent], screens,
+      executor: owned.executor(fakeOrca(screens, [], [terminals[0]!, agent])),
       config: config({ selectedRepository: 'test/project' }),
       resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack',
         primaryRoot: primary, repository: 'test/project' }),
+      extra: owned.options,
       listTerminalEnvelopes: () => [event],
     });
     expect(sendsTo(parked.calls, 'one').filter((call) => call.includes('--text'))).toHaveLength(1);
@@ -739,17 +864,19 @@ describe('fleet alarm', () => {
 
   it('r05: unrelated foreign artifact never vetoes an exact witnessed GPT event', async () => {
     const id = 'inv-owned';
-    const agent = { ...terminals[1]!, incarnationId: 'r05-owner' };
-    const matching: TerminalEnvelopeEvent = { path: '/tmp/opencode/r05-owned-terminal.json',
-      invocationId: id, observedInvocationId: id, terminalHandle: 'one',
-      cwd: workerBase + '/two/child', lifecycleOutcome: 'success', turnResultState: 'ok' };
+    const agent = { ...terminals[1]!, incarnationId: 'r05-owner', branch: 'refs/heads/r05' };
+    const owned = parkFixture([{ pane: agent }]);
+    owned.own(id);
+    const matching = owned.envelope(id, { terminalHandle: 'one', cwd: workerBase + '/two/child' });
     const foreign: TerminalEnvelopeEvent = { path: '/tmp/opencode/r05-foreign-terminal.json',
       invocationId: 'inv-unrelated', terminalHandle: 'one' };
-    const observed = await tick({ terminals: [terminals[0]!, agent],
-      screens: { coord: 'idle', one: 'PARKED on GPT turn ' + id },
+    const screens = { coord: 'idle', one: 'PARKED on GPT turn ' + id };
+    const observed = await tick({ terminals: [terminals[0]!, agent], screens,
+      executor: owned.executor(fakeOrca(screens, [], [terminals[0]!, agent])),
       config: config({ selectedRepository: 'test/project' }),
       resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack',
         primaryRoot: primary, repository: 'test/project' }),
+      extra: owned.options,
       listTerminalEnvelopes: () => [foreign, matching] });
     expect(sendsTo(observed.calls, 'one').filter((call) => call.includes('--text'))).toHaveLength(1);
     expect(sendsTo(observed.calls, 'one')[0]?.join(' ')).toContain(matching.path);
@@ -1245,27 +1372,40 @@ describe('Issue #2463 parked-producer compatibility with r05', () => {
   const setting = config({ selectedRepository: 'test/project' });
   const textTo = (calls: readonly string[][]) => sendsTo(calls, 'one')
     .filter((row) => row.includes('--text')).map((row) => row[row.indexOf('--text') + 1]!);
+  // Issue #2840: a direct Wake needs exact owner proof for the parked manager pane.
+  const manager = { ...terminals[1]!, branch: 'refs/heads/one' };
+  const managerRows = [terminals[0]!, manager];
+  const ownedTick = (owned: ReturnType<typeof parkFixture>, screens: Record<string, string>,
+    rest: Omit<Parameters<typeof tick>[0], 'screens'> = {}) => tick({ terminals: managerRows, config: setting,
+    executor: owned.executor(fakeOrca(screens, [], managerRows)), extra: owned.options, ...rest, screens });
   it('observes a finished current-head pack-review PR with native PR evidence and deduplicates', async () => {
     const store = new MemoryWakeStore();
-    const step = () => tick({ store, config: setting, terminals: [terminals[0]!, terminals[1]!],
-      screens: { coord: 'idle', one: 'PARKED on pack-review PR #268 head ' + head },
-      // A named PR now requires a live open/unmerged exact-head witness;
-      // a historical check result without that PR cannot select a recipient.
-      readNamedPull: (_repo, number) => ({ number, headSha: head, state: 'open', merged: false }),
+    const owned = parkFixture([{ pane: manager, issue: 268 }]);
+    const step = () => ownedTick(owned, { coord: 'idle', one: 'PARKED on pack-review PR #268 head ' + head }, { store,
+      // A named PR now requires a live open/unmerged exact-head witness that closes the manager Issue.
+      readNamedPull: (_repo, number) => closingPull(number, 268, head),
       readPackReviewStage: () => ({ state: 'success', description: 'completed' }),
     });
     expect(textTo((await step()).calls)[0]).toContain('stage-success');
     expect(textTo((await step()).calls)).toHaveLength(0);
   });
-  it('wakes on completed CI with no owner proof and independently recognizes terminal exit', async () => {
-    const ci = await tick({ config: setting, terminals: [terminals[0]!, terminals[1]!],
-      screens: { coord: 'idle', one: 'PARKED on CI on ' + head }, checkRunsFinishedAt: () => 17 });
-    expect(textTo(ci.calls)[0]).toContain('checks-completed');
+  it('a PR-less CI park gets a re-park correction and a terminal exit is only a coordinator alarm (#2840)', async () => {
+    const owned = parkFixture([{ pane: manager }]);
+    const ci = await ownedTick(owned, { coord: 'idle', one: 'PARKED on CI on ' + head },
+      { checkRunsFinishedAt: () => 17 });
+    expect(textTo(ci.calls)).toHaveLength(1);
+    expect(textTo(ci.calls)[0]).toContain('names no exact PR head');
+    expect(textTo(ci.calls)[0]).not.toContain('checks-completed');
+    expect(sendsTo(ci.calls, 'coord')).toHaveLength(0);
     const producer: FleetTerminal = { handle: 'producer', title: 'OpenCode producer',
       worktreePath: '/other/path', incarnationId: 'inc-x', status: 'exited' };
-    const exited = await tick({ config: setting, terminals: [terminals[0]!, terminals[1]!, producer],
-      screens: { coord: 'idle', one: 'PARKED on terminal producer incarnation inc-x' } });
-    expect(textTo(exited.calls)[0]).toContain('terminal-exited');
+    const screens = { coord: 'idle', one: 'PARKED on terminal producer incarnation inc-x' };
+    const rows = [terminals[0]!, terminals[1]!, producer];
+    const exited = await tick({ config: setting, terminals: rows, screens });
+    expect(textTo(exited.calls)).toHaveLength(0);
+    expect(sendsTo(exited.calls, 'coord')).toHaveLength(1);
+    expect(sendsTo(exited.calls, 'coord')[0]?.join(' ')).toContain('UNTRUSTED PANE OBSERVATION');
+    expect(sendsTo(exited.calls, 'coord')[0]?.join(' ')).toContain('bare terminal exit is not producer Task evidence');
   });
   it('intentionally rejects an arbitrary completed CI result ID as a named producer', async () => {
     const id = 'ci:42:' + head + ':17';
@@ -1279,21 +1419,23 @@ describe('Issue #2463 parked-producer compatibility with r05', () => {
     expect(sendsTo(run.calls, 'coord')[0]?.join(' ')).toContain('unknown parked producer');
   });
 
-  it('preserves native merged and submitted-review event re-checks without Task binding', async () => {
-    const merged = await tick({ config: setting, terminals: [terminals[0]!, terminals[1]!],
-      screens: { coord: 'idle', one: 'PARKED on PR #12 merged' },
-      readNamedPull: () => ({ number: 12, headSha: head, state: 'closed', merged: true }) });
+  it('preserves native merged and submitted-review event re-checks for the manager own PR', async () => {
+    const owned = parkFixture([{ pane: manager, issue: 12 }]);
+    const merged = await ownedTick(owned, { coord: 'idle', one: 'PARKED on PR #12 merged' },
+      { readNamedPull: () => closingPull(12, 12, head, 'closed', true) });
     expect(textTo(merged.calls)[0]).toContain('merged');
-    const review = await tick({ config: setting, terminals: [terminals[0]!, terminals[1]!],
-      screens: { coord: 'idle', one: 'PARKED on PR #12 review #14 head ' + head },
-      readNamedReview: () => ({ id: 14, state: 'COMMENTED', commitSha: head, submittedAt: '2026-10-10T00:00:00Z' }) });
+    const review = await ownedTick(owned, { coord: 'idle', one: 'PARKED on PR #12 review #14 head ' + head },
+      { readNamedPull: () => closingPull(12, 12, head),
+        readNamedReview: () => ({ id: 14, state: 'COMMENTED', commitSha: head, submittedAt: '2026-10-10T00:00:00Z' }) });
     expect(textTo(review.calls)[0]).toContain('review-submitted');
   });
 
   it('keeps unmatched PARKED quiet and direct reminders at elapsed 30/60 minutes', async () => {
     const store = new MemoryWakeStore(), screens = { coord: 'idle', one: 'PARKED on GPT turn missing-event' };
-    const step = (now: number) => tick({ store, screens, now: () => now,
-      terminals: [terminals[0]!, terminals[1]!] });
+    // Own indexed invocation without an envelope is pending: silent, with the unchanged reminder.
+    const owned = parkFixture([{ pane: manager }]);
+    owned.own('missing-event');
+    const step = (now: number) => ownedTick(owned, screens, { store, now: () => now });
     expect(sends((await step(0)).calls)).toHaveLength(0);
     expect(sends((await step(1_799_999)).calls)).toHaveLength(0);
     const thirty = await step(1_800_000);
@@ -1303,16 +1445,18 @@ describe('Issue #2463 parked-producer compatibility with r05', () => {
     expect(textTo((await step(3_600_000)).calls)[0]).toContain('Reminder: parked 30 min');
   });
   it('encodes punctuation in an exact terminal path as an inert one-line re-check', async () => {
-    const agent = { ...terminals[1]!, incarnationId: 'inc-punctuation' };
-    const event: TerminalEnvelopeEvent = { path: '/tmp/opencode/event;not-a-command-terminal.json',
-      invocationId: 'inv-command', observedInvocationId: 'inv-command', terminalHandle: 'one',
-      cwd: workerBase + '/one', lifecycleOutcome: 'success', turnResultState: 'ok' };
-    const result = await tick({ terminals: [terminals[0]!, agent],
-      config: config({ selectedRepository: 'test/project' }),
+    const agent = { ...manager, incarnationId: 'inc-punctuation' };
+    const owned = parkFixture([{ pane: agent }]);
+    owned.own('inv-command');
+    const event = owned.envelope('inv-command', { path: '/tmp/opencode/event;not-a-command-terminal.json',
+      terminalHandle: 'one', cwd: workerBase + '/one' });
+    const rows = [terminals[0]!, agent];
+    const screens = { coord: 'idle', one: 'PARKED on GPT turn inv-command' };
+    const result = await tick({ terminals: rows, config: setting,
+      executor: owned.executor(fakeOrca(screens, [], rows)), extra: owned.options,
       resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack',
         primaryRoot: primary, repository: 'test/project' }),
-      screens: { coord: 'idle', one: 'PARKED on GPT turn inv-command' },
-      listTerminalEnvelopes: () => [event] });
+      screens, listTerminalEnvelopes: () => [event] });
     const text = textTo(result.calls)[0] ?? '';
     expect(text).toContain('re-check');
     expect(text).toMatch(/^[A-Za-z0-9 _./:%#=+-]+$/u);
@@ -1998,11 +2142,15 @@ describe('Issue #2485 / #2687: exact producer instead of ambiguous substring', (
   const parked = 'PARKED on GPT turn ' + id;
   const paneText = (calls: readonly string[][], handle: string) => sendsTo(calls, handle)
     .filter((row) => row.includes('--text')).map((row) => row[row.indexOf('--text') + 1]!);
-  const one = { ...terminals[1]!, incarnationId: 'inc-one' };
-  const two = { ...terminals[2]!, incarnationId: 'inc-two' };
+  const one = { ...terminals[1]!, incarnationId: 'inc-one', branch: 'refs/heads/one' };
+  const two = { ...terminals[2]!, incarnationId: 'inc-two', branch: 'refs/heads/two' };
+  // Issue #2840: one fixture per tick set; managers[0] = pane one, managers[1] = pane two.
+  const fixture = () => parkFixture([{ pane: one }, { pane: two }]);
   const simple = (screens: Record<string,string>, store?: FleetWakeStateStore,
-    envelopes: readonly TerminalEnvelopeEvent[] = [event, otherPaneEvent]) =>
+    envelopes: readonly TerminalEnvelopeEvent[] = [event, otherPaneEvent],
+    owned: ReturnType<typeof parkFixture> = fixture()) =>
     tick({ screens, store, terminals: [terminals[0]!, one, two],
+      executor: owned.executor(fakeOrca(screens, [], [terminals[0]!, one, two])), extra: owned.options,
       config: config({ selectedRepository: 'test/project' }),
       resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack', repository: 'test/project',
         primaryRoot: primary }),
@@ -2023,14 +2171,16 @@ describe('Issue #2485 / #2687: exact producer instead of ambiguous substring', (
     expect(parseNamedParkedProducer(wait)).toEqual({ kind: 'gpt', label: 'GPT-turn-' + token, id: token });
     const matching: TerminalEnvelopeEvent = { path: '/tmp/opencode/issue-2498-' + token + '-terminal.json',
       invocationId: 'unrelated' };
+    const owned = fixture();
+    owned.own(token);
     const weak = await simple({ coord: 'idle', one: wait, two: 'working\nesc interrupt' },
-      new MemoryWakeStore(), [matching]);
+      new MemoryWakeStore(), [matching], owned);
     expect(paneText(weak.calls, 'one')).toHaveLength(0);
     expect(paneText(weak.calls, 'coord')).toHaveLength(0);
-    const exact: TerminalEnvelopeEvent = { ...matching, observedInvocationId: token,
-      terminalHandle: 'one', cwd: workerBase + '/two', lifecycleOutcome: 'success', turnResultState: 'ok' };
+    const exact: TerminalEnvelopeEvent = owned.envelope(token, { path: matching.path,
+      terminalHandle: 'one', cwd: workerBase + '/two' });
     const strong = await simple({ coord: 'idle', one: wait, two: 'working\nesc interrupt' },
-      new MemoryWakeStore(), [exact]);
+      new MemoryWakeStore(), [exact], owned);
     expect(paneText(strong.calls, 'one')).toHaveLength(1);
     expect(paneText(strong.calls, 'one')[0]).toContain('re-check');
   });
@@ -2060,40 +2210,57 @@ describe('Issue #2485 / #2687: exact producer instead of ambiguous substring', (
   });
 
   it('rejects filename-only, fallback invocation and missing owner completion without guessed Wake', async () => {
+    const owned = fixture();
+    owned.own(id);
     const loose = await simple({ coord: 'idle', one: parked, two: 'working\nesc interrupt' },
-      new MemoryWakeStore(), [{ path: event.path, invocationId: id }]);
+      new MemoryWakeStore(), [{ path: event.path, invocationId: id }], owned);
     expect(paneText(loose.calls, 'one')).toHaveLength(0);
     expect(paneText(loose.calls, 'coord')).toHaveLength(0);
+    // No private index at all: a missing owner is unverified, coordinator-only, never a pane Wake.
+    const unindexed = await simple({ coord: 'idle', one: parked, two: 'working\nesc interrupt' },
+      new MemoryWakeStore(), [event]);
+    expect(paneText(unindexed.calls, 'one')).toHaveLength(0);
+    expect(paneText(unindexed.calls, 'coord')[0]).toContain('GPT invocation index missing or unreadable');
     const byName = await simple({ coord: 'idle', one: 'PARKED on 2485-r05-terminal.json',
       two: 'working\nesc interrupt' });
     expect(paneText(byName.calls, 'one')).toHaveLength(0);
     expect(paneText(byName.calls, 'coord')[0]).toContain('unknown parked producer');
     const unrelated = await simple({ coord: 'idle', one: parked, two: 'working\nesc interrupt' },
-      new MemoryWakeStore(), [{ ...event, observedInvocationId: 'foreign', terminalHandle: 'other' }]);
+      new MemoryWakeStore(), [{ ...event, observedInvocationId: 'foreign', terminalHandle: 'other' }], owned);
     expect(paneText(unrelated.calls, 'one')).toHaveLength(0);
     expect(paneText(unrelated.calls, 'coord')).toHaveLength(0);
   });
 
-  it('Issue #2773: two panes parked on the same GPT invocation receive no Wake', async () => {
+  it('Issue #2840: two panes parked on the same GPT invocation wake only its owner; the other is corrected once', async () => {
     const store = new MemoryWakeStore();
+    const owned = fixture();
+    owned.own(id, 0);
+    const exact = owned.envelope(id, { path: event.path, terminalHandle: 'one', cwd: workerBase + '/one' });
     for (const tickIndex of [0, 1]) {
-      const result = await simple({ coord: 'idle', one: parked, two: parked }, store, [event]);
-      expect(paneText(result.calls, 'one')).toHaveLength(0);
-      expect(paneText(result.calls, 'two')).toHaveLength(0);
-      if (tickIndex === 0) expect(paneText(result.calls, 'coord').join(' ')).toContain('GPT producer evidence uncertain');
+      const result = await simple({ coord: 'idle', one: parked, two: parked }, store, [exact], owned);
+      expect(paneText(result.calls, 'one')).toHaveLength(tickIndex === 0 ? 1 : 0);
+      expect(paneText(result.calls, 'two')).toHaveLength(tickIndex === 0 ? 1 : 0);
+      if (tickIndex === 0) {
+        expect(paneText(result.calls, 'one')[0]).toContain('2485-r05-terminal.json');
+        expect(paneText(result.calls, 'two')[0]).toContain('is not your own producer');
+      }
+      expect(paneText(result.calls, 'coord')).toHaveLength(0);
     }
-    expect([...store.parkedWakeEvents].filter((key) => key.startsWith('event:'))).toHaveLength(0);
+    expect([...store.parkedWakeEvents].filter((key) => key.startsWith('event:'))).toHaveLength(1);
   });
 
   it('distinct exact GPT facts wake each own parked pane once with independent marks', async () => {
     const store = new MemoryWakeStore();
-    const changed: TerminalEnvelopeEvent = { ...event, path: '/tmp/opencode/other-terminal.json',
-      invocationId: 'other-token', observedInvocationId: 'other-token' };
+    const owned = fixture();
+    owned.own('other-token', 0);
+    owned.own(id, 1);
+    const changed: TerminalEnvelopeEvent = owned.envelope('other-token', { path: '/tmp/opencode/other-terminal.json' });
+    const mine: TerminalEnvelopeEvent = owned.envelope(id, { path: event.path });
     const screens = { coord: 'idle', one: 'PARKED on GPT turn other-token', two: parked };
-    const first = await simple(screens, store, [event, changed]);
+    const first = await simple(screens, store, [mine, changed], owned);
     expect(paneText(first.calls, 'one')).toEqual([expect.stringContaining('other-terminal.json')]);
     expect(paneText(first.calls, 'two')).toEqual([expect.stringContaining('2485-r05-terminal.json')]);
-    const repeated = await simple(screens, store, [event, changed]);
+    const repeated = await simple(screens, store, [mine, changed], owned);
     expect(paneText(repeated.calls, 'one')).toHaveLength(0);
     expect(paneText(repeated.calls, 'two')).toHaveLength(0);
     expect([...store.parkedWakeEvents].filter((key) => key.startsWith('event:'))).toHaveLength(2);
@@ -2164,24 +2331,31 @@ describe('Issue #2485 / #2687: exact producer instead of ambiguous substring', (
   it('delivers one matching named CI completion, never unrelated PR-owner CI, to PARKED', async () => {
     const sha = 'b'.repeat(40);
     const owner = { ...terminals[1]!, branch: 'refs/heads/ci-owner' };
+    const owned = parkFixture([{ pane: owner, issue: 42 }], 'example/repo');
+    const rows = [terminals[0]!, owner];
     const params = {
       config: config({ selectedRepository: 'example/repo' }),
-      terminals: [terminals[0]!, owner],
+      terminals: rows,
+      extra: owned.options,
       listOpenPulls: () => [{ number: 42, ref: 'ci-owner', sha }],
-      readNamedPull: () => ({ number: 42, headSha: sha, state: 'open' as const, merged: false }),
+      readNamedPull: () => closingPull(42, 42, sha),
       checkRunsFinishedAt: () => 17,
       readPackReviewStage: () => undefined,
     };
+    const run = (screens: Record<string, string>, store?: MemoryWakeStore) => tick({ ...params, store, screens,
+      executor: owned.executor(fakeOrca(screens, [], rows)) });
     const store = new MemoryWakeStore();
-    const matched = await tick({ ...params, store, screens: { coord: 'idle', one: 'PARKED on CI on ' + sha } });
+    const matched = await run({ coord: 'idle', one: 'PARKED on CI PR #42 head ' + sha }, store);
     expect(paneText(matched.calls, 'one')).toHaveLength(1);
     expect(sendsTo(matched.calls, 'one')).toHaveLength(1);
-    expect(sendsTo((await tick({ ...params, store,
-      screens: { coord: 'idle', one: 'PARKED on CI on ' + sha } })).calls, 'one')).toHaveLength(0);
-    const unrelated = await tick({ ...params,
-      screens: { coord: 'idle', one: 'PARKED on GPT turn unrelated-event' } });
+    expect(sendsTo((await run({ coord: 'idle', one: 'PARKED on CI PR #42 head ' + sha }, store)).calls, 'one')).toHaveLength(0);
+    // An abbreviated PR-less CI park is only re-parked, never completed from the current head (#2840).
+    const prless = await run({ coord: 'idle', one: 'PARKED on CI on ' + sha });
+    expect(paneText(prless.calls, 'one')).toHaveLength(1);
+    expect(paneText(prless.calls, 'one')[0]).toContain('names no exact PR head');
+    const unrelated = await run({ coord: 'idle', one: 'PARKED on GPT turn unrelated-event' });
     expect(sendsTo(unrelated.calls, 'one')).toHaveLength(0);
-    const stopped = await tick({ ...params, screens: { coord: 'idle', one: 'done' } });
+    const stopped = await run({ coord: 'idle', one: 'done' });
     expect(paneText(stopped.calls, 'one')).toHaveLength(1);
     expect(paneText(stopped.calls, 'one')[0]).toContain('CI on ' + sha);
   });
@@ -2210,7 +2384,9 @@ describe('Issue #2485 / #2687: exact producer instead of ambiguous substring', (
     expect(first.result).toMatchObject({ state: 'sent', count: 2 });
     const unchanged = await simple({ coord: 'idle', one: 'done', two: 'needs a step' }, store, []);
     expect(unchanged.result.state).toBe('same_stopped_set');
-    const parked = await simple({ coord: 'idle', one: 'PARKED on GPT turn waiting', two: 'needs a step' }, store, []);
+    const owned = fixture();
+    owned.own('waiting', 0);
+    const parked = await simple({ coord: 'idle', one: 'PARKED on GPT turn waiting', two: 'needs a step' }, store, [], owned);
     expect(sendsTo(parked.calls, 'coord')).toHaveLength(0);
     const changed = await simple({ coord: 'idle', one: 'done again', two: 'needs a step' }, store, []);
     expect(changed.result).toMatchObject({ state: 'sent', count: 1 });
@@ -2234,8 +2410,10 @@ describe('Issue #2485 / #2687: exact producer instead of ambiguous substring', (
 
   it('AC7: long filename/attempt-only event is not a completion witness', async () => {
     const longEvent = { path: '/tmp/opencode/' + 'é'.repeat(200) + '.json', invocationId: 'long-token' };
+    const owned = fixture();
+    owned.own('long-token', 0);
     const run = await simple({ coord: 'idle', one: 'PARKED on GPT turn long-token', two: 'working\nesc interrupt' },
-      new MemoryWakeStore(), [longEvent]);
+      new MemoryWakeStore(), [longEvent], owned);
     expect(paneText(run.calls, 'one')).toHaveLength(0);
     expect(paneText(run.calls, 'coord')).toHaveLength(0);
   });
@@ -2643,18 +2821,23 @@ describe('Issue #2821 exact review-run park wake', () => {
   const repository = 'test/project';
   const id = 'prr-fc9b0b60d0074575aaf8516355e247cd';
   const wait = 'PARKED on review run ' + id;
-  const unit: FleetTerminal = { ...terminals[1]!, agentIdentity: 'opencode', title: 'OpenCode GPT-6.1 Sol' };
+  const unit: FleetTerminal = { ...terminals[1]!, agentIdentity: 'opencode', title: 'OpenCode GPT-6.1 Sol',
+    branch: 'refs/heads/review-owner' };
   const screens = { one: wait };
+  const head = 'a'.repeat(40);
+  // Issue #2840: the parked pane is the one selected-project manager for Issue 2812 (PR closer target).
+  const owned = parkFixture([{ pane: unit, issue: 2812 }], repository);
   const makeRun = (overrides: Partial<PackReviewRunRecord> = {}): PackReviewRunRecord => ({
     id, runId: id, projectId: 'orchestrator-pack', canonicalRepository: repository,
-    sourceRepoRoot: primary, prNumber: 2812, targetSha: 'a'.repeat(40),
+    sourceRepoRoot: primary, prNumber: 2812, targetSha: head, headSha: head,
     status: 'changes_requested', ...overrides,
   } as PackReviewRunRecord);
   const input = (records: readonly PackReviewRunRecord[]) => ({
     screens, terminals: [unit], config: config({ selectedRepository: repository }),
     resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack', repository, primaryRoot: primary }),
-    readPackReviewRuns: () => records, readCurrentAssignments: () => [], listOpenPulls: () => [], now: () => 0,
-    readNamedPull: vi.fn(() => undefined),
+    readPackReviewRuns: () => records, listOpenPulls: () => [], now: () => 0,
+    executor: owned.executor(fakeOrca(screens, [], [unit])), extra: owned.options,
+    readNamedPull: vi.fn((_repository: string, number: number) => closingPull(number, 2812, head)),
     reconcilePackReview: vi.fn(async () => ({ ok: true as const, results: [] })),
   });
 
@@ -2671,7 +2854,7 @@ describe('Issue #2821 exact review-run park wake', () => {
 
   it.each<PackReviewRunRecord['status']>([
     'up_to_date', 'commented', 'changes_requested', 'failed', 'timed_out', 'cancelled',
-  ])('wakes the unassigned native pane once for an already terminal %s run', async (status) => {
+  ])('wakes the owned manager pane once for an already terminal %s run', async (status) => {
     const store = new MemoryWakeStore();
     const options = { ...input([makeRun({ status })]), store };
     const first = await tick(options);
@@ -2686,8 +2869,40 @@ describe('Issue #2821 exact review-run park wake', () => {
     expect(text).toContain('re-check the producer yourself');
     expect(store.eventStatus.get('event:one:review-run:' + id + ':' + status)).toBe('sent');
     expect(sendsTo((await tick(options)).calls, unit.handle)).toHaveLength(0);
-    expect(options.readNamedPull).not.toHaveBeenCalled();
+    // PR ownership is proven from the live PR body closer; reconciliation is never run.
+    expect(options.readNamedPull).toHaveBeenCalledWith(repository, 2812);
     expect(options.reconcilePackReview).not.toHaveBeenCalled();
+  });
+
+  it('never wakes an unassigned native pane for a terminal run; only the coordinator hears it (#2840)', async () => {
+    const coord = terminals[0]!;
+    const options = { ...input([makeRun()]), store: new MemoryWakeStore(), terminals: [coord, unit],
+      screens: { coord: 'idle', one: wait }, extra: { ...owned.options, readCurrentAssignments: () => [] },
+      executor: fakeOrca({ coord: 'idle', one: wait }, [], [coord, unit]) };
+    const first = await tick(options);
+    expect(sendsTo(first.calls, unit.handle)).toHaveLength(0);
+    expect(sendsTo(first.calls, coord.handle)).toHaveLength(1);
+    expect(sendsTo(first.calls, coord.handle)[0]?.join(' ')).toContain('parking manager Task/Dispatch unverified');
+    expect(sends((await tick(options)).calls)).toHaveLength(0);
+  });
+
+  it('a moved open PR head gets a head-moved advisory instead of the H0 run status; a foreign PR gets a correction (#2840)', async () => {
+    const moved = 'b'.repeat(40);
+    const advisory = { ...input([makeRun()]), store: new MemoryWakeStore(),
+      readNamedPull: vi.fn((_repository: string, number: number) => closingPull(number, 2812, moved)) };
+    const first = sendsTo((await tick(advisory)).calls, unit.handle);
+    expect(first).toHaveLength(1);
+    const text = first[0]![first[0]!.indexOf('--text') + 1]!;
+    expect(text).toContain('head moved to ' + moved);
+    expect(text).not.toContain('changes_requested');
+    const closed = { ...input([makeRun()]), store: new MemoryWakeStore(),
+      readNamedPull: vi.fn((_repository: string, number: number) => closingPull(number, 2812, moved, 'closed')) };
+    expect(sendsTo((await tick(closed)).calls, unit.handle)).toHaveLength(0);
+    const foreign = { ...input([makeRun()]), store: new MemoryWakeStore(),
+      readNamedPull: vi.fn((_repository: string, number: number) => closingPull(number, 9999, head)) };
+    const corrected = sendsTo((await tick(foreign)).calls, unit.handle);
+    expect(corrected).toHaveLength(1);
+    expect(corrected[0]![corrected[0]!.indexOf('--text') + 1]).toContain('is not your own producer');
   });
 
   it('wakes only when the same active run becomes terminal on a later tick', async () => {
@@ -2723,7 +2938,7 @@ describe('Issue #2821 exact review-run park wake', () => {
 
   it('never replays an unverified receipt for the terminal run', async () => {
     const store = new MemoryWakeStore();
-    const base = fakeOrca(screens, [], [unit]);
+    const base = owned.executor(fakeOrca(screens, [], [unit]));
     const executor: OrcaExecutor = (args) => args[0] === 'terminal' && args[1] === 'send'
       ? commandResult(JSON.stringify({ ok: true, result: { send: { handle: unit.handle, accepted: true } } }))
       : base(args);
@@ -2735,8 +2950,10 @@ describe('Issue #2821 exact review-run park wake', () => {
 
   it('isolates an unreadable run store while an unrelated time wake and the run reminder remain deliverable', async () => {
     const other = { ...terminals[2]!, agentIdentity: 'opencode' };
+    const both = { ...screens, two: 'PARKED on time 1970-01-01T00:00:00Z' };
     const options = { ...input([]), store: new MemoryWakeStore(), terminals: [unit, other],
-      screens: { ...screens, two: 'PARKED on time 1970-01-01T00:00:00Z' },
+      executor: owned.executor(fakeOrca(both, [], [unit, other])),
+      screens: both,
       readPackReviewRuns: () => { throw new Error('store_lock_timeout'); },
     };
     const first = await tick(options);
@@ -3107,6 +3324,16 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
   const selectedProjectEvidence = {
     resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack', repository, primaryRoot: primary }),
   };
+  // Issue #2840: the parked GPT invocation is indexed as this manager's own (real private index files).
+  const ownerFixture = parkFixture([{ pane: manager }], repository);
+  ownerFixture.index({ id: 'inv-mgr334', task: assignment.taskId, dispatch: assignment.bindingKey,
+    launcher: manager.handle });
+  const ownerSeams: Partial<FleetAlarmTickOptions> = {
+    readInvocationLocator: ownerFixture.options.readInvocationLocator,
+    readGitCommonDir: ownerFixture.options.readGitCommonDir,
+  };
+  const indexedCompletion = ownerFixture.envelope('inv-mgr334', { path: event.path,
+    terminalHandle: manager.handle, cwd: workerBase + '/two/child' });
   const executorFor = (
     screens: Readonly<Record<string, string>>,
     roster: readonly FleetTerminal[] = [manager],
@@ -3135,6 +3362,7 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
     readCurrentAssignments: () => [assignment],
     listPublishedIssueFacts: () => [githubFact('comment-1'), githubFact('comment-2')],
     listOpenPulls: () => [], listTerminalEnvelopes: () => [],
+    extra: ownerSeams,
     ...overrides,
   });
   const texts = (calls: readonly string[][], handle = manager.handle) =>
@@ -3311,7 +3539,7 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
     const result = await invoke({
       screens: { [manager.handle]: parked }, executor, store,
       listPublishedIssueFacts: () => [],
-      listTerminalEnvelopes: () => [verifiedGptCompletion],
+      listTerminalEnvelopes: () => [indexedCompletion],
       ...selectedProjectEvidence,
     });
     expect(texts(result.calls)).toHaveLength(1);
@@ -3319,7 +3547,7 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
     expect(result.result).toMatchObject({ paneWakeAttempts: 1, paneWakeConfirmed: 1, paneWakeNotConfirmed: 0 });
     const retry = await invoke({ store, screens: { [manager.handle]: parked },
       executor: executorFor({ [manager.handle]: parked }), listPublishedIssueFacts: () => [],
-      listTerminalEnvelopes: () => [verifiedGptCompletion],
+      listTerminalEnvelopes: () => [indexedCompletion],
       ...selectedProjectEvidence });
     expect(texts(retry.calls)).toHaveLength(0);
     expect(sendsTo(retry.calls, manager.handle)).toHaveLength(0);
@@ -3686,26 +3914,48 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
   const texts = (calls: readonly string[][], handle: string) =>
     sendsTo(calls, handle).filter((row) => row.includes('--text'))
       .map((row) => row[row.indexOf('--text') + 1] ?? '');
-  const event = (id: string, overrides: Partial<TerminalEnvelopeEvent> = {}): TerminalEnvelopeEvent => ({
-    path: '/tmp/opencode/' + id + '-terminal.json', invocationId: id, observedInvocationId: id,
-    terminalHandle: manager.handle, cwd: workerBase + '/two/child',
-    lifecycleOutcome: 'success', turnResultState: 'ok', ...overrides,
-  });
+  // Issue #2840: the parked manager is the one selected-project assignment (Issue 42, the PR closer
+  // target). Every GPT invocation id read through the index is, by default, this manager's own
+  // (real private index files written on demand); `foreignOwner` indexes a different pair instead.
+  const owned = parkFixture([{ pane: manager, issue: 42 }], repository);
+  const foreignInvocations = new Set<string>();
+  const ownerOptions: Partial<FleetAlarmTickOptions> = {
+    ...owned.options,
+    readInvocationLocator: (input) => {
+      if (foreignInvocations.has(input.invocationId)) {
+        owned.index({ id: input.invocationId, task: 'task-other', dispatch: 'dispatch-other', launcher: 'other-pane' });
+      } else owned.own(input.invocationId);
+      return owned.options.readInvocationLocator(input);
+    },
+  };
+  const event = (id: string, overrides: Partial<TerminalEnvelopeEvent> = {}): TerminalEnvelopeEvent =>
+    owned.envelope(id, { path: '/tmp/opencode/' + id + '-terminal.json',
+      terminalHandle: manager.handle, cwd: workerBase + '/two/child', ...overrides });
   const scenario = (
     screen: string, overrides: Partial<Parameters<typeof tick>[0]> = {},
     store: FleetWakeStateStore = new MemoryWakeStore(),
-  ) => tick({
-    config: settings, terminals: [coordinator, manager],
-    screens: { coord: 'idle', one: screen }, store,
-    resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack',
-      repository, primaryRoot: primary }),
-    listOpenPulls: () => [], listTerminalEnvelopes: () => [],
-    checkRunsFinishedAt: () => undefined, readNamedPull: () => undefined,
-    readPackReviewStage: () => undefined, readNamedReview: () => undefined,
-    readCurrentAssignments: () => [], readPackReviewRuns: () => [],
-    readChats: async () => [],
-    ...overrides,
-  });
+  ) => {
+    const screens = { coord: 'idle', one: screen };
+    const rows = [coordinator, manager];
+    return tick({
+      config: settings, terminals: rows,
+      screens, store,
+      resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack',
+        repository, primaryRoot: primary }),
+      listOpenPulls: () => [], listTerminalEnvelopes: () => [],
+      checkRunsFinishedAt: () => undefined, readNamedPull: () => undefined,
+      readPackReviewStage: () => undefined, readNamedReview: () => undefined,
+      readPackReviewRuns: () => [], listPublishedIssueFacts: () => [],
+      // The original-owner incident route is tested elsewhere; here only the named-park decision counts.
+      readOriginalHandoffReceipt: () => null,
+      readChats: async () => [],
+      ...overrides,
+      executor: owned.executor(overrides.executor ?? fakeOrca(screens, [], rows)),
+      extra: { ...ownerOptions, ...overrides.extra },
+    });
+  };
+  const pullAt = (head: string, state: 'open' | 'closed' = 'open', merged = false) =>
+    (_repo: string, number: number) => closingPull(number, 42, head, state, merged);
 
 
   // Retain the native OpenCode frame, prior tool output and model/status chrome from a
@@ -3767,7 +4017,7 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     expect(observed?.ownParkObservation).toBeUndefined();
     const store = new MemoryWakeStore();
     const run = () => scenario(screen, {
-      readNamedPull: (_repository, number) => ({ number, headSha: head, state: 'open', merged: false }),
+      readNamedPull: pullAt(head),
       checkRunsFinishedAt: (_repository, sha) => sha === head ? 1_730_000_000_000 : undefined,
     }, store);
     const first = await run(), repeat = await run();
@@ -3902,9 +4152,7 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
 
   it('B9-3: final-line CI/pack-review after Tool/User context gets due 30-minute Reminder', async () => {
     const h = 'a'.repeat(40);
-    const readNamedPull = (_repo: string, number: number) => ({
-      number, headSha: h, state: 'open' as const, merged: false,
-    });
+    const readNamedPull = pullAt(h);
     for (const kind of ['CI', 'pack-review'] as const) {
       const own = 'PARKED on ' + kind + ' PR #42 head ' + h;
       for (const screen of ['Tool: foreign pane\n\n' + own, 'User: quote this\n\n' + own, own]) {
@@ -3925,9 +4173,7 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     const sha = 'd'.repeat(40);
     for (const kind of ['CI', 'pack-review'] as const) {
       for (const merged of [false, true]) {
-        const readNamedPull = (_repo: string, number: number) => ({
-          number, headSha: sha, state: 'closed' as const, merged,
-        });
+        const readNamedPull = pullAt(sha, 'closed', merged);
         const observed = await scenario('PARKED on ' + kind + ' PR #42 head ' + sha, {
           readNamedPull, checkRunsFinishedAt: () => 123,
           readPackReviewStage: () => ({ state: 'success', description: 'exact terminal head' }),
@@ -3947,7 +4193,7 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
         const wait = 'PARKED on ' + kind + ' PR #42 head ' + h0;
         const store = new MemoryWakeStore();
         const overrides: Partial<Parameters<typeof scenario>[1]> = {
-          readNamedPull: (_repo, number) => ({ number, headSha: h1, state: 'open', merged: false }),
+          readNamedPull: pullAt(h1),
           checkRunsFinishedAt: () => h0State === 'completed' ? 17 : undefined,
           readPackReviewStage: () => h0State === 'completed'
             ? { state: 'success', description: 'old-head only' } : undefined,
@@ -3968,7 +4214,7 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     ]) {
       const store = new MemoryWakeStore();
       const overrides = {
-        readNamedPull: (_repo: string, number: number) => ({ number, headSha: h1, state: 'open' as const, merged: false }),
+        readNamedPull: pullAt(h1),
       };
       const first = await scenario(quoted, overrides, store);
       expect(texts(first.calls, manager.handle)).toHaveLength(1);
@@ -3978,8 +4224,8 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     for (const condition of ['closed', 'missing', 'pending-current'] as const) {
       const checked = await scenario('PARKED on CI PR #42 head ' + h0, {
         readNamedPull: () => condition === 'missing' ? undefined
-          : ({ number: 42, headSha: condition === 'pending-current' ? h0 : h1,
-            state: condition === 'closed' ? 'closed' : 'open', merged: false }),
+          : closingPull(42, 42, condition === 'pending-current' ? h0 : h1,
+            condition === 'closed' ? 'closed' : 'open', false),
         checkRunsFinishedAt: () => undefined,
       });
       expect(texts(checked.calls, manager.handle)).toHaveLength(0);
@@ -4000,7 +4246,7 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
       };
       const store = new MemoryWakeStore();
       const observed = await scenario(wait, { executor,
-        readNamedPull: (_repo, number) => ({ number, headSha: head, state: 'open', merged: false }),
+        readNamedPull: (_repo, number) => closingPull(number, 42, head),
         checkRunsFinishedAt: () => undefined }, store);
       expect(texts(observed.calls, manager.handle)).toHaveLength(phase === 'before-text' ? 0 : 1);
       expect(sendsTo(observed.calls, manager.handle).filter((row) => !row.includes('--text'))).toHaveLength(0);
@@ -4119,13 +4365,12 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     expect(sends((await run()).calls)).toHaveLength(0);
   });
 
-  it('Issue #2773: exact invocation ID wakes the parked owner from a standalone clone cwd or a launcher tab handle', async () => {
+  it('Issue #2773: the indexed own invocation wakes whatever cwd or launcher handle its envelope copy reports', async () => {
     const parked = 'PARKED on GPT turn inv-a';
     for (const landed of [
-      // AppliedIn PR 306: child cwd is a standalone clone outside every selected linked worktree.
+      // The envelope's own cwd/handle are not owner evidence; only the private index is.
       event('inv-a', { cwd: '/tmp/opencode/appliedin-301-pr306-author' }),
       event('inv-a', { cwd: undefined }),
-      // Issue 2772: the long-run launcher ran in its own, since exited, Orca tab.
       event('inv-a', { terminalHandle: 'term_launcher_tab_exited' }),
     ]) {
       const store = new MemoryWakeStore();
@@ -4134,6 +4379,39 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
       expect(texts(first.calls, coordinator.handle)).toHaveLength(0);
       expect(sends((await scenario(parked, { listTerminalEnvelopes: () => [landed] }, store)).calls)).toHaveLength(0);
     }
+  });
+
+  it('Issue #2840: a standalone-clone child cwd or a foreign launcher tab in the private index is unverified, never own', async () => {
+    const parked = 'PARKED on GPT turn inv-a';
+    for (const [spec, reason] of [
+      // AppliedIn PR 306: the child ran in a standalone clone outside every selected linked worktree.
+      [{ childCwd: '/tmp/opencode/appliedin-301-pr306-author' }, 'child cwd is not a selected-project linked worktree'],
+      // Issue 2772: the long-run launcher ran in its own Orca tab, which is not the parking manager's terminal.
+      [{ launcher: 'term_launcher_tab_exited' }, 'launch handle does not join the current manager terminal'],
+    ] as const) {
+      const fixture = parkFixture([{ pane: manager, issue: 42 }], repository);
+      fixture.own('inv-a', 0, spec);
+      const store = new MemoryWakeStore();
+      const run = () => scenario(parked, { extra: fixture.options,
+        listTerminalEnvelopes: () => [fixture.envelope('inv-a')] }, store);
+      const first = await run();
+      expect(texts(first.calls, manager.handle)).toHaveLength(0);
+      expect(texts(first.calls, coordinator.handle)).toHaveLength(1);
+      expect(texts(first.calls, coordinator.handle)[0]).toContain(reason);
+      expect(sends((await run()).calls)).toHaveLength(0);
+    }
+  });
+
+  it('Issue #2840: a coherent different Task/Dispatch pair is foreign and gets one direct correction to the verified manager', async () => {
+    foreignInvocations.add('inv-foreign');
+    try {
+      const store = new MemoryWakeStore();
+      const run = () => scenario('PARKED on GPT turn inv-foreign', { listTerminalEnvelopes: () => [event('inv-foreign')] }, store);
+      const first = await run();
+      expect(texts(first.calls, manager.handle)).toEqual([expect.stringContaining('is not your own producer - park on your own producer')]);
+      expect(texts(first.calls, coordinator.handle)).toHaveLength(0);
+      expect(sends((await run()).calls)).toHaveLength(0);
+    } finally { foreignInvocations.delete('inv-foreign'); }
   });
 
   it('Issue #2773: an uncertain GPT park still receives its own 30-minute Reminder', async () => {
@@ -4256,37 +4534,27 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     }
   });
 
-  it('F5 PID exits require locally witnessed same namespace/startticks; first absent is never exit', async () => {
+  it('F5 PID parks are unverified, never wake and alarm only the coordinator once per episode (#2840)', async () => {
     const parked = 'PARKED on process pid 2612721 startticks 123456789';
     const live = { state: 'live' as const, startticks: '123456789', namespace: 'pid:[12]' };
     const missing = { state: 'absent' as const, namespace: 'pid:[12]' };
     const store = new MemoryWakeStore();
     let seen: ReturnType<NonNullable<FleetAlarmTickOptions['probePid']>> = live;
     const run = () => scenario(parked, { probePid: () => seen }, store);
-    expect(sends((await run()).calls)).toHaveLength(0);
-    expect(sends((await run()).calls)).toHaveLength(0);
-    seen = missing;
-    expect(texts((await run()).calls, manager.handle)).toHaveLength(1);
-    expect(sends((await run()).calls)).toHaveLength(0);
-    const zombie = await scenario(parked, { probePid: () => ({
-      state: 'exited', startticks: '123456789', namespace: 'pid:[12]',
-    }) });
-    expect(texts(zombie.calls, manager.handle)).toHaveLength(1);
-    const reusedStore = new MemoryWakeStore();
-    await scenario(parked, { probePid: () => live }, reusedStore);
-    const reused = await scenario(parked, { probePid: () => ({
-      state: 'live', startticks: '987654321', namespace: 'pid:[12]',
-    }) }, reusedStore);
-    expect(texts(reused.calls, manager.handle)).toHaveLength(1);
-    for (const observation of [
-      missing,
-      { state: 'unverified' as const },
-      // A namespace-mismatched read-only /proc probe returns unverified, never a live witness.
-      { state: 'unverified' as const },
-    ]) {
-      const guard = await scenario(parked, { probePid: () => observation });
-      expect(texts(guard.calls, manager.handle)).toHaveLength(0);
-      expect(texts(guard.calls, coordinator.handle)[0]).toContain('process provenance unverified');
+    const first = await run();
+    expect(texts(first.calls, manager.handle)).toHaveLength(0);
+    expect(texts(first.calls, coordinator.handle)).toHaveLength(1);
+    expect(texts(first.calls, coordinator.handle)[0]).toContain('UNTRUSTED PANE OBSERVATION');
+    expect(texts(first.calls, coordinator.handle)[0]).toContain('process pid park has no Task-bound producer selector');
+    // Whatever the local witness later says (live, gone, zombie, reused or unverified), no pane Wake and no repeat alarm.
+    for (const observation of [live, missing,
+      { state: 'exited' as const, startticks: '123456789', namespace: 'pid:[12]' },
+      { state: 'live' as const, startticks: '987654321', namespace: 'pid:[12]' },
+      { state: 'unverified' as const }]) {
+      seen = observation;
+      const later = await run();
+      expect(sendsTo(later.calls, manager.handle)).toHaveLength(0);
+      expect(sendsTo(later.calls, coordinator.handle)).toHaveLength(0);
     }
   });
 });
@@ -4467,6 +4735,15 @@ describe('Issue #2687: original receipt association never replaces GPT completio
     launching_terminal_handle: owner.handle, child_cwd: workerBase + '/two/child',
   };
   const parked = 'PARKED on GPT turns inv-a, inv-b, inv-c';
+  // Issue #2840: every triplet member is indexed as this manager's own (real private index files).
+  const ownerFixture = parkFixture([{ pane: owner }]);
+  for (const id of ['inv-a', 'inv-b', 'inv-c']) {
+    ownerFixture.index({ id, task: assignment.taskId, dispatch: assignment.bindingKey, launcher: owner.handle });
+  }
+  const ownerSeams: Partial<FleetAlarmTickOptions> = {
+    readInvocationLocator: ownerFixture.options.readInvocationLocator,
+    readGitCommonDir: ownerFixture.options.readGitCommonDir,
+  };
   const executor = (): OrcaExecutor => {
     const terminal = fakeOrca({ coord: 'idle', one: parked }, [], [coordinator, owner]);
     return (args) => {
@@ -4499,6 +4776,7 @@ describe('Issue #2687: original receipt association never replaces GPT completio
     listTerminalEnvelopes: () => [envelope], readPackReviewRuns: () => [],
     resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack',
       primaryRoot: primary, repository: 'test/project' }),
+    extra: ownerSeams,
     ...overrides,
   });
   const textTo = (calls: readonly string[][], handle: string) =>
@@ -4547,15 +4825,19 @@ describe('Issue #2687: original receipt association never replaces GPT completio
     const unowned = new MemoryWakeStore();
     const noRow = { readCurrentAssignments: () => [] as WorkerAssignmentRecord[] };
     const one = await perform(failure, unowned, noRow);
-    expect(sends(one.calls)).toHaveLength(0);
+    expect(sendsTo(one.calls, owner.handle)).toHaveLength(0);
+    // With no assignment row the GPT park itself is only a coordinator-only unverified alarm (#2840).
+    expect(textTo(one.calls, coordinator.handle)).toHaveLength(1);
+    expect(textTo(one.calls, coordinator.handle)[0]?.join(' ')).toContain('parking manager Task/Dispatch unverified');
     expect(one.logs.filter((line) => line.startsWith('no bindable owner for terminal envelope'))).toHaveLength(1);
     const again = await perform(failure, unowned, noRow);
     expect(again.logs.filter((line) => line.startsWith('no bindable owner'))).toHaveLength(0);
   });
 
   it('Issue #2773: a foreign launcher handle with the exact observed ID is an ordinary partial triplet', async () => {
-    const launcherTab = await perform(event({ observedInvocationId: 'inv-a',
-      terminalHandle: 'foreign-launch-handle' }));
+    // Exactly indexed run/attempt/receipt association, only the launcher tab differs.
+    const launcherTab = await perform(ownerFixture.envelope('inv-a', { terminalHandle: 'foreign-launch-handle',
+      cwd: workerBase + '/two/child' }));
     expect(textTo(launcherTab.calls, owner.handle)).toHaveLength(0);
     expect(textTo(launcherTab.calls, coordinator.handle)).toHaveLength(0);
   });
@@ -5123,11 +5405,12 @@ describe('Issue #2749 B9-6: exact primary-root near-effect Dispatch admission', 
   };
   const park = 'PARKED on GPT turn inv-primary-b9';
   const roster = [coordinator, rootAgent];
-  const envelope: TerminalEnvelopeEvent = {
-    path: '/tmp/opencode/inv-primary-b9-terminal.json', invocationId: 'inv-primary-b9',
-    observedInvocationId: 'inv-primary-b9', terminalHandle: rootAgent.handle,
-    cwd: workerBase + '/two/child', lifecycleOutcome: 'success', turnResultState: 'ok',
-  };
+  // Issue #2840: the primary-root manager also needs exact owner proof (assignment A + private index).
+  const owned = parkFixture([{ pane: rootAgent, key: 'b9-A' }]);
+  owned.own('inv-primary-b9');
+  const envelope: TerminalEnvelopeEvent = owned.envelope('inv-primary-b9', {
+    path: '/tmp/opencode/inv-primary-b9-terminal.json', terminalHandle: rootAgent.handle,
+    cwd: workerBase + '/two/child' });
   const exercise = (
     phase: 'stable' | 'unbound' | 'unreadable-census' | 'before-text' | 'before-enter'
       | 'rebind-before-text' | 'rebind-before-enter',
@@ -5173,7 +5456,7 @@ describe('Issue #2749 B9-6: exact primary-root near-effect Dispatch admission', 
       config: config({ selectedRepository: 'test/project', orchestratorHandle: coordinator.handle,
         workspaceRe: /(?:\/home\/user\/project$|\/orca\/workspaces\/project\/)/u }),
       listTerminalEnvelopes: () => [envelope], listOpenPulls: () => [],
-      readCurrentAssignments: () => [], readPackReviewRuns: () => [],
+      readPackReviewRuns: () => [], extra: owned.options,
       resolveSelectedReviewProject: () => ({
         projectId: 'orchestrator-pack', repository: 'test/project', primaryRoot: primary,
       }),
@@ -5242,14 +5525,19 @@ describe('Issue #2749 B9-6: exact primary-root near-effect Dispatch admission', 
 describe('Issue #2833 firefighter parked-producer and submit regressions', () => {
   const repo = 'test/project';
   const a = 'a'.repeat(40), b = 'b'.repeat(40);
-  const unit = { ...terminals[1]!, agentIdentity: 'opencode' };
+  const unit = { ...terminals[1]!, agentIdentity: 'opencode', branch: 'refs/heads/fix/2833' };
+  // Issue #2840: the parked pane is the one selected-project manager for Issue 42 (PR closer target).
+  const owned = parkFixture([{ pane: unit, issue: 42 }], repo);
   const common = {
     terminals: [unit], config: config({ selectedRepository: repo }),
-    readCurrentAssignments: () => [], listOpenPulls: () => [],
+    extra: owned.options, listOpenPulls: () => [], listPublishedIssueFacts: () => [],
     resolveSelectedReviewProject: () => ({
       projectId: 'orchestrator-pack', repository: repo, primaryRoot: primary,
     }),
   };
+  /** Native executor whose worker-show proves the manager; `coord` is only present when listed. */
+  const native = (screens: Record<string, string>, rows: readonly FleetTerminal[] = [unit]) =>
+    owned.executor(fakeOrca(screens, [], rows));
   const sentText = (calls: string[][], handle = 'one'): string[] =>
     sendsTo(calls, handle).map((call) => call[call.indexOf('--text') + 1] ?? '');
 
@@ -5257,8 +5545,8 @@ describe('Issue #2833 firefighter parked-producer and submit regressions', () =>
     const wait = 'PARKED on CI PR #42 head ' + a + '; resume step: inspect CI';
     let finished = false;
     const store = new MemoryWakeStore();
-    const run = () => tick({ ...common, screens: { one: wait }, store,
-      readNamedPull: () => ({ number: 42, headSha: a, state: 'open', merged: false }),
+    const run = () => tick({ ...common, screens: { one: wait }, store, executor: native({ one: wait }),
+      readNamedPull: () => closingPull(42, 42, a),
       checkRunsFinishedAt: (_repo, sha) => finished && sha === a ? 1234 : undefined });
     expect(sentText((await run()).calls)).toHaveLength(0);
     finished = true;
@@ -5268,18 +5556,25 @@ describe('Issue #2833 firefighter parked-producer and submit regressions', () =>
     expect(sentText((await run()).calls)).toHaveLength(0);
   });
 
-  it('rechecks current head and pack-review status for number-only producer', async () => {
+  it('a number-only pack-review park gets one re-park correction and never a status wake (#2840)', async () => {
     const wait = 'PARKED on pack-review 635 — resume step: read review';
     let stage: string | undefined;
     const store = new MemoryWakeStore();
-    const run = () => tick({ ...common, screens: { one: wait }, store,
-      readNamedPull: () => ({ number: 635, headSha: b, state: 'open', merged: false }),
+    const run = (closes = 42) => tick({ ...common, screens: { one: wait }, store, executor: native({ one: wait }),
+      readNamedPull: () => closingPull(635, closes, b),
       readPackReviewStage: (_repo, sha) => sha === b && stage
         ? { state: stage, description: 'runner terminal' } : undefined });
-    expect(sentText((await run()).calls)).toHaveLength(0);
+    const first = sentText((await run()).calls);
+    expect(first).toHaveLength(1);
+    expect(first[0]).toContain('names no exact PR head - re-read your own PR and re-park as CI PR #N head SHA40');
     stage = 'failure';
-    expect(sentText((await run()).calls)[0]).toContain('stage-failure');
-    expect(sentText((await run()).calls)).toHaveLength(0);
+    const later = sentText((await run()).calls);
+    expect(later).toHaveLength(0);
+    // A PR closing another Issue is foreign: a distinct correction, never a status wake.
+    const foreign = sentText((await run(999)).calls);
+    expect(foreign).toHaveLength(1);
+    expect(foreign[0]).toContain('is not your own producer');
+    expect([...store.parkedWakeEvents].some((key) => key.includes('pack-review:'))).toBe(false);
   });
 
   it('wakes a review runner whose pid is gone even with active status', async () => {
@@ -5287,12 +5582,13 @@ describe('Issue #2833 firefighter parked-producer and submit regressions', () =>
     const wait = 'PARKED on review run ' + id;
     const record = {
       id, runId: id, projectId: 'orchestrator-pack', canonicalRepository: repo,
-      sourceRepoRoot: primary, prNumber: 635, targetSha: a, status: 'running',
+      sourceRepoRoot: primary, prNumber: 635, targetSha: a, headSha: a, status: 'running',
       runnerPid: 12345, heartbeatAtUtc: '2026-11-13T10:00:00Z',
     } as PackReviewRunRecord;
     let pid: 'live' | 'absent' = 'live';
     const store = new MemoryWakeStore();
-    const run = () => tick({ ...common, screens: { one: wait }, store,
+    const run = () => tick({ ...common, screens: { one: wait }, store, executor: native({ one: wait }),
+      readNamedPull: () => closingPull(635, 42, a),
       readPackReviewRuns: () => [record],
       probePid: () => pid === 'live'
         ? { state: 'live', startticks: '22', namespace: 'pid:[1]' }
@@ -5319,40 +5615,51 @@ describe('Issue #2833 firefighter parked-producer and submit regressions', () =>
     expect(sentText((await run()).calls)).toHaveLength(0);
   });
 
-  it('wakes the same PID when its witnessed process exits', async () => {
+  it('never wakes the same PID when its witnessed process exits; only the coordinator hears it once (#2840)', async () => {
     const wait = 'PARKED on process pid 7654 startticks 123456';
     let alive = true;
     const store = new MemoryWakeStore();
-    const run = () => tick({ ...common, screens: { one: wait }, store,
+    const screens = { coord: 'idle', one: wait };
+    const run = () => tick({ ...common, terminals: [terminals[0]!, unit], screens, store,
+      executor: native(screens, [terminals[0]!, unit]),
       probePid: () => alive
         ? { state: 'live', startticks: '123456', namespace: 'pid:[11]' }
         : { state: 'absent', namespace: 'pid:[11]' } });
-    expect(sentText((await run()).calls)).toHaveLength(0);
+    const first = await run();
+    expect(sentText(first.calls)).toHaveLength(0);
+    expect(sentText(first.calls, 'coord')).toHaveLength(1);
+    expect(sentText(first.calls, 'coord')[0]).toContain('process pid park has no Task-bound producer selector');
     alive = false;
-    expect(sentText((await run()).calls)[0]).toContain('process-exited');
+    const exited = await run();
+    expect(sentText(exited.calls)).toHaveLength(0);
+    expect(sentText(exited.calls, 'coord')).toHaveLength(0);
     expect(sentText((await run()).calls)).toHaveLength(0);
   });
 
-  it('matches the author attempt id as well as its distinct observed invocation id', async () => {
-    const wait = 'PARKED on GPT turn a-author-2833';
-    const envelope: TerminalEnvelopeEvent = {
-      path: '/tmp/author-2833-terminal.json',
-      invocationId: 'i-author-2833', observedInvocationId: 'i-author-2833',
-      attemptIdentity: 'a-author-2833', lifecycleOutcome: 'success',
-      turnResultState: 'ok',
-    };
-    const run = (store: MemoryWakeStore) => tick({ ...common, screens: { one: wait },
-      store, listTerminalEnvelopes: () => [envelope] });
+  it('an attempt-id-only GPT park is unverified and never wakes; the distinct observed invocation id does (#2840)', async () => {
+    owned.own('i-author-2833');
+    const envelope: TerminalEnvelopeEvent = owned.envelope('i-author-2833', {
+      path: '/tmp/author-2833-terminal.json' });
+    const attemptWait = 'PARKED on GPT turn a-author-2833';
+    const screens = { coord: 'idle', one: attemptWait };
+    const rows = [terminals[0]!, unit];
+    const unverified = await tick({ ...common, terminals: rows, screens, store: new MemoryWakeStore(),
+      executor: native(screens, rows), listTerminalEnvelopes: () => [{ ...envelope, attemptIdentity: 'a-author-2833' }] });
+    expect(sentText(unverified.calls)).toHaveLength(0);
+    expect(sentText(unverified.calls, 'coord')[0]).toContain('GPT invocation index missing or unreadable');
+    const wait = 'PARKED on GPT turn i-author-2833';
+    const run = (store: MemoryWakeStore, event = envelope) => tick({ ...common, screens: { one: wait },
+      store, executor: native({ one: wait }), listTerminalEnvelopes: () => [event] });
     const store = new MemoryWakeStore();
     expect(sentText((await run(store)).calls)[0]).toContain('ended state ok');
     expect(sentText((await run(store)).calls)).toHaveLength(0);
-    const foreign = await tick({ ...common, screens: { one: wait },
-      listTerminalEnvelopes: () => [{ ...envelope, attemptIdentity: 'a-foreign' }] });
+    const foreign = await run(new MemoryWakeStore(), { ...envelope, attemptIdentity: 'a-foreign' });
     expect(sentText(foreign.calls)).toHaveLength(0);
   });
 
   it('rejects foreign-terminal and filename-only attempt-id envelopes without an attributable wake', async () => {
-    const wait = 'PARKED on GPT turn a-author-2833';
+    owned.own('i-author-2833');
+    const wait = 'PARKED on GPT turn i-author-2833';
     const envelope: TerminalEnvelopeEvent = {
       path: '/tmp/author-2833-terminal.json',
       invocationId: 'i-author-2833', observedInvocationId: 'i-author-2833',
@@ -5364,8 +5671,9 @@ describe('Issue #2833 firefighter parked-producer and submit regressions', () =>
       terminalHandle: 'one',
     };
     for (const event of [envelope, filenameOnly]) {
-      const observed = await tick({ ...common, terminals: [terminals[0]!, unit],
-        screens: { coord: 'idle', one: wait },
+      const screens = { coord: 'idle', one: wait };
+      const observed = await tick({ ...common, terminals: [terminals[0]!, unit], screens,
+        executor: native(screens, [terminals[0]!, unit]),
         listTerminalEnvelopes: () => [event] });
       expect(sends(observed.calls)).toHaveLength(0);
     }
@@ -5375,8 +5683,8 @@ describe('Issue #2833 firefighter parked-producer and submit regressions', () =>
     const wait = 'PARKED on CI PR #42 head ' + a;
     let head = a;
     const store = new MemoryWakeStore();
-    const run = () => tick({ ...common, screens: { one: wait }, store,
-      readNamedPull: () => ({ number: 42, headSha: head, state: 'open', merged: false }),
+    const run = () => tick({ ...common, screens: { one: wait }, store, executor: native({ one: wait }),
+      readNamedPull: () => closingPull(42, 42, head),
       checkRunsFinishedAt: () => undefined });
     expect(sentText((await run()).calls)).toHaveLength(0);
     head = b;
@@ -5477,25 +5785,23 @@ describe('Issue #2833 firefighter parked-producer and submit regressions', () =>
 
 describe('Issue #2833 short-head CI and stale-heartbeat regressions', () => {
   const a = 'a'.repeat(40), b = 'b'.repeat(40);
-  it('binds an abbreviated CI head to one exact native PR and detects its later head change', async () => {
+  it('an abbreviated CI head is never bound to a PR; the manager is told to re-park on the exact head (#2840)', async () => {
     const wait = 'PARKED on CI on aaaaaaaa; resume step: inspect head';
     const unit = { ...terminals[1]!, branch: 'refs/heads/fix/short', agentIdentity: 'opencode' };
+    const owned = parkFixture([{ pane: unit, issue: 42 }], 'test/project');
     const store = new MemoryWakeStore();
-    let head = a;
-    let done = false;
     const run = () => tick({
       terminals: [unit], screens: { one: wait }, store, config: config({ selectedRepository: 'test/project' }),
-      readCurrentAssignments: () => [],
-      listOpenPulls: () => [{ number: 42, ref: 'fix/short', sha: head }],
-      readNamedPull: () => ({ number: 42, headSha: head, state: 'open', merged: false }),
-      checkRunsFinishedAt: (_repo, sha) => done && sha === a ? 1234 : undefined,
+      executor: owned.executor(fakeOrca({ one: wait }, [], [unit])), extra: owned.options,
+      listOpenPulls: () => [{ number: 42, ref: 'fix/short', sha: a }], listPublishedIssueFacts: () => [],
+      readNamedPull: () => closingPull(42, 42, a),
+      checkRunsFinishedAt: (_repo, sha) => sha === a ? 1234 : undefined,
     });
-    expect(sendsTo((await run()).calls, 'one')).toHaveLength(0);
-    done = true;
-    expect(sendsTo((await run()).calls, 'one')[0]?.join(' ')).toContain('checks-completed');
-    done = false;
-    head = b;
-    expect(sendsTo((await run()).calls, 'one')[0]?.join(' ')).toContain('head moved to ' + b);
+    const first = sendsTo((await run()).calls, 'one');
+    expect(first).toHaveLength(1);
+    const text = first[0]![first[0]!.indexOf('--text') + 1]!;
+    expect(text).toContain('names no exact PR head - re-read your own PR and re-park as CI PR #N head SHA40');
+    expect(text).not.toContain('checks-completed');
     expect(sendsTo((await run()).calls, 'one')).toHaveLength(0);
   });
 
@@ -5503,15 +5809,19 @@ describe('Issue #2833 short-head CI and stale-heartbeat regressions', () => {
     const id = 'prr-' + 'd'.repeat(32);
     const record = {
       id, runId: id, projectId: 'orchestrator-pack', canonicalRepository: 'test/project',
-      sourceRepoRoot: primary, prNumber: 635, targetSha: a, status: 'reviewing',
+      sourceRepoRoot: primary, prNumber: 635, targetSha: a, headSha: a, status: 'reviewing',
       runnerPid: 12345, heartbeatAtUtc: '2026-11-11T10:00:00Z',
     } as PackReviewRunRecord;
     const store = new MemoryWakeStore();
+    const unit = { ...terminals[1]!, agentIdentity: 'opencode', branch: 'refs/heads/fix/stale' };
+    const owned = parkFixture([{ pane: unit, issue: 635 }], 'test/project');
     const run = () => tick({
-      terminals: [{ ...terminals[1]!, agentIdentity: 'opencode' }],
+      terminals: [unit],
       screens: { one: 'PARKED on review run ' + id }, store,
       config: config({ selectedRepository: 'test/project' }),
-      readCurrentAssignments: () => [], listOpenPulls: () => [],
+      executor: owned.executor(fakeOrca({ one: 'PARKED on review run ' + id }, [], [unit])), extra: owned.options,
+      readNamedPull: () => closingPull(635, 635, a), listPublishedIssueFacts: () => [],
+      listOpenPulls: () => [],
       resolveSelectedReviewProject: () => ({
         projectId: 'orchestrator-pack', repository: 'test/project', primaryRoot: primary,
       }),
@@ -5522,5 +5832,301 @@ describe('Issue #2833 short-head CI and stale-heartbeat regressions', () => {
     });
     expect(sendsTo((await run()).calls, 'one')[0]?.join(' ')).toContain('runner-dead');
     expect(sendsTo((await run()).calls, 'one')).toHaveLength(0);
+  });
+});
+
+describe('Issue #2840 named park producer ownership', () => {
+  const repository = 'test/project';
+  const coordinator: FleetTerminal = { ...terminals[0]!, incarnationId: 'coord-2840', status: 'running' };
+  const m643: FleetTerminal = { ...terminals[1]!, incarnationId: 'inc-643', branch: 'refs/heads/fix/643',
+    status: 'running', agentIdentity: 'opencode' };
+  const m644: FleetTerminal = { ...terminals[2]!, incarnationId: 'inc-644', branch: 'refs/heads/fix/644',
+    status: 'running', agentIdentity: 'opencode' };
+  const settings = config({ selectedRepository: repository, orchestratorHandle: coordinator.handle });
+  const texts = (calls: readonly string[][], handle: string) =>
+    sendsTo(calls, handle).filter((row) => row.includes('--text')).map((row) => row[row.indexOf('--text') + 1] ?? '');
+  const H0 = '0'.repeat(39) + 'a', H1 = '1'.repeat(39) + 'b', H2 = '2'.repeat(39) + 'c';
+  const setup = () => parkFixture([{ pane: m643, issue: 643, key: '643' }, { pane: m644, issue: 644, key: '644' }]);
+  const run = (
+    fixture: ReturnType<typeof setup>, screens: Record<string, string>,
+    overrides: Partial<Parameters<typeof tick>[0]> = {}, store: FleetWakeStateStore = new MemoryWakeStore(),
+  ) => tick({
+    config: settings, terminals: [coordinator, m643, m644], store,
+    screens: { coord: 'idle', ...screens },
+    executor: fixture.executor(fakeOrca({ coord: 'idle', ...screens }, [], [coordinator, m643, m644])),
+    resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack', repository, primaryRoot: primary }),
+    listOpenPulls: () => [], listTerminalEnvelopes: () => [], checkRunsFinishedAt: () => undefined,
+    readNamedPull: () => undefined, readPackReviewStage: () => undefined, readNamedReview: () => undefined,
+    readPackReviewRuns: () => [], readChats: async () => [], now: () => 0,
+    extra: fixture.options,
+    ...overrides,
+  });
+
+  it('AC1/AC2: coherent different owner pair corrects only the parking manager once; own turn stays pending then wakes once', async () => {
+    const fixture = setup();
+    fixture.own('inv-644', 1);
+    fixture.own('inv-643', 0);
+    const store = new MemoryWakeStore();
+    const screens = { one: 'PARKED on GPT turn inv-644', two: 'PARKED on GPT turn inv-643' };
+    const first = await run(fixture, screens, {}, store);
+    // #643 parked on #644's invocation and vice versa: each verified manager gets one correction.
+    expect(texts(first.calls, 'one')).toEqual([expect.stringContaining('is not your own producer - park on your own producer')]);
+    expect(texts(first.calls, 'two')).toEqual([expect.stringContaining('is not your own producer')]);
+    expect(texts(first.calls, 'coord')).toHaveLength(0);
+    const repeat = await run(fixture, screens, {}, store);
+    expect(sends(repeat.calls)).toHaveLength(0);
+
+    const own = { one: 'PARKED on GPT turn inv-643' };
+    const pending = await run(fixture, own, {}, new MemoryWakeStore());
+    expect(sends(pending.calls)).toHaveLength(0);
+    const landed = fixture.envelope('inv-643', { lifecycleOutcome: 'incident', turnResultState: 'driver_error',
+      turnResultCause: 'page_closed' });
+    const settledStore = new MemoryWakeStore();
+    const settled = await run(fixture, own, { listTerminalEnvelopes: () => [landed] }, settledStore);
+    expect(texts(settled.calls, 'one')).toEqual([expect.stringContaining('ended state driver_error:page_closed')]);
+    expect(texts(settled.calls, 'one')[0]).not.toMatch(/\bok\b/u);
+    expect(sends((await run(fixture, own, { listTerminalEnvelopes: () => [landed] }, settledStore)).calls)
+      .filter((row) => row.includes('one'))).toHaveLength(0);
+  });
+
+  it.each([
+    ['stale launching handle', { launcher: 'term-old-launcher' }],
+    ['missing launching handle', { launcher: undefined }],
+    ['child cwd outside the selected linked worktrees', { childCwd: '/tmp/standalone-clone' }],
+  ] as const)('AC2: matching owner pair with %s is unverified: no direct send, coordinator exact-invocation step', async (_name, overrides) => {
+    const fixture = setup();
+    fixture.own('inv-stale', 0, overrides);
+    const landed = fixture.envelope('inv-stale');
+    const first = await run(fixture, { one: 'PARKED on GPT turn inv-stale' }, { listTerminalEnvelopes: () => [landed] });
+    expect(sendsTo(first.calls, 'one')).toHaveLength(0);
+    expect(texts(first.calls, 'coord')).toEqual([expect.stringMatching(/UNTRUSTED PANE OBSERVATION.*reconcile this manager Task\/Dispatch for the exact own GPT invocation inv-stale/u)]);
+  });
+
+  it.each([
+    ['no private index', (fixture: ReturnType<typeof setup>) => { void fixture; }],
+    ['owner Task without Dispatch', (fixture: ReturnType<typeof setup>) => fixture.index({ id: 'inv-x', task: fixture.assignments[1]!.taskId, launcher: 'two' })],
+  ] as const)('AC2: %s is unverified, never foreign, pending or complete', async (_name, prepare) => {
+    const fixture = setup();
+    prepare(fixture);
+    const first = await run(fixture, { one: 'PARKED on GPT turn inv-x' },
+      { listTerminalEnvelopes: () => [fixture.envelope('inv-x')] });
+    expect(sendsTo(first.calls, 'one')).toHaveLength(0);
+    expect(texts(first.calls, 'coord')).toHaveLength(1);
+    expect(texts(first.calls, 'coord')[0]).not.toContain('not your own producer');
+  });
+
+  it('AC2: a copied ID on a foreign pane does not veto the proven owner, and the copier is corrected', async () => {
+    const fixture = setup();
+    fixture.own('inv-shared', 0);
+    const screens = { one: 'PARKED on GPT turn inv-shared', two: 'PARKED on GPT turn inv-shared' };
+    const first = await run(fixture, screens, { listTerminalEnvelopes: () => [fixture.envelope('inv-shared')] });
+    expect(texts(first.calls, 'one')).toEqual([expect.stringContaining('ended state ok')]);
+    expect(texts(first.calls, 'two')).toEqual([expect.stringContaining('is not your own producer')]);
+  });
+
+  it('AC2: an own triplet with two settled members stays pending; the third settles one aggregate Wake', async () => {
+    const fixture = setup();
+    for (const id of ['t-a', 't-b', 't-c']) fixture.own(id, 0);
+    const screens = { one: 'PARKED on GPT turns t-a, t-b, t-c' };
+    const store = new MemoryWakeStore();
+    const partial = await run(fixture, screens,
+      { listTerminalEnvelopes: () => [fixture.envelope('t-a'), fixture.envelope('t-b')] }, store);
+    expect(sends(partial.calls)).toHaveLength(0);
+    const all = await run(fixture, screens, { listTerminalEnvelopes: () => ['t-a', 't-b', 't-c'].map((id) => fixture.envelope(id)) }, store);
+    expect(texts(all.calls, 'one')).toEqual([expect.stringContaining('terminal-envelope-settled')]);
+  });
+
+  it('AC1: a same-pane worker replacement before the single native call withholds the direct send', async () => {
+    const fixture = setup();
+    fixture.own('inv-rebind', 0);
+    const screens = { one: 'PARKED on GPT turn inv-rebind' };
+    const base = fixture.executor(fakeOrca({ coord: 'idle', ...screens }, [], [coordinator, m643, m644]));
+    let shows = 0;
+    const executor: OrcaExecutor = (args) => {
+      const response = base(args);
+      if (args[1] !== 'worker-show' || args[args.indexOf('--dispatch') + 1] !== fixture.assignments[0]!.bindingKey
+        || shows++ === 0) return response;
+      // The Dispatch now reports a replacement worker incarnation on the same handle.
+      const body = JSON.parse(response.stdout) as { result: { terminal: Record<string, unknown> } };
+      body.result.terminal.incarnationId = 'inc-643-replacement';
+      return commandResult(JSON.stringify(body));
+    };
+    const first = await run(fixture, screens, { executor,
+      listTerminalEnvelopes: () => [fixture.envelope('inv-rebind')] });
+    expect(sendsTo(first.calls, 'one')).toHaveLength(0);
+    expect(first.logs.join('\n')).toContain('manager Task/Dispatch, assignment or pane changed');
+  });
+
+  it('AC1: an unverified native receipt for a correction stays attempted_unverified', async () => {
+    const fixture = setup();
+    fixture.own('inv-644', 1);
+    const screens = { one: 'PARKED on GPT turn inv-644' };
+    const base = fixture.executor(fakeOrca({ coord: 'idle', ...screens }, [], [coordinator, m643, m644]));
+    const store = new MemoryWakeStore();
+    const first = await run(fixture, screens, {
+      executor: (args) => args[1] === 'send' ? commandResult('{') : base(args),
+    }, store);
+    expect(sendsTo(first.calls, 'one')).toHaveLength(1);
+    expect([...store.eventStatus.entries()].filter(([key]) => key.startsWith('correct:one:')))
+      .toEqual([[expect.any(String), 'attempted_unverified']]);
+  });
+
+  it('AC3: own CI PR head H0 moved to open H1 sends one H1 re-park; foreign or closer-less PR never does', async () => {
+    const fixture = setup();
+    const screens = { one: 'PARKED on CI PR #50 head ' + H0 };
+    const finished = (_repository: string, sha: string) => sha === H0 ? 1 : undefined;
+    const moved = await run(fixture, screens, { readNamedPull: () => closingPull(50, 643, H1), checkRunsFinishedAt: finished });
+    expect(texts(moved.calls, 'one')).toEqual(['Wake: PR #50 head moved to ' + H1 + ' - re-read PR #50 CI and re-park on the current head']);
+    const foreign = await run(fixture, screens, { readNamedPull: () => closingPull(50, 644, H0), checkRunsFinishedAt: finished });
+    expect(texts(foreign.calls, 'one')).toEqual([expect.stringContaining('is not your own producer')]);
+    const unlinked = await run(fixture, screens, {
+      readNamedPull: () => ({ ...closingPull(50, 643, H0), body: 'Refs #643' }), checkRunsFinishedAt: finished });
+    expect(sendsTo(unlinked.calls, 'one')).toHaveLength(0);
+    expect(texts(unlinked.calls, 'coord')).toEqual([expect.stringContaining('no unique closing Issue')]);
+    const closedMoved = await run(fixture, screens, { readNamedPull: () => closingPull(50, 643, H1, 'closed', true) });
+    expect(sendsTo(closedMoved.calls, 'one')).toHaveLength(0);
+    const closedSame = await run(fixture, screens, { readNamedPull: () => closingPull(50, 643, H0, 'closed', true), checkRunsFinishedAt: finished });
+    expect(texts(closedSame.calls, 'one')).toEqual([expect.stringContaining('ended state checks-completed')]);
+  });
+
+  it('AC3: H1 to H2 seen on the last pre-send read withholds the stale H1 advisory', async () => {
+    const fixture = setup();
+    let reads = 0;
+    const first = await run(fixture, { one: 'PARKED on CI PR #50 head ' + H0 }, {
+      readNamedPull: () => closingPull(50, 643, reads++ === 0 ? H1 : H2),
+    });
+    expect(sendsTo(first.calls, 'one')).toHaveLength(0);
+    expect(first.logs.join('\n')).toContain('re-check the own PR and its exact current head');
+  });
+
+  it('AC4: a review on an older commit does not complete H0; the H0 review does', async () => {
+    const fixture = setup();
+    const screens = { one: 'PARKED on PR #50 review #7 head ' + H0 };
+    const older = await run(fixture, screens, { readNamedPull: () => closingPull(50, 643, H0),
+      readNamedReview: () => ({ id: 7, state: 'APPROVED', commitSha: H1, submittedAt: '2026-11-16T00:00:00Z' }) });
+    expect(sends(older.calls)).toHaveLength(0);
+    const exact = await run(fixture, screens, { readNamedPull: () => closingPull(50, 643, H0),
+      readNamedReview: () => ({ id: 7, state: 'APPROVED', commitSha: H0, submittedAt: '2026-11-16T00:00:00Z' }) });
+    expect(texts(exact.calls, 'one')).toEqual([expect.stringContaining('ended state review-submitted')]);
+  });
+
+  it.each(['PARKED on CI on ' + H0.slice(0, 7), 'PARKED on pack-review #50'])(
+    'AC4: %s cannot invent H0 and asks the verified manager for an exact re-park', async (wait) => {
+      const fixture = setup();
+      const first = await run(fixture, { one: wait }, {
+        readNamedPull: () => closingPull(50, 643, H0), checkRunsFinishedAt: () => 1,
+        readPackReviewStage: () => ({ state: 'success', description: 'ok' }),
+        listOpenPulls: () => [{ number: 50, ref: 'fix/643', sha: H0, issue: 643 }],
+      });
+      expect(texts(first.calls, 'one')).toEqual([expect.stringContaining('names no exact PR head - re-read your own PR and re-park as CI PR #N head SHA40')]);
+      expect(texts(first.calls, 'one')[0]).not.toContain('ended state');
+    });
+
+  describe('AC4 review run against a persisted store record', () => {
+    let wait = '';
+    // Create a real record with the production store, then rewrite the persisted
+    // JSON (e.g. drop raw headSha) so reads go through parseRecord/discovery.
+    const persist = (mutate: (raw: Record<string, unknown>) => void) => {
+      const storeRoot = mkdtempSync(join(tmpdir(), 'fleet-wake-2840-runs-'));
+      const created = createPackReviewRun({ projectId: 'orchestrator-pack', storeRoot, prNumber: 50, headSha: H0,
+        trustedPackRoot: primary, sourceRepoRoot: primary, canonicalRepository: repository, resolvedReviewer: 'gpt' });
+      const path = join(storeRoot, 'runs', created.run.id + '.json');
+      const raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+      raw.status = 'commented';
+      raw.latestRunStatus = 'commented';
+      mutate(raw);
+      writeFileSync(path, JSON.stringify(raw));
+      vi.stubEnv('PACK_REVIEW_RUN_STORE_ROOT', storeRoot);
+      wait = 'PARKED on review run ' + created.run.id;
+      return created.run.id;
+    };
+    const runStore = (fixture: ReturnType<typeof setup>, head: string, state: 'open' | 'closed' = 'open', issue = 643) =>
+      run(fixture, { one: wait }, { readPackReviewRuns: undefined,
+        readNamedPull: () => closingPull(50, issue, head, state, state === 'closed') });
+
+    it('normalizes a legacy record without raw headSha and reports its actual status at unchanged H0', async () => {
+      persist((raw) => { delete raw.headSha; });
+      try {
+        const first = await runStore(setup(), H0);
+        expect(first.logs.join('\n')).not.toContain('run store unreadable');
+        expect(texts(first.calls, 'one')).toEqual([expect.stringContaining('ended state commented')]);
+        expect(texts(first.calls, 'one')[0]).toContain('PR-50-head-' + H0);
+      } finally { vi.unstubAllEnvs(); }
+    });
+
+    it.each(['commented', 'running'])('a %s legacy run on an own PR moved to open H1 only asks for an H1 re-park', async (status) => {
+      persist((raw) => { delete raw.headSha; raw.status = status; raw.latestRunStatus = status;
+        raw.runnerPid = process.pid; raw.heartbeatAtUtc = new Date().toISOString(); });
+      try {
+        const first = await runStore(setup(), H1);
+        expect(texts(first.calls, 'one')).toEqual(['Wake: PR #50 head moved to ' + H1 + ' - re-read PR #50 CI and re-park on the current head']);
+        const closed = await runStore(setup(), H1, 'closed');
+        expect(sendsTo(closed.calls, 'one')).toHaveLength(0);
+      } finally { vi.unstubAllEnvs(); }
+    });
+
+    it('an actually mismatched persisted headSha is unverified; an invalid SHA is rejected by the parser', async () => {
+      persist((raw) => { raw.headSha = H1; });
+      try {
+        const mismatch = await runStore(setup(), H0);
+        expect(sendsTo(mismatch.calls, 'one')).toHaveLength(0);
+        expect(texts(mismatch.calls, 'coord')).toEqual([expect.stringContaining('target and head disagree')]);
+      } finally { vi.unstubAllEnvs(); }
+      persist((raw) => { raw.headSha = 'not-a-sha'; });
+      try {
+        const invalid = await runStore(setup(), H0);
+        expect(sendsTo(invalid.calls, 'one')).toHaveLength(0);
+        expect(texts(invalid.calls, 'one')).toHaveLength(0);
+      } finally { vi.unstubAllEnvs(); }
+    });
+
+    it('a run for a foreign PR corrects the parking manager instead of reporting its status', async () => {
+      persist(() => {});
+      try {
+        const first = await runStore(setup(), H0, 'open', 644);
+        expect(texts(first.calls, 'one')).toEqual([expect.stringContaining('is not your own producer')]);
+      } finally { vi.unstubAllEnvs(); }
+    });
+  });
+
+  it('AC5: own PR merge wakes; a foreign merged PR is corrected, never completed', async () => {
+    const fixture = setup();
+    const own = await run(fixture, { one: 'PARKED on PR #50 merged' }, { readNamedPull: () => closingPull(50, 643, H0, 'closed', true) });
+    expect(texts(own.calls, 'one')).toEqual([expect.stringContaining('ended state merged')]);
+    const foreign = await run(fixture, { one: 'PARKED on merge-51' }, { readNamedPull: () => closingPull(51, 900, H0, 'closed', true) });
+    expect(texts(foreign.calls, 'one')).toEqual([expect.stringContaining('is not your own producer')]);
+  });
+
+  it.each([
+    ['ordinary', 'PARKED on terminal term-gone incarnation inc-gone'],
+    ['merge agent', 'PARKED on merge agent terminal term-gone incarnation inc-gone PR #50'],
+  ])('AC5: an apparently foreign %s terminal exit is unverified: no direct Wake or correction', async (_kind, wait) => {
+    const fixture = setup();
+    const exited: FleetTerminal = { handle: 'term-gone', title: 'merge agent', worktreePath: workerBase + '/gone',
+      incarnationId: 'inc-gone', status: 'exited' };
+    const first = await run(fixture, { one: wait }, {
+      terminals: [coordinator, m643, m644, exited],
+      executor: fixture.executor(fakeOrca({ coord: 'idle', one: wait }, [], [coordinator, m643, m644, exited])),
+      readNamedPull: () => closingPull(50, 643, H0, 'closed', true),
+    });
+    expect(sendsTo(first.calls, 'one')).toHaveLength(0);
+    expect(texts(first.calls, 'coord')).toEqual([expect.stringContaining('bare terminal exit is not producer Task evidence')]);
+  });
+
+  it.each([
+    ['exited own-looking', { state: 'exited', startticks: '77', namespace: 'pid:[1]' }],
+    ['absent', { state: 'absent', namespace: 'pid:[1]' }],
+    ['live long-lived server', { state: 'live', startticks: '77', namespace: 'pid:[1]' }],
+    ['reused', { state: 'live', startticks: '78', namespace: 'pid:[1]' }],
+  ] as const)('AC5: a generic PID park (%s) never produces a process-exited Wake', async (_name, observation) => {
+    const fixture = setup();
+    const store = new MemoryWakeStore();
+    const wait = 'PARKED on process pid 4242 startticks 77';
+    const probePid = () => observation as never;
+    const first = await run(fixture, { one: wait }, { probePid }, store);
+    const second = await run(fixture, { one: wait }, { probePid }, store);
+    expect([...sendsTo(first.calls, 'one'), ...sendsTo(second.calls, 'one')]).toHaveLength(0);
+    expect([...texts(first.calls, 'coord'), ...texts(second.calls, 'coord')])
+      .toEqual([expect.stringContaining('process pid park has no Task-bound producer selector')]);
   });
 });
