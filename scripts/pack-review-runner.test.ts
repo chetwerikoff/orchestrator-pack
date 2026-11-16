@@ -3066,7 +3066,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     });
     expect(delta.created, JSON.stringify(delta)).toBe(true);
     const sourceSlots = oldRound.sourceSlots.map((slot) => {
-      const invocationId = '2835-clean-' + slot.slotId + '-' + toSha.slice(0, 8);
+      const invocationId = `28350000-0000-4000-8000-${String(slot.ordinal).padStart(12, '0')}`;
       const commentIdentity = {
         repository: f.input.repoSlug, prNumber, headSha: toSha,
         runId: delta.run.id, slotId: slot.slotId, invocationId,
