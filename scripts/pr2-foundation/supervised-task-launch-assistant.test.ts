@@ -7299,6 +7299,282 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
     });
     expect(starts).toBe(0);
   });
+
+  describe('Issue #2842 direct Claude', () => {
+    const sonnet = "claude --model 'claude-sonnet-5-5' --effort 'high'";
+    const opus = "claude --model 'claude-opus-5-5' --effort 'medium'";
+
+    it.each([
+      ['Sonnet', 'claude-sonnet-5-5', 'high', sonnet],
+      ['Opus', 'claude-opus-5-5', 'medium', opus],
+    ])('admits command-present fresh %s; commandless identity is not authority',
+      async (family, model, effort, command) => {
+        const env = claudeEnv(model, effort);
+        let starts = 0;
+        const native = observedClaudeAdapter(command, family, effort, { commandObserved: true });
+        const result = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), env, issueNumber: 2842 },
+          deps({ adapter: native, onSupervised: () => { starts += 1; } }));
+        expect(result.outcome).toBe('ready');
+        expect(starts).toBe(1);
+      });
+
+    it.each([
+      "caveman --plugin-dir '/tmp/plugin' claude --model 'claude-sonnet-5-5' --effort 'high'",
+      "claude --plugin-dir '/tmp/plugin' --model 'claude-sonnet-5-5' --effort 'high'",
+      "claude --model 'claude-sonnet-5-5' --effort 'high' --effort 'medium'",
+      "claude --model 'claude-sonnet-5-5' --effort 'high'; echo hi",
+      "echo claude --model 'claude-sonnet-5-5' --effort 'high'",
+      '',
+    ])('refuses unsupported or commandless native %s before liveness', async (nativeCommand) => {
+      let livenessCalls = 0;
+      const env = claudeEnv('claude-sonnet-5-5', 'high');
+      const original = observedClaudeAdapter(sonnet, 'Sonnet', 'high', { commandOverride: nativeCommand });
+      const adapter: RuntimeAdapter = { ...original, liveness: (input, options) => {
+        livenessCalls += 1;
+        return original.liveness(input, options);
+      } };
+      const result = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), env, issueNumber: 2842 },
+        deps({ adapter }));
+      expect(result).toMatchObject({ outcome: 'continue', stage: 'terminal_prepare' });
+      expect(livenessCalls).toBe(0);
+    });
+
+    it('accepts normal standalone input glyph, rejects editor and transcript status facsimiles', async () => {
+      const env = claudeEnv('claude-sonnet-5-5', 'high');
+      const profile = resolveExecutorProfile('manager', env, 'exact_terminal_worktree');
+      if (profile.status !== 'ok') throw Error('profile not selected');
+      const original = observedClaudeAdapter(sonnet, 'Sonnet', 'high', { commandObserved: true });
+      expect(await claudePaneProfileObserved(profile.value, worker, original)).toBe(true);
+      for (const lines of [
+        ['Claude Code', 'Editor:', 'Sonnet 5.5 · effort: high'],
+        ['Claude Code', 'Transcript:', 'Sonnet 5.5 · effort: high'],
+        ['Claude Code', '> Sonnet 5.5 · effort: high'],
+        ['Claude Code', 'Sonnet 5.5 · effort: high', 'Opus 5.5 · effort: medium'],
+      ]) {
+        const adapter: RuntimeAdapter = { ...original, readBoundedOutputAsync: async (input, options) => {
+          const observed = await original.readBoundedOutputAsync!(input, options);
+          return observed.status === 'ok' ? { ...observed, value: { ...observed.value, lines } } : observed;
+        } };
+        expect(await claudePaneProfileObserved(profile.value, worker, adapter)).toBe(false);
+      }
+    });
+  });
+
+  describe('Issue #2842 observation deadline', () => {
+    const command = "claude --model 'claude-sonnet-5-5' --effort 'high'";
+    const env = claudeEnv('claude-sonnet-5-5', 'high');
+
+    it('budgets initial/repeated/final native lookup, show, screen and liveness from one clock', async () => {
+      let ticks = 0, starts = 0;
+      const calls: Array<{ kind: string; timeoutMs?: number; windowMs?: number }> = [];
+      const base = observedClaudeAdapter(command, 'Sonnet', 'high', { commandObserved: true });
+      const adapter: RuntimeAdapter = {
+        ...base,
+        findWorkerById: (id, options) => {
+          calls.push({ kind: 'find', timeoutMs: options?.timeoutMs }); ticks += 5;
+          return base.findWorkerById(id, options);
+        },
+        observeComposerFamily: (id, options) => {
+          calls.push({ kind: 'show', timeoutMs: options?.timeoutMs }); ticks += 5;
+          return base.observeComposerFamily!(id, options);
+        },
+        readBoundedOutputAsync: async (input, options) => {
+          calls.push({ kind: 'screen', timeoutMs: options?.timeoutMs }); ticks += 5;
+          return base.readBoundedOutputAsync!(input, options);
+        },
+        liveness: (input, options) => {
+          calls.push({ kind: 'liveness', timeoutMs: options?.timeoutMs, windowMs: input.observationWindowMs });
+          ticks += 5; return base.liveness(input, options);
+        },
+      };
+      const start = readyStart('task-1');
+      const supervised: SupervisedWorkerStartResult = { ...start,
+        assignment: { ...start.assignment!, issueNumber: 2842, role: 'orchestrator' },
+        receipt: { ...start.receipt!, effects: [{ kind: 'worktree', action: 'reused', id: 'repo::exact-worktree' }] },
+      };
+      const result = await runSupervisedTaskLaunchAssistant({
+        ...launchInput('manager'), env, issueNumber: 2842, existingTerminal: worker.identity.id,
+      }, { ...deps({ adapter, supervised, onSupervised: () => { starts += 1; } }),
+        now: () => 0, monotonicNow: () => ticks });
+      expect(result.outcome).toBe('ready');
+      expect(starts).toBe(1);
+      expect(calls.filter((call) => call.kind === 'find')).toHaveLength(3);
+      for (const call of calls) {
+        expect(call.timeoutMs).toBeGreaterThan(0);
+        if (call.kind === 'liveness') {
+          expect(call.timeoutMs).toBeLessThanOrEqual(60_000);
+          expect(call.windowMs).toBeLessThanOrEqual(30_000);
+        } else expect(call.timeoutMs).toBeLessThanOrEqual(2_000);
+      }
+    });
+
+    it.each([60_000, 60_001])('refuses final awaited Dispatch at %i ms with zero starts', async (late) => {
+      let ticks = 0, dispatches = 0, starts = 0;
+      const base = deps({ adapter: observedClaudeAdapter(command, 'Sonnet', 'high', { commandObserved: true }) });
+      const result = await runSupervisedTaskLaunchAssistant({
+        ...launchInput('manager'), env, issueNumber: 2842, existingTerminal: worker.identity.id,
+      }, { ...base, now: () => 0, monotonicNow: () => ticks,
+        observeDispatch: async () => {
+          dispatches += 1;
+          if (dispatches === 2) ticks = late;
+          return { status: 'ok', value: { kind: 'absent' } };
+        },
+        runSupervisedStart: async (input) => { starts += 1; return readyStart(String(input.orcaArgs[1])); },
+      });
+      expect(dispatches).toBe(2);
+      expect(result).toMatchObject({ outcome: 'continue', stage: 'dispatch_admission_final',
+        observedCause: 'terminal_observation_deadline', nextAction: { kind: 'remediate_terminal' } });
+      expect(starts).toBe(0);
+    });
+
+    it('forwards bounded outer fresh-spawn timeout and never starts after slow create/fallback', async () => {
+      let ticks = 0, liveness = 0, starts = 0, spawns = 0, passedTimeout = 0;
+      const base = observedClaudeAdapter(command, 'Sonnet', 'high', { commandObserved: true });
+      const adapter: RuntimeAdapter = {
+        ...base,
+        spawnWorker: (_input, options) => {
+          spawns += 1; passedTimeout = options?.timeoutMs ?? 0; ticks = 60_001;
+          return { status: 'ok', value: worker };
+        },
+        liveness: (input, options) => { liveness += 1; return base.liveness(input, options); },
+      };
+      const result = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), env, issueNumber: 2842 },
+        { ...deps({ adapter, onSupervised: () => { starts += 1; } }), now: () => 0,
+          monotonicNow: () => ticks });
+      expect(result).toMatchObject({ outcome: 'continue', stage: 'terminal_prepare',
+        observedCause: 'terminal_observation_deadline' });
+      expect(passedTimeout).toBe(60_000);
+      expect(spawns).toBe(1);
+      expect(liveness).toBe(0);
+      expect(starts).toBe(0);
+    });
+
+    it('limits frozen-clock read attempts to 121 and yields at least 500ms between failed reads', async () => {
+      let reads = 0, gaps = 0;
+      const native = observedClaudeAdapter(command, 'Sonnet', 'high', {
+        commandObserved: true, hideFooter: true, onRead: () => { reads += 1; },
+      });
+      const result = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), env, issueNumber: 2842 },
+        { ...deps({ adapter: native }), now: () => 0, monotonicNow: () => 0,
+          delay: async (ms) => { expect(ms).toBeGreaterThanOrEqual(500); gaps += 1; } });
+      expect(result).toMatchObject({ outcome: 'continue', observedCause: 'executor_effort_channel_unavailable' });
+      expect(reads).toBe(121);
+      expect(gaps).toBe(120);
+    });
+  });
+
+  describe('Issue #2842 existing terminal', () => {
+    const sonnet = "claude --model 'claude-sonnet-5-5' --effort 'high'";
+    const env = claudeEnv('claude-sonnet-5-5', 'high');
+
+    it('propagates parsed selected project for unprefixed Sonnet; one start, zero new terminals', async () => {
+      const parsed = parseLaunchAssistantCli([
+        '--project', 'orchestrator-pack', '--work-class', 'manager', '--run', 'run-1',
+        '--task', 'task-1', '--issue-number', '2842', '--worktree', 'id:manager-worktree',
+        '--existing-terminal', worker.identity.id,
+      ], env, () => ({ projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+        primaryRoot: '/tmp/primary', defaultBranch: 'main' } as ReturnType<typeof import('../lib/target-context.ts').resolveTargetContext>));
+      expect(env.OPK_PROJECT_ID).toBeUndefined();
+      expect(parsed.env?.OPK_PROJECT_ID).toBe('orchestrator-pack');
+      let starts = 0, spawns = 0;
+      let submitted: Parameters<LaunchDependencies['runSupervisedStart']>[0] | undefined;
+      const native = observedClaudeAdapter(sonnet, 'Sonnet', 'high', {
+        commandObserved: true, onSpawn: () => { spawns += 1; },
+      });
+      const original = readyStart('task-1');
+      const supervised: SupervisedWorkerStartResult = { ...original,
+        assignment: { ...original.assignment!, issueNumber: 2842, role: 'orchestrator' },
+        receipt: { ...original.receipt!, effects: [{ kind: 'worktree', action: 'reused', id: 'repo::exact-worktree' }] },
+      };
+      const result = await runSupervisedTaskLaunchAssistant(parsed, {
+        ...deps({ adapter: native }),
+        runSupervisedStart: async (input) => { submitted = input; starts += 1; return supervised; },
+      });
+      expect(result.outcome).toBe('ready');
+      expect(spawns).toBe(0);
+      expect(starts).toBe(1);
+      expect(submitted?.env?.OPK_PROJECT_ID).toBe('orchestrator-pack');
+      expect(submitted?.projectId).toBe('orchestrator-pack');
+      expect(submitted?.repository).toBe('chetwerikoff/orchestrator-pack');
+      expect(submitted?.issueNumber).toBe(2842);
+      expect(submitted?.orcaArgs).toEqual([
+        '--task', 'task-1', '--terminal', worker.identity.id, '--worktree', 'id:manager-worktree',
+      ]);
+    });
+
+    it('refuses commandless existing terminal without liveness or start', async () => {
+      let starts = 0;
+      const result = await runSupervisedTaskLaunchAssistant({
+        ...launchInput('manager'), env, issueNumber: 2842, existingTerminal: worker.identity.id,
+      }, deps({ adapter: observedClaudeAdapter(sonnet, 'Sonnet', 'high'),
+        onSupervised: () => { starts += 1; } }));
+      expect(result).toMatchObject({ outcome: 'continue', stage: 'worktree_prepare',
+        observedCause: 'existing_terminal_project_unverified' });
+      expect(starts).toBe(0);
+    });
+
+    it('reproduces real task-adapter old-title internal recovery, then refuses same commandless shape', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'opk-2842-recovered-title-'));
+      const title = 'opk-manager-task-1';
+      const terminal = { handle: worker.identity.id, incarnationId: worker.identity.generation,
+        worktreePath: worker.workspacePath, title, status: 'running' as const,
+        agentIdentity: 'claude', command: '' };
+      const terminals: typeof terminal[] = [];
+      let creates = 0;
+      const runJson = vi.fn((argv: readonly string[]): OrcaJsonResponse => {
+        const operation = String(argv[0] ?? '') + ' ' + String(argv[1] ?? '');
+        if (operation === 'terminal create') {
+          creates += 1; terminals.push(terminal); return { ok: true, result: { terminal } };
+        }
+        if (operation === 'terminal list') {
+          return { ok: true, result: { totalCount: terminals.length, truncated: false, terminals } };
+        }
+        if (operation === 'terminal show') {
+          const found = terminals.find((row) => row.handle === argv[argv.indexOf('--terminal') + 1]);
+          return found ? { ok: true, result: { terminal: found } }
+            : { ok: false, error: { code: 'not_found', message: 'missing' } };
+        }
+        return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+      });
+      try {
+        const state = { OPK_WAKE_SUPERVISOR_STATE_DIR: root };
+        const first = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env: state });
+        expect(first.spawnWorker({ title, command: sonnet, workspace: worker.workspacePath }).status).toBe('ok');
+        const second = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env: state });
+        const reused = second.spawnWorker({ title,
+          command: "claude --model 'claude-opus-5-5' --effort 'medium'", workspace: worker.workspacePath });
+        expect(reused).toMatchObject({ status: 'ok', value: { identity: worker.identity, provenance: 'internal' } });
+        expect(creates).toBe(1);
+        if (reused.status !== 'ok') throw Error('recovery unavailable');
+        const observed = second.observeComposerFamily?.(reused.value.identity);
+        expect(observed).toMatchObject({ status: 'known', agentIdentity: 'claude', command: '' });
+        const native = observedClaudeAdapter(sonnet, 'Sonnet', 'high');
+        let liveness = 0, starts = 0;
+        const assistantAdapter: RuntimeAdapter = {
+          ...native, spawnWorker: () => reused, observeComposerFamily: () => observed!,
+          liveness: (input, options) => { liveness += 1; return native.liveness(input, options); },
+        };
+        // The real persisted-title adapter and assistant paths share the exact
+        // observable identity/empty command; these remain separate harness seams.
+        const result = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), env, issueNumber: 2842 },
+          deps({ adapter: assistantAdapter, onSupervised: () => { starts += 1; } }));
+        expect(result).toMatchObject({ outcome: 'continue', stage: 'terminal_prepare' });
+        expect(liveness).toBe(0);
+        expect(starts).toBe(0);
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    });
+
+    it('reads fixture cases as synthetic rather than claimed native incident captures', () => {
+      const fixture = JSON.parse(readFileSync(fileURLToPath(new URL('./fixtures/claude-terminal-prepare-pane-cases.json', import.meta.url)), 'utf8')) as {
+        source: string; cases: Array<{ source: string; expected: string }>;
+      };
+      expect(fixture.source).toBe('synthetic');
+      expect(fixture.cases.length).toBeGreaterThanOrEqual(10);
+      expect(fixture.cases.every((row) => row.source === 'synthetic')).toBe(true);
+      expect(fixture.cases.some((row) => row.expected === 'ready')).toBe(true);
+      expect(fixture.cases.some((row) => row.expected === 'continue')).toBe(true);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
