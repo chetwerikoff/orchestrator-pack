@@ -7319,10 +7319,11 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
       observedCause: 'terminal_observation_deadline',
       nextAction: { kind: 'remediate_terminal', note: expect.any(String) },
     });
-    expect(reads).toBe(4);
-    expect(gaps).toHaveLength(3);
+    // 30s / 4 per read: eight 7.5s synthetic reads and seven 500ms gaps cross the 60s admission deadline.
+    expect(reads).toBe(8);
+    expect(gaps).toHaveLength(7);
     expect(gaps.every((ms) => ms >= 500)).toBe(true);
-    expect(elapsedMs).toBeGreaterThanOrEqual(LAUNCH_STARTUP_OBSERVATION_WINDOW_MS);
+    expect(elapsedMs).toBeGreaterThanOrEqual(60_000);
     expect(starts).toBe(0);
   });
 
