@@ -1,0 +1,134 @@
+{
+  "schema": "claude-terminal-prepare-pane-cases/synthetic-v1",
+  "source": "synthetic",
+  "purpose": "Launcher control-flow examples only; no authenticated native process, caveman forwarding, or measured incident elapsed time",
+  "cases": [
+    {
+      "id": "direct-sonnet-high",
+      "source": "synthetic",
+      "nativeCommand": "claude --model 'claude-sonnet-5-5' --effort 'high'",
+      "screen": [
+        "✻ Welcome to Claude Code!",
+        "❯",
+        "Claude Sonnet 5.5 · effort: high"
+      ],
+      "expected": "ready"
+    },
+    {
+      "id": "direct-fresh-opus-medium",
+      "source": "synthetic",
+      "nativeCommand": "OPK_PROJECT_ID='orchestrator-pack' claude --model 'claude-opus-5-5' --effort 'medium'",
+      "screen": [
+        "✻ Welcome to Claude Code!",
+        "❯",
+        "Claude Opus 5.5 · effort: medium"
+      ],
+      "expected": "ready"
+    },
+    {
+      "id": "old-title-internal-commandless",
+      "source": "synthetic",
+      "provenance": "internal",
+      "nativeCreateCalls": 0,
+      "oldTerminal": {
+        "id": "terminal-fresh",
+        "generation": "pty-1"
+      },
+      "agentIdentity": "claude",
+      "nativeCommand": "",
+      "screen": [
+        "✻ Welcome to Claude Code!",
+        "Claude Sonnet 5.5 · effort: high"
+      ],
+      "expected": "continue",
+      "nextAction": "remediate_terminal"
+    },
+    {
+      "id": "opaque-caveman-wrapper",
+      "source": "synthetic",
+      "nativeCommand": "caveman --plugin-dir '/tmp/fixture' claude --model 'claude-sonnet-5-5' --effort 'high'",
+      "expected": "continue",
+      "nextAction": "repair_executor_profile"
+    },
+    {
+      "id": "plugin-dir-not-model",
+      "source": "synthetic",
+      "nativeCommand": "claude --plugin-dir '/tmp/fixture'",
+      "expected": "continue",
+      "nextAction": "repair_executor_profile"
+    },
+    {
+      "id": "duplicate-effort",
+      "source": "synthetic",
+      "nativeCommand": "claude --model 'claude-sonnet-5-5' --effort 'high' --effort 'medium'",
+      "expected": "continue",
+      "nextAction": "repair_executor_profile"
+    },
+    {
+      "id": "quoted-status",
+      "source": "synthetic",
+      "nativeCommand": "claude --model 'claude-sonnet-5-5' --effort 'high'",
+      "screen": [
+        "Claude Code",
+        "```",
+        "Sonnet 5.5 · effort: high",
+        "```"
+      ],
+      "expected": "continue",
+      "nextAction": "repair_executor_profile"
+    },
+    {
+      "id": "wrong-source",
+      "source": "synthetic",
+      "nativeCommand": "claude --model 'claude-sonnet-5-5' --effort 'high'",
+      "screenSource": "stream",
+      "screen": [
+        "Claude Code",
+        "Sonnet 5.5 · effort: high"
+      ],
+      "expected": "continue",
+      "nextAction": "repair_executor_profile"
+    },
+    {
+      "id": "slow-native-first-lookup",
+      "source": "synthetic",
+      "simulatedMonotonicMs": 60000,
+      "edge": "findWorkerById:first",
+      "expected": "continue",
+      "nextAction": "remediate_terminal"
+    },
+    {
+      "id": "slow-native-final-dispatch",
+      "source": "synthetic",
+      "simulatedMonotonicMs": 60000,
+      "edge": "observeDispatch:final-async",
+      "expected": "continue",
+      "nextAction": "remediate_terminal"
+    },
+    {
+      "id": "slow-fresh-create-fallback",
+      "source": "synthetic",
+      "simulatedMonotonicMs": 60001,
+      "edge": "spawnWorker:terminal-create/fallback-lookup",
+      "nativeCreateCalls": 1,
+      "expected": "continue",
+      "nextAction": "remediate_terminal"
+    },
+    {
+      "id": "slow-native-liveness",
+      "source": "synthetic",
+      "simulatedMonotonicMs": 60001,
+      "edge": "liveness:terminal-wait",
+      "expected": "continue",
+      "nextAction": "remediate_terminal"
+    },
+    {
+      "id": "slow-native-screen",
+      "source": "synthetic",
+      "simulatedMonotonicMs": 60001,
+      "edge": "readBoundedOutputAsync:screen",
+      "expected": "continue",
+      "nextAction": "remediate_terminal"
+    }
+  ]
+}

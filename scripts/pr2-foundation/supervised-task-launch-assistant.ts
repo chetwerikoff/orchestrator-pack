@@ -355,6 +355,10 @@ export interface LaunchDependencies {
   readonly adapter: RuntimeAdapter;
   readonly runSupervisedStart: typeof runSupervisedWorkerStart;
   readonly now: () => number;
+  /** Monotonic admission clock; owner-local override permits deterministic deadline tests. */
+  readonly monotonicNow?: () => number;
+  /** Non-spinning retry spacing; owner-local override for synthetic tests. */
+  readonly delay?: (ms: number) => Promise<void>;
 }
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -813,48 +817,92 @@ function retryProviderArgs(profile: ExecutorProfile): string[] {
   return (profile.providerArgs ?? []).map((arg) => arg.startsWith('--') ? arg : quote(arg));
 }
 
+const CLAUDE_ADMISSION_DEADLINE_MS = 60_000;
+const CLAUDE_OBSERVATION_ATTEMPTS = 121;
+const CLAUDE_OBSERVATION_GAP_MS = 500;
+
+function canonicalClaudeCommand(profile: ExecutorProfile): string | null {
+  if (profile.family !== 'claude' || !profile.model || !profile.effort) return null;
+  // A closed direct grammar, not a shell-token substring or a wrapper forwarding guess.
+  if (!((profile.model === 'claude-sonnet-5-5' && profile.effort === 'high')
+    || (profile.model === 'claude-opus-5-5' && profile.effort === 'medium'))) return null;
+  return `claude --model ${quote(profile.model)} --effort ${quote(profile.effort)}`;
+}
+
+function matchingDirectClaudeCommand(
+  profile: ExecutorProfile, command: string | undefined, projectId?: string,
+): boolean {
+  const direct = canonicalClaudeCommand(profile);
+  if (!direct || !command) return false;
+  const prefix = projectId ? `OPK_PROJECT_ID=${quote(projectId)} ` : '';
+  if (profile.launchCommand !== direct && (!prefix || profile.launchCommand !== prefix + direct)) return false;
+  return command === direct || Boolean(prefix && command === prefix + direct);
+}
+
 /**
- * Claude readiness is observed on the exact native pane, not inferred from
- * argv, a terminal title, or generic idle liveness. A present terminal-show
- * command must match the launch command; without it, the native agentIdentity
- * must be exactly claude. Model and effort are proven only by the screen footer.
+ * The native adapter-trimmed command is the only exposed launch-argument evidence.
+ * Screen footer corroborates same-generation readiness, never substitutes for a
+ * missing direct native command or proves actual process argv/model/effort.
  */
 export async function claudePaneProfileObserved(
   profile: ExecutorProfile,
   worker: RuntimeWorker,
   adapter: RuntimeAdapter,
+  options: {
+    readonly deadlineMs?: number;
+    readonly monotonicNow?: () => number;
+    readonly expectedCommand?: string;
+    readonly projectId?: string;
+  } = {},
 ): Promise<boolean> {
-  if (profile.family !== 'claude' || !profile.model || !profile.effort) return false;
-  const observed = adapter.observeComposerFamily?.(worker.identity);
+  const now = options.monotonicNow ?? (() => performance.now());
+  const budget = (): number | undefined => options.deadlineMs === undefined
+    ? undefined : Math.max(0, Math.floor(Math.min(2_000, options.deadlineMs - now())));
+  const firstBudget = budget();
+  if (firstBudget !== undefined && firstBudget < 1) return false;
+  const observed = adapter.observeComposerFamily?.(worker.identity,
+    firstBudget === undefined ? undefined : { timeoutMs: firstBudget });
   if (!observed || observed.status !== 'known' || observed.family !== 'non-opencode'
-    || (observed.command
-      ? observed.command !== profile.launchCommand
-      : observed.agentIdentity !== 'claude')) return false;
-  // The existing Orca async screen-read seam revalidates this composite
-  // generation while keeping this supervised launch path non-blocking.
+    || !matchingDirectClaudeCommand(profile, observed.command, options.projectId)
+    || (options.expectedCommand !== undefined && observed.command !== options.expectedCommand)
+    || (options.deadlineMs !== undefined && now() >= options.deadlineMs)) return false;
   if (!adapter.readBoundedOutputAsync) return false;
-  const screen = await adapter.readBoundedOutputAsync({ worker: worker.identity, screen: true, limit: 120 });
-  if (screen.status !== 'ok' || screen.value.source !== 'screen'
+  const readBudget = budget();
+  if (readBudget !== undefined && readBudget < 1) return false;
+  let screen: Awaited<ReturnType<NonNullable<RuntimeAdapter['readBoundedOutputAsync']>>>;
+  try {
+    screen = await adapter.readBoundedOutputAsync({ worker: worker.identity, screen: true, limit: 120 },
+      readBudget === undefined ? undefined : { timeoutMs: readBudget });
+  } catch {
+    return false;
+  }
+  if ((options.deadlineMs !== undefined && now() >= options.deadlineMs)
+    || screen.status !== 'ok' || screen.value.source !== 'screen'
     || screen.value.terminalState !== 'running'
     || !sameIdentity(screen.value.worker, worker.identity)) return false;
-  const lines = screen.value.lines.map((line) => line.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/gu, ''));
-  if (!lines.some((line) => /\bClaude Code\b/iu.test(line))) return false;
-  const footer = lines.flatMap((line) => line.split(/\r?\n/u)).slice(-20);
-  const family = profile.model === 'claude-opus-5-5' ? 'Opus'
-    : profile.model === 'claude-sonnet-5-5' ? 'Sonnet' : '';
-  if (!family) return false;
-  // Read the final model status row, never a model/effort quoted by transcript text.
+  const lines = screen.value.lines.flatMap((line) => line.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/gu, '').split(/\r?\n/u));
+  if (!lines.some((line) => /^\s*(?:✻\s*)?(?:Welcome to\s+)?Claude Code\b/iu.test(line))) return false;
+  const footer = lines.slice(-20);
+  const family = profile.model === 'claude-opus-5-5' ? 'Opus' : 'Sonnet';
   const statusRow = /^\s*(?:Claude\s+)?(?:Opus|Sonnet)(?:[- .]?5[- .]?5)\b/iu;
-  let modelIndex = footer.length - 1;
-  while (modelIndex >= 0 && !statusRow.test(footer[modelIndex]!)) modelIndex -= 1;
-  if (modelIndex < 0) return false;
+  const matches = footer.flatMap((line, index) => statusRow.test(line) ? [index] : []);
+  if (matches.length !== 1) return false;
+  const modelIndex = matches[0]!;
+  // Detectable editor, fenced, quote or transcript frames cannot act as status.
+  if (footer.slice(0, modelIndex + 1).some((line) =>
+    /^\s*(?:```|~~~|>\s|(?:Transcript|Editor|Quoted)\s*:)/iu.test(line))) return false;
   const modelLine = new RegExp(`^\\s*(?:Claude\\s+)?${family}(?:[- .]?5[- .]?5)\\b`, 'iu');
   const row = footer[modelIndex]!;
   if (!modelLine.test(row)) return false;
   const effortLine = new RegExp(`^\\s*(?:effort\\s*[:=]\\s*${profile.effort}|${profile.effort}\\s+effort)\\s*$`, 'iu');
   const suffix = row.replace(modelLine, '').replace(/^\s*[·|•]\s*/u, '').trim();
-  return suffix.toLowerCase() === profile.effort.toLowerCase() || effortLine.test(suffix)
-    || (!suffix && footer.slice(modelIndex + 1).some((line) => effortLine.test(line)));
+  // A status footer admits only one compatible effort row anywhere, or a
+  // matching inline model/effort row without any separate effort status.
+  const effortStatusRow = /^\s*(?:effort\s*[:=]\s*\S.*|\S+\s+effort)\s*$/iu;
+  const effortRows = footer.filter((line) => effortStatusRow.test(line));
+  const inlineEffort = suffix.toLowerCase() === profile.effort?.toLowerCase() || effortLine.test(suffix);
+  return suffix ? inlineEffort && effortRows.length === 0
+    : effortRows.length === 1 && effortLine.test(effortRows[0]!);
 }
 
 /** Reobserve selected-worktree terminals and Linux /proc processes, ignoring other fleets. */
@@ -1260,13 +1308,34 @@ export async function runSupervisedTaskLaunchAssistant(
     restoreBefore = { selected: selected.value };
   }
 
+  const monotonicNow = deps.monotonicNow ?? (() => performance.now());
+  const delay = deps.delay ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  let existingClaudeDeadline: number | undefined;
+  let freshClaudeDeadline: number | undefined;
+  const admissionDeadline = (): number | undefined => existingClaudeDeadline ?? freshClaudeDeadline;
+  const nativeBudget = (cap: number): number => {
+    const deadline = admissionDeadline();
+    return deadline === undefined ? Math.floor(cap)
+      : Math.max(0, Math.floor(Math.min(cap, deadline - monotonicNow())));
+  };
+  const expired = (): boolean => admissionDeadline() !== undefined && nativeBudget(60_000) < 1;
+  const deadlineEdge = (): Extract<EdgeResult<never>, { status: 'continue' }> => ({
+    status: 'continue', cause: 'terminal_observation_deadline', actor: 'orchestrator',
+    nextAction: { kind: 'remediate_terminal',
+      note: 'The single bound Claude admission window expired; inspect the exact native Task/terminal/Dispatch and retry only the supported same-Task route. Never create a replacement terminal or start late.' },
+  });
   const providerMode = profile.route === 'provider_new_top_level';
   let reusedIdentity: RuntimeWorkerIdentity | undefined;
   let reusedCommand: string | undefined;
   let reusedOpenCodeIds: OpenCodeLaunchIds | undefined;
   const prepareStep = (): Promise<EdgeResult<PreparedWorktree>> => {
     if (input.existingTerminal) {
-      const observed = deps.adapter.findWorkerById(input.existingTerminal);
+      if (profile.family === 'claude') existingClaudeDeadline = monotonicNow() + CLAUDE_ADMISSION_DEADLINE_MS;
+      if (expired()) return Promise.resolve(deadlineEdge());
+      const firstTimeout = profile.family === 'claude' ? nativeBudget(2_000) : undefined;
+      const observed = deps.adapter.findWorkerById(input.existingTerminal,
+        firstTimeout === undefined ? undefined : { timeoutMs: firstTimeout });
+      if (expired()) return Promise.resolve(deadlineEdge());
       if (observed.status !== 'ok' || !observed.value
         || observed.value.identity.runtime !== deps.adapter.id
         || observed.value.identity.id !== input.existingTerminal
@@ -1278,9 +1347,20 @@ export async function runSupervisedTaskLaunchAssistant(
             note: 'prove the exact native terminal/worktree; never select by title or stale pane text' } });
       }
       reusedIdentity = observed.value.identity;
-      const selection = deps.adapter.observeComposerFamily?.(observed.value.identity);
+      if (expired()) return Promise.resolve(deadlineEdge());
+      const showTimeout = profile.family === 'claude' ? nativeBudget(2_000) : undefined;
+      const selection = deps.adapter.observeComposerFamily?.(observed.value.identity,
+        showTimeout === undefined ? undefined : { timeoutMs: showTimeout });
+      if (expired()) return Promise.resolve(deadlineEdge());
+      const unprefixedSonnet = profile.family === 'claude'
+        && profile.model === 'claude-sonnet-5-5' && profile.effort === 'high'
+        && selection?.status === 'known'
+        && selection.command === canonicalClaudeCommand(profile);
       if (!selection || selection.status !== 'known'
-        || !selection.command?.startsWith(`OPK_PROJECT_ID=${quote(projectId)} `)) {
+        || (profile.family === 'claude'
+          ? (!matchingDirectClaudeCommand(profile, selection.command, projectId)
+            || (!unprefixedSonnet && !selection.command?.startsWith(`OPK_PROJECT_ID=${quote(projectId)} `)))
+          : !selection.command?.startsWith(`OPK_PROJECT_ID=${quote(projectId)} `))) {
         return Promise.resolve({ status: 'continue' as const,
           cause: 'existing_terminal_project_unverified', actor: 'orchestrator' as const,
           nextAction: { kind: 'remediate_terminal' as const,
@@ -1378,7 +1458,9 @@ export async function runSupervisedTaskLaunchAssistant(
   const projectPrefix = `OPK_PROJECT_ID=${quote(projectId)} `;
   profile = { ...profile, launchCommand: projectPrefix + profile.launchCommand };
   if (input.existingTerminal) {
-    if (profile.launchCommand !== reusedCommand) return continued(input, 'dispatch_admission_final', {
+    const unprefixedSonnet = profile.family === 'claude' && profile.model === 'claude-sonnet-5-5'
+      && profile.effort === 'high' && reusedCommand === canonicalClaudeCommand(profile);
+    if (!reusedCommand || (profile.launchCommand !== reusedCommand && !unprefixedSonnet)) return continued(input, 'dispatch_admission_final', {
       cause: 'existing_terminal_generation_changed', actor: 'orchestrator', evidence: {},
       nextAction: { kind: 'remediate_terminal',
         note: 'the original native command does not reproduce the selected profile and current baseline; inspect read-only rather than replacing its process environment' },
@@ -1400,6 +1482,7 @@ export async function runSupervisedTaskLaunchAssistant(
     return continued(input, 'dispatch_admission_final', mergePredecessorMismatch(), resources, startedAtMs, timings, deps.now);
   }
   const final = await checkpoint('dispatch_admission_final', timings, deps.now, () => deps.observeDispatch(taskId));
+  if (expired()) return continued(input, 'dispatch_admission_final', deadlineEdge(), resources, startedAtMs, timings, deps.now);
   if (final.status !== 'ok') return continued(input, 'dispatch_admission_final', final, resources, startedAtMs, timings, deps.now);
   const finalCurrent = assignmentForDispatch(final.value);
   if (finalCurrent && 'status' in finalCurrent) return continued(input, 'dispatch_admission_final', finalCurrent, resources, startedAtMs, timings, deps.now);
@@ -1493,6 +1576,7 @@ export async function runSupervisedTaskLaunchAssistant(
     creationTerminals = await deps.captureLaunchShells(prepared.value);
   }
   let terminal: RuntimeWorker | undefined;
+  let nativeClaudeCommand: string | undefined;
   if (providerMode) {
     const terminalStartedAt = deps.now();
     const terminalFinishedAt = deps.now();
@@ -1506,24 +1590,32 @@ export async function runSupervisedTaskLaunchAssistant(
     const terminalStartedAt = deps.now();
     let terminalCause = '';
     let liveness: ReturnType<RuntimeAdapter['liveness']> | null = null;
-    const spawn = input.existingTerminal
-      ? deps.adapter.findWorkerById(input.existingTerminal)
-      : deps.adapter.spawnWorker({
-      title: `opk-${input.workClass === 'merge' ? 't2-merge' : input.workClass}-${taskId}`,
-      command: profile.launchCommand,
-      workspace: prepared.value.path,
-      // Extra adapter-consumed input on the existing runtime-neutral spawn path.
-      // The production Orca adapter rechecks the current fence and native proof
-      // before replacing an absent terminal's durable title ownership.
-      ...(earlyTerminal && earlyCurrent && earlyGone?.worktreeId === prepared.value.id
-        ? { terminalGoneRecovery: { assignment: earlyCurrent, worktreeId: prepared.value.id } }
-        : {}),
-    });
-    const spawnNativeError = spawn.status !== 'ok' ? nativeRuntimeError(spawn) : null;
-    if (spawn.status !== 'ok') terminalCause = `terminal_spawn_${spawn.status}`;
-    else if (!spawn.value || !text(spawn.value.identity.runtime)
-      || !text(spawn.value.identity.id) || !text(spawn.value.identity.generation)) terminalCause = 'terminal_identity_invalid';
-    else {
+    const freshClaude = profile.family === 'claude' && !input.existingTerminal;
+    if (freshClaude) freshClaudeDeadline = monotonicNow() + CLAUDE_ADMISSION_DEADLINE_MS;
+    const spawnBudget = profile.family === 'claude'
+      ? nativeBudget(input.existingTerminal ? 2_000 : CLAUDE_ADMISSION_DEADLINE_MS) : undefined;
+    if (expired() || (spawnBudget !== undefined && spawnBudget < 1)) terminalCause = 'terminal_observation_deadline';
+    // The registered Orca task adapter may return a recovered old-title terminal
+    // with provenance=internal. This is not proof of this-invocation creation.
+    const spawn = terminalCause
+      ? null
+      : input.existingTerminal
+        ? deps.adapter.findWorkerById(input.existingTerminal,
+          spawnBudget === undefined ? undefined : { timeoutMs: spawnBudget })
+        : deps.adapter.spawnWorker({
+          title: `opk-${input.workClass === 'merge' ? 't2-merge' : input.workClass}-${taskId}`,
+          command: profile.launchCommand,
+          workspace: prepared.value.path,
+          ...(earlyTerminal && earlyCurrent && earlyGone?.worktreeId === prepared.value.id
+            ? { terminalGoneRecovery: { assignment: earlyCurrent, worktreeId: prepared.value.id } }
+            : {}),
+        }, spawnBudget === undefined ? undefined : { timeoutMs: spawnBudget });
+    if (expired()) terminalCause = 'terminal_observation_deadline';
+    const spawnNativeError = spawn && spawn.status !== 'ok' ? nativeRuntimeError(spawn) : null;
+    if (!terminalCause && spawn?.status !== 'ok') terminalCause = `terminal_spawn_${spawn?.status ?? 'unavailable'}`;
+    else if (!terminalCause && spawn?.status === 'ok' && (!spawn.value || !text(spawn.value.identity.runtime)
+      || !text(spawn.value.identity.id) || !text(spawn.value.identity.generation))) terminalCause = 'terminal_identity_invalid';
+    else if (!terminalCause && spawn?.status === 'ok' && spawn.value) {
       resources = { ...resources, terminal: spawn.value.identity };
       if (input.existingTerminal && (!reusedIdentity
         || !sameIdentity(spawn.value.identity, reusedIdentity))) terminalCause = 'terminal_generation_mismatch';
@@ -1532,21 +1624,48 @@ export async function runSupervisedTaskLaunchAssistant(
       else if (spawn.value.identity.runtime !== deps.adapter.id) terminalCause = 'terminal_runtime_mismatch';
       else terminal = spawn.value;
     }
+    if (!terminalCause && terminal && profile.family === 'claude') {
+      const showBudget = nativeBudget(2_000);
+      if (showBudget < 1) terminalCause = 'terminal_observation_deadline';
+      else {
+        const native = deps.adapter.observeComposerFamily?.(terminal.identity, { timeoutMs: showBudget });
+        if (expired()) terminalCause = 'terminal_observation_deadline';
+        else if (!native || native.status !== 'known' || native.family !== 'non-opencode'
+          || !matchingDirectClaudeCommand(profile, native.command, projectId)
+          || (input.existingTerminal && native.command !== reusedCommand)) {
+          terminalCause = 'executor_effort_channel_unavailable';
+        } else nativeClaudeCommand = native.command;
+      }
+    }
     if (!terminalCause && terminal) {
-      liveness = deps.adapter.liveness({ worker: terminal.identity, observationWindowMs: LAUNCH_STARTUP_OBSERVATION_WINDOW_MS });
-      if (!sameIdentity(liveness.worker, terminal.identity)) terminalCause = 'terminal_generation_mismatch';
-      else if (liveness.status !== 'idle') terminalCause = `terminal_liveness_${liveness.status}`;
-      else if (profile.family === 'claude') {
-        // Idle liveness can precede Claude's footer. Read only the same
-        // bound pane, within the launch's existing startup window.
+      const budget = profile.family === 'claude' ? nativeBudget(CLAUDE_ADMISSION_DEADLINE_MS) : undefined;
+      if (budget !== undefined && budget < 1) terminalCause = 'terminal_observation_deadline';
+      else {
+        liveness = deps.adapter.liveness({
+          worker: terminal.identity,
+          observationWindowMs: budget === undefined
+            ? LAUNCH_STARTUP_OBSERVATION_WINDOW_MS : Math.floor(Math.min(30_000, budget)),
+        }, budget === undefined ? undefined : { timeoutMs: budget });
+        if (expired()) terminalCause = 'terminal_observation_deadline';
+        else if (!sameIdentity(liveness.worker, terminal.identity)) terminalCause = 'terminal_generation_mismatch';
+        else if (liveness.status !== 'idle') terminalCause = `terminal_liveness_${liveness.status}`;
+      }
+      if (!terminalCause && profile.family === 'claude') {
         let profileObserved = false;
-        while (deps.now() - terminalStartedAt < LAUNCH_STARTUP_OBSERVATION_WINDOW_MS) {
-          if (await claudePaneProfileObserved(profile, terminal, deps.adapter)) {
-            profileObserved = deps.now() - terminalStartedAt <= LAUNCH_STARTUP_OBSERVATION_WINDOW_MS;
+        for (let attempt = 0; attempt < CLAUDE_OBSERVATION_ATTEMPTS && !expired(); attempt += 1) {
+          if (await claudePaneProfileObserved(profile, terminal, deps.adapter, {
+            deadlineMs: admissionDeadline(), monotonicNow, expectedCommand: nativeClaudeCommand, projectId,
+          })) {
+            profileObserved = !expired();
             break;
           }
+          if (expired() || attempt + 1 >= CLAUDE_OBSERVATION_ATTEMPTS
+            || nativeBudget(CLAUDE_ADMISSION_DEADLINE_MS) <= CLAUDE_OBSERVATION_GAP_MS) break;
+          await delay(CLAUDE_OBSERVATION_GAP_MS);
+          if (expired()) break;
         }
-        if (!profileObserved) terminalCause = 'executor_effort_channel_unavailable';
+        if (!profileObserved) terminalCause = expired()
+          ? 'terminal_observation_deadline' : 'executor_effort_channel_unavailable';
       }
     }
     const terminalFinishedAt = deps.now();
@@ -1558,7 +1677,15 @@ export async function runSupervisedTaskLaunchAssistant(
       evidence: {
         liveness: liveness?.status ?? 'not_observed',
         ...(profile.family === 'claude' ? { executorFamily: 'claude', route: profile.route } : {}),
-        ...(spawn.status !== 'ok' ? {
+        ...(profile.family === 'claude' && terminalCause === 'terminal_observation_deadline'
+          && spawn?.status === 'ok' && spawn.value ? {
+            unverifiedSpawnReturn: {
+              runtime: spawn.value.identity.runtime,
+              id: spawn.value.identity.id,
+              generation: spawn.value.identity.generation,
+            },
+          } : {}),
+        ...(spawn && spawn.status !== 'ok' ? {
           spawnReason: spawn.reason,
           spawnError: spawnNativeError?.message || spawnNativeError?.code || spawn.reason,
           ...(spawnNativeError?.code ? { spawnErrorCode: spawnNativeError.code } : {}),
@@ -1573,7 +1700,7 @@ export async function runSupervisedTaskLaunchAssistant(
             note: input.prNumber
               ? 'Rerun the returned --task launch command for this same Task and terminal; do not close the terminal or rerun --pr, which would create a new Task'
               : 'Rerun the same command with unchanged arguments: #2107 reuses this exact Task-owned terminal. Do not close the terminal' }
-          : spawn.status !== 'ok' && spawn.reason === 'launch_task_terminal_identity_unproven'
+          : spawn?.status !== 'ok' && spawn?.reason === 'launch_task_terminal_identity_unproven'
             ? { kind: 'remediate_terminal',
               note: input.prNumber
                 ? 'Native terminal show could not prove the old owner gone or retitled. Reconcile native terminal show, then retry the existing --task route; never repeat --pr or send to an unproven terminal'
@@ -1586,8 +1713,15 @@ export async function runSupervisedTaskLaunchAssistant(
   }
 
   if (input.existingTerminal && terminal) {
-    const current = deps.adapter.findWorkerById(terminal.identity.id);
-    const commandObservation = deps.adapter.observeComposerFamily?.(terminal.identity);
+    if (expired()) return continued(input, 'dispatch_admission_final', deadlineEdge(), resources, startedAtMs, timings, deps.now);
+    const lookupBudget = profile.family === 'claude' ? nativeBudget(2_000) : undefined;
+    const current = deps.adapter.findWorkerById(terminal.identity.id,
+      lookupBudget === undefined ? undefined : { timeoutMs: lookupBudget });
+    if (expired()) return continued(input, 'dispatch_admission_final', deadlineEdge(), resources, startedAtMs, timings, deps.now);
+    const showBudget = profile.family === 'claude' ? nativeBudget(2_000) : undefined;
+    const commandObservation = deps.adapter.observeComposerFamily?.(terminal.identity,
+      showBudget === undefined ? undefined : { timeoutMs: showBudget });
+    if (expired()) return continued(input, 'dispatch_admission_final', deadlineEdge(), resources, startedAtMs, timings, deps.now);
     if (current.status !== 'ok' || !current.value
       || !sameIdentity(current.value.identity, terminal.identity)
       || current.value.workspacePath !== terminal.workspacePath
@@ -1600,6 +1734,21 @@ export async function runSupervisedTaskLaunchAssistant(
     }
   }
 
+  if (profile.family === 'claude' && terminal && !input.existingTerminal) {
+    if (expired()) return continued(input, 'dispatch_admission_final', deadlineEdge(), resources, startedAtMs, timings, deps.now);
+    const showBudget = nativeBudget(2_000);
+    const observed = deps.adapter.observeComposerFamily?.(terminal.identity, { timeoutMs: showBudget });
+    if (expired()) return continued(input, 'dispatch_admission_final', deadlineEdge(), resources, startedAtMs, timings, deps.now);
+    if (!observed || observed.status !== 'known' || observed.family !== 'non-opencode'
+      || observed.command !== nativeClaudeCommand) return continued(input, 'dispatch_admission_final', {
+        cause: 'terminal_native_command_changed', actor: 'orchestrator',
+        nextAction: { kind: 'remediate_terminal',
+          note: 'Reobserve the original Task-owned direct Claude command and exact generation before retry; do not start an ambiguous recovered process' },
+      }, resources, startedAtMs, timings, deps.now);
+  }
+  // Covers late non-native final guards, hook restoration and every native read:
+  // no post-deadline authorization to invoke supervised start.
+  if (expired()) return continued(input, 'dispatch_admission_final', deadlineEdge(), resources, startedAtMs, timings, deps.now);
   const startAt = deps.now();
   const supervised = await deps.runSupervisedStart({
     repository: resources.repository,
@@ -3042,8 +3191,11 @@ function dispatchEdge(value: Record<string, unknown> | null): EdgeResult<Dispatc
 
 export async function createProductionLaunchDependencies(input: LaunchInput): Promise<LaunchDependencies> {
   const cwd = input.cwd ?? process.cwd();
-  const inheritedEnv = input.env ?? overlayExecutorProfileEnv(process.env);
-  const env = input.workClass === 'merge' ? withMergeExecutorProfileDefaults(inheritedEnv) : inheritedEnv;
+  const inheritedEnv = overlayExecutorProfileEnv(input.env ?? process.env);
+  if (input.projectId && inheritedEnv.OPK_PROJECT_ID?.trim()
+    && inheritedEnv.OPK_PROJECT_ID.trim() !== input.projectId) throw new Error('project_selector_mismatch');
+  const routedEnv = input.workClass === 'merge' ? withMergeExecutorProfileDefaults(inheritedEnv) : inheritedEnv;
+  const env: NodeJS.ProcessEnv = { ...routedEnv, ...(input.projectId ? { OPK_PROJECT_ID: input.projectId } : {}) };
   const target = resolveTargetContext({ projectId: input.projectId, env });
   const adapter = await selectRuntimeAdapter({ env: { ...env } }, { cwd, transport: { env: { ...env } } });
   return {
@@ -3053,7 +3205,7 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       (args, timeoutMs) => child(args, cwd, env, timeoutMs)),
     cleanupLaunchShells: (worktree, unitTerminalId) => cleanupLaunchShells(worktree, unitTerminalId,
       (args, timeoutMs) => child(args, cwd, env, timeoutMs)),
-    runSupervisedStart: runSupervisedWorkerStart,
+    runSupervisedStart: (start) => runSupervisedWorkerStart({ ...start, env: { ...env, ...(start.env ?? {}), OPK_PROJECT_ID: target.projectId } }),
     commandPreflight: () => {
       if (Number(process.versions.node.split('.')[0]) !== SUPPORTED_NODE_MAJOR) return {
         status: 'continue', cause: 'unsupported_node_major', actor: 'operator', evidence: { requiredMajor: SUPPORTED_NODE_MAJOR },
@@ -3542,6 +3694,7 @@ export function parseLaunchAssistantCli(
   return {
     repository,
     projectId: target.projectId,
+    env: { ...env, OPK_PROJECT_ID: target.projectId },
     primaryRoot: target.primaryRoot,
     ...(prNumber !== undefined ? { prNumber, packRoot: target.packRoot } : {}),
     ...(mergeInstruction !== undefined ? { mergeInstruction } : {}),
