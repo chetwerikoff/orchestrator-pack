@@ -362,6 +362,10 @@ function parseScenarioFieldToken(token: string, scenario: SmokeScenario): void {
   applyScenarioField(scenario, match[1], match[2]);
 }
 
+function splitSmokeScenarioFields(row: string): string[] {
+  return row.split(/\|\s*(?=(?:action|expected|observed|outcome|skip-reason|cause-family):)/iu);
+}
+
 function parseSmokeScenarioBlock(block: string): SmokeScenario[] {
   const scenarios: SmokeScenario[] = [];
   let current: SmokeScenario | null = null;
@@ -385,7 +389,7 @@ function parseSmokeScenarioBlock(block: string): SmokeScenario[] {
       }
       current = { action: '', expected: '' };
       const content = trimmed.replace(/^-\s*/, '');
-      for (const part of content.split('|')) {
+      for (const part of splitSmokeScenarioFields(content)) {
         parseScenarioFieldToken(part.trim(), current);
       }
       if (!content.includes('|')) {
@@ -394,7 +398,7 @@ function parseSmokeScenarioBlock(block: string): SmokeScenario[] {
       continue;
     }
     if (current && (/^\s{2,}/.test(rawLine) || /^(?:expected|observed|outcome|skip-reason|cause-family):/i.test(trimmed))) {
-      for (const part of trimmed.split('|')) {
+      for (const part of splitSmokeScenarioFields(trimmed)) {
         parseScenarioFieldToken(part.trim(), current);
       }
     }
@@ -534,15 +538,12 @@ function parseSmokeAgentReportBody(body: string): Partial<SmokeReport> | null {
       if (!trimmed.startsWith('-')) {
         continue;
       }
-      const action = trimmed.match(/action:\s*([^|]+)/i)?.[1]?.trim() ?? '';
-      const expected = trimmed.match(/expected:\s*([^|]+)/i)?.[1]?.trim() ?? '';
-      const observed = trimmed.match(/observed:\s*([^|]+)/i)?.[1]?.trim() ?? '';
-      const outcome = trimmed.match(/outcome:\s*([a-z]+)/i)?.[1]?.trim().toLowerCase() as SmokeScenario['outcome'];
-      const skipReason = trimmed.match(/skip-reason:\s*([^|]+)/i)?.[1]?.trim();
-      const causeFamilyRaw = trimmed.match(/cause-family:\s*([^|]+)/i)?.[1]?.trim();
-      const causeFamily = isWorkerSmokeScenarioCauseFamily(causeFamilyRaw) ? causeFamilyRaw : undefined;
-      if (action || expected || observed) {
-        scenarios.push({ action, expected, observed, outcome, skipReason, causeFamily });
+      const scenario: SmokeScenario = { action: '', expected: '' };
+      for (const part of splitSmokeScenarioFields(trimmed.replace(/^-\s*/, ''))) {
+        parseScenarioFieldToken(part.trim(), scenario);
+      }
+      if (scenario.action || scenario.expected || scenario.observed) {
+        scenarios.push(scenario);
       }
     }
   }
