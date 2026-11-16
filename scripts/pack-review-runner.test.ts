@@ -3825,7 +3825,7 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(readPackReviewAuthority(prNumber, f.options)?.transitionSeq).toBe(closed?.transitionSeq);
   });
 
-  it('Issue #2451: a settled strict descendant projects a later live head without reopening the review cap', async () => {
+  it('Issue #2451: completed H2 never projects success on H3 before its exact ordinary delta review', async () => {
     const f = unchangedDescendantFixture();
     // Ancestry alone is not enough: this is the persisted, authenticated
     // ordinary delta result from the real protected run store.
@@ -3850,6 +3850,25 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
 
     liveHead = 'd'.repeat(40);
     f.input.fixtureCurrentPrHeadSha = liveHead;
+    const unreviewedH3 = await reconcileStalePackReviewRuns(f.input);
+    expect(unreviewedH3.results).toContainEqual(expect.objectContaining({
+      headSha: liveHead, settled: false,
+      reason: 'final_cap_delta_frontier_not_ancestor',
+      nextAction: expect.any(String),
+    }));
+    expect(statusByHead.get(liveHead)).not.toBe('success');
+    expect(f.statuses.filter((status) => status.state === 'success')).toHaveLength(1);
+    expect(readPackReviewAuthority(prNumber, f.options)?.cycle).toMatchObject({
+      cycleId: beforeHeadAdvance?.cycle?.cycleId,
+      state: 'closed', reviewStageComplete: true, consumedRoundOrdinals: [1, 2],
+    });
+
+    // A second authenticated ordinary review is non-consuming and compares
+    // only H2..H3; H1's previously fixed finding is not reintroduced.
+    const reviewedH3 = completeFinalCapDelta(f, liveHead, revisedBody, HEAD, []);
+    expect(reviewedH3.finalCapDelta).toMatchObject({
+      fromSha: HEAD, toSha: liveHead, priorFindings: [],
+    });
     const second = await reconcileStalePackReviewRuns(f.input);
     expect(second.results).toContainEqual(expect.objectContaining({
       settled: true, statusPublished: true, publicationHeadSha: liveHead,
@@ -3862,13 +3881,13 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       state: 'closed', reviewStageComplete: true, consumedRoundOrdinals: [1, 2],
     });
     expect(statusByHead.get(liveHead)).toBe('success');
-    expect(f.statuses).toHaveLength(2);
+    expect(f.statuses.filter((status) => status.state === 'success')).toHaveLength(2);
 
     const third = await reconcileStalePackReviewRuns(f.input);
     expect(third.results).toContainEqual(expect.objectContaining({
       settled: true, statusPublished: true, publicationHeadSha: liveHead,
     }));
-    expect(f.statuses).toHaveLength(2);
+    expect(f.statuses.filter((status) => status.state === 'success')).toHaveLength(2);
     expect(readPackReviewAuthority(prNumber, f.options)?.transitionSeq).toBe(current?.transitionSeq);
   });
 
