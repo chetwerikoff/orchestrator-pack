@@ -6393,12 +6393,52 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
     });
   } catch (error) { return refused('final_cap_delta_run_admission_failed: ' + describeError(error)); }
   if (created.reused) {
-    const persisted = getPackReviewRun(created.run.id,
+    let persisted = getPackReviewRun(created.run.id,
       { projectId: opts.projectId, storeRoot: opts.storeRoot });
     if (!persisted?.finalCapDelta || !isDeepStrictEqual(persisted.finalCapDelta, delta)
-        || !hasPersistedPackReviewVerdict(persisted)
-        || persisted.deliveryOutcomes.githubComment?.state !== 'succeeded') {
+        || !hasPersistedPackReviewVerdict(persisted)) {
       return refused('final_cap_delta_incumbent_must_be_reconciled');
+    }
+    if (persisted.deliveryOutcomes.githubComment?.state !== 'succeeded') {
+      // Never reinvoke the reviewer for an existing journaled terminal.
+      // Existing GitHub COMMENT reconciliation owns the one-message election;
+      // a possibly-delivered mutation requires its original census, not a
+      // second arbitrary POST.
+      if (!input.deltaClaimOwned?.()
+          || await readCheckedReviewPrHead(input, opts.repoSlug, opts.prNumber, opts.targetSha)
+            !== opts.targetSha) return refused('final_cap_delta_resume_claim_or_head_unverified');
+      const journaled = packReviewJournaledPayload(persisted);
+      if (!journaled) return refused('final_cap_delta_journal_unavailable');
+      const transport = createGithubReviewTransport({
+        repoRoot: input.sourceRepoRoot, repoSlug: opts.repoSlug, prNumber: opts.prNumber,
+        fixtureReviewId: input.fixtureGithubReviewId,
+        fixtureTransport: input.fixtureGithubReviewTransport,
+      });
+      const incumbent = persisted;
+      try {
+        const resumed = await resumePackReviewVerdictDelivery({
+          run: incumbent, projectId: opts.projectId, storeRoot: opts.storeRoot,
+          postGithubComment: async () => {
+            const posted = await postGithubReview({
+              repoRoot: input.sourceRepoRoot, repoSlug: opts.repoSlug,
+              prNumber: opts.prNumber, headSha: opts.targetSha,
+              run: incumbent, payload: journaled, projectId: opts.projectId,
+              storeRoot: opts.storeRoot, transport,
+            });
+            return { id: posted.id, url: posted.url, event: 'COMMENT' };
+          },
+          writeRequiredStatus: async () => { throw new Error('delta status remains runner-owned'); },
+          notifyWorker: async () => { throw new Error('delta must not independently notify'); },
+        });
+        persisted = getPackReviewRun(incumbent.id,
+          { projectId: opts.projectId, storeRoot: opts.storeRoot });
+        if (resumed.reason !== 'completed' || !persisted
+            || persisted.deliveryOutcomes.githubComment?.state !== 'succeeded') {
+          return refused('final_cap_delta_original_comment_delivery_unconfirmed');
+        }
+      } catch (error) {
+        return refused('final_cap_delta_journal_delivery_requires_reconcile: ' + describeError(error));
+      }
     }
     return { state: persisted.reviewVerdict === 'clean' ? 'clean' : 'findings',
       reason: 'final_cap_delta_exact_result_reused', runId: persisted.id, fromSha: frontier };
