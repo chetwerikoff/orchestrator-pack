@@ -6232,6 +6232,11 @@ export async function finalCapPureSelectedBaseMerge(
       ['rev-list', '--first-parent', '--reverse', fromSha + '..' + toSha],
       'reviewed merge chain')).trim().split(/\r?\n/).filter(Boolean);
     if (firstParent.length === 0) return false;
+    // Transitive ancestry is insufficient: an earlier foreign side parent
+    // may be adopted by the selected base only AFTER it entered the PR.
+    const selectedBaseMainline = new Set((await runGit(root,
+      ['rev-list', '--first-parent', baseTip], 'selected base mainline'))
+      .trim().split(/\r?\n/).filter(Boolean));
     let cursor = fromSha;
     for (const mergeSha of firstParent) {
       if (!rebaseSha1.test(mergeSha)) return false;
@@ -6249,7 +6254,8 @@ export async function finalCapPureSelectedBaseMerge(
         // selected base tip has advanced again.
         return false;
       }
-      if (!await rebaseAncestor(root, mergedBase, baseTip)) return false;
+      if (!selectedBaseMainline.has(mergedBase)
+          || !await rebaseAncestor(root, mergedBase, baseTip)) return false;
       const mergeTree = await runProcess({
         command: 'git', args: ['merge-tree', '--write-tree', cursor, mergedBase],
         cwd: root, inheritParentEnv: true, allowEmptyStdout: false, timeoutMs: 30000,
@@ -6262,6 +6268,94 @@ export async function finalCapPureSelectedBaseMerge(
     }
     return cursor === toSha;
   } catch { return false; }
+}
+
+/** The original run-store worker-notification channel is claimed BEFORE
+ * sending a persisted non-consuming F..T findings verdict. Reconciliation
+ * cannot blindly resend a possibly dispatched message.
+ */
+export async function handoffFinalCapDeltaFindings(input: {
+  runId: string; originalRunId: string; projectId: string; storeRoot: string;
+  notifier?: PackReviewWorkerNotifier;
+}): Promise<{ state: 'submitted' | 'already_attempted' | 'unverified'; reason: string }> {
+  const options = { projectId: input.projectId, storeRoot: input.storeRoot };
+  const delta = getPackReviewRun(input.runId, options);
+  const original = getPackReviewRun(input.originalRunId, options);
+  if (!delta?.finalCapDelta || delta.finalCapDelta.originalRunId !== input.originalRunId
+      || delta.automaticBudgetDisposition !== 'non_consuming_explicit'
+      || !original || delta.linkedSessionId !== original.linkedSessionId
+      || delta.reviewVerdict !== 'findings' || !hasPersistedPackReviewVerdict(delta)
+      || delta.deliveryOutcomes.githubComment?.state !== 'succeeded') {
+    return { state: 'unverified', reason: 'delta_findings_or_original_binding_unverified' };
+  }
+  if (delta.deliveryOutcomes.workerNotification) {
+    return { state: 'already_attempted', reason: 'worker_notification_attempt_already_recorded' };
+  }
+  const binding = parsePersistedWorkerNotificationBinding(original);
+  if (!input.notifier && (!delta.linkedSessionId || !binding)) {
+    return { state: 'unverified', reason: 'delta_worker_runtime_binding_unavailable' };
+  }
+  const key = `worker-notification:${delta.id}:${delta.targetSha}`;
+  const claimed = updatePackReviewRunIf(delta.id,
+    (records) => records.some((record) => record.id === delta.id
+      && record.finalCapDelta?.originalRunId === original.id
+      && record.reviewVerdict === 'findings'
+      && hasPersistedPackReviewVerdict(record)
+      && record.deliveryOutcomes.githubComment?.state === 'succeeded'
+      && !record.deliveryOutcomes.workerNotification),
+    (stored) => ({
+      ...(binding && !parsePersistedWorkerNotificationBinding(stored)
+        ? { workerNotificationBinding: { ...binding, headSha: stored.targetSha } } : {}),
+      deliveryOutcomes: {
+        ...stored.deliveryOutcomes,
+        workerNotification: {
+          state: 'escalated' as const, recordedAtUtc: new Date().toISOString(),
+          reason: 'submission_outcome_unresolved', idempotencyKey: key,
+        },
+      },
+    }), options);
+  if (!claimed) {
+    return { state: 'already_attempted', reason: 'worker_notification_attempt_already_recorded' };
+  }
+  const notify = input.notifier ?? ((request: Parameters<PackReviewWorkerNotifier>[0]) =>
+    sendPackReviewWorkerNotification({
+      trustedPackRoot: claimed.trustedPackRoot, sessionId: claimed.linkedSessionId,
+      projectId: input.projectId, storeRoot: input.storeRoot, request,
+    }));
+  let state: 'submitted' | 'unverified' = 'unverified';
+  let reason = 'dispatch_outcome_unknown';
+  let recordedState: 'succeeded' | 'failed' | 'escalated' = 'escalated';
+  try {
+    const result = await notify({
+      message: [
+        `Pack review completed for PR #${claimed.prNumber}.`,
+        `Run: ${claimed.id}`,
+        `Head: ${claimed.targetSha}`,
+        'Verdict: findings',
+        `Findings: ${claimed.findingCount}`,
+        'Pack-review status: failure',
+      ].join('\n'),
+      idempotencyKey: key, reviewRunId: claimed.id,
+    });
+    state = result.state === 'submitted' || result.state === 'delivered'
+      ? 'submitted' : 'unverified';
+    recordedState = state === 'submitted' ? 'succeeded'
+      : result.state === 'pre_dispatch_failure' || result.state === 'failed'
+        ? 'failed' : 'escalated';
+    reason = result.reason;
+  } catch (error) { reason = describeError(error); }
+  updatePackReviewRunIf(claimed.id,
+    (records) => records.some((record) => record.id === claimed.id
+      && record.deliveryOutcomes.workerNotification?.idempotencyKey === key
+      && record.deliveryOutcomes.workerNotification.reason === 'submission_outcome_unresolved'),
+    (stored) => ({ deliveryOutcomes: {
+      ...stored.deliveryOutcomes,
+      workerNotification: {
+        state: recordedState, recordedAtUtc: new Date().toISOString(),
+        reason, idempotencyKey: key,
+      },
+    } }), options);
+  return { state, reason };
 }
 
 interface FinalCapDeltaOutcome {
@@ -7040,6 +7134,22 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
   }
 
   let verifiedFinalCiSelectors: TargetContext['requiredCi'];
+  let selectedBaseTipBeforeDelta: string | undefined;
+  const selectedFinalCap = resolveTargetContext({ projectId: options.projectId });
+  const readSelectedBaseTip = async (): Promise<string> => {
+    const ref = 'refs/heads/' + selectedFinalCap.defaultBranch;
+    const rows = (await runGit(input.sourceRepoRoot,
+      ['ls-remote', 'origin', ref], 'selected base live tip')).trim().split(/\r?\n/);
+    const parts = rows.length === 1 ? rows[0]!.split('\t') : [];
+    if (parts.length !== 2 || !rebaseSha1.test(parts[0] ?? '') || parts[1] !== ref) {
+      throw new Error('selected base remote tip unverified');
+    }
+    const local = await rebaseGitSha1(input.sourceRepoRoot,
+      ['rev-parse', '--verify', 'refs/remotes/origin/' + selectedFinalCap.defaultBranch + '^{commit}'],
+      'selected local base tip');
+    if (local !== parts[0]) throw new Error('selected base remote/local tip moved');
+    return parts[0]!;
+  };
   if (logicalAccounting && currentHead !== priorRun.targetSha
       && (process.env.OPK_VITEST_HARNESS !== '1' || rebasedC
         || input.fixtureGithubReviewTransport)) {
@@ -7057,6 +7167,14 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         throw new Error('current-head required CI not green');
       }
       verifiedFinalCiSelectors = requiredCi;
+      if (process.env.OPK_VITEST_HARNESS !== '1') {
+        const pr = await resolveCurrentPrTarget(input.sourceRepoRoot, options.repoSlug, prNumber);
+        if (pr.headSha !== currentHead || pr.baseRef !== selectedFinalCap.defaultBranch
+            || selectedFinalCap.repository.toLowerCase() !== options.repoSlug.toLowerCase()) {
+          throw new Error('selected PR/base identity changed before delta review');
+        }
+        selectedBaseTipBeforeDelta = await readSelectedBaseTip();
+      }
     } catch (error) {
       return { prNumber, headSha: currentHead, finalCapSettlement: true, settled: false,
         reason: 'final_cap_review_binding_unverified', detail: describeError(error),
@@ -7125,7 +7243,28 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
           }
         } catch { currentIssueStillBound = false; }
       }
-      return currentIssueStillBound
+      // Refresh exact-T CI and selected-base identity/tip after the reviewer
+      // and immediately before POST/confirmation; an old green is not proof.
+      let freshCiAndBase = selectedFinalCap.repository.toLowerCase() === options.repoSlug.toLowerCase();
+      try {
+        if (freshCiAndBase && process.env.OPK_VITEST_HARNESS !== '1') {
+          const pr = await resolveCurrentPrTarget(input.sourceRepoRoot, options.repoSlug, prNumber);
+          const tip = await readSelectedBaseTip();
+          freshCiAndBase = pr.headSha === publicationHead.toLowerCase()
+            && pr.baseRef === selectedFinalCap.defaultBranch
+            && (selectedBaseTipBeforeDelta === undefined || tip === selectedBaseTipBeforeDelta);
+        }
+        if (freshCiAndBase && (process.env.OPK_VITEST_HARNESS !== '1'
+            || input.fixtureRequiredCiChecks !== undefined
+            || input.fixtureRequiredCiPolicy !== undefined)) {
+          freshCiAndBase = await manualPackReviewRequiredCiGreen({
+            startInput: input, targetContext: selectedFinalCap,
+            target: { prNumber, headSha: publicationHead, repoSlug: options.repoSlug,
+              sourceRepoRoot: input.sourceRepoRoot, prBaseRef: selectedFinalCap.defaultBranch },
+          });
+        }
+      } catch { freshCiAndBase = false; }
+      return freshCiAndBase && currentIssueStillBound
         && liveHead === publicationHead.toLowerCase()
         && latest?.currentHeadSha.toLowerCase() === publicationHead.toLowerCase()
         && latest.terminal?.runId === priorRun.id
@@ -7291,8 +7430,13 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
             && sameHeadPublicationDigest !== undefined),
       });
       if (deltaOutcome.state !== 'clean') {
-        // A durable FINDINGS result moves only F and is handed to the
-        // existing fixer. A missing/uncertain invocation never grants green.
+        // Use the existing fixer/worker transport, once per persisted delta.
+        const findingsHandoff = deltaOutcome.state === 'findings' && deltaOutcome.runId
+          ? await handoffFinalCapDeltaFindings({
+              runId: deltaOutcome.runId, originalRunId: priorRun.id,
+              projectId: options.projectId, storeRoot: options.storeRoot,
+              notifier: input.fixtureWorkerNotifier,
+            }) : undefined;
         const currentTarget = authority.currentHeadSha;
         try {
           if (await readCheckedReviewPrHead(input, options.repoSlug, prNumber, currentTarget)
@@ -7315,8 +7459,11 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
           prNumber, headSha: currentTarget, finalCapSettlement: true, settled: false,
           reason: deltaOutcome.reason,
           ...(deltaOutcome.runId ? { deltaRunId: deltaOutcome.runId } : {}),
+          ...(findingsHandoff ? { findingsHandoff } : {}),
           nextAction: deltaOutcome.state === 'findings'
-            ? 'send the persisted ordinary delta findings to the existing fixer, then review only the next F..T'
+            ? findingsHandoff?.state === 'submitted' || findingsHandoff?.state === 'already_attempted'
+              ? 'continue the existing fixer from the persisted delta REVIEW, then review only the next F..T'
+              : 'restore the bound worker notification route for persisted findings before fixer continuation'
             : 'reconcile the existing exact-head delta run/source census or use the PR-led claimed runner; never resend uncertain output',
         };
       }
