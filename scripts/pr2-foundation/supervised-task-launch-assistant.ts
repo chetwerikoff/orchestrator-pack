@@ -896,9 +896,13 @@ export async function claudePaneProfileObserved(
   if (!modelLine.test(row)) return false;
   const effortLine = new RegExp(`^\\s*(?:effort\\s*[:=]\\s*${profile.effort}|${profile.effort}\\s+effort)\\s*$`, 'iu');
   const suffix = row.replace(modelLine, '').replace(/^\s*[·|•]\s*/u, '').trim();
-  const sameEffort = suffix.toLowerCase() === profile.effort?.toLowerCase() || effortLine.test(suffix)
-    || (!suffix && footer.slice(modelIndex + 1).some((line) => effortLine.test(line)));
-  return Boolean(sameEffort);
+  // A separate model row admits exactly one compatible effort status; a later
+  // matching row cannot override an earlier contradictory one.
+  const effortStatusRow = /^\s*(?:effort\s*[:=]\s*\S.*|\S+\s+effort)\s*$/iu;
+  const effortRows = footer.slice(modelIndex + 1).filter((line) => effortStatusRow.test(line));
+  const inlineEffort = suffix.toLowerCase() === profile.effort?.toLowerCase() || effortLine.test(suffix);
+  return suffix ? inlineEffort && effortRows.length === 0
+    : effortRows.length === 1 && effortLine.test(effortRows[0]!);
 }
 
 /** Reobserve selected-worktree terminals and Linux /proc processes, ignoring other fleets. */
@@ -3187,7 +3191,7 @@ function dispatchEdge(value: Record<string, unknown> | null): EdgeResult<Dispatc
 
 export async function createProductionLaunchDependencies(input: LaunchInput): Promise<LaunchDependencies> {
   const cwd = input.cwd ?? process.cwd();
-  const inheritedEnv = input.env ?? overlayExecutorProfileEnv(process.env);
+  const inheritedEnv = overlayExecutorProfileEnv(input.env ?? process.env);
   if (input.projectId && inheritedEnv.OPK_PROJECT_ID?.trim()
     && inheritedEnv.OPK_PROJECT_ID.trim() !== input.projectId) throw new Error('project_selector_mismatch');
   const routedEnv = input.workClass === 'merge' ? withMergeExecutorProfileDefaults(inheritedEnv) : inheritedEnv;
