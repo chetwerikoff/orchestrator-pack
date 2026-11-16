@@ -9483,6 +9483,12 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
           const bound = original.boundIssueSnapshotDigest
             ?? original.reviewRound?.boundIssueSnapshotDigest
             ?? authoritative.snapshotDigest;
+          // Completed H2 findings authority cannot be projected onto H3 after
+          // observePackReviewHead clears the old publication record.
+          if (authority.terminal.reviewVerdict === 'findings'
+              && authority.currentHeadSha !== authority.terminal.targetSha
+              && (authority.publication?.headSha !== target.headSha
+                || authority.publication?.status !== 'succeeded')) return false;
           const originalDigestMatches = Boolean(bound && bound === authoritative.snapshotDigest);
           if (!originalDigestMatches && !completedFinalCapVerified
               && authority.cycle?.settlementKind !== 'same_head_issue_resolution') return false;

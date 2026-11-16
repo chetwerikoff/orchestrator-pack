@@ -557,7 +557,16 @@ function currentPackReviewCompletionCycle(
     if (!authority?.cycle || authority.currentHeadSha !== currentHeadSha.toLowerCase()) return null;
     const cycle = authority.cycle;
     if (!cycle) return null;
-    return { cycleId: cycle.cycleId, capMapVersion: cycle.capMapVersion, reviewStageComplete: cycle.reviewStageComplete };
+    // observePackReviewHead clears publication when H2 is followed by an
+    // unreviewed H3. Never interpret H2's completed-stage flag as H3 green.
+    const completedFindingsDescendant = cycle.reviewStageComplete === true
+      && authority.terminal?.reviewVerdict === 'findings'
+      && authority.terminal.targetSha !== currentHeadSha.toLowerCase();
+    const reviewedCurrentHead = !completedFindingsDescendant
+      || (authority.publication?.headSha === currentHeadSha.toLowerCase()
+        && authority.publication.status === 'succeeded');
+    return { cycleId: cycle.cycleId, capMapVersion: cycle.capMapVersion,
+      reviewStageComplete: reviewedCurrentHead && cycle.reviewStageComplete };
   } catch { return null; }
 }
 

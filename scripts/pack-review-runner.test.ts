@@ -2540,13 +2540,19 @@ describe('Issue #2565 selected-target reset and immutable H1/B0 to H2/B1 review'
         findingsDigest: 'immutable-final', automaticBudgetDisposition: 'consume' },
       status: 'changes_requested', findingCount: 1, options: opts,
     });
-    authority = observePackReviewHead({
-      prNumber, expectedTransitionSeq: authority.transitionSeq, headSha: H1, options: opts,
-    });
+    // Reset coverage needs a previously completed cycle, not the newly
+    // prohibited ancestry-only findings settlement. Use the independently
+    // verified same-head Issue-resolution lane for this synthetic fixture.
     authority = settleLogicalPackReviewFindingsByStrictDescendant({
       prNumber, expectedTransitionSeq: authority.transitionSeq,
-      reviewedHeadSha: H0, currentHeadSha: H1,
-      reviewedHeadIsAncestor: true, options: opts,
+      reviewedHeadSha: H0, currentHeadSha: H0, reviewedHeadIsAncestor: false,
+      sameHeadIssueResolution: {
+        runId: run.id, cycleId: authority.cycle!.cycleId, logicalRoundOrdinal: 1,
+      },
+      options: opts,
+    });
+    authority = observePackReviewHead({
+      prNumber, expectedTransitionSeq: authority.transitionSeq, headSha: H1, options: opts,
     });
     const priorCycleId = authority.cycle!.cycleId;
     expect(authority.cycle).toMatchObject({
