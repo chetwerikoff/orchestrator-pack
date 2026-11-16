@@ -6353,7 +6353,12 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
     if (!completedLineage.has(r.targetSha)
         && !await ancestry(r.targetSha, opts.targetSha)) continue;
     if (r.finalCapDelta?.fromSha !== frontier
-        || r.finalCapDelta.toSha !== r.targetSha) {
+        || r.finalCapDelta.toSha !== r.targetSha
+        || r.finalCapDelta.selectedBaseRef !== selectedBaseRef
+        // A self-consistent stored digest alone cannot prove that the ordinary
+        // reviewer actually received every unresolved H1/H2 finding. Bind the
+        // completed F..T result to the expected live frontier context.
+        || !isDeepStrictEqual(r.finalCapDelta.priorFindings, unresolved)) {
       return refused('final_cap_delta_review_chain_unverified');
     }
     frontier = r.targetSha;
