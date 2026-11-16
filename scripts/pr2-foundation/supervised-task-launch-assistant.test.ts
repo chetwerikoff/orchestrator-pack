@@ -7144,7 +7144,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
     expect(starts).toBe(1);
   });
 
-  it('refuses without a footer after the full existing startup window', async () => {
+  it('refuses without a footer at the shared Claude admission deadline', async () => {
     const env = claudeEnv('claude-sonnet-5-5', 'high');
     const command = "claude --model 'claude-sonnet-5-5' --effort 'high'";
     let elapsedMs = 0;
@@ -7167,7 +7167,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
     expect(result).toMatchObject({
       outcome: 'continue', stage: 'terminal_prepare',
       observedCause: 'terminal_observation_deadline',
-      nextAction: { kind: 'repair_executor_profile' },
+      nextAction: { kind: 'remediate_terminal' },
     });
     expect(reads).toBe(4);
     expect(elapsedMs).toBeGreaterThanOrEqual(60_000);
@@ -7210,7 +7210,10 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
   it('Issue #2810 accepts a case-insensitive selected model-line effort footer', async () => {
     const profile = resolveExecutorProfile('manager', claudeEnv('claude-sonnet-5-5', 'high'), 'exact_terminal_worktree');
     if (profile.status !== 'ok') throw new Error('Claude fixture profile refused');
-    const native = observedClaudeAdapter(profile.value.launchCommand, 'Sonnet', 'high');
+    const native = observedClaudeAdapter(profile.value.launchCommand, 'Sonnet', 'high', { commandObserved: true });
+    expect(native.observeComposerFamily?.(worker.identity)).toMatchObject({
+      status: 'known', family: 'non-opencode', command: profile.value.launchCommand,
+    });
     for (const [footer, accepted] of [
       ['sOnNeT 5.5 HiGh', true],
       ['Sonnet 5.5 Medium', false],
