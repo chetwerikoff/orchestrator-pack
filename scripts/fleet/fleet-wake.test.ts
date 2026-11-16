@@ -272,6 +272,8 @@ function parkFixture(managers: readonly ManagerSpec[], repository = 'test/projec
     } as WorkerAssignmentRecord;
   });
   const terminalOverrides = new Map<string, string>();
+  /** Per-id indexed child cwd and launcher: a matching envelope reports exactly these. */
+  const indexed = new Map<string, { cwd: string; launcher: string | undefined }>();
   const identity = (id: string) => ({ run: 'run-' + id, attempt: 'attempt-' + id,
     handoff: join(root, 'handoffs', createHash('sha256').update(id).digest('hex') + '-handoff.json'),
     terminal: join(root, 'envelopes', createHash('sha256').update(id).digest('hex') + '-terminal.json') });
@@ -294,6 +296,7 @@ function parkFixture(managers: readonly ManagerSpec[], repository = 'test/projec
       };
       writeFileSync(ids.handoff, JSON.stringify(receipt), { mode: 0o600 });
       if (spec.terminal !== undefined) terminalOverrides.set(spec.id, spec.terminal);
+      indexed.set(spec.id, { cwd: spec.childCwd ?? workerBase + '/child-' + spec.id, launcher: spec.launcher });
       writeFileSync(invocationReceiptLocatorPath(spec.id, root), JSON.stringify({
         schema: RECEIPT_LOCATOR_SCHEMA, invocation_id: spec.id, run_identity: ids.run,
         attempt_identity: ids.attempt, handoff_receipt_path: ids.handoff,
@@ -310,7 +313,9 @@ function parkFixture(managers: readonly ManagerSpec[], repository = 'test/projec
       const ids = identity(id);
       return { path: terminalOverrides.get(id) ?? ids.terminal, invocationId: id, observedInvocationId: id,
         runIdentity: ids.run, attemptIdentity: ids.attempt, handoffReceiptPath: ids.handoff,
-        lifecycleOutcome: 'success', turnResultState: 'ok', ...overrides };
+        lifecycleOutcome: 'success', turnResultState: 'ok',
+        ...(indexed.has(id) ? { cwd: indexed.get(id)!.cwd, terminalHandle: indexed.get(id)!.launcher } : {}),
+        ...overrides };
     },
     executor(base: OrcaExecutor): OrcaExecutor {
       return (args) => {
@@ -840,8 +845,7 @@ describe('fleet alarm', () => {
     const owned = parkFixture([{ pane: agent }]);
     owned.own(token);
     const screens = { coord: 'idle', one: 'PARKED on GPT turn ' + token };
-    const event = owned.envelope(token, { path: owned.envelope(token).path, terminalHandle: 'one',
-      cwd: workerBase + '/two/child' });
+    const event = owned.envelope(token);
     const parked = await tick({ terminals: [terminals[0]!, agent], screens,
       executor: owned.executor(fakeOrca(screens, [], [terminals[0]!, agent])),
       config: config({ selectedRepository: 'test/project' }),
@@ -872,7 +876,7 @@ describe('fleet alarm', () => {
     const agent = { ...terminals[1]!, incarnationId: 'r05-owner', branch: 'refs/heads/r05' };
     const owned = parkFixture([{ pane: agent }]);
     owned.own(id);
-    const matching = owned.envelope(id, { terminalHandle: 'one', cwd: workerBase + '/two/child' });
+    const matching = owned.envelope(id);
     const foreign: TerminalEnvelopeEvent = { path: '/tmp/opencode/r05-foreign-terminal.json',
       invocationId: 'inv-unrelated', terminalHandle: 'one' };
     const screens = { coord: 'idle', one: 'PARKED on GPT turn ' + id };
@@ -1453,7 +1457,7 @@ describe('Issue #2463 parked-producer compatibility with r05', () => {
     const agent = { ...manager, incarnationId: 'inc-punctuation' };
     const owned = parkFixture([{ pane: agent }]);
     owned.own('inv-command', 0, { terminal: '/tmp/opencode/event;not-a-command-terminal.json' });
-    const event = owned.envelope('inv-command', { terminalHandle: 'one', cwd: workerBase + '/one' });
+    const event = owned.envelope('inv-command');
     const rows = [terminals[0]!, agent];
     const screens = { coord: 'idle', one: 'PARKED on GPT turn inv-command' };
     const result = await tick({ terminals: rows, config: setting,
@@ -2182,8 +2186,7 @@ describe('Issue #2485 / #2687: exact producer instead of ambiguous substring', (
       new MemoryWakeStore(), [matching], owned);
     expect(paneText(weak.calls, 'one')).toHaveLength(0);
     expect(paneText(weak.calls, 'coord')).toHaveLength(0);
-    const exact: TerminalEnvelopeEvent = owned.envelope(token, {
-      terminalHandle: 'one', cwd: workerBase + '/two' });
+    const exact: TerminalEnvelopeEvent = owned.envelope(token);
     const strong = await simple({ coord: 'idle', one: wait, two: 'working\nesc interrupt' },
       new MemoryWakeStore(), [exact], owned);
     expect(paneText(strong.calls, 'one')).toHaveLength(1);
@@ -2240,7 +2243,7 @@ describe('Issue #2485 / #2687: exact producer instead of ambiguous substring', (
     const store = new MemoryWakeStore();
     const owned = fixture();
     owned.own(id, 0, { terminal: event.path });
-    const exact = owned.envelope(id, { terminalHandle: 'one', cwd: workerBase + '/one' });
+    const exact = owned.envelope(id);
     for (const tickIndex of [0, 1]) {
       const result = await simple({ coord: 'idle', one: parked, two: parked }, store, [exact], owned);
       expect(paneText(result.calls, 'one')).toHaveLength(tickIndex === 0 ? 1 : 0);
@@ -2967,24 +2970,24 @@ describe('Issue #2821 exact review-run park wake', () => {
     expect(sendsTo((await tick(options)).calls, unit.handle)).toHaveLength(0);
   });
 
-  it('isolates an unreadable run store while an unrelated time wake and the run reminder remain deliverable', async () => {
+  it('isolates an unreadable run store: unverified coordinator alarm only, while an unrelated time wake stays deliverable (#2840 review 2)', async () => {
     const other = { ...terminals[2]!, agentIdentity: 'opencode' };
-    const both = { ...screens, two: 'PARKED on time 1970-01-01T00:00:00Z' };
-    const options = { ...input([]), store: new MemoryWakeStore(), terminals: [unit, other],
-      executor: owned.executor(fakeOrca(both, [], [unit, other])),
+    const coord = terminals[0]!;
+    const both = { coord: 'idle', ...screens, two: 'PARKED on time 1970-01-01T00:00:00Z' };
+    const options = { ...input([]), store: new MemoryWakeStore(), terminals: [coord, unit, other],
+      executor: owned.executor(fakeOrca(both, [], [coord, unit, other])),
       screens: both,
       readPackReviewRuns: () => { throw new Error('store_lock_timeout'); },
     };
     const first = await tick(options);
     expect(sendsTo(first.calls, unit.handle)).toHaveLength(0);
     expect(sendsTo(first.calls, other.handle)).toHaveLength(1);
+    expect(sendsTo(first.calls, coord.handle)[0]?.join(' ')).toContain('run store unreadable');
     expect(first.logs).toEqual(expect.arrayContaining([
-      expect.stringContaining('review-run Wake pending/unverified for ' + id),
+      expect.stringContaining('review-run Wake unverified for ' + id),
     ]));
     const later = await tick({ ...options, now: () => 30 * 60 * 1_000 });
-    const reminder = sendsTo(later.calls, unit.handle);
-    expect(reminder).toHaveLength(1);
-    expect(reminder[0]![reminder[0]!.indexOf('--text') + 1]).toContain('Reminder:');
+    expect(sendsTo(later.calls, unit.handle)).toHaveLength(0);
     expect(sendsTo(later.calls, other.handle).some((call) =>
       call[call.indexOf('--text') + 1]?.startsWith('Wake:'))).toBe(false);
     expect(options.reconcilePackReview).not.toHaveBeenCalled();
@@ -3351,8 +3354,7 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
     readInvocationLocator: ownerFixture.options.readInvocationLocator,
     readGitCommonDir: ownerFixture.options.readGitCommonDir,
   };
-  const indexedCompletion = ownerFixture.envelope('inv-mgr334', {
-    terminalHandle: manager.handle, cwd: workerBase + '/two/child' });
+  const indexedCompletion = ownerFixture.envelope('inv-mgr334');
   const executorFor = (
     screens: Readonly<Record<string, string>>,
     roster: readonly FleetTerminal[] = [manager],
@@ -3948,7 +3950,8 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     },
   };
   const event = (id: string, overrides: Partial<TerminalEnvelopeEvent> = {}): TerminalEnvelopeEvent =>
-    owned.envelope(id, { terminalHandle: manager.handle, cwd: workerBase + '/two/child', ...overrides });
+    // Index first so the envelope defaults to the indexed child cwd and launcher handle.
+    (owned.own(id), owned.envelope(id, overrides));
   const scenario = (
     screen: string, overrides: Partial<Parameters<typeof tick>[0]> = {},
     store: FleetWakeStateStore = new MemoryWakeStore(),
@@ -4004,7 +4007,7 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     expect(observed).toMatchObject({ state: 'PARKED', wait });
     expect(observed?.ownParkObservation).toBeUndefined();
     const landed = event('inv-2759-native-gpt', {
-      cwd: manager.worktreePath, lifecycleOutcome: 'success', turnResultState: 'ok', delivery: 'landed',
+      lifecycleOutcome: 'success', turnResultState: 'ok', delivery: 'landed',
     });
     const store = new MemoryWakeStore();
     const run = () => scenario(screen, { listTerminalEnvelopes: () => [landed] }, store);
@@ -4391,19 +4394,22 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
     expect(sends((await run()).calls)).toHaveLength(0);
   });
 
-  it('Issue #2773: the indexed own invocation wakes whatever cwd or launcher handle its envelope copy reports', async () => {
+  it('Issue #2773: an envelope copy must report the indexed child cwd and launcher handle to wake (#2840 review 2)', async () => {
     const parked = 'PARKED on GPT turn inv-a';
+    // Positive control: matching indexed cwd and launcher handle wakes once.
+    const matching = new MemoryWakeStore();
+    const first = await scenario(parked, { listTerminalEnvelopes: () => [event('inv-a')] }, matching);
+    expect(texts(first.calls, manager.handle)).toEqual([expect.stringContaining('GPT-turn-inv-a ended state ok')]);
+    expect(texts(first.calls, coordinator.handle)).toHaveLength(0);
+    expect(sends((await scenario(parked, { listTerminalEnvelopes: () => [event('inv-a')] }, matching)).calls)).toHaveLength(0);
     for (const landed of [
-      // The envelope's own cwd/handle are not owner evidence; only the private index is.
       event('inv-a', { cwd: '/tmp/opencode/appliedin-301-pr306-author' }),
       event('inv-a', { cwd: undefined }),
       event('inv-a', { terminalHandle: 'term_launcher_tab_exited' }),
+      event('inv-a', { terminalHandle: undefined }),
     ]) {
-      const store = new MemoryWakeStore();
-      const first = await scenario(parked, { listTerminalEnvelopes: () => [landed] }, store);
-      expect(texts(first.calls, manager.handle)).toEqual([expect.stringContaining('GPT-turn-inv-a ended state ok')]);
-      expect(texts(first.calls, coordinator.handle)).toHaveLength(0);
-      expect(sends((await scenario(parked, { listTerminalEnvelopes: () => [landed] }, store)).calls)).toHaveLength(0);
+      const observed = await scenario(parked, { listTerminalEnvelopes: () => [landed] }, new MemoryWakeStore());
+      expect(sendsTo(observed.calls, manager.handle)).toHaveLength(0);
     }
   });
 
@@ -5436,8 +5442,7 @@ describe('Issue #2749 B9-6: exact primary-root near-effect Dispatch admission', 
   // Issue #2840: the primary-root manager also needs exact owner proof (assignment A + private index).
   const owned = parkFixture([{ pane: rootAgent, key: 'b9-A' }]);
   owned.own('inv-primary-b9');
-  const envelope: TerminalEnvelopeEvent = owned.envelope('inv-primary-b9', {
-    terminalHandle: rootAgent.handle, cwd: workerBase + '/two/child' });
+  const envelope: TerminalEnvelopeEvent = owned.envelope('inv-primary-b9');
   const exercise = (
     phase: 'stable' | 'unbound' | 'unreadable-census' | 'before-text' | 'before-enter'
       | 'rebind-before-text' | 'rebind-before-enter',
@@ -5925,7 +5930,11 @@ describe('Issue #2840 named park producer ownership', () => {
     const landed = fixture.envelope('inv-stale');
     const first = await run(fixture, { one: 'PARKED on GPT turn inv-stale' }, { listTerminalEnvelopes: () => [landed] });
     expect(sendsTo(first.calls, 'one')).toHaveLength(0);
-    expect(texts(first.calls, 'coord')).toEqual([expect.stringMatching(/UNTRUSTED PANE OBSERVATION.*reconcile this manager Task\/Dispatch for the exact own GPT invocation inv-stale/u)]);
+    // The coordinator sees only an inert digest of the invocation id, never the id itself.
+    const digest = 'sha256:' + createHash('sha256').update('inv-stale').digest('hex').slice(0, 16);
+    expect(texts(first.calls, 'coord')).toEqual([expect.stringMatching(/UNTRUSTED PANE OBSERVATION.*reconcile this manager Task\/Dispatch for the exact own GPT invocation /u)]);
+    expect(texts(first.calls, 'coord')[0]).toContain(digest);
+    expect(texts(first.calls, 'coord')[0]).not.toContain('inv-stale');
   });
 
   it.each([
@@ -6283,12 +6292,76 @@ describe('Issue #2840 named park producer ownership', () => {
     });
   });
 
-  it('(e) a secret-shaped GPT park token is redacted from the coordinator reason', async () => {
+  it.each(['ghp-SECRETTOKEN123', 'xoxb-1234-5678-abcdEFGH', 'inv-plain-id'])(
+    '(e) an unverified GPT park id %s reaches the coordinator only as a sha256 digest, never raw', async (token) => {
+      const fixture = setup();
+      const first = await run(fixture, { one: 'PARKED on GPT turn ' + token });
+      expect(sendsTo(first.calls, 'one')).toHaveLength(0);
+      const coord = texts(first.calls, 'coord').join(' ');
+      const digest = 'sha256:' + createHash('sha256').update(token).digest('hex').slice(0, 16);
+      expect(coord).toContain(digest);
+      expect(coord).not.toContain(token);
+      expect(coord).not.toMatch(/SECRETTOKEN|xoxb/u);
+      expect(sends(first.calls).flat().join(' ')).not.toMatch(/SECRETTOKEN|xoxb-/u);
+    });
+
+  it('(i) an earlier own indented park followed by a later guttered copy as final content never reaches the manager', async () => {
     const fixture = setup();
-    const first = await run(fixture, { one: 'PARKED on GPT turn ghp-SECRETTOKEN123' });
+    fixture.own('inv-native-twice', 0);
+    const wait = 'PARKED on GPT turn inv-native-twice';
+    const screen = realOpenCodePane('tool').replace('     PR #225 merged; Issue #221 review continues next.',
+      ['     ' + wait, '     Tool: inspected selected producer result', '  ┃  ' + wait].join('\n'));
+    expect(lastFleetParkedLine(screen)).toBe(wait);
+    const observed = runFleetSweep({ projectId: 'orchestrator-pack', primary, terminals: [coordinator, m643],
+      store: new MemoryWakeStore(), executor: fakeOrca({ coord: 'idle', one: screen }, [], [coordinator, m643]) })
+      .find((pane) => pane.handle === 'one');
+    expect(observed).toMatchObject({ state: 'PARKED', wait });
+    const first = await run(fixture, { one: screen },
+      { listTerminalEnvelopes: () => [fixture.envelope('inv-native-twice')] });
     expect(sendsTo(first.calls, 'one')).toHaveLength(0);
-    const coord = texts(first.calls, 'coord').join(' ');
-    expect(coord).toContain('[redacted]');
-    expect(coord).not.toContain('SECRETTOKEN');
+  });
+
+  it('(ii) a live non-primary terminal park without an assignment never gets a direct 30-minute reminder', async () => {
+    const fixture = setup();
+    const producer: FleetTerminal = { handle: 'producer', title: 'OpenCode producer',
+      worktreePath: workerBase + '/producer', incarnationId: 'inc-prod', status: 'running', agentIdentity: 'opencode' };
+    const rows = [coordinator, m643, m644, producer];
+    const screens = { one: 'PARKED on terminal producer incarnation inc-prod', producer: 'working\nesc interrupt' };
+    const overrides = { terminals: rows, extra: { ...fixture.options, readCurrentAssignments: () => [] },
+      executor: fixture.executor(fakeOrca({ coord: 'idle', ...screens }, [], rows)) };
+    const store = new MemoryWakeStore();
+    await run(fixture, screens, { ...overrides, now: () => 0 }, store);
+    for (const now of [1_800_000, 3_600_000]) {
+      expect(sendsTo((await run(fixture, screens, { ...overrides, now: () => now }, store)).calls, 'one')).toHaveLength(0);
+    }
+  });
+
+  it('(iii) an unreadable review-run store gets a coordinator alarm only, never a pane reminder', async () => {
+    const fixture = setup();
+    const runId = 'prr-' + 'c'.repeat(32);
+    const overrides = { readPackReviewRuns: () => { throw new Error('store_lock_timeout'); } };
+    const store = new MemoryWakeStore();
+    const screens = { one: 'PARKED on review run ' + runId };
+    const first = await run(fixture, screens, { ...overrides, now: () => 0 }, store);
+    const later = await run(fixture, screens, { ...overrides, now: () => 1_800_000 }, store);
+    expect(sendsTo(first.calls, 'one')).toHaveLength(0);
+    expect(sendsTo(later.calls, 'one')).toHaveLength(0);
+    expect([...texts(first.calls, 'coord'), ...texts(later.calls, 'coord')].join(' ')).toContain('run store unreadable');
+  });
+
+  it.each([
+    ['missing cwd', { cwd: undefined }],
+    ['wrong cwd', { cwd: workerBase + '/some-other-worktree' }],
+    ['missing terminalHandle', { terminalHandle: undefined }],
+    ['wrong terminalHandle', { terminalHandle: 'two' }],
+  ] as const)('(iv) an indexed-path envelope with %s does not Wake', async (_name, overrides) => {
+    const fixture = setup();
+    fixture.own('inv-bound-fields', 0);
+    const screens = { one: 'PARKED on GPT turn inv-bound-fields' };
+    const control = await run(fixture, screens, { listTerminalEnvelopes: () => [fixture.envelope('inv-bound-fields')] });
+    expect(texts(control.calls, 'one')).toEqual([expect.stringContaining('ended state ok')]);
+    const bad = await run(fixture, screens,
+      { listTerminalEnvelopes: () => [fixture.envelope('inv-bound-fields', overrides)] });
+    expect(sendsTo(bad.calls, 'one')).toHaveLength(0);
   });
 });

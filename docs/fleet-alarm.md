@@ -74,8 +74,10 @@ selected-project/repository manager WorkerAssignment whose live exact
 `orchestration worker-show --dispatch <bindingKey> --full --json` worker is
 this pane's native handle, incarnation, worktree and branch, and whose park is
 positively its **own final outcome**: the provenance-aware own response, or a
-native OpenCode assistant-rendered final line outside every `┃` gutter (OpenCode
-renders incoming messages and tool output inside that gutter). A raw last
+native OpenCode screen whose actual final `PARKED` occurrence is itself an
+assistant-rendered line outside every `┃` gutter (OpenCode renders incoming
+messages and tool output inside that gutter); an older equal assistant line
+never vouches for a later guttered copy. A raw last
 `PARKED` line from a tool result, quotation or `User:`/`Tool:` context is never
 recipient authority, at selection or at the pre-send check. Duplicate rows,
 an unreadable census, a replaced Dispatch/generation/incarnation or a
@@ -106,8 +108,9 @@ your own producer" correction to the verified parking manager only), or
   stale, changed, missing or unjoinable launching handle, a missing, partial
   or unreadable owner pair, a missing/legacy index, an unproven cwd or an
   attempt-ID-only park is **unverified**: the coordinator is asked to
-  reconcile the exact own invocation (named only in an inert identifier
-  shape; any other park token is `[redacted]`). A launcher mismatch never proves
+  reconcile the exact own invocation, named only as `sha256:<16 hex>` of the
+  park token (the private index file name) so no untrusted token bytes reach
+  the coordinator. A launcher mismatch never proves
   foreignness. A copied ID on another pane does not veto the proven owner.
 - **CI, PR review and pack-review with an explicit head H0.** The live
   `pulls/N` body must have one unique `Closes/Fixes/Resolves #Issue` equal to
@@ -127,7 +130,8 @@ your own producer" correction to the verified parking manager only), or
   `targetSha`. `headSha` is normalized by the production record parser, and a
   legacy record without a raw `headSha` reads back as `targetSha`; equal
   normalized values are only an internal consistency check, and an actually
-  surfaced mismatch or parser-rejected record is unverified. The run's PR is
+  surfaced mismatch, parser-rejected record or unreadable selected-project
+  run store is unverified (coordinator-only, no direct Reminder). The run's PR is
   joined through the live PR body closer above, then H0 is compared with the
   **live** own PR head: unchanged H0 reports only the run's actual terminal
   status (or the verified runner-dead diagnostic; active stays pending); an
@@ -150,7 +154,9 @@ your own producer" correction to the verified parking manager only), or
 **GPT terminal re-check.** An own single turn (above) is eligible with its independently
 parsed `TERMINAL_SCHEMA` artifact **at the indexed `terminal_envelope_path`**
 containing byte-exact `observed_invocation_id`, the indexed run/attempt identity
-and the present, equal indexed handoff receipt path, and a coherent ended result
+and the present, equal indexed handoff receipt path, a recorded `cwd` equal to
+the indexed `child_cwd` and a `terminal_handle` equal to the verified launching
+manager terminal, and a coherent ended result
 (a `success` lifecycle without a recorded turn-result state is uncertain, never
 an inferred `ok`) (`ok`, `not-sent`,
 `driver_error:<cause>` or another positively terminal non-contradictory
@@ -188,8 +194,8 @@ proof above**; then a single in-flight turn, or a triplet with zero/one/two
 settlements, retains the existing **30-minute Reminder**, not an immediate
 alarm or triplet completion. That Reminder for a task-owned producer goes only
 to a verified parking manager on its own pending park, with the same pre-send
-check; an unverified or corrected park gets no direct Reminder and keeps only
-the coordinator route. A missing or unreadable index, or a matching
+check; an unverified or corrected park, and every bare terminal or PID park
+(live or exited), gets no direct Reminder and keeps only the coordinator route. A missing or unreadable index, or a matching
 owner Task+Dispatch with a stale, changed, absent or unjoinable launching
 handle, is unverified and gets the coordinator exact-invocation reconcile step,
 not a direct foreign correction. A global same-ID foreign event, filename or

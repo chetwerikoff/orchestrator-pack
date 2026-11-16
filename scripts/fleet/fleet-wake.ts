@@ -2,7 +2,7 @@
 import '../toolchain/native-entrypoint-preflight.ts';
 import { createHash } from 'node:crypto';
 import { runProcessSync } from '../kernel/subprocess.ts';
-import { existsSync, mkdirSync, readFileSync, readlinkSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readlinkSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1430,9 +1430,11 @@ type WorkerShowCache = Map<string, Record<string, unknown> | undefined>;
 export function ownFinalPark(screen: string, wait: string): boolean {
   if (ownPaneOutcome(screen).wait === wait) return true;
   if (lastFleetParkedLine(screen) !== wait) return false;
-  const raw = screen.split(/\r?\n/u);
+  const raw = screen.split(/\r?\n/u).map((line) => line.replace(/\s+$/u, ''));
   if (!raw.some((line) => /^\s*┃/u.test(line))) return false;
-  const final = raw.map((line) => line.replace(/\s+$/u, '')).filter((line) => line.trim() === wait).at(-1);
+  // The witness is the screen's actual final PARKED occurrence (the one the
+  // sweep read), framed or not; an older equal assistant line never counts.
+  const final = raw.filter((line) => line.replace(/^[\s┃│╹╻▀▄█▌▐⬝■▣◆●•·]+/u, '').trim() === wait).at(-1);
   return final !== undefined && /^ +PARKED on /u.test(final);
 }
 
@@ -1528,7 +1530,8 @@ function selectedLinkedWorktree(cwd: string | undefined, options: FleetAlarmTick
 
 type GptOwnership =
   | { readonly kind: 'own'; readonly runIdentity: string; readonly attemptIdentity: string;
-    readonly handoffReceiptPath: string; readonly terminalEnvelopePath: string }
+    readonly handoffReceiptPath: string; readonly terminalEnvelopePath: string;
+    readonly childCwd: string; readonly launcher: string }
   | { readonly kind: 'foreign' }
   | { readonly kind: 'unverified'; readonly reason: string };
 
@@ -1560,11 +1563,13 @@ function classifyGptInvocation(
   if (receipt.launching_terminal_handle !== manager.handle) {
     return unverified('GPT launch handle does not join the current manager terminal');
   }
-  if (!selectedLinkedWorktree(receipt.child_cwd, options)) {
+  const childCwd = receipt.child_cwd;
+  if (!childCwd || !selectedLinkedWorktree(childCwd, options)) {
     return unverified('GPT child cwd is not a selected-project linked worktree');
   }
   return { kind: 'own', runIdentity: locator.run_identity, attemptIdentity: locator.attempt_identity,
-    handoffReceiptPath: locator.handoff_receipt_path, terminalEnvelopePath: locator.terminal_envelope_path };
+    handoffReceiptPath: locator.handoff_receipt_path, terminalEnvelopePath: locator.terminal_envelope_path,
+    childCwd, launcher: manager.handle };
 }
 
 type PullOwnership =
@@ -1772,9 +1777,10 @@ function decideNamedPark(
     try {
       matches = readSelectedProjectReviewRuns(options)?.records.filter((run) => run.id === producer.id) ?? [];
     } catch {
-      log('review-run Wake pending/unverified for ' + producer.id
+      log('review-run Wake unverified for ' + producer.id
         + ': selected-project run store unreadable - re-check the store before the next normal tick');
-      return PENDING;
+      return { kind: 'unverified', reason: 'review run ' + producer.id + ' selected-project run store unreadable'
+        + ' - reconcile the selected-project review-run store' + UNVERIFIED_NEXT };
     }
     if (matches.length !== 1) {
       return { kind: 'unverified', reason: 'review run ' + producer.id + ' has no unique selected-project record'
@@ -1957,11 +1963,20 @@ function safeTerminalCauseCode(value: string | undefined): string | undefined {
     ? value : undefined;
 }
 
-/** Coordinator text carries only an inert identifier shape, never an arbitrary park token. */
+/**
+ * Coordinator text never echoes untrusted park token bytes. The digest names
+ * the private `browser-gpt-receipts/<sha256(id)>.json` index entry for local
+ * exact-ID reconciliation.
+ */
 function inertInvocationId(id: string): string {
-  return /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/u.test(id)
-    && !/(?:token|secret|passw|credential|private|apikey|bearer|^sk-|^gh[pousr]-?)/iu.test(id)
-    ? id : '[redacted]';
+  return 'sha256:' + createHash('sha256').update(id).digest('hex').slice(0, 16);
+}
+
+function sameChildCwd(cwd: string | undefined, childCwd: string): boolean {
+  if (!cwd || !isAbsolute(cwd)) return false;
+  if (resolve(cwd) === resolve(childCwd)) return true;
+  try { return realpathSync(cwd) === realpathSync(childCwd); }
+  catch { return false; }
 }
 
 function singleGptEndedState(event: TerminalEnvelopeEvent): string {
@@ -1978,7 +1993,8 @@ function gptTerminalResolution(
   producer: NamedProducer,
   ids: readonly string[],
   owned: ReadonlyMap<string, { readonly runIdentity: string; readonly attemptIdentity: string;
-    readonly handoffReceiptPath: string; readonly terminalEnvelopePath: string }>,
+    readonly handoffReceiptPath: string; readonly terminalEnvelopePath: string;
+    readonly childCwd: string; readonly launcher: string }>,
   events: readonly TerminalEnvelopeEvent[],
 ): { readonly match?: ProducerResolution; readonly deficient: boolean } {
   let deficient = false;
@@ -1992,7 +2008,9 @@ function gptTerminalResolution(
     const associated = events.filter((event) => resolve(event.path) === resolve(own.terminalEnvelopePath)
       && event.observedInvocationId === id
       && event.runIdentity === own.runIdentity && event.attemptIdentity === own.attemptIdentity
-      && event.handoffReceiptPath === own.handoffReceiptPath);
+      && event.handoffReceiptPath === own.handoffReceiptPath
+      // The result artifact's own child origin must be the indexed child cwd and launcher.
+      && event.terminalHandle === own.launcher && sameChildCwd(event.cwd, own.childCwd));
     if (associated.length === 0) continue; // Indexed own turn with no envelope yet is ordinary pending.
     if (associated.length !== 1) { deficient = true; continue; }
     const event = associated[0]!;
@@ -2309,7 +2327,10 @@ async function wakeNamedParkedProducers(
     // PARKED stays silent until its own elapsed 30-minute Reminder. An unverified
     // or corrected park keeps only the coordinator route; a task-owned producer
     // reminds only a verified parking manager on its own pending park.
-    const reminderGate = decision.kind === 'unverified' || decision.kind === 'correct' ? undefined
+    // A bare terminal or PID park has no Task-bound producer origin, live or
+    // exited, so it never gets a direct Reminder; only UTC time and shared units do.
+    const reminderGate = decision.kind === 'unverified' || decision.kind === 'correct'
+      || producer?.kind === 'terminal' || producer?.kind === 'process' ? undefined
       : needsManager ? (decision.kind === 'pending' && manager ? stillBoundManager(manager) : undefined)
         : stillParkedOwner;
     if (reminderGate && epoch && Number.isFinite(now) && now >= epoch.since + REMINDER_INTERVAL_MS) {
