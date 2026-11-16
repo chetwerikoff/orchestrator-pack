@@ -3146,6 +3146,26 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     return reloaded;
   }
 
+  it('Issue #2835: a persisted clean T that omitted H1 blocking findings cannot settle', async () => {
+    const f = unchangedDescendantFixture();
+    const delta = completeFinalCapDelta(f, HEAD, revisedBody, reviewedHead, []);
+    // This is a fully journaled, source-complete, self-digest-consistent
+    // ordinary result, but its prompt context omitted the outstanding H1
+    // blocker. Neither current-head ancestry nor an accepted COMMENT erases it.
+    expect(delta.finalCapDelta?.priorFindings).toEqual([]);
+    expect(getPackReviewRun(f.run.id, f.options)?.findings.length).toBeGreaterThan(0);
+    f.input.fixtureCurrentPrHeadSha = HEAD;
+    f.input.fixtureReviewCompareStatus = 'ahead';
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({
+      prNumber, headSha: HEAD, finalCapSettlement: true, settled: false,
+      reason: 'final_cap_delta_review_chain_unverified',
+    }));
+    expect(f.statuses.some((status) => status.state === 'success')).toBe(false);
+    expect(readPackReviewAuthority(prNumber, f.options)?.cycle?.reviewStageComplete).not.toBe(true);
+    expect(listPackReviewRuns(f.options)).toHaveLength(2);
+  });
+
   it.each(['scoped reconcile', 'PR-led start', 'unauthorized', 'wrong-head', 'wrong-diff',
     'changed-behavior', 'body-drift', 'not-descendant', 'outside-scope', 'red-ci',
     'guarded-declaration', 'guarded-declaration-start', 'guard-free-declaration',
