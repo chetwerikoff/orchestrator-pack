@@ -1461,9 +1461,9 @@ export function settleLogicalPackReviewFindingsByStrictDescendant(input: {
         cycle.atCapHash = undefined;
         markReviewStageComplete(current, cycle.closedAtUtc);
         if (sameHead) cycle.settlementKind = 'same_head_issue_resolution';
-        else if (input.verifiedDeltaRunId || input.verifiedPureBaseMerge) {
-          cycle.settlementKind = 'delta_review';
-        }
+        // Original strict-descendant settlements have no settlementKind.
+        // Authenticated delta evidence changes eligibility, not the
+        // persisted receipt grammar or capped-round identity.
       } else if (
         cycle.state === 'closed' && cycle.reviewStageComplete === true
         && consumedCount === cycle.frozenCap
@@ -1472,7 +1472,10 @@ export function settleLogicalPackReviewFindingsByStrictDescendant(input: {
         // After an accepted clean H2, a newly reviewed H3 can update S
         // without reopening or consuming a required round. The runner must
         // still verify the exact ordinary delta result and current-head gates.
-        cycle.settlementKind = 'delta_review';
+        // The only exceptional receipt shape was the independently proven
+        // same-head Issue correction. Once H2 has an ordinary clean delta,
+        // current-head publication (not a second cycle/round) owns settlement.
+        cycle.settlementKind = undefined;
       } else {
         throw new PackReviewAuthorityError(
           'findings_settlement_invalid',
