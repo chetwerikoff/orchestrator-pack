@@ -636,7 +636,6 @@ describe('OpenCode HTTP control plane', () => {
     })).toBeUndefined();
   });
 
-
   function procCommandFixture() {
     const root = mkdtempSync(join(tmpdir(), 'opk-2847-proc-'));
     const terminal = {
