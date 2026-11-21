@@ -7345,6 +7345,70 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
         expect(starts).toBe(1);
       });
 
+    it('admits the observed Orca plugin-dir command for fresh and reused Claude panes', async () => {
+      const pluginDir = join(homedir(), '.config', 'orca', 'claude-agent-view', 'abcdef0123', 'orca-agent-view');
+      const command = `claude --plugin-dir ${pluginDir} --model claude-opus-5-5 --effort medium`;
+      const env = claudeEnv('claude-opus-5-5', 'medium');
+      let starts = 0;
+      const fresh = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), env, issueNumber: 2847 },
+        deps({ adapter: observedClaudeAdapter(command, 'Opus', 'medium', { commandObserved: true }),
+          onSupervised: () => { starts += 1; } }));
+      expect(fresh.outcome).toBe('ready');
+      expect(starts).toBe(1);
+
+      const reusedCommand = `OPK_PROJECT_ID='orchestrator-pack' ${command}`;
+      const base = readyStart('task-1');
+      if (!base.assignment || !base.receipt) throw Error('missing supervised fixture');
+      const reusedStart: SupervisedWorkerStartResult = {
+        ...base,
+        assignment: { ...base.assignment, issueNumber: 2847, role: 'orchestrator' },
+        receipt: { ...base.receipt, effects: [{ kind: 'worktree', action: 'reused', id: 'repo::exact-worktree' }] },
+      };
+      const reused = await runSupervisedTaskLaunchAssistant({
+        ...launchInput('manager'), env, issueNumber: 2847, existingTerminal: worker.identity.id,
+      }, deps({ adapter: observedClaudeAdapter(reusedCommand, 'Opus', 'medium', { commandObserved: true }),
+        supervised: reusedStart, onSupervised: () => { starts += 1; } }));
+      expect(reused.outcome).toBe('ready');
+      expect(starts).toBe(2);
+    });
+
+    it('refuses plugin-dir paths outside the exact Orca agent-view hex root', async () => {
+      const env = claudeEnv('claude-sonnet-5-5', 'high');
+      for (const outside of [
+        '/tmp/plugin',
+        join(homedir(), '.config', 'orca', 'claude-agent-view', 'not-hex', 'orca-agent-view'),
+        join(homedir(), '.config', 'orca', 'claude-agent-view', 'abcdef0123', 'outside'),
+      ]) {
+        let livenessCalls = 0;
+        const command = `claude --plugin-dir '${outside}' --model 'claude-sonnet-5-5' --effort 'high'`;
+        const original = observedClaudeAdapter(command, 'Sonnet', 'high', { commandObserved: true });
+        const adapter: RuntimeAdapter = { ...original, liveness: (input, options) => {
+          livenessCalls += 1;
+          return original.liveness(input, options);
+        } };
+        const result = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), env, issueNumber: 2847 },
+          deps({ adapter }));
+        expect(result).toMatchObject({ outcome: 'continue', stage: 'terminal_prepare' });
+        expect(livenessCalls).toBe(0);
+      }
+    });
+
+    it('refuses extra unknown Claude flags despite a valid Orca plugin-dir', async () => {
+      const pluginDir = join(homedir(), '.config', 'orca', 'claude-agent-view', 'abcdef0123', 'orca-agent-view');
+      const command = `claude --plugin-dir '${pluginDir}' --model 'claude-sonnet-5-5' --effort 'high' --unrecognized`;
+      const env = claudeEnv('claude-sonnet-5-5', 'high');
+      let livenessCalls = 0;
+      const original = observedClaudeAdapter(command, 'Sonnet', 'high', { commandObserved: true });
+      const adapter: RuntimeAdapter = { ...original, liveness: (input, options) => {
+        livenessCalls += 1;
+        return original.liveness(input, options);
+      } };
+      const result = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), env, issueNumber: 2847 },
+        deps({ adapter }));
+      expect(result).toMatchObject({ outcome: 'continue', stage: 'terminal_prepare' });
+      expect(livenessCalls).toBe(0);
+    });
+
     it.each([
       "caveman --plugin-dir '/tmp/plugin' claude --model 'claude-sonnet-5-5' --effort 'high'",
       "claude --plugin-dir '/tmp/plugin' --model 'claude-sonnet-5-5' --effort 'high'",

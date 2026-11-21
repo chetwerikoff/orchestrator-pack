@@ -5,7 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { performance } from 'node:perf_hooks';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
 import { SUPPORTED_NODE_MAJOR } from '../toolchain/node-runtime-contract.mjs';
 import { evaluateCommandRuntimePreflight } from '../lib/command-runtime-bootstrap.mjs';
@@ -829,14 +829,43 @@ function canonicalClaudeCommand(profile: ExecutorProfile): string | null {
   return `claude --model ${quote(profile.model)} --effort ${quote(profile.effort)}`;
 }
 
+function normalizedOrcaClaudeCommand(command: string): string | null {
+  const root = resolve(homedir(), '.config', 'orca', 'claude-agent-view');
+  let invalidPlugin = false;
+  let orcaInjected = false;
+  const withoutPlugin = command.replace(
+    /(^| )--plugin-dir (?:'([^']+)'|"([^"]+)"|([^\s'"]+))(?= |$)/gu,
+    (match, _separator: string, single: string | undefined, double: string | undefined, bare: string | undefined) => {
+      const pluginPath = single ?? double ?? bare ?? '';
+      const withinRoot = relative(root, resolve(pluginPath)).replaceAll('\\', '/');
+      if (!/^[0-9a-f]+\/orca-agent-view(?:\/[A-Za-z0-9_.-]+)*\/?$/iu.test(withinRoot)) {
+        invalidPlugin = true;
+        return match;
+      }
+      orcaInjected = true;
+      return '';
+    },
+  );
+  if (invalidPlugin) return null;
+  if (!orcaInjected) return command;
+  // Orca's native argv display can omit shell quotes around the exact model/effort values.
+  return withoutPlugin.replace(
+    /(^| )claude --model (claude-(?:sonnet|opus)-5-5) --effort (high|medium)$/u,
+    (_match, prefix: string, model: string, effort: string) =>
+      `${prefix}claude --model ${quote(model)} --effort ${quote(effort)}`,
+  );
+}
+
 function matchingDirectClaudeCommand(
   profile: ExecutorProfile, command: string | undefined, projectId?: string,
 ): boolean {
   const direct = canonicalClaudeCommand(profile);
   if (!direct || !command) return false;
   const prefix = projectId ? `OPK_PROJECT_ID=${quote(projectId)} ` : '';
-  if (profile.launchCommand !== direct && (!prefix || profile.launchCommand !== prefix + direct)) return false;
-  return command === direct || Boolean(prefix && command === prefix + direct);
+  const launchCommand = normalizedOrcaClaudeCommand(profile.launchCommand);
+  const observedCommand = normalizedOrcaClaudeCommand(command);
+  if (launchCommand !== direct && (!prefix || launchCommand !== prefix + direct)) return false;
+  return observedCommand === direct || Boolean(prefix && observedCommand === prefix + direct);
 }
 
 /**
@@ -864,7 +893,8 @@ export async function claudePaneProfileObserved(
     firstBudget === undefined ? undefined : { timeoutMs: firstBudget });
   if (!observed || observed.status !== 'known' || observed.family !== 'non-opencode'
     || !matchingDirectClaudeCommand(profile, observed.command, options.projectId)
-    || (options.expectedCommand !== undefined && observed.command !== options.expectedCommand)
+    || (options.expectedCommand !== undefined
+      && normalizedOrcaClaudeCommand(observed.command) !== normalizedOrcaClaudeCommand(options.expectedCommand))
     || (options.deadlineMs !== undefined && now() >= options.deadlineMs)) return false;
   if (!adapter.readBoundedOutputAsync) return false;
   const readBudget = budget();
@@ -1355,7 +1385,8 @@ export async function runSupervisedTaskLaunchAssistant(
       const unprefixedSonnet = profile.family === 'claude'
         && profile.model === 'claude-sonnet-5-5' && profile.effort === 'high'
         && selection?.status === 'known'
-        && selection.command === canonicalClaudeCommand(profile);
+        && selection.command !== undefined
+        && normalizedOrcaClaudeCommand(selection.command) === canonicalClaudeCommand(profile);
       if (!selection || selection.status !== 'known'
         || (profile.family === 'claude'
           ? (!matchingDirectClaudeCommand(profile, selection.command, projectId)
@@ -1458,9 +1489,11 @@ export async function runSupervisedTaskLaunchAssistant(
   const projectPrefix = `OPK_PROJECT_ID=${quote(projectId)} `;
   profile = { ...profile, launchCommand: projectPrefix + profile.launchCommand };
   if (input.existingTerminal) {
+    const normalizedReusedCommand = profile.family === 'claude' && reusedCommand
+      ? normalizedOrcaClaudeCommand(reusedCommand) : reusedCommand;
     const unprefixedSonnet = profile.family === 'claude' && profile.model === 'claude-sonnet-5-5'
-      && profile.effort === 'high' && reusedCommand === canonicalClaudeCommand(profile);
-    if (!reusedCommand || (profile.launchCommand !== reusedCommand && !unprefixedSonnet)) return continued(input, 'dispatch_admission_final', {
+      && profile.effort === 'high' && normalizedReusedCommand === canonicalClaudeCommand(profile);
+    if (!reusedCommand || (profile.launchCommand !== normalizedReusedCommand && !unprefixedSonnet)) return continued(input, 'dispatch_admission_final', {
       cause: 'existing_terminal_generation_changed', actor: 'orchestrator', evidence: {},
       nextAction: { kind: 'remediate_terminal',
         note: 'the original native command does not reproduce the selected profile and current baseline; inspect read-only rather than replacing its process environment' },
