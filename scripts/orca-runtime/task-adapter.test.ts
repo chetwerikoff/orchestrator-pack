@@ -2,7 +2,7 @@
 // @vitest-pre-topology-seconds 120
 import { createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { DeterministicRuntimeAdapter } from '../runtime/test-adapter.ts';
@@ -668,7 +668,8 @@ describe('OpenCode HTTP control plane', () => {
 
   it('#2847 observes the real Orca-injected Claude argv from a unique /proc root, not inherited MCP or nested Claude', () => {
     const fixture = procCommandFixture();
-    const command = 'claude --plugin-dir /home/fixture/.config/orca/claude-agent-view/abcdef0123/orca-agent-view --model claude-opus-5-5 --effort medium';
+    const pluginDir = join(homedir(), '.config', 'orca', 'claude-agent-view', 'abcdef0123', 'orca-agent-view');
+    const command = `claude --plugin-dir ${pluginDir} --model claude-opus-5-5 --effort medium`;
     try {
       fixture.writeProcess(510, 1, command.split(' '), [
         fixture.handleEnv, 'OPK_PROJECT_ID=fixture-project', 'OTHER_PRIVATE_VALUE=do-not-expose',
