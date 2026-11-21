@@ -690,6 +690,20 @@ describe('OpenCode HTTP control plane', () => {
     } finally { fixture.dispose(); }
   });
 
+  it('#2847 presents an absolute Claude argv0 as bare claude with the remaining argv and project prefix intact', () => {
+    const fixture = procCommandFixture();
+    const pluginDir = join(homedir(), '.config', 'orca', 'claude-agent-view', 'abcdef0123', 'orca-agent-view');
+    const argv = ['/usr/local/bin/claude', '--plugin-dir', pluginDir, '--model', 'claude-opus-5-5', '--effort', 'medium'];
+    try {
+      fixture.writeProcess(513, 1, argv, [fixture.handleEnv, 'OPK_PROJECT_ID=fixture-project']);
+      expect(fixture.observe()).toEqual({
+        status: 'known', family: 'non-opencode',
+        command: "OPK_PROJECT_ID='fixture-project' claude " + argv.slice(1).join(' '),
+        provenance: 'orca-terminal-show',
+      });
+    } finally { fixture.dispose(); }
+  });
+
   it('#2847 keeps two independent handle-bound Claude roots unknown', () => {
     const fixture = procCommandFixture();
     try {
