@@ -7207,6 +7207,26 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
     expect(starts).toBe(0);
   });
 
+  it('#2847 admits the decorated Orca Claude splash only for selected Opus 5.5 / medium', async () => {
+    const profile = resolveExecutorProfile('manager', claudeEnv('claude-opus-5-5', 'medium'), 'exact_terminal_worktree');
+    if (profile.status !== 'ok') throw new Error('Claude fixture profile refused');
+    const native = observedClaudeAdapter(profile.value.launchCommand, 'Opus', 'medium', { commandObserved: true });
+    const header = '▐▛███▛█   Claude Code v2.1.330';
+    for (const [footer, accepted] of [
+      ['▝▜██████▀  Opus 5.5 with medium effort · Claude Max', true],
+      ['▝▜██████▀  Sonnet 5.5 with medium effort · Claude Max', false],
+      ['▝▜██████▀  Opus 5.5 with high effort · Claude Max', false],
+    ] as const) {
+      const adapter: RuntimeAdapter = { ...native, readBoundedOutputAsync: async (input, options) => {
+        const output = await native.readBoundedOutputAsync!(input, options);
+        return output.status === 'ok'
+          ? { ...output, value: { ...output.value, lines: [header, footer] } }
+          : output;
+      } };
+      expect(await claudePaneProfileObserved(profile.value, worker, adapter)).toBe(accepted);
+    }
+  });
+
   it('Issue #2810 accepts a case-insensitive selected model-line effort footer', async () => {
     const profile = resolveExecutorProfile('manager', claudeEnv('claude-sonnet-5-5', 'high'), 'exact_terminal_worktree');
     if (profile.status !== 'ok') throw new Error('Claude fixture profile refused');
