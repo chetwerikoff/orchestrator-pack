@@ -911,17 +911,19 @@ export async function claudePaneProfileObserved(
     || screen.value.terminalState !== 'running'
     || !sameIdentity(screen.value.worker, worker.identity)) return false;
   const lines = screen.value.lines.flatMap((line) => line.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/gu, '').split(/\r?\n/u));
-  if (!lines.some((line) => /^\s*(?:✻\s*)?(?:Welcome to\s+)?Claude Code\b/iu.test(line))) return false;
+  const logoPrefix = String.raw`\s*(?:[\u2580-\u259F]+\s+)*`;
+  const splashRow = new RegExp(`^${logoPrefix}(?:✻\\s*)?(?:Welcome to\\s+)?Claude Code\\b`, 'iu');
+  if (!lines.some((line) => splashRow.test(line))) return false;
   const footer = lines.slice(-20);
   const family = profile.model === 'claude-opus-5-5' ? 'Opus' : 'Sonnet';
-  const statusRow = /^\s*(?:Claude\s+)?(?:Opus|Sonnet)(?:[- .]?5[- .]?5)\b/iu;
+  const statusRow = new RegExp(`^${logoPrefix}(?:Claude\\s+)?(?:Opus|Sonnet)(?:[- .]?5[- .]?5)\\b`, 'iu');
   const matches = footer.flatMap((line, index) => statusRow.test(line) ? [index] : []);
   if (matches.length !== 1) return false;
   const modelIndex = matches[0]!;
   // Detectable editor, fenced, quote or transcript frames cannot act as status.
   if (footer.slice(0, modelIndex + 1).some((line) =>
     /^\s*(?:```|~~~|>\s|(?:Transcript|Editor|Quoted)\s*:)/iu.test(line))) return false;
-  const modelLine = new RegExp(`^\\s*(?:Claude\\s+)?${family}(?:[- .]?5[- .]?5)\\b`, 'iu');
+  const modelLine = new RegExp(`^${logoPrefix}(?:Claude\\s+)?${family}(?:[- .]?5[- .]?5)\\b`, 'iu');
   const row = footer[modelIndex]!;
   if (!modelLine.test(row)) return false;
   const effortLine = new RegExp(`^\\s*(?:effort\\s*[:=]\\s*${profile.effort}|${profile.effort}\\s+effort)\\s*$`, 'iu');
@@ -930,7 +932,943 @@ export async function claudePaneProfileObserved(
   // matching inline model/effort row without any separate effort status.
   const effortStatusRow = /^\s*(?:effort\s*[:=]\s*\S.*|\S+\s+effort)\s*$/iu;
   const effortRows = footer.filter((line) => effortStatusRow.test(line));
-  const inlineEffort = suffix.toLowerCase() === profile.effort?.toLowerCase() || effortLine.test(suffix);
+  const withEffortLine = new RegExp(`^with\\s+${profile.effort}\\s+effort(?:\\s*·\\s*Claude Max)?#!/usr/bin/env -S node --experimental-strip-types
+
+import '../toolchain/native-entrypoint-preflight.ts';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { performance } from 'node:perf_hooks';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { runProcess } from '../kernel/subprocess.ts';
+import { SUPPORTED_NODE_MAJOR } from '../toolchain/node-runtime-contract.mjs';
+import { evaluateCommandRuntimePreflight } from '../lib/command-runtime-bootstrap.mjs';
+import { resolveTargetContext } from '../lib/target-context.ts';
+import { selectRuntimeAdapter } from '../runtime/registry.ts';
+import type { RuntimeAdapter, RuntimeWorker, RuntimeWorkerIdentity } from '../runtime/contracts.ts';
+import { overlayExecutorProfileEnv } from '../executor-profile-store.ts';
+import {
+  currentWorkerAssignmentByDeliverable, listCurrentWorkerAssignmentRecords, parseDelegatedIntegrationMarker, resolveWorkerAssignmentStorePath,
+  sameDelegatedIntegrationMarker, type DelegatedIntegrationMarker, type WorkerAssignment, type WorkerAssignmentRecord,
+} from '../lib/worker-assignment-store.ts';
+import {
+  buildExecutorCommand,
+  buildProviderInvocation,
+  CLAUDE_TASK_ROUTE_CAPABILITIES,
+  claudeHelpEdgeCapabilities,
+  CURSOR_TASK_ROUTE_CAPABILITIES,
+  evaluateExecutorRouteAdmission,
+  EXECUTOR_FAMILY_DESCRIPTORS,
+  executorCatalogContains,
+  buildOpenCodeAgentOverlay,
+  pinnedProbeCommand,
+  openCodeAgentConfigFromInfo,
+  openCodeAgentSemantics,
+  openCodeFleetBrowserDenyRulesAreTerminal,
+  openCodeLaunchHasFleetBrowserDenies,
+  validOpenCodeResumeSession,
+  withOpenCodeFleetBrowserDenies,
+  openCodeConfigPaths,
+  openCodeEdgeCapabilities,
+  openCodeVariantCatalog,
+  profileNamesForTask,
+  resolveSemanticExecutorProfile,
+  withMergeExecutorProfileDefaults,
+  type ExecutorFamily,
+  type ExecutorRoute,
+  type SemanticExecutorProfile,
+} from '../executor-profile-policy.ts';
+import { installManagerPushGuard, restoreManagerPushGuardForClaude } from './manager-push-guard.ts';
+import { runSupervisedWorkerStart, readTerminalGoneDispatch, type SupervisedWorkerStartResult, type WorkerStartMode } from './supervised-worker-start.ts';
+import type { TerminalGoneAssignmentEvidence } from '../lib/worker-assignment-runtime.ts';
+import { collectProcessEvidence } from '../worktree-lifecycle/operations.ts';
+import { parseGitWorktreePorcelain } from '../worktree-lifecycle/core.ts';
+
+export const LAUNCH_ASSISTANT_SCHEMA = 'supervised-task-launch-assistant/v1' as const;
+export const LAUNCH_STARTUP_OBSERVATION_WINDOW_MS = 30_000;
+export const LAUNCH_WORK_CLASSES = ['manager', 't1', 't2', 't3', 'merge'] as const;
+export const CANONICAL_MERGE_LAUNCH_COMMAND = 'node --experimental-strip-types scripts/pr2-foundation/supervised-task-launch-assistant.ts --project "$PROJECT_ID" --work-class merge --task "$TASK_ID" --worktree "path:$PRIMARY_ROOT"';
+const CANONICAL_DELEGATED_MERGE_LAUNCH_COMMAND = 'node --experimental-strip-types scripts/pr2-foundation/supervised-task-launch-assistant.ts --project "$PROJECT_ID" --work-class merge --task "$TASK_ID" --issue-number "$ISSUE_NUMBER" --delegated-integration "$DELEGATED_INTEGRATION_JSON"';
+export type LaunchWorkClass = (typeof LAUNCH_WORK_CLASSES)[number];
+export type LaunchStage = 'command_preflight' | 'repository_preflight' | 'executor_profile'
+  | 'manager_run' | 'manager_task' | 'dispatch_admission_early' | 'worktree_prepare'
+  | 'terminal_prepare' | 'dispatch_admission_final' | 'supervised_start';
+export type LaunchActor = 'operator' | 'orchestrator' | 'manager' | 'provider';
+
+export interface StageTiming {
+  readonly stage: LaunchStage;
+  readonly startedAtMs: number;
+  readonly finishedAtMs: number;
+  readonly elapsedMs: number;
+  readonly outcome: 'passed' | 'continued';
+}
+
+export interface LaunchResources {
+  readonly repository: string;
+  readonly issueNumber?: number;
+  readonly runId?: string;
+  readonly taskId?: string;
+  readonly worktreeId?: string;
+  readonly worktreeSelector?: string;
+  readonly worktreePath?: string;
+  readonly terminal?: RuntimeWorkerIdentity;
+  readonly providerAgentTerminalId?: string;
+  readonly dispatchId?: string;
+}
+
+export interface NextAction {
+  readonly kind: 'repair_preflight' | 'repair_executor_profile' | 'reconcile_manager_run'
+    | 'reconcile_manager_task' | 'reconcile_dispatch' | 'reconcile_worktree_setup' | 'remediate_terminal'
+    | 'retry_supervised_start' | 'reconcile_supervised_start' | 'start_new_task';
+  readonly requestId?: string;
+  readonly command?: string;
+  readonly note?: string;
+}
+
+export interface ContinueResult {
+  readonly schema: typeof LAUNCH_ASSISTANT_SCHEMA;
+  readonly outcome: 'continue';
+  readonly workClass: LaunchWorkClass;
+  readonly stage: LaunchStage;
+  readonly observedCause: string;
+  readonly resources: LaunchResources;
+  readonly responsibleActor: LaunchActor;
+  readonly evidence: Readonly<Record<string, unknown>>;
+  readonly nextAction: NextAction;
+  readonly startedAtMs: number;
+  readonly finishedAtMs: number;
+  readonly elapsedMs: number;
+  readonly firstAbsentOrFailedCheckpoint: LaunchStage;
+  readonly timings: readonly StageTiming[];
+}
+
+export interface ReadyResult {
+  readonly schema: typeof LAUNCH_ASSISTANT_SCHEMA;
+  readonly outcome: 'ready';
+  readonly workClass: LaunchWorkClass;
+  readonly resources: LaunchResources & {
+    readonly taskId: string;
+    readonly worktreeId: string;
+    readonly worktreeSelector: string;
+    readonly worktreePath: string;
+    readonly terminal?: RuntimeWorkerIdentity;
+    readonly providerAgentTerminalId?: string;
+    readonly dispatchId: string;
+  };
+  readonly supervisedStart: {
+    readonly ok: true;
+    readonly reason: 'ready_and_assignment_bound';
+    readonly assignmentBound: true;
+  };
+  readonly startedAtMs: number;
+  readonly finishedAtMs: number;
+  readonly elapsedMs: number;
+  readonly timings: readonly StageTiming[];
+}
+
+export type LaunchResult = ContinueResult | ReadyResult;
+export type EdgeResult<T> =
+  | { readonly status: 'ok'; readonly value: T; readonly evidence?: Readonly<Record<string, unknown>> }
+  | { readonly status: 'continue'; readonly cause: string; readonly actor: LaunchActor;
+      readonly evidence?: Readonly<Record<string, unknown>>; readonly nextAction: NextAction };
+
+type IssueAssignmentObservation = WorkerAssignment | null | Extract<EdgeResult<never>, { status: 'continue' }>;
+
+export function observeSelectedIssueAssignment(
+  file: string, issueNumber: number, projectId: string, repository: string,
+): IssueAssignmentObservation {
+  const rows = listCurrentWorkerAssignmentRecords(file);
+  const matches = rows?.filter((row): row is WorkerAssignment => row.issueNumber === issueNumber) ?? [];
+  if (!rows || rows.some((row) => row.projectId !== projectId || row.repository.toLowerCase() !== repository.toLowerCase())) {
+    return { status: 'continue', cause: 'assignment_store_untrusted', actor: 'orchestrator',
+      evidence: { issueNumber, storePath: file }, nextAction: { kind: 'reconcile_dispatch',
+        note: 'the selected assignment-store census is unreadable, malformed or belongs to another project/repository; the owning orchestrator must reconcile the exact Issue/store read-only before any launch; do not treat unknown as absence' } };
+  }
+  if (matches.length > 1) {
+    const claims = matches.map((row) => ({ taskId: row.taskId, dispatchId: row.bindingKey, assignmentId: row.assignmentId }));
+    return { status: 'continue', cause: 'issue_assignment_ambiguous', actor: 'orchestrator',
+      evidence: { issueNumber, claims }, nextAction: { kind: 'reconcile_dispatch',
+        note: `the owning orchestrator must reconcile Issue ${issueNumber} and all conflicting rows read-only: ${JSON.stringify(claims)}; no Task/terminal/Dispatch creation or automatic store repair` } };
+  }
+  return matches[0] ?? null;
+}
+
+export interface ExecutorProfile {
+  readonly family: ExecutorFamily;
+  readonly route: ExecutorRoute;
+  readonly launchCommand: string;
+  /** Closed native Claude selection; verified again from the bound pane's footer. */
+  readonly model?: string;
+  readonly effort?: string;
+  readonly agentName?: string;
+  readonly inlineConfigJson?: string;
+  /** Required profile-pinned absolute OpenCode binary, shared by all probes and spawn. */
+  readonly executable?: string;
+  readonly providerArgs?: readonly string[];
+  readonly names: readonly [string, string, string];
+}
+
+export interface PreparedWorktree {
+  readonly id?: string;
+  readonly selector: string;
+  readonly path?: string;
+  readonly repositorySelector?: string;
+  readonly setupWitness: 'same_invocation_complete' | 'proven_reuse' | 'provider_top_level';
+  /** Clean same-invocation manager placement tip (fetched selected default or verified PR head); never captured on reuse. */
+  readonly placementSeedOid?: string;
+  /** Same-invocation census, before the unit terminal starts; never populated on reuse. */
+  readonly creationTerminals?: readonly CreationTerminal[];
+}
+
+export interface CreationTerminal {
+  readonly handle: string;
+  readonly incarnationId: string;
+}
+
+export interface WorktreePreparationRequest {
+  readonly repository: string;
+  readonly issueNumber?: number;
+  readonly taskId: string;
+  readonly worktreeSelector?: string;
+  readonly worktreeName?: string;
+  readonly baseBranch?: string;
+  readonly defaultBranch?: string;
+  readonly providerTopLevel?: boolean;
+  readonly managerRefresh?: boolean;
+  /** Existing primary checkout only; merge never creates or refreshes a worktree. */
+  readonly primaryReuseRoot?: string;
+  /** Only populated after native Run/Task membership was proven for an existing manager. */
+  readonly managerTaskRunId?: string;
+  /** Exact Issue-owned predecessor for an existing worker's worktree (not a guess from path). */
+  readonly reuseAssignment?: WorkerAssignment;
+}
+
+export type DispatchObservation = { readonly kind: 'absent' }
+  | { readonly kind: 'present'; readonly dispatchId?: string; readonly status?: string };
+
+/** A terminal Dispatch is reusable only for its exact current Issue/Task assignment. */
+function sameTaskTerminalDispatch(
+  observed: DispatchObservation,
+  assignment: WorkerAssignmentRecord | null,
+  taskId: string,
+  adapterId: string,
+): boolean {
+  return observed.kind === 'present'
+    && Boolean(assignment
+      && observed.dispatchId === assignment.bindingKey
+      && assignment.taskId === taskId
+      && assignment.kind === 'local'
+      && assignment.provider === adapterId
+      && ['failed', 'abandoned', 'cancelled', 'done', 'completed'].includes(observed.status ?? ''));
+}
+
+const FIRST_START_COMMAND = 'node --experimental-strip-types scripts/pr2-foundation/supervised-task-launch-assistant.ts';
+
+function mergeSameTaskCommand(input: LaunchInput, taskId: string, repository: string): string {
+  return `${FIRST_START_COMMAND} --project ${quote(input.projectId!)} --repository ${quote(repository)} --work-class merge --task ${quote(taskId)} --worktree ${quote(`path:${input.primaryRoot}`)}`;
+}
+
+/**
+ * A present Dispatch with no current assignment for this Task is never resumed by
+ * a same-Task successor. The lawful next step is a coordinator-authorized new
+ * Task through the existing first-start route.
+ */
+function freshDispatchNotAbsent(
+  input: LaunchInput,
+  taskId: string,
+  observed: Extract<DispatchObservation, { kind: 'present' }>,
+  current: WorkerAssignmentRecord | null,
+  reconcileNote: string,
+): Omit<Extract<EdgeResult<never>, { status: 'continue' }>, 'status'> {
+  const evidence = {
+    dispatchState: 'present',
+    ...(observed.status ? { dispatchStatus: observed.status } : {}),
+    taskId,
+    ...(input.runId?.trim() ? { runId: input.runId.trim() } : {}),
+  };
+  if (input.workClass === 'merge' || current?.taskId === taskId) {
+    return {
+      cause: 'fresh_dispatch_not_absent', actor: 'orchestrator', evidence,
+      nextAction: { kind: 'reconcile_dispatch', note: reconcileNote },
+    };
+  }
+  return {
+    cause: 'fresh_dispatch_not_absent', actor: 'orchestrator',
+    evidence: { ...evidence, assignment: 'absent' },
+    nextAction: {
+      kind: 'start_new_task',
+      note: `no current assignment owns Task ${taskId}; inspect the exact Dispatch read-only and preserve the old checkout, including dirty bytes. The coordinator must supply the selected project, ${input.workClass === 'manager' ? 'original Run, fresh manager brief' : 'separately authorized new --task (without manager-only --run/--manager-brief)'} and unique worktree name. If one open same-repository Issue-closing PR has a verified default base and fetched head, use a fresh named worktree on origin/<verified PR branch>; otherwise separately authorize a clean default-branch first start. No executable retry is resolved here.`,
+    },
+  };
+}
+
+export type ManagerBriefTemplateName = 'manager-preamble.md' | 'ff-prompt-universal.md';
+
+export interface LaunchInput {
+  readonly repository: string;
+  readonly projectId?: string;
+  readonly workClass: LaunchWorkClass;
+  readonly primaryRoot?: string;
+  /** Absolute pack checkout that owns the merge skill, from the selected project card. */
+  readonly packRoot?: string;
+  /** One-command merge Task creation; existing --task launches do not use this field. */
+  readonly prNumber?: number;
+  readonly mergeInstruction?: string;
+  readonly mergeWaiverLine?: string;
+  readonly issueNumber?: number;
+  readonly delegatedIntegration?: DelegatedIntegrationMarker;
+  readonly runId?: string;
+  readonly taskId?: string;
+  readonly managerBrief?: string;
+  readonly worktreeSelector?: string;
+  readonly worktreeName?: string;
+  /** Exact native terminal to reuse for a new manager Task, without spawning. */
+  readonly existingTerminal?: string;
+  readonly baseBranch?: string;
+  readonly defaultBranch?: string;
+  readonly env?: Readonly<NodeJS.ProcessEnv>;
+  readonly cwd?: string;
+  readonly startMode?: WorkerStartMode;
+}
+
+export interface RestoreWorktreeIdentity {
+  readonly id: string;
+  readonly path: string;
+}
+
+export interface ManagerPushGuardRequest {
+  readonly repository: string;
+  readonly worktreePath: string;
+  readonly defaultBranch: string;
+  readonly placementSeedOid?: string;
+}
+
+export interface MergePrSnapshot {
+  readonly number: number;
+  readonly state: 'open';
+  readonly baseRef: string;
+  readonly baseRepository: string;
+  readonly headSha: string;
+}
+
+export interface LaunchDependencies {
+  readonly commandPreflight: () => Promise<EdgeResult<true>> | EdgeResult<true>;
+  readonly repositoryPreflight: (repository: string) => Promise<EdgeResult<true>>;
+  readonly resolveProfile: (
+    workClass: LaunchWorkClass,
+    env: Readonly<NodeJS.ProcessEnv>,
+    startMode?: WorkerStartMode,
+  ) => Promise<EdgeResult<ExecutorProfile>> | EdgeResult<ExecutorProfile>;
+  readonly observeManagerRun: (runId: string) => Promise<EdgeResult<{ readonly runId: string; readonly coordinatorHandle?: string }>>;
+  /** Read the exact open PR/base/head via tracked GitHub REST before any Task create. */
+  readonly readMergePr?: (repository: string, prNumber: number) => Promise<EdgeResult<MergePrSnapshot>>;
+  readonly proveManagerTaskMembership: (runId: string, taskId: string) => Promise<EdgeResult<{ readonly taskId: string }>>;
+  readonly readManagerBriefTemplate: (name: ManagerBriefTemplateName) => Promise<EdgeResult<string>> | EdgeResult<string>;
+  readonly readIssueTitle: (repository: string, issueNumber: number) => Promise<EdgeResult<string>>;
+  readonly createManagerTask: (runId: string, brief: string) => Promise<EdgeResult<{ readonly taskId: string; readonly status: string }>>;
+  /** Existing selected-base/PR-head observation, before Task creation and again before spawn. */
+  readonly observeFreshManagerBase?: () => Promise<EdgeResult<FreshPrHead | null>>;
+  readonly observeDispatch: (taskId: string) => Promise<EdgeResult<DispatchObservation>>;
+  readonly readCurrentAssignment: (issueNumber: number) => IssueAssignmentObservation;
+  /** Existing issue-less assignment, selected only by the exact Task/Dispatch deliverable. */
+  readonly readUnnumberedAssignment?: (taskId: string, dispatchId: string) => WorkerAssignmentRecord | null;
+  /** Read-only Orca worktree-show; never infer identity from --worktree text alone. */
+  readonly resolveRestoreWorktree?: (selector: string) => Promise<EdgeResult<RestoreWorktreeIdentity>>;
+  /** Complete native terminal list, scoped to this worktree, and Linux CWD/descendant census. */
+  readonly observeRestoreQuiescence?: (path: string) => Promise<EdgeResult<true>>;
+  /** Native exact-Dispatch/worker-absent witness, not an assignment/store guess. */
+  readonly proveTerminalGone?: (assignment: WorkerAssignmentRecord) => Promise<TerminalGoneAssignmentEvidence | null>;
+  readonly prepareWorktree: (input: WorktreePreparationRequest) => Promise<EdgeResult<PreparedWorktree>>;
+  readonly captureLaunchShells?: (worktree: PreparedWorktree) => Promise<readonly CreationTerminal[]>;
+  readonly cleanupLaunchShells?: (worktree: PreparedWorktree, unitTerminalId: string) => Promise<void>;
+  /** Non-Claude manager push guard; a resolved Claude-family manager is the local route. */
+  readonly installManagerPushGuard?: (input: ManagerPushGuardRequest) => Promise<EdgeResult<true>> | EdgeResult<true>;
+  /** Restore recorded B5 hooks only on an existing Claude-family manager worktree. */
+  readonly restoreClaudeManagerGuard?: (worktreePath: string) => Promise<EdgeResult<true>> | EdgeResult<true>;
+  readonly finalizeProfile?: (profile: ExecutorProfile, worktreePath: string, resumeSession?: string, dataRoot?: string, launchIds?: OpenCodeLaunchIds) => Promise<EdgeResult<ExecutorProfile>>;
+  readonly adapter: RuntimeAdapter;
+  readonly runSupervisedStart: typeof runSupervisedWorkerStart;
+  readonly now: () => number;
+  /** Monotonic admission clock; owner-local override permits deterministic deadline tests. */
+  readonly monotonicNow?: () => number;
+  /** Non-spinning retry spacing; owner-local override for synthetic tests. */
+  readonly delay?: (ms: number) => Promise<void>;
+}
+
+const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+const text = (value: unknown): string => typeof value === 'string' ? value.trim() : '';
+const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
+const sameIdentity = (a: RuntimeWorkerIdentity, b: RuntimeWorkerIdentity): boolean =>
+  a.runtime === b.runtime && a.id === b.id && a.generation === b.generation;
+
+function nativeRuntimeError(
+  failure: { readonly reason: string },
+): { readonly code: string; readonly message: string } | null {
+  const candidate = (failure as typeof failure & { readonly nativeError?: unknown }).nativeError;
+  if (!record(candidate)) return null;
+  const code = text(candidate.code);
+  const message = text(candidate.message);
+  return code || message ? { code, message } : null;
+}
+
+const MANAGER_BRIEFS_DIRECTORY = join(homedir(), '.local', 'state', 'create-issue-draft', 'briefs');
+const FIREFIGHTER_BRIEF_MARKER = /\bfirefighter\b/iu;
+
+function markdownHeadingText(markdown: string): string {
+  for (const line of markdown.split(/\r?\n/u)) {
+    const match = line.match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/u);
+    if (match?.[1]) return match[1].trim();
+  }
+  return '';
+}
+
+function normalizedHeadingLine(line: string): string {
+  const match = line.match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/u);
+  return (match?.[1] ?? line).trim();
+}
+
+function startsWithHeadingText(value: string, heading: string): boolean {
+  const firstLine = value.trimStart().split(/\r?\n/u, 1)[0] ?? '';
+  return normalizedHeadingLine(firstLine) === heading;
+}
+
+function containsMarkdownHeadingText(value: string, heading: string): boolean {
+  return value.split(/\r?\n/u).some((line) => {
+    const match = line.match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/u);
+    return match?.[1]?.trim() === heading;
+  });
+}
+
+function stripTemplateSeparator(value: string): string {
+  return value.replace(/^(?:\r?\n){1,2}/u, '');
+}
+
+function normalizedTemplateStructure(value: string): string {
+  return value
+    .replace(/\r\n/gu, '\n')
+    .split('\n')
+    .map((line) => line.trimEnd().replace(/[ \t]+/gu, ' '))
+    .join('\n');
+}
+
+function leadingLinePrefix(value: string, lineCount: number): { readonly prefix: string; readonly tail: string } | null {
+  let offset = 0;
+  for (let line = 1; line < lineCount; line += 1) {
+    const lineBreak = value.slice(offset).match(/\r?\n/u);
+    if (!lineBreak || lineBreak.index === undefined) return null;
+    offset += lineBreak.index + lineBreak[0].length;
+  }
+  const nextLineBreak = value.slice(offset).match(/\r?\n/u);
+  const end = nextLineBreak?.index === undefined ? value.length : offset + nextLineBreak.index;
+  return { prefix: value.slice(0, end), tail: value.slice(end) };
+}
+
+function recognizedManagerPrefix(
+  brief: string,
+  canonical: string,
+): { readonly exact: boolean; readonly tail: string } | null {
+  if (brief.startsWith(canonical)) {
+    return { exact: true, tail: stripTemplateSeparator(brief.slice(canonical.length)) };
+  }
+
+  const canonicalCore = canonical.replace(/(?:\r?\n)+$/u, '');
+  const canonicalLineCount = canonicalCore.split(/\r?\n/u).length;
+  const candidate = leadingLinePrefix(brief, canonicalLineCount);
+  if (!candidate) return null;
+  if (normalizedTemplateStructure(candidate.prefix) !== normalizedTemplateStructure(canonicalCore)) return null;
+  return { exact: false, tail: stripTemplateSeparator(candidate.tail) };
+}
+
+function noncanonicalManagerTail(brief: string, canonical: string): string {
+  const canonicalCore = canonical.replace(/(?:\r?\n)+$/u, '');
+  const candidate = leadingLinePrefix(brief, canonicalCore.split(/\r?\n/u).length);
+  return candidate ? stripTemplateSeparator(candidate.tail) : '';
+}
+
+function prependFullTemplate(template: string, body: string): string {
+  if (!body) return template;
+  if (template.endsWith('\n\n')) return `${template}${body}`;
+  if (template.endsWith('\n')) return `${template}\n${body}`;
+  return `${template}\n\n${body}`;
+}
+
+function invalidTemplateHeading(name: ManagerBriefTemplateName): EdgeResult<string> {
+  return {
+    status: 'continue',
+    cause: 'manager_brief_template_heading_missing',
+    actor: 'operator',
+    evidence: { template: name },
+    nextAction: {
+      kind: 'reconcile_manager_task',
+      note: `restore a Markdown heading in the canonical ${name} before creating a manager Task`,
+    },
+  };
+}
+
+function noncanonicalManagerPreamble(): EdgeResult<string> {
+  return {
+    status: 'continue',
+    cause: 'manager_brief_preamble_noncanonical',
+    actor: 'manager',
+    evidence: { template: 'manager-preamble.md' },
+    nextAction: {
+      kind: 'reconcile_manager_task',
+      note: 'provide the exact current canonical manager preamble when a firefighter brief cannot be safely composed from noncanonical preamble bytes',
+    },
+  };
+}
+
+export function readManagerBriefTemplateFromDisk(
+  name: ManagerBriefTemplateName,
+  directory: string = MANAGER_BRIEFS_DIRECTORY,
+): EdgeResult<string> {
+  const templatePath = join(directory, name);
+  try {
+    const value = readFileSync(templatePath, 'utf8');
+    return value ? { status: 'ok', value } : {
+      status: 'continue',
+      cause: 'manager_brief_template_unavailable',
+      actor: 'operator',
+      evidence: { template: name, path: templatePath, errorCode: 'empty' },
+      nextAction: {
+        kind: 'reconcile_manager_task',
+        note: `restore a readable non-empty canonical ${name} before creating a manager Task`,
+      },
+    };
+  } catch (error) {
+    const errorCode = record(error) && typeof error.code === 'string' ? error.code : 'read_failed';
+    return {
+      status: 'continue',
+      cause: 'manager_brief_template_unavailable',
+      actor: 'operator',
+      evidence: { template: name, path: templatePath, errorCode },
+      nextAction: {
+        kind: 'reconcile_manager_task',
+        note: `restore a readable canonical ${name} before creating a manager Task`,
+      },
+    };
+  }
+}
+
+async function prepareFreshManagerBrief(
+  input: { readonly repository: string; readonly issueNumber?: number; readonly brief: string },
+  deps: Pick<LaunchDependencies, 'readManagerBriefTemplate' | 'readIssueTitle'>,
+): Promise<EdgeResult<string>> {
+  const managerTemplate = await deps.readManagerBriefTemplate('manager-preamble.md');
+  if (managerTemplate.status !== 'ok') return managerTemplate;
+  const managerHeading = markdownHeadingText(managerTemplate.value);
+  if (!managerHeading) return invalidTemplateHeading('manager-preamble.md');
+
+  const managerHeadingPresent = startsWithHeadingText(input.brief, managerHeading);
+  const managerPrefix = managerHeadingPresent
+    ? recognizedManagerPrefix(input.brief, managerTemplate.value)
+    : null;
+  const exactManagerPrefix = managerPrefix?.exact === true;
+  const managerTail = managerPrefix?.tail ?? input.brief;
+
+  let issueTitle = '';
+  if (input.issueNumber) {
+    const issueTitleEdge = await deps.readIssueTitle(input.repository, input.issueNumber);
+    if (issueTitleEdge.status !== 'ok') return issueTitleEdge;
+    issueTitle = issueTitleEdge.value;
+  }
+  const issueNamesFirefighter = FIREFIGHTER_BRIEF_MARKER.test(issueTitle);
+
+  if (managerHeadingPresent && !managerPrefix) {
+    const deltaNamesFirefighter = FIREFIGHTER_BRIEF_MARKER.test(
+      noncanonicalManagerTail(input.brief, managerTemplate.value),
+    );
+    if (issueNamesFirefighter || deltaNamesFirefighter) return noncanonicalManagerPreamble();
+    return { status: 'ok', value: input.brief };
+  }
+
+  const deltaNamesFirefighter = FIREFIGHTER_BRIEF_MARKER.test(managerTail);
+  if (managerPrefix && !managerPrefix.exact) {
+    if (issueNamesFirefighter || deltaNamesFirefighter) return noncanonicalManagerPreamble();
+    return { status: 'ok', value: input.brief };
+  }
+
+  if (!issueNamesFirefighter && !deltaNamesFirefighter) {
+    return {
+      status: 'ok',
+      value: exactManagerPrefix ? input.brief : prependFullTemplate(managerTemplate.value, input.brief),
+    };
+  }
+
+  const firefighterTemplate = await deps.readManagerBriefTemplate('ff-prompt-universal.md');
+  if (firefighterTemplate.status !== 'ok') return firefighterTemplate;
+  const firefighterHeading = markdownHeadingText(firefighterTemplate.value);
+  if (!firefighterHeading) return invalidTemplateHeading('ff-prompt-universal.md');
+
+  if (containsMarkdownHeadingText(managerTail, firefighterHeading)) {
+    return {
+      status: 'ok',
+      value: exactManagerPrefix ? input.brief : prependFullTemplate(managerTemplate.value, input.brief),
+    };
+  }
+
+  const body = prependFullTemplate(firefighterTemplate.value, managerTail);
+  return { status: 'ok', value: prependFullTemplate(managerTemplate.value, body) };
+}
+
+function supportedStartMode(value: WorkerStartMode | undefined): value is ExecutorRoute | undefined {
+  return value === undefined || value === 'provider_new_top_level' || value === 'exact_terminal_worktree';
+}
+
+function profileResolutionEdge(
+  workClass: LaunchWorkClass,
+  env: Readonly<NodeJS.ProcessEnv>,
+): EdgeResult<SemanticExecutorProfile> {
+  const names = profileNamesForTask(workClass);
+  const resolved = resolveSemanticExecutorProfile({
+    surface: 'task', names, env: workClass === 'merge' ? withMergeExecutorProfileDefaults(env) : env,
+  });
+  if (resolved.ok) return { status: 'ok', value: resolved.profile };
+  const variableKey = resolved.code === 'executor_profile_missing' ? 'missingVariables'
+    : resolved.code === 'executor_profile_malformed' ? 'malformedVariables'
+      : resolved.code === 'executor_route_unavailable' ? 'modelVariable'
+        : resolved.code === 'executor_effort_channel_unavailable' ? 'effortVariable' : 'agentVariable';
+  const evidence = resolved.code === 'executor_profile_missing' || resolved.code === 'executor_profile_malformed'
+    ? { [variableKey]: resolved.variables }
+    : { [variableKey]: resolved.variables[0] };
+  const note = resolved.code === 'executor_profile_missing'
+    ? `export the required stable profile variables: ${resolved.variables.join(',')}`
+    : resolved.code === 'executor_profile_malformed'
+      ? `repair malformed stable profile variables: ${resolved.variables.join(',')}`
+      : resolved.code === 'executor_route_unavailable'
+        ? `select one of the closed Claude Code model IDs through ${resolved.variables[0]}`
+        : resolved.code === 'executor_effort_channel_unavailable'
+          ? `select a supported Claude Code effort level through ${resolved.variables[0]}`
+          : `select a supported executor family through ${resolved.variables[0]}`;
+  return {
+    status: 'continue', cause: resolved.code, actor: 'operator', evidence,
+    nextAction: { kind: 'repair_executor_profile', note },
+  };
+}
+
+function admittedProfile(
+  semantic: SemanticExecutorProfile,
+  route: ExecutorRoute,
+): EdgeResult<ExecutorProfile> {
+  const invocation = buildExecutorCommand(semantic);
+  const provider = buildProviderInvocation(semantic);
+  if (route === 'provider_new_top_level' && !provider) return {
+    status: 'continue', cause: 'executor_route_unavailable', actor: 'operator',
+    evidence: { executorFamily: semantic.family, route },
+    nextAction: { kind: 'repair_executor_profile', note: 'select an executor route whose model and effort channels are proven' },
+  };
+  return {
+    status: 'ok',
+    value: {
+      family: semantic.family,
+      route,
+      launchCommand: invocation.command,
+      ...(semantic.family === 'claude' ? { model: semantic.model, effort: semantic.effort } : {}),
+      ...(invocation.agentName ? { agentName: invocation.agentName } : {}),
+      ...(invocation.inlineConfigJson ? { inlineConfigJson: invocation.inlineConfigJson } : {}),
+      ...(semantic.family === 'opencode' && semantic.opencodeExecutable ? { executable: semantic.opencodeExecutable } : {}),
+      ...(provider ? { providerArgs: provider.argv } : {}),
+      names: semantic.names,
+    },
+    evidence: { executorFamily: semantic.family, route, profileVariables: semantic.names },
+  };
+}
+
+export function resolveExecutorProfile(
+  workClass: LaunchWorkClass,
+  env: Readonly<NodeJS.ProcessEnv> = process.env,
+  startMode?: WorkerStartMode,
+): EdgeResult<ExecutorProfile> {
+  const semanticEdge = profileResolutionEdge(workClass, env);
+  if (semanticEdge.status !== 'ok') return semanticEdge;
+  if (!supportedStartMode(startMode)) return {
+    status: 'continue', cause: 'executor_route_mismatch', actor: 'orchestrator', evidence: { executorFamily: semanticEdge.value.family },
+    nextAction: { kind: 'repair_executor_profile', note: 'select a supported worker-start composition route' },
+  };
+  const capabilities = semanticEdge.value.family === 'cursor'
+    ? CURSOR_TASK_ROUTE_CAPABILITIES
+    : semanticEdge.value.family === 'claude'
+      ? CLAUDE_TASK_ROUTE_CAPABILITIES : openCodeEdgeCapabilities([]);
+  const verdict = evaluateExecutorRouteAdmission({
+    profile: semanticEdge.value,
+    ...(startMode ? { startMode } : {}),
+    edgeCapabilities: capabilities,
+  });
+  if (!verdict.ok) return {
+    status: 'continue', cause: verdict.refusal, actor: 'operator',
+    evidence: { executorFamily: semanticEdge.value.family, profileVariables: semanticEdge.value.names },
+    nextAction: { kind: 'repair_executor_profile', note: 'select an executor route whose model and effort channels are proven' },
+  };
+  return admittedProfile(semanticEdge.value, verdict.route);
+}
+
+function openCodeLaunchRefusal(workClass: LaunchWorkClass, delegatedIntegration = false): {
+  readonly cause: string;
+  readonly actor: LaunchActor;
+  readonly evidence: Readonly<Record<string, unknown>>;
+  readonly nextAction: NextAction;
+} {
+  const mergeCommand = delegatedIntegration ? CANONICAL_DELEGATED_MERGE_LAUNCH_COMMAND : CANONICAL_MERGE_LAUNCH_COMMAND;
+  return {
+    cause: 'opencode_launch_overlay_required', actor: 'orchestrator',
+    evidence: { executorFamily: 'opencode', requiredEnvironment: 'OPENCODE_CONFIG_CONTENT' },
+    nextAction: workClass === 'merge' ? {
+      kind: 'repair_executor_profile',
+      command: mergeCommand,
+      note: `Use the pack's canonical merge launch command: ${mergeCommand}`,
+    } : {
+      kind: 'repair_executor_profile',
+      note: `Restore the OPENCODE_CONFIG_CONTENT browser-deny overlay and rerun scripts/pr2-foundation/supervised-task-launch-assistant.ts with --work-class ${workClass}, retaining the original --run/--task and worktree arguments; do not switch to --work-class merge`,
+    },
+  };
+}
+
+
+/** Only the exact numbered implementation assignment may enter a delegated merge handoff. */
+function matchesMergePredecessor(
+  assignment: WorkerAssignment | null,
+  input: LaunchInput,
+  taskId: string,
+  marker: DelegatedIntegrationMarker,
+): assignment is WorkerAssignment {
+  return Boolean(assignment
+    && assignment.issueNumber === input.issueNumber
+    && assignment.repository === input.repository.trim().toLowerCase()
+    && assignment.taskId === taskId
+    && assignment.kind === 'local' && assignment.provider === 'orca' && assignment.role === 'worker'
+    && !assignment.delegatedIntegration
+    && assignment.assignmentId === marker.predecessorAssignmentId
+    && assignment.generation === marker.predecessorGeneration
+    && assignment.bindingKey);
+}
+
+function mergeContextRequired(): Extract<EdgeResult<never>, { readonly status: 'continue' }> {
+  return {
+    status: 'continue', cause: 'merge_delegated_integration_required', actor: 'orchestrator',
+    evidence: { requiredArguments: ['--issue-number', '--delegated-integration'] },
+    nextAction: { kind: 'reconcile_manager_task', command: CANONICAL_DELEGATED_MERGE_LAUNCH_COMMAND,
+      note: 'Supply the current Issue and exact existing PR/head/predecessor marker for the implementation assignment' },
+  };
+}
+
+function mergePredecessorMismatch(): Extract<EdgeResult<never>, { readonly status: 'continue' }> {
+  return {
+    status: 'continue', cause: 'merge_delegated_predecessor_mismatch', actor: 'orchestrator',
+    evidence: {},
+    nextAction: { kind: 'reconcile_manager_task',
+      note: 'Reconcile the exact current numbered implementation assignment and its PR/head/predecessor marker before launching merge' },
+  };
+}
+
+function initialResources(input: LaunchInput): LaunchResources {
+  return {
+    repository: input.repository.trim().toLowerCase(),
+    ...(input.issueNumber ? { issueNumber: input.issueNumber } : {}),
+    ...(input.runId ? { runId: input.runId.trim() } : {}),
+    ...(input.taskId ? { taskId: input.taskId.trim() } : {}),
+  };
+}
+
+function continued(
+  input: LaunchInput,
+  stage: LaunchStage,
+  edge: { cause: string; actor: LaunchActor; evidence?: Readonly<Record<string, unknown>>; nextAction: NextAction },
+  resources: LaunchResources,
+  startedAtMs: number,
+  timings: StageTiming[],
+  now: () => number,
+): ContinueResult {
+  const lastTiming = timings.at(-1);
+  if (lastTiming?.stage === stage) {
+    if (lastTiming.outcome !== 'continued') {
+      timings[timings.length - 1] = { ...lastTiming, outcome: 'continued' };
+    }
+  } else {
+    const failedAtMs = now();
+    timings.push({
+      stage,
+      startedAtMs: failedAtMs,
+      finishedAtMs: failedAtMs,
+      elapsedMs: 0,
+      outcome: 'continued',
+    });
+  }
+  const finishedAtMs = now();
+  // After --pr has created a Task, every refusal must retain the same Task
+  // continuation. Keep a stage-specific retry/start command when one exists;
+  // uncertain Dispatch/start outcomes must still be reconciled before a retry.
+  const sameTaskCommand = input.workClass === 'merge' && input.prNumber !== undefined
+    && edge.evidence?.errorCode !== 'task_not_startable'
+    && !input.taskId && resources.taskId && input.projectId && input.primaryRoot
+    ? mergeSameTaskCommand(input, resources.taskId, resources.repository) : null;
+  const nextAction: NextAction = sameTaskCommand ? {
+    ...edge.nextAction,
+    ...(edge.nextAction.command ? {} : { command: sameTaskCommand }),
+    note: [
+      edge.nextAction.note,
+      `After resolving ${stage}${stage.startsWith('dispatch_admission') || stage === 'supervised_start'
+        ? ' and reconciling the exact Dispatch/start outcome' : ''}, continue the existing Task with ${sameTaskCommand}; never rerun --pr, which creates another Task.`,
+    ].filter(Boolean).join(' '),
+  } : edge.nextAction;
+  return {
+    schema: LAUNCH_ASSISTANT_SCHEMA,
+    outcome: 'continue',
+    workClass: input.workClass,
+    stage,
+    observedCause: edge.cause,
+    resources,
+    responsibleActor: edge.actor,
+    evidence: edge.evidence ?? {},
+    nextAction,
+    startedAtMs,
+    finishedAtMs,
+    elapsedMs: Math.max(0, finishedAtMs - startedAtMs),
+    firstAbsentOrFailedCheckpoint: stage,
+    timings,
+  };
+}
+
+async function checkpoint<T>(
+  stage: LaunchStage,
+  timings: StageTiming[],
+  now: () => number,
+  edge: () => Promise<EdgeResult<T>> | EdgeResult<T>,
+): Promise<EdgeResult<T>> {
+  const startedAtMs = now();
+  const result = await edge();
+  const finishedAtMs = now();
+  timings.push({
+    stage,
+    startedAtMs,
+    finishedAtMs,
+    elapsedMs: Math.max(0, finishedAtMs - startedAtMs),
+    outcome: result.status === 'ok' ? 'passed' : 'continued',
+  });
+  return result;
+}
+
+function retryProviderArgs(profile: ExecutorProfile): string[] {
+  return (profile.providerArgs ?? []).map((arg) => arg.startsWith('--') ? arg : quote(arg));
+}
+
+const CLAUDE_ADMISSION_DEADLINE_MS = 60_000;
+const CLAUDE_OBSERVATION_ATTEMPTS = 121;
+const CLAUDE_OBSERVATION_GAP_MS = 500;
+
+function canonicalClaudeCommand(profile: ExecutorProfile): string | null {
+  if (profile.family !== 'claude' || !profile.model || !profile.effort) return null;
+  // A closed direct grammar, not a shell-token substring or a wrapper forwarding guess.
+  if (!((profile.model === 'claude-sonnet-5-5' && profile.effort === 'high')
+    || (profile.model === 'claude-opus-5-5' && profile.effort === 'medium'))) return null;
+  return `claude --model ${quote(profile.model)} --effort ${quote(profile.effort)}`;
+}
+
+function normalizedOrcaClaudeCommand(command: string): string | null {
+  const root = resolve(homedir(), '.config', 'orca', 'claude-agent-view');
+  let invalidPlugin = false;
+  let orcaInjected = false;
+  const withoutPlugin = command.replace(
+    /(^| )--plugin-dir (?:'([^']+)'|"([^"]+)"|([^\s'"]+))(?= |$)/gu,
+    (match, _separator: string, single: string | undefined, double: string | undefined, bare: string | undefined) => {
+      const pluginPath = single ?? double ?? bare ?? '';
+      const withinRoot = relative(root, resolve(pluginPath)).replaceAll('\\', '/');
+      if (!/^[0-9a-f]+\/orca-agent-view(?:\/[A-Za-z0-9_.-]+)*\/?$/iu.test(withinRoot)) {
+        invalidPlugin = true;
+        return match;
+      }
+      orcaInjected = true;
+      return '';
+    },
+  );
+  if (invalidPlugin) return null;
+  if (!orcaInjected) return command;
+  // Orca's native argv display can omit shell quotes around the exact model/effort values.
+  return withoutPlugin.replace(
+    /(^| )claude --model (claude-(?:sonnet|opus)-5-5) --effort (high|medium)$/u,
+    (_match, prefix: string, model: string, effort: string) =>
+      `${prefix}claude --model ${quote(model)} --effort ${quote(effort)}`,
+  );
+}
+
+function matchingDirectClaudeCommand(
+  profile: ExecutorProfile, command: string | undefined, projectId?: string,
+): boolean {
+  const direct = canonicalClaudeCommand(profile);
+  if (!direct || !command) return false;
+  const prefix = projectId ? `OPK_PROJECT_ID=${quote(projectId)} ` : '';
+  const launchCommand = normalizedOrcaClaudeCommand(profile.launchCommand);
+  const observedCommand = normalizedOrcaClaudeCommand(command);
+  if (launchCommand !== direct && (!prefix || launchCommand !== prefix + direct)) return false;
+  return observedCommand === direct || Boolean(prefix && observedCommand === prefix + direct);
+}
+
+/**
+ * The native adapter-trimmed command is the only exposed launch-argument evidence.
+ * Screen footer corroborates same-generation readiness, never substitutes for a
+ * missing direct native command or proves actual process argv/model/effort.
+ */
+export async function claudePaneProfileObserved(
+  profile: ExecutorProfile,
+  worker: RuntimeWorker,
+  adapter: RuntimeAdapter,
+  options: {
+    readonly deadlineMs?: number;
+    readonly monotonicNow?: () => number;
+    readonly expectedCommand?: string;
+    readonly projectId?: string;
+  } = {},
+): Promise<boolean> {
+  const now = options.monotonicNow ?? (() => performance.now());
+  const budget = (): number | undefined => options.deadlineMs === undefined
+    ? undefined : Math.max(0, Math.floor(Math.min(2_000, options.deadlineMs - now())));
+  const firstBudget = budget();
+  if (firstBudget !== undefined && firstBudget < 1) return false;
+  const observed = adapter.observeComposerFamily?.(worker.identity,
+    firstBudget === undefined ? undefined : { timeoutMs: firstBudget });
+  if (!observed || observed.status !== 'known' || observed.family !== 'non-opencode'
+    || !matchingDirectClaudeCommand(profile, observed.command, options.projectId)
+    || (options.expectedCommand !== undefined
+      && normalizedOrcaClaudeCommand(observed.command) !== normalizedOrcaClaudeCommand(options.expectedCommand))
+    || (options.deadlineMs !== undefined && now() >= options.deadlineMs)) return false;
+  if (!adapter.readBoundedOutputAsync) return false;
+  const readBudget = budget();
+  if (readBudget !== undefined && readBudget < 1) return false;
+  let screen: Awaited<ReturnType<NonNullable<RuntimeAdapter['readBoundedOutputAsync']>>>;
+  try {
+    screen = await adapter.readBoundedOutputAsync({ worker: worker.identity, screen: true, limit: 120 },
+      readBudget === undefined ? undefined : { timeoutMs: readBudget });
+  } catch {
+    return false;
+  }
+  if ((options.deadlineMs !== undefined && now() >= options.deadlineMs)
+    || screen.status !== 'ok' || screen.value.source !== 'screen'
+    || screen.value.terminalState !== 'running'
+    || !sameIdentity(screen.value.worker, worker.identity)) return false;
+  const lines = screen.value.lines.flatMap((line) => line.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/gu, '').split(/\r?\n/u));
+  const logoPrefix = String.raw`\s*(?:[\u2580-\u259F]+\s+)*`;
+  const splashRow = new RegExp(`^${logoPrefix}(?:✻\\s*)?(?:Welcome to\\s+)?Claude Code\\b`, 'iu');
+  if (!lines.some((line) => splashRow.test(line))) return false;
+  const footer = lines.slice(-20);
+  const family = profile.model === 'claude-opus-5-5' ? 'Opus' : 'Sonnet';
+  const statusRow = new RegExp(`^${logoPrefix}(?:Claude\\s+)?(?:Opus|Sonnet)(?:[- .]?5[- .]?5)\\b`, 'iu');
+  const matches = footer.flatMap((line, index) => statusRow.test(line) ? [index] : []);
+  if (matches.length !== 1) return false;
+  const modelIndex = matches[0]!;
+  // Detectable editor, fenced, quote or transcript frames cannot act as status.
+  if (footer.slice(0, modelIndex + 1).some((line) =>
+    /^\s*(?:```|~~~|>\s|(?:Transcript|Editor|Quoted)\s*:)/iu.test(line))) return false;
+  const modelLine = new RegExp(`^${logoPrefix}(?:Claude\\s+)?${family}(?:[- .]?5[- .]?5)\\b`, 'iu');
+  const row = footer[modelIndex]!;
+  if (!modelLine.test(row)) return false;
+  const effortLine = new RegExp(`^\\s*(?:effort\\s*[:=]\\s*${profile.effort}|${profile.effort}\\s+effort)\\s*$`, 'iu');
+  const suffix = row.replace(modelLine, '').replace(/^\s*[·|•]\s*/u, '').trim();
+  // A status footer admits only one compatible effort row anywhere, or a
+  // matching inline model/effort row without any separate effort status.
+  const effortStatusRow = /^\s*(?:effort\s*[:=]\s*\S.*|\S+\s+effort)\s*$/iu;
+  const effortRows = footer.filter((line) => effortStatusRow.test(line));
+, 'iu');
+  const inlineEffort = suffix.toLowerCase() === profile.effort?.toLowerCase()
+    || effortLine.test(suffix) || withEffortLine.test(suffix);
   return suffix ? inlineEffort && effortRows.length === 0
     : effortRows.length === 1 && effortLine.test(effortRows[0]!);
 }
