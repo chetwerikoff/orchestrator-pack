@@ -7207,6 +7207,26 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
     expect(starts).toBe(0);
   });
 
+  it('#2847 admits the decorated Orca Claude splash only for selected Opus 5.5 / medium', async () => {
+    const profile = resolveExecutorProfile('manager', claudeEnv('claude-opus-5-5', 'medium'), 'exact_terminal_worktree');
+    if (profile.status !== 'ok') throw new Error('Claude fixture profile refused');
+    const native = observedClaudeAdapter(profile.value.launchCommand, 'Opus', 'medium', { commandObserved: true });
+    const header = '▐▛███▛█   Claude Code v2.1.330';
+    for (const [footer, accepted] of [
+      ['▝▜██████▀  Opus 5.5 with medium effort · Claude Max', true],
+      ['▝▜██████▀  Sonnet 5.5 with medium effort · Claude Max', false],
+      ['▝▜██████▀  Opus 5.5 with high effort · Claude Max', false],
+    ] as const) {
+      const adapter: RuntimeAdapter = { ...native, readBoundedOutputAsync: async (input, options) => {
+        const output = await native.readBoundedOutputAsync!(input, options);
+        return output.status === 'ok'
+          ? { ...output, value: { ...output.value, lines: [header, footer] } }
+          : output;
+      } };
+      expect(await claudePaneProfileObserved(profile.value, worker, adapter)).toBe(accepted);
+    }
+  });
+
   it('Issue #2810 accepts a case-insensitive selected model-line effort footer', async () => {
     const profile = resolveExecutorProfile('manager', claudeEnv('claude-sonnet-5-5', 'high'), 'exact_terminal_worktree');
     if (profile.status !== 'ok') throw new Error('Claude fixture profile refused');
@@ -7344,6 +7364,70 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
         expect(result.outcome).toBe('ready');
         expect(starts).toBe(1);
       });
+
+    it('admits the observed Orca plugin-dir command for fresh and reused Claude panes', async () => {
+      const pluginDir = join(homedir(), '.config', 'orca', 'claude-agent-view', 'abcdef0123', 'orca-agent-view');
+      const command = `claude --plugin-dir ${pluginDir} --model claude-opus-5-5 --effort medium`;
+      const env = claudeEnv('claude-opus-5-5', 'medium');
+      let starts = 0;
+      const fresh = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), env, issueNumber: 2847 },
+        deps({ adapter: observedClaudeAdapter(command, 'Opus', 'medium', { commandObserved: true }),
+          onSupervised: () => { starts += 1; } }));
+      expect(fresh.outcome).toBe('ready');
+      expect(starts).toBe(1);
+
+      const reusedCommand = `OPK_PROJECT_ID='orchestrator-pack' ${command}`;
+      const base = readyStart('task-1');
+      if (!base.assignment || !base.receipt) throw Error('missing supervised fixture');
+      const reusedStart: SupervisedWorkerStartResult = {
+        ...base,
+        assignment: { ...base.assignment, issueNumber: 2847, role: 'orchestrator' },
+        receipt: { ...base.receipt, effects: [{ kind: 'worktree', action: 'reused', id: 'repo::exact-worktree' }] },
+      };
+      const reused = await runSupervisedTaskLaunchAssistant({
+        ...launchInput('manager'), env, issueNumber: 2847, existingTerminal: worker.identity.id,
+      }, deps({ adapter: observedClaudeAdapter(reusedCommand, 'Opus', 'medium', { commandObserved: true }),
+        supervised: reusedStart, onSupervised: () => { starts += 1; } }));
+      expect(reused.outcome).toBe('ready');
+      expect(starts).toBe(2);
+    });
+
+    it('refuses plugin-dir paths outside the exact Orca agent-view hex root', async () => {
+      const env = claudeEnv('claude-sonnet-5-5', 'high');
+      for (const outside of [
+        '/tmp/plugin',
+        join(homedir(), '.config', 'orca', 'claude-agent-view', 'not-hex', 'orca-agent-view'),
+        join(homedir(), '.config', 'orca', 'claude-agent-view', 'abcdef0123', 'outside'),
+      ]) {
+        let livenessCalls = 0;
+        const command = `claude --plugin-dir '${outside}' --model 'claude-sonnet-5-5' --effort 'high'`;
+        const original = observedClaudeAdapter(command, 'Sonnet', 'high', { commandObserved: true });
+        const adapter: RuntimeAdapter = { ...original, liveness: (input, options) => {
+          livenessCalls += 1;
+          return original.liveness(input, options);
+        } };
+        const result = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), env, issueNumber: 2847 },
+          deps({ adapter }));
+        expect(result).toMatchObject({ outcome: 'continue', stage: 'terminal_prepare' });
+        expect(livenessCalls).toBe(0);
+      }
+    });
+
+    it('refuses extra unknown Claude flags despite a valid Orca plugin-dir', async () => {
+      const pluginDir = join(homedir(), '.config', 'orca', 'claude-agent-view', 'abcdef0123', 'orca-agent-view');
+      const command = `claude --plugin-dir '${pluginDir}' --model 'claude-sonnet-5-5' --effort 'high' --unrecognized`;
+      const env = claudeEnv('claude-sonnet-5-5', 'high');
+      let livenessCalls = 0;
+      const original = observedClaudeAdapter(command, 'Sonnet', 'high', { commandObserved: true });
+      const adapter: RuntimeAdapter = { ...original, liveness: (input, options) => {
+        livenessCalls += 1;
+        return original.liveness(input, options);
+      } };
+      const result = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), env, issueNumber: 2847 },
+        deps({ adapter }));
+      expect(result).toMatchObject({ outcome: 'continue', stage: 'terminal_prepare' });
+      expect(livenessCalls).toBe(0);
+    });
 
     it.each([
       "caveman --plugin-dir '/tmp/plugin' claude --model 'claude-sonnet-5-5' --effort 'high'",

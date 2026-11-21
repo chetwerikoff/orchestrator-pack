@@ -1,8 +1,8 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
 import { createHash } from 'node:crypto';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { DeterministicRuntimeAdapter } from '../runtime/test-adapter.ts';
@@ -560,7 +560,6 @@ describe('OpenCode durable launch control', () => {
         status: 'send_failed',
         reason: 'opencode_control_unbound',
       });
-      expect(readFileSync(new URL('./adapter.ts', import.meta.url), 'utf8')).not.toContain('/proc');
       expect(readFileSync(new URL('./task-adapter.ts', import.meta.url), 'utf8')).not.toContain('/proc');
     } finally {
       rmSync(stateRoot, { recursive: true, force: true });
@@ -635,6 +634,97 @@ describe('OpenCode HTTP control plane', () => {
       id: terminal.handle,
       generation: terminal.incarnationId,
     })).toBeUndefined();
+  });
+
+  function procCommandFixture() {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2847-proc-'));
+    const terminal = {
+      handle: 'term-2847-claude',
+      incarnationId: 'generation-2847-claude',
+      worktreePath: process.cwd(),
+      title: 'claude',
+      status: 'running' as const,
+    };
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse =>
+      args[0] === 'terminal' && args[1] === 'show'
+        ? { ok: true, result: { terminal } }
+        : { ok: false, error: { code: 'unexpected_operation', message: args.join(' ') } });
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, procRoot: root });
+    const observe = () => adapter.observeComposerFamily?.({
+      runtime: 'orca', id: terminal.handle, generation: terminal.incarnationId,
+    });
+    const writeProcess = (pid: number, parentPid: number, argv: readonly string[], variables: readonly string[]) => {
+      const dir = join(root, String(pid));
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'cmdline'), argv.join('\0') + '\0');
+      writeFileSync(join(dir, 'environ'), variables.join('\0') + '\0');
+      writeFileSync(join(dir, 'status'), 'Name:\tfixture\nPPid:\t' + parentPid + '\n');
+    };
+    const handleEnv = 'ORCA_TERMINAL_HANDLE=' + terminal.handle;
+    const dispose = () => rmSync(root, { recursive: true, force: true });
+    return { root, observe, writeProcess, handleEnv, dispose };
+  }
+
+  it('#2847 observes the real Orca-injected Claude argv from a unique /proc root, not inherited MCP or nested Claude', () => {
+    const fixture = procCommandFixture();
+    const pluginDir = join(homedir(), '.config', 'orca', 'claude-agent-view', 'abcdef0123', 'orca-agent-view');
+    const command = `claude --plugin-dir ${pluginDir} --model claude-opus-5-5 --effort medium`;
+    try {
+      fixture.writeProcess(510, 1, command.split(' '), [
+        fixture.handleEnv, 'OPK_PROJECT_ID=fixture-project', 'OTHER_PRIVATE_VALUE=do-not-expose',
+      ]);
+      fixture.writeProcess(511, 510, ['node', 'mcp-server.js'], [fixture.handleEnv]);
+      fixture.writeProcess(512, 510, ['claude', '--model', 'claude-sonnet-5-5'], [fixture.handleEnv]);
+      expect(fixture.observe()).toEqual({
+        status: 'known', family: 'non-opencode',
+        command: "OPK_PROJECT_ID='fixture-project' " + command,
+        provenance: 'orca-terminal-show',
+      });
+      expect(JSON.stringify(fixture.observe())).not.toContain('do-not-expose');
+
+      fixture.writeProcess(510, 1, command.split(' '), [fixture.handleEnv, 'OTHER_PRIVATE_VALUE=do-not-expose']);
+      expect(fixture.observe()).toEqual({
+        status: 'known', family: 'non-opencode', command,
+        provenance: 'orca-terminal-show',
+      });
+    } finally { fixture.dispose(); }
+  });
+
+  it('#2847 presents an absolute Claude argv0 as bare claude with the remaining argv and project prefix intact', () => {
+    const fixture = procCommandFixture();
+    const pluginDir = join(homedir(), '.config', 'orca', 'claude-agent-view', 'abcdef0123', 'orca-agent-view');
+    const argv = ['/usr/local/bin/claude', '--plugin-dir', pluginDir, '--model', 'claude-opus-5-5', '--effort', 'medium'];
+    try {
+      fixture.writeProcess(513, 1, argv, [fixture.handleEnv, 'OPK_PROJECT_ID=fixture-project']);
+      expect(fixture.observe()).toEqual({
+        status: 'known', family: 'non-opencode',
+        command: "OPK_PROJECT_ID='fixture-project' claude " + argv.slice(1).join(' '),
+        provenance: 'orca-terminal-show',
+      });
+    } finally { fixture.dispose(); }
+  });
+
+  it('#2847 keeps two independent handle-bound Claude roots unknown', () => {
+    const fixture = procCommandFixture();
+    try {
+      fixture.writeProcess(610, 1, ['claude', '--model', 'claude-opus-5-5'], [fixture.handleEnv]);
+      fixture.writeProcess(611, 1, ['claude', '--model', 'claude-opus-5-5'], [fixture.handleEnv]);
+      expect(fixture.observe()).toEqual({
+        status: 'unbound', reason: 'runtime_composer_command_unbound', provenance: 'orca-terminal-show',
+      });
+    } finally { fixture.dispose(); }
+  });
+
+  it('#2847 keeps a vanished /proc cmdline entry unknown', () => {
+    const fixture = procCommandFixture();
+    try {
+      const vanished = join(fixture.root, '710');
+      mkdirSync(vanished);
+      writeFileSync(join(vanished, 'environ'), fixture.handleEnv + '\0');
+      expect(fixture.observe()).toEqual({
+        status: 'unbound', reason: 'runtime_composer_command_unbound', provenance: 'orca-terminal-show',
+      });
+    } finally { fixture.dispose(); }
   });
 
   it('leaves a missing terminal command unbound and keeps ambiguous evidence closed', () => {

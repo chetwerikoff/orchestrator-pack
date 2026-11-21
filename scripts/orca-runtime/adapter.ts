@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { realpathSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
+import { readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { basename, isAbsolute, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { runProcessSync } from '../kernel/subprocess.ts';
 import { promisify } from 'node:util';
@@ -51,6 +51,56 @@ import { openCodeComposerContentLines, openCodeComposerMatchesText } from './ope
 import { validOpenCodeResumeSession } from '../executor-profile-policy.ts';
 
 const execFileAsync = promisify(execFile);
+
+/** Read a terminal's Claude argv from /proc, without exposing unrelated environment values. */
+function observedClaudeCommandFromProc(handle: string, procRoot: string): string | undefined {
+  if (!handle.trim()) return undefined;
+  let entries: string[];
+  try { entries = readdirSync(procRoot); } catch { return undefined; }
+
+  const candidates: Array<{
+    pid: string;
+    parentPid: string;
+    argv: string[];
+    projectId?: string;
+  }> = [];
+  for (const pid of entries) {
+    if (!/^\d+$/u.test(pid)) continue;
+    try {
+      const processRoot = join(procRoot, pid);
+      const argv = readFileSync(join(processRoot, 'cmdline'), 'utf8').split('\0');
+      if (argv.at(-1) === '') argv.pop();
+      if (!argv[0] || basename(argv[0]) !== 'claude') continue;
+
+      const environ = readFileSync(join(processRoot, 'environ'), 'utf8').split('\0');
+      if (!environ.includes(`ORCA_TERMINAL_HANDLE=${handle}`)) continue;
+      const parentPid = /^PPid:[ \t]*(\d+)[ \t]*$/mu.exec(
+        readFileSync(join(processRoot, 'status'), 'utf8'),
+      )?.[1];
+      if (!parentPid) continue;
+      const projectValues = environ.filter((value) => value.startsWith('OPK_PROJECT_ID='));
+      if (projectValues.length > 1) return undefined;
+      candidates.push({
+        pid, parentPid, argv,
+        ...(projectValues.length === 1 ? { projectId: projectValues[0]!.slice('OPK_PROJECT_ID='.length) } : {}),
+      });
+    } catch {
+      // A process may disappear while /proc is scanned; it is not command evidence.
+    }
+  }
+
+  const candidatePids = new Set(candidates.map(({ pid }) => pid));
+  const roots = candidates.filter(({ parentPid }) => !candidatePids.has(parentPid));
+  if (roots.length !== 1) return undefined;
+  const root = roots[0]!;
+  const quoteWord = (value: string): string => /^[A-Za-z0-9_@%+=:,./-]+$/u.test(value)
+    ? value : `'${value.replaceAll("'", "'\\''")}'`;
+  const command = root.argv.map((arg, index) => quoteWord(index === 0 ? basename(arg) : arg)).join(' ');
+  // Match the canonical OPK_PROJECT_ID quoting while reading no other env variable.
+  return root.projectId === undefined
+    ? command
+    : `OPK_PROJECT_ID='${root.projectId.replaceAll("'", "'\\''")}' ${command}`;
+}
 
 const OPEN_CODE_HTTP_SCRIPT = [
   "const [url, method, body] = process.argv.slice(1);",
@@ -240,6 +290,7 @@ export interface OrcaRuntimeAdapterOptions extends OrcaRunOptions {
   readonly runJson?: typeof runOrcaJson;
   readonly runJsonAsync?: typeof runOrcaJsonAsync;
   readonly now?: () => number;
+  readonly procRoot?: string;
   readonly openCodeHttpRequest?: (input: {
     readonly url: string;
     readonly method: 'GET' | 'POST';
@@ -1091,7 +1142,8 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     const rawAgentIdentity = (terminal as OrcaTerminalSummary & { agentIdentity?: unknown }).agentIdentity;
     const identityEvidence = typeof rawAgentIdentity === 'string'
       ? { agentIdentity: rawAgentIdentity } : {};
-    const command = typeof terminal.command === 'string' ? terminal.command.trim() : '';
+    const nativeCommand = typeof terminal.command === 'string' ? terminal.command.trim() : '';
+    const command = nativeCommand || observedClaudeCommandFromProc(worker.id, this.#options.procRoot ?? '/proc') || '';
     if (!command) {
       const agentIdentity = typeof rawAgentIdentity === 'string'
         ? rawAgentIdentity.trim().toLowerCase() : '';
