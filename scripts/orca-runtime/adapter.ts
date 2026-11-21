@@ -65,16 +65,16 @@ function observedClaudeCommandFromProc(handle: string, procRoot: string): string
     projectId?: string;
   }> = [];
   for (const pid of entries) {
-    if (!/^\\d+$/u.test(pid)) continue;
+    if (!/^\d+$/u.test(pid)) continue;
     try {
       const processRoot = join(procRoot, pid);
-      const argv = readFileSync(join(processRoot, 'cmdline'), 'utf8').split('\\0');
+      const argv = readFileSync(join(processRoot, 'cmdline'), 'utf8').split('\0');
       if (argv.at(-1) === '') argv.pop();
       if (!argv[0] || basename(argv[0]) !== 'claude') continue;
 
-      const environ = readFileSync(join(processRoot, 'environ'), 'utf8').split('\\0');
+      const environ = readFileSync(join(processRoot, 'environ'), 'utf8').split('\0');
       if (!environ.includes(`ORCA_TERMINAL_HANDLE=${handle}`)) continue;
-      const parentPid = /^PPid:[ \\t]*(\\d+)[ \\t]*$/mu.exec(
+      const parentPid = /^PPid:[ \t]*(\d+)[ \t]*$/mu.exec(
         readFileSync(join(processRoot, 'status'), 'utf8'),
       )?.[1];
       if (!parentPid) continue;
@@ -94,12 +94,12 @@ function observedClaudeCommandFromProc(handle: string, procRoot: string): string
   if (roots.length !== 1) return undefined;
   const root = roots[0]!;
   const quoteWord = (value: string): string => /^[A-Za-z0-9_@%+=:,./-]+$/u.test(value)
-    ? value : `'${value.replaceAll("'", "'\\\\''")}'`;
+    ? value : `'${value.replaceAll("'", "'\\''")}'`;
   const command = root.argv.map(quoteWord).join(' ');
   // Match the canonical OPK_PROJECT_ID quoting while reading no other env variable.
   return root.projectId === undefined
     ? command
-    : `OPK_PROJECT_ID='${root.projectId.replaceAll("'", "'\\\\''")}' ${command}`;
+    : `OPK_PROJECT_ID='${root.projectId.replaceAll("'", "'\\''")}' ${command}`;
 }
 
 const OPEN_CODE_HTTP_SCRIPT = [
