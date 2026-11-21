@@ -95,7 +95,7 @@ function observedClaudeCommandFromProc(handle: string, procRoot: string): string
   const root = roots[0]!;
   const quoteWord = (value: string): string => /^[A-Za-z0-9_@%+=:,./-]+$/u.test(value)
     ? value : `'${value.replaceAll("'", "'\\''")}'`;
-  const command = root.argv.map(quoteWord).join(' ');
+  const command = root.argv.map((arg, index) => quoteWord(index === 0 ? basename(arg) : arg)).join(' ');
   // Match the canonical OPK_PROJECT_ID quoting while reading no other env variable.
   return root.projectId === undefined
     ? command
