@@ -176,8 +176,20 @@ green; the automation Chrome is logged into ChatGPT; and Orca is running.
    mismatch or an unbound non-empty namespace is a stop condition, not
    permission to reuse the state. #2186 owns removing scheduler target
    inference from cwd/`--repo-root`.
-9. **Fleet wake.** Remove the retired
-   `~/.config/orchestrator-fleet/<projectId>.env` if it exists. Render/install
+9. **Fleet wake.** Keep `~/.config/orchestrator-fleet/<projectId>.env` as that
+   project's `ORCH_HANDLE` pin. It is not a retired file; do not delete it.
+   The tracked `scripts/fleet/fleet-wake@.service` template has no
+   `EnvironmentFile`. Before `systemctl --user restart "fleet-wake@<projectId>.service"`,
+   update the existing per-project systemd user drop-in
+   (`systemctl --user edit "fleet-wake@<projectId>.service"`) so `[Service]`
+   contains `EnvironmentFile=%h/.config/orchestrator-fleet/%i.env`, or update
+   an already-installed equivalent, and the restarted process inherits
+   `ORCH_HANDLE` equal to the new pin. Run `systemctl --user daemon-reload`
+   when the drop-in changes. After restart, read the unit's effective
+   EnvironmentFile and the process's selected `ORCH_HANDLE`, and observe
+   file-backed coordinator behavior. An active unit or the pin file alone is
+   not adoption. When that readback is missing, record `Run bound / pin written; fleet-wake adoption not verified` and repair the drop-in, reload,
+   and restart. Render/install
    `scripts/fleet/fleet-wake@.service` from the stable `$PACK_ROOT`
    checkout, replacing `{PACK_ROOT}` with that absolute pack checkout path.
    Its `ExecStart` must execute the in-pack entrypoint and pass
@@ -215,7 +227,8 @@ green; the automation Chrome is logged into ChatGPT; and Orca is running.
     `opk-wake-supervisor <projectId> stop`. Remove that project card. Other
     target cards and the pack project remain untouched.
 
-Operator-local `~/.local/bin/opk-*` launchers and the shared prompts/templates
+`scripts/opk-orch-start` is the tracked `resume` and positional `attach` entry.
+Other operator-local `~/.local/bin/opk-*` launchers and the shared prompts/templates
 are deliberately not tracked by this repository. They must read the selected
 card and pass `--project <id>`; pack scripts are invoked from `{PACK_ROOT}`,
 never "from this worktree". The shared prompt/template placeholders are
@@ -483,6 +496,27 @@ current-Issue declaration using its canonical producer. An optional green
 scope job is not enforcement and a red one must not be overridden.
 
 ### Coordinator Run binding is independent of worker-start
+
+**Operator-attested seat restore.** The only exception to the general/manual
+`run-use` rule below is positional `scripts/opk-orch-start attach <terminal-handle> [project-id]`
+with the existing `OPK_RUN_ID`. From the trusted pack root, enter it with the
+declared Node major (`scripts/toolchain/node-version.json`, currently 24):
+
+```bash
+cd "$PACK_ROOT" && mise exec node@24 -- node --experimental-strip-types scripts/opk-orch-start attach "$TERMINAL_HANDLE" "$PROJECT_ID"
+```
+
+The explicit handle is the authority. Attach reads a fresh same-runtime
+`orca terminal list --json`. When that list succeeds, the requested handle is
+live, and the Run's former `coordinator_handle` is absent, it issues exactly
+one `orca orchestration run-use --id "$OPK_RUN_ID"` from that seat and requires
+`run-show` to report the same Run and the new `coordinator_handle`. A
+still-live old handle is named and refused: close that handle or attach from
+it. Absence is this one-seat operational condition, not proof the old process
+died, and it does not authorize any other `run-use`. Attach does not call
+`worker-start`, does not create a Run, Task, or Dispatch, and does not restart
+fleet-wake. Run/pin success is not service adoption: update the per-project
+drop-in so the restarted unit inherits the new pin, then read it back.
 
 **Never** recover a coordinator by calling `worker-start` against the
 coordinator terminal or by bypassing `terminal_is_coordinator`. An observed

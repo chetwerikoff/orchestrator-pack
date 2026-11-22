@@ -8,9 +8,11 @@ import { parseEnv } from 'node:util';
 import * as targetContext from '../lib/target-context.ts';
 import { describe, expect, it, vi } from 'vitest';
 import { promptSendArgv } from '../orca-runtime/send-receipt.ts';
+import { runProcessSync, type ProcessResult } from '../kernel/subprocess.ts';
 import {
   FileFleetWakeStateStore,
   bannerOwnerPane,
+  checkRunsFinishedAt,
   listTerminalEnvelopes,
   uniqueClosingIssue,
   fleetAlarmMessage,
@@ -51,6 +53,12 @@ import { configuredProfileKey } from '../chatgpt-browser-turn/storage-common.ts'
 import { createPackReviewRun, type PackReviewRunRecord } from '../lib/pack-review-run-store.ts';
 import { writeChatBinding } from '../chatgpt-browser-turn/chat-bindings.ts';
 import { admitStateLightTurnObservation, transitionStateLightTurnObservation } from '../chatgpt-browser-turn/state-light-turn-observation.ts';
+
+// Pass-through: only the Issue #2849 check-run reader regression overrides one call.
+vi.mock('../kernel/subprocess.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../kernel/subprocess.ts')>();
+  return { ...actual, runProcessSync: vi.fn(actual.runProcessSync) };
+});
 
 class MemoryWakeStore implements FleetWakeStateStore {
   readonly root = '/xdg/fleet-sweep/project';
@@ -6401,5 +6409,254 @@ describe('Issue #2840 named park producer ownership', () => {
     const bad = await run(fixture, screens,
       { listTerminalEnvelopes: () => [fixture.envelope('inv-bound-fields', overrides)] });
     expect(sendsTo(bad.calls, 'one')).toHaveLength(0);
+  });
+});
+
+describe('Issue #2849 accepted advisory Wake, owner-binding diagnostic and UTC journal', () => {
+  const repository = 'test/project';
+  const coordinator: FleetTerminal = { ...terminals[0]!, incarnationId: 'coord-2849', status: 'running' };
+  const m643: FleetTerminal = { ...terminals[1]!, incarnationId: 'inc-643', branch: 'refs/heads/fix/643',
+    status: 'running', agentIdentity: 'opencode' };
+  const settings = config({ selectedRepository: repository, orchestratorHandle: coordinator.handle });
+  const H0 = '0'.repeat(39) + 'a', H1 = '1'.repeat(39) + 'b';
+  const ciPark = { one: 'PARKED on CI PR #50 head ' + H0 };
+  const texts = (calls: readonly string[][], handle: string) =>
+    sendsTo(calls, handle).filter((row) => row.includes('--text')).map((row) => row[row.indexOf('--text') + 1] ?? '');
+  const setup = () => parkFixture([{ pane: m643, issue: 643, key: '643' }]);
+  const target = (args: readonly string[]) => args[args.indexOf('--terminal') + 1] ?? '';
+  /** Orca 1.4.265 `terminal send --wait-submit` when the provider cannot observe the prompt. */
+  const unobserved = (handle: string, processIncarnation?: string, accepted = true) => commandResult(JSON.stringify({
+    ok: true, result: {
+      send: { handle, accepted, prompt: { requestId: 'r-2849', stages: ['input_accepted'], provider: 'unsupported',
+        observation: 'unsupported', ...(processIncarnation !== undefined ? { processIncarnation } : {}),
+        generation: 1, baselineWorkingSequence: 0 } },
+      mutation: { requestId: 'r-2849', replayed: false },
+    },
+  }));
+  const run = (
+    fixture: ReturnType<typeof setup>, screens: Record<string, string>,
+    send?: (args: readonly string[]) => OrcaCommandResult,
+    overrides: Partial<Parameters<typeof tick>[0]> = {}, store: FleetWakeStateStore = new MemoryWakeStore(),
+  ) => {
+    const base = fixture.executor(fakeOrca({ coord: 'idle', ...screens }, [], [coordinator, m643]));
+    return tick({
+      config: settings, terminals: [coordinator, m643], store,
+      screens: { coord: 'idle', ...screens },
+      executor: (args) => args[1] === 'send' && send && target(args) === 'one' ? send(args) : base(args),
+      resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack', repository, primaryRoot: primary }),
+      listOpenPulls: () => [], listTerminalEnvelopes: () => [],
+      checkRunsFinishedAt: (_repository, sha) => sha === H0 ? 1 : undefined,
+      readNamedPull: () => closingPull(50, 643, H0), readPackReviewStage: () => undefined,
+      readNamedReview: () => undefined, readPackReviewRuns: () => [], readChats: async () => [], now: () => 0,
+      extra: fixture.options,
+      ...overrides,
+    });
+  };
+  const withClock = async (body: (advance: (ms: number) => void) => Promise<void>): Promise<void> => {
+    let now = Date.parse('2026-11-22T00:00:00Z');
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try { await body((ms) => { now += ms; }); } finally { clock.mockRestore(); }
+  };
+  const ownEnvelopePark = (fixture: ReturnType<typeof setup>) => {
+    fixture.own('inv-2849', 0);
+    return { screens: { one: 'PARKED on GPT turn inv-2849' }, overrides: {
+      listTerminalEnvelopes: () => [fixture.envelope('inv-2849')] } };
+  };
+
+  it.each([
+    ['CI PR/head park, matching processIncarnation', false, m643.incarnationId],
+    ['CI PR/head park, processIncarnation absent', false, undefined],
+    ['indexed own envelope park, matching processIncarnation', true, m643.incarnationId],
+  ] as const)('AC2: %s - an accepted unobserved Wake is sent once and not repeated after five minutes',
+    async (_name, envelopePark, incarnation) => withClock(async (advance) => {
+      const fixture = setup();
+      const park = envelopePark ? ownEnvelopePark(fixture) : { screens: ciPark, overrides: {} };
+      const store = new MemoryWakeStore();
+      const send = (args: readonly string[]) => unobserved(target(args), incarnation);
+      const first = await run(fixture, park.screens, send, park.overrides, store);
+      expect(texts(first.calls, 'one')).toEqual([expect.stringContaining(envelopePark ? 'ended state ok' : 'ended state checks-completed')]);
+      expect(sendsTo(first.calls, 'one')[0]).toEqual(expect.arrayContaining(['--enter', '--wait-submit']));
+      expect(first.logs.join('\n')).toMatch(/sent re-check to one: event:one:\S+ \(native send accepted; prompt observation unavailable\)/u);
+      expect([...store.eventStatus].filter(([key]) => key.startsWith('event:one:')).map(([, status]) => status))
+        .toEqual(['sent']);
+      advance(5 * 60_000 + 1);
+      const later = await run(fixture, park.screens, send, park.overrides, store);
+      expect(sendsTo(later.calls, 'one')).toHaveLength(0);
+      advance(30 * 60_000);
+      expect(sendsTo((await run(fixture, park.screens, send, park.overrides, store)).calls, 'one')).toHaveLength(0);
+    }));
+
+  it('AC2: turn_started stays the stronger receipt and keeps the plain sent line', async () => {
+    const fixture = setup();
+    const store = new MemoryWakeStore();
+    const first = await run(fixture, ciPark, undefined, {}, store);
+    expect(texts(first.calls, 'one')).toHaveLength(1);
+    expect(first.logs.filter((line) => line.startsWith('sent re-check to one: event:one:'))).toEqual([
+      expect.not.stringContaining('prompt observation unavailable'),
+    ]);
+    expect([...store.eventStatus].filter(([key]) => key.startsWith('event:one:')).map(([, status]) => status))
+      .toEqual(['sent']);
+  });
+
+  it.each([
+    ['present mismatching processIncarnation', () => unobserved('one', 'inc-643-replacement'), 'submission_observation_unavailable'],
+    ['accepted:false', () => unobserved('one', m643.incarnationId, false), 'send_acceptance_unverified'],
+    ['another handle', () => unobserved('two', m643.incarnationId), 'send_acceptance_unverified'],
+    ['failed native command', () => commandResult('', false), 'native_send_failed'],
+    ['accepted send without the explicit unsupported-observation prompt', () => commandResult(JSON.stringify({
+      ok: true, result: { send: { handle: 'one', accepted: true } } })), 'submission_observation_unavailable'],
+    ['observed input without turn_started', () => commandResult(JSON.stringify({ ok: true, result: {
+      send: { handle: 'one', accepted: true, prompt: { requestId: 'r1', processIncarnation: m643.incarnationId,
+        provider: 'opencode', observation: 'supported', stages: ['input_accepted'] } },
+      mutation: { requestId: 'r1', replayed: false } } })), 'turn_start_unverified'],
+  ] as const)('AC2: %s stays attempted_unverified with no sent upgrade and retries after five minutes',
+    async (_name, response, reason) => withClock(async (advance) => {
+      const fixture = setup();
+      const store = new MemoryWakeStore();
+      const first = await run(fixture, ciPark, () => response(), {}, store);
+      expect(sendsTo(first.calls, 'one')).toHaveLength(1);
+      expect(first.logs.join('\n')).toContain('reason=' + reason);
+      expect(first.logs.join('\n')).not.toContain('sent re-check to one');
+      expect([...store.eventStatus].filter(([key]) => key.startsWith('event:one:')).map(([, status]) => status))
+        .toEqual(['attempted_unverified']);
+      expect(sendsTo((await run(fixture, ciPark, () => response(), {}, store)).calls, 'one')).toHaveLength(0);
+      advance(5 * 60_000 + 1);
+      expect(sendsTo((await run(fixture, ciPark, () => response(), {}, store)).calls, 'one')).toHaveLength(1);
+    }));
+
+  it('AC2: an accepted unobserved Wake to a census pane without incarnation identity is never upgraded to sent',
+    async () => withClock(async (advance) => {
+      const bare: FleetTerminal = { handle: 'one', title: 'OpenCode manager one', worktreePath: workerBase + '/one',
+        agentIdentity: 'opencode', incarnationId: undefined } as unknown as FleetTerminal;
+      const screens = { one: 'PARKED on time 2026-11-21T23:00:00Z' };
+      const base = fakeOrca(screens, [], [bare]);
+      const store = new MemoryWakeStore();
+      const run = () => tick({ terminals: [bare], config: config(), screens, store,
+        executor: (args) => args[1] === 'send' ? unobserved(target(args)) : base(args) });
+      const first = await run();
+      expect(base(['terminal', 'list', '--json']).stdout).not.toContain('incarnationId');
+      expect(texts(first.calls, 'one')).toEqual([expect.stringContaining('UTC-time-due')]);
+      expect(first.logs.join('\n')).toContain('reason=submission_observation_unavailable');
+      expect(first.logs.join('\n')).not.toContain('sent re-check to one');
+      expect([...store.eventStatus].filter(([key]) => key.startsWith('event:one:')).map(([, status]) => status))
+        .toEqual(['attempted_unverified']);
+      advance(5 * 60_000 + 1);
+      expect(sendsTo((await run()).calls, 'one')).toHaveLength(1);
+    }));
+
+  it('AC5: completed check-runs, whatever their conclusion, are an advisory completion; a pending sibling is not', async () => {
+    const rows = (...lines: string[]): ProcessResult => ({ outcome: 'exit', ok: true, exitCode: 0, signal: null,
+      stdout: lines.join('\n') + '\n', stderr: '', timedOut: false, cancelled: false });
+    const reader = vi.mocked(runProcessSync);
+    // The projection carries no conclusion: a failed or cancelled completed run reads like a green one.
+    reader.mockImplementationOnce(() => rows('completed\t2026-11-22T00:00:00Z', 'completed\t2026-11-22T00:05:00Z'));
+    expect(checkRunsFinishedAt(repository, H0)).toBe(Date.parse('2026-11-22T00:05:00Z'));
+    const projection = reader.mock.lastCall?.[0].args ?? [];
+    expect(projection).toContain('.check_runs[] | [.status, (.completed_at // "")] | @tsv');
+    expect(projection.join(' ')).not.toContain('conclusion');
+    reader.mockImplementationOnce(() => rows('completed\t2026-11-22T00:00:00Z', 'in_progress\t'));
+    expect(checkRunsFinishedAt(repository, H0)).toBeUndefined();
+    reader.mockImplementationOnce(() => rows('queued\t'));
+    expect(checkRunsFinishedAt(repository, H0)).toBeUndefined();
+
+    const fixture = setup();
+    const advisory = await run(fixture, ciPark);
+    expect(texts(advisory.calls, 'one')).toEqual([expect.stringContaining('ended state checks-completed')]);
+    expect(texts(advisory.calls, 'one')[0]).not.toMatch(/\b(?:green|success|passed)\b/iu);
+    const pending = await run(fixture, ciPark, undefined, { checkRunsFinishedAt: () => undefined });
+    expect(sendsTo(pending.calls, 'one')).toHaveLength(0);
+  });
+
+  it('Seam 1: a same-tick sibling withhold follows its own just-typed Wake and stays fail-closed', async () => withClock(async (advance) => {
+    const store = new MemoryWakeStore();
+    const exactPane = { ...terminals[1]!, incarnationId: 'legacy-2849' };
+    const census = [terminals[0]!, exactPane, terminals[2]!];
+    const envelopes: TerminalEnvelopeEvent[] = ['a', 'b'].map((name) => ({
+      path: `/tmp/opencode/2849-${name}-terminal.json`, invocationId: 'inv-2849-' + name,
+      observedInvocationId: 'inv-2849-' + name, terminalHandle: 'one',
+      lifecycleOutcome: 'success', turnResultState: 'ok', cwd: workerBase + '/one/scripts',
+    }));
+    const screens: Record<string, string> = { coord: 'idle', one: 'done and ready for new Task', two: 'working\nesc interrupt' };
+    const base = fakeOrca(screens, [], census);
+    const executor: OrcaExecutor = (args) => {
+      if (args[1] !== 'send' || target(args) !== 'one') return base(args);
+      // The accepted text+Enter changes the STOPPED recipient's own screen.
+      screens.one = 'Wake: GPT turn ended\nworking\nesc interrupt';
+      return unobserved('one', exactPane.incarnationId);
+    };
+    const selected = {
+      terminals: census, executor, store, listTerminalEnvelopes: () => envelopes,
+      config: config({ selectedRepository: 'test/project' }),
+      readPackReviewRuns: () => [], readCurrentAssignments: () => [], listOpenPulls: () => [],
+      resolveSelectedReviewProject: () => ({ projectId: 'orchestrator-pack', primaryRoot: primary, repository: 'test/project' }),
+    };
+    const first = await tick({ ...selected, screens });
+    expect(texts(first.calls, 'one')).toEqual(['Wake: GPT turn inv-2849-a ended, read ' + envelopes[0]!.path]);
+    // Diagnosed conjunct: freshSendSafePane's STOPPED own-screen equality, genuinely changed by that Wake.
+    expect(first.logs).toContain('unit wake selected owner changed; send withheld: event:one:terminal:' + envelopes[1]!.path);
+    screens.one = 'done and ready for the next Task';
+    advance(5 * 60_000 + 1);
+    const second = await tick({ ...selected, screens });
+    expect(texts(second.calls, 'one')).toEqual(['Wake: GPT turn inv-2849-b ended, read ' + envelopes[1]!.path]);
+    screens.one = 'done again';
+    advance(5 * 60_000 + 1);
+    expect(sendsTo((await tick({ ...selected, screens })).calls, 'one')).toHaveLength(0);
+  }));
+
+  it('Seam 3: no bindable owner names the failed join; the 694-exec-03 park grammar stays unsupported and no-send', async () => {
+    const fixture = setup();
+    const id = 'invocation-694-exec-03';
+    fixture.own(id, 0);
+    const failed = fixture.envelope(id, { lifecycleOutcome: 'incident', turnResultState: 'observation_uncertain', delivery: 'landed' });
+    const line = (link: string) => `no bindable owner for terminal envelope ${failed.path}: failed link=${link}; re-check it with the original caller`;
+    const busy = await run(fixture, { one: 'working\nesc interrupt' }, undefined, { listTerminalEnvelopes: () => [failed] });
+    expect(sendsTo(busy.calls, 'one')).toHaveLength(0);
+    expect(busy.logs).toContain(line('park state (launching pane is not observed PARKED or STOPPED this tick)'));
+    const unassigned = await run(fixture, { one: 'PARKED on GPT turn ' + id }, undefined, {
+      listTerminalEnvelopes: () => [failed], extra: { ...fixture.options, readCurrentAssignments: () => [] } });
+    expect(sendsTo(unassigned.calls, 'one')).toHaveLength(0);
+    expect(unassigned.logs).toContain(line('Task/Dispatch assignment (0 current manager rows match the receipt)'));
+    const drifted = await run(fixture, { one: 'PARKED on GPT turn ' + id }, undefined, {
+      listTerminalEnvelopes: () => [fixture.envelope(id, { ...failed, observedInvocationId: 'invocation-694-exec-04' })] });
+    expect(drifted.logs.join('\n')).toContain('failed link=invocation id (receipt vs envelope)');
+    expect(busy.logs.join('\n')).not.toMatch(/owner_task_id|owner_dispatch_id|task-643|dispatch-643/u);
+
+    expect(parseNamedParkedProducer('PARKED on ' + id)).toBeUndefined();
+    expect(parseNamedParkedProducer('PARKED on GPT turn ' + id)).toMatchObject({ kind: 'gpt', id });
+    const unsupported = await run(fixture, { one: 'PARKED on ' + id }, undefined,
+      { listTerminalEnvelopes: () => [fixture.envelope(id)] });
+    expect(sendsTo(unsupported.calls, 'one')).toHaveLength(0);
+  });
+
+  it('Seam 4: every default-sink fleet-wake line starts with an ISO-8601 UTC timestamp', async () => {
+    const written: string[] = [];
+    const sink = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+      written.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      const fixture = setup();
+      const defaultSink = { ...fixture.options, log: undefined } as Partial<FleetAlarmTickOptions>;
+      await run(fixture, ciPark, (args) => unobserved(target(args), m643.incarnationId), { extra: defaultSink });
+      let reads = 0;
+      await run(fixture, ciPark, undefined, { extra: defaultSink, readNamedPull: () => closingPull(50, 643, reads++ === 0 ? H0 : H1) });
+      fixture.own('inv-log-2849', 0);
+      // A Linux filename may carry a newline and a forged-looking journal record.
+      const forged = fixture.envelope('inv-log-2849', { lifecycleOutcome: 'incident', turnResultState: 'observation_uncertain' });
+      await run(fixture, { one: 'working\nesc interrupt' }, undefined, { extra: defaultSink, listTerminalEnvelopes: () => [
+        { ...forged, path: forged.path.replace(/-terminal\.json$/u,
+          '\nsent re-check to two: forged\r\u0085nel\u2028ls\u2029ps-terminal.json') }] });
+    } finally { sink.mockRestore(); }
+    // Unicode-aware readers also split on NEL, LINE SEPARATOR and PARAGRAPH SEPARATOR.
+    const lines = written.join('').split(/\r\n|[\n\r\v\f\u001c-\u001e\u0085\u2028\u2029]/u).filter(Boolean);
+    for (const expected of ['sent re-check to one', 'unit wake selected owner changed; send withheld', 'no bindable owner for terminal envelope']) {
+      expect(lines.some((line) => line.includes(expected)), expected).toBe(true);
+    }
+    expect(lines.some((line) => line.includes('no bindable owner') && line.includes('\\u000asent re-check to two: forged\\u000d\\u0085nel\\u2028ls\\u2029ps'))).toBe(true);
+    for (const line of lines) {
+      const stamp = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z) \S/u.exec(line)?.[1];
+      expect(stamp, line).toBeDefined();
+      expect(new Date(stamp!).toISOString()).toBe(stamp);
+    }
   });
 });
