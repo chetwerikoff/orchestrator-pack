@@ -433,22 +433,12 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
     }
     const selected = selectedAttemptJobs(jobs);
     const failedJobs = selected.filter((job) => job.conclusion === 'failure' || job.conclusion === 'timed_out');
-    const failedRunIds = new Set<number>();
     const successfulRunIds = new Set<number>();
     for (const job of selected) {
-      const runId = job.run_id ?? job.id ?? 0;
-      if (job.conclusion === 'failure' || job.conclusion === 'timed_out') failedRunIds.add(runId);
-      else if (job.conclusion === 'success') successfulRunIds.add(runId);
+      if (job.conclusion === 'success') successfulRunIds.add(job.run_id ?? job.id ?? 0);
     }
-    for (const runId of failedRunIds) successfulRunIds.delete(runId);
     if (selected.length > 0 && failedJobs.length === 0) {
       return { kind: 'hold', reason: `required CI on ${sha} has no failed check-run or job conclusion` };
-    }
-    if (successfulRunIds.size > 0 && failedRunIds.size > 0) {
-      return {
-        kind: 'hold',
-        reason: `current-head CI has a successful run alongside a failed run, so required-check relevance is unproved on ${sha}`,
-      };
     }
     const steps = failedJobs.flatMap((job) => job.steps ?? []);
     let attempt: number | null = null;
@@ -527,6 +517,12 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
     if (lintFailed.length === 0) {
       return { kind: 'hold', reason: `required CI on ${sha} has no proved lint or substantive failing step` };
     }
+    if (successfulRunIds.size > 0) {
+      return {
+        kind: 'hold',
+        reason: `current-head CI has a successful job alongside a failed lint job, so required-check relevance is unproved on ${sha}`,
+      };
+    }
     return { kind: 'lint', skippedDownstream, attempt };
   }
 
@@ -560,6 +556,9 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
       }
     }
     if (formatterAt === -1) {
+      if (rows.some((row) => row.parents.length > 1)) {
+        return { kind: 'blocked', reason: 'first-parent line is ambiguous' };
+      }
       const oldest = rows[rows.length - 1]!;
       const shallow = git(context.primaryRoot, ['rev-parse', '--is-shallow-repository']);
       if (!shallow.ok || shallow.stdout.trim() === 'true' || oldest.parents.length > 0) {

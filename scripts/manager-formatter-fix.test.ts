@@ -700,6 +700,49 @@ process.stdout.write('HTTP/2 200\\n\\n' + JSON.stringify({ total_count: 2, check
     expect(world.remoteHead()).toBe(world.head);
   });
 
+  it('does not publish when a failed lint job shares a run with a successful job', () => {
+    const world = fixture();
+    world.ci.jobs = [
+      {
+        id: 401, runId: 100, runAttempt: 4, conclusion: 'success', logs: 'required ci passed\n',
+        name: 'required CI',
+        steps: [{ name: 'test', status: 'completed', conclusion: 'success', number: 1 }],
+      },
+      {
+        id: 402, runId: 100, runAttempt: 4, conclusion: 'failure', logs: 'optional format error\n',
+        name: 'optional lint',
+        steps: [{ name: 'lint', status: 'completed', conclusion: 'failure', number: 1 }],
+      },
+    ];
+    const result = runManagerFormatterFix(world.context, 42, world.deps);
+    expect(result.outcome).toBe('refused');
+    expect(result.message).toContain('required-check relevance is unproved');
+    expect(world.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+    expect(world.remoteHead()).toBe(world.head);
+  });
+
+  it('still sends a failed test job to GPT when a lint job in the same run succeeded', () => {
+    const world = fixture();
+    world.ci.jobs = [
+      {
+        id: 411, runId: 100, runAttempt: 4, conclusion: 'success', logs: 'lint clean\n',
+        name: 'lint',
+        steps: [{ name: 'lint', status: 'completed', conclusion: 'success', number: 1 }],
+      },
+      {
+        id: 412, runId: 100, runAttempt: 4, conclusion: 'failure', logs: 'test failed: expected true\n',
+        name: 'test',
+        steps: [{ name: 'test', status: 'completed', conclusion: 'failure', number: 1 }],
+      },
+    ];
+    const result = runManagerFormatterFix(world.context, 42, world.deps);
+    expect(result.outcome).toBe('gpt');
+    expect(result.message).toContain('test failed: expected true');
+    expect(result.message).not.toContain('lint clean');
+    expect(world.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+    expect(world.remoteHead()).toBe(world.head);
+  });
+
   it('gives a mixed lint and test failure to GPT and does not publish', () => {
     const world = fixture();
     world.ci.steps = [
@@ -820,6 +863,21 @@ describe('C1 hook repeat', () => {
     expect(result.message).toContain('current head is an Apply formatter commit');
     expect(shCommands(world, calls)).toEqual([]);
     expect(world.remoteHead()).toBe(published);
+    world.expectRemoved();
+  });
+
+  it('does not treat a merge that hides Apply formatter on the second parent as a first episode', () => {
+    const world = fixture();
+    const root = world.head;
+    const tree = world.git(world.primary, 'rev-parse', `${root}^{tree}`);
+    const repair = world.git(world.primary, 'commit-tree', tree, '-p', root, '-m', 'Apply formatter');
+    const merge = pushedCommit(world, root, tree, 'Merge repair', repair);
+    world.pointAt(merge);
+    const result = runManagerFormatterFix(world.context, 42, world.deps);
+    expect(result.outcome).toBe('refused');
+    expect(result.message).toContain('first-parent line is ambiguous');
+    expect(world.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+    expect(world.remoteHead()).toBe(merge);
     world.expectRemoved();
   });
 
