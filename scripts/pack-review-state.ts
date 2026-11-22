@@ -1491,6 +1491,113 @@ export function settleLogicalPackReviewFindingsByStrictDescendant(input: {
   });
 }
 
+/** Existing `docs/merge-triage-gate.mjs::adjudicateArchitectFinding` journal row fields. */
+export interface PackReviewArchitectAdjudicationRow {
+  pr_number: unknown;
+  head_sha: unknown;
+  finding_id: unknown;
+  verdict: unknown;
+  reason: unknown;
+}
+
+/**
+ * Issue #2870: the sole blocking non-scope `quality` finding code of an
+ * at-cap findings terminal, or undefined when the findings do not qualify.
+ */
+export function soleBlockingQualityFindingCode(findings: readonly unknown[]): string | undefined {
+  const blocking = findings.filter((finding) => (
+    finding !== null && typeof finding === 'object'
+    && (finding as Record<string, unknown>).severity === 'blocking'
+  )) as Array<Record<string, unknown>>;
+  if (blocking.length === 0) return undefined;
+  if (!blocking.every((finding) => finding.type === 'quality'
+      && typeof finding.code === 'string' && finding.code.trim() !== '')) {
+    return undefined;
+  }
+  const codes = new Set(blocking.map((finding) => finding.code as string));
+  return codes.size === 1 ? [...codes][0] : undefined;
+}
+
+/**
+ * Issue #2870: close an existing logical at-cap findings cycle when an
+ * existing architect DEFER adjudication row matches the PR, the reviewed
+ * head and the sole blocking quality finding code. The original findings
+ * terminal, its digests and the cap stay unchanged as history.
+ */
+export function settleAtCapPackReviewFindingByArchitectDefer(input: {
+  prNumber: number;
+  expectedTransitionSeq: number;
+  reviewedHeadSha: string;
+  terminalRunId: string;
+  findings: readonly unknown[];
+  findingSnapshotDigest: string;
+  adjudication: PackReviewArchitectAdjudicationRow;
+  committedAtUtc: string;
+  options: PackReviewAuthorityOptions;
+}): PackReviewAuthorityDocument {
+  const reviewedHeadSha = normalizeSha(input.reviewedHeadSha, 'reviewedHeadSha');
+  const code = soleBlockingQualityFindingCode(input.findings);
+  if (!code) {
+    throw new PackReviewAuthorityError('findings_settlement_invalid',
+      'architect DEFER settles only one blocking non-scope quality finding code');
+  }
+  const row = input.adjudication;
+  if (row.reason !== 'architect_adjudication' || row.verdict !== 'DEFER'
+      || Number(row.pr_number) !== input.prNumber
+      || String(row.head_sha ?? '').trim().toLowerCase() !== reviewedHeadSha
+      || row.finding_id !== code) {
+    throw new PackReviewAuthorityError('findings_settlement_invalid',
+      'architect DEFER adjudication does not match the PR, reviewed head and finding code');
+  }
+  if (input.findingSnapshotDigest !== sha256(stableJson(input.findings))) {
+    throw new PackReviewAuthorityError('findings_settlement_invalid', 'finding snapshot digest mismatch');
+  }
+  return commitPackReviewAuthorityTransition({
+    prNumber: input.prNumber,
+    expectedTransitionSeq: input.expectedTransitionSeq,
+    // Same as strict-descendant settlement: the original findings status may
+    // already be published; the final-cap status publication follows.
+    nextPhase: 'head_observed',
+    options: input.options,
+    mutate(current) {
+      const cycle = current.cycle;
+      if (current.currentHeadSha !== reviewedHeadSha) {
+        throw new PackReviewAuthorityError('findings_settlement_head_stale', current.currentHeadSha);
+      }
+      if (!cycle || !isLogicalRoundCycle(cycle)
+          || cycle.state !== 'at_cap_open_findings'
+          || cycleConsumedCount(cycle) !== cycle.frozenCap
+          || current.terminal?.reviewVerdict !== 'findings'
+          || current.terminal.runId !== input.terminalRunId
+          || current.terminal.targetSha !== reviewedHeadSha) {
+        throw new PackReviewAuthorityError('findings_settlement_invalid',
+          'no authoritative at-cap findings terminal for the reviewed head');
+      }
+      const terminalDigest = current.terminal.digest;
+      const immutable = listPackReviewImmutableRecordsUnlocked('terminal', input.options)
+        .filter((entry) => entry.digest === terminalDigest);
+      const value = immutable.length === 1 ? immutable[0]!.value as PackReviewTerminalV2 | undefined : undefined;
+      if (!value || value.runId !== input.terminalRunId
+          || value.findingsDigest !== sha256(JSON.stringify(input.findings))) {
+        throw new PackReviewAuthorityError('findings_settlement_invalid',
+          'immutable terminal findings digest does not match the original findings');
+      }
+      cycle.state = 'closed';
+      cycle.closedAtUtc = nowIso(input.options);
+      cycle.atCapHash = undefined;
+      markReviewStageComplete(current, cycle.closedAtUtc);
+      current.triage = {
+        verdict: 'DEFER',
+        source: 'architect',
+        findingSnapshotDigest: input.findingSnapshotDigest,
+        committedAtUtc: input.committedAtUtc,
+      };
+      current.publication = undefined;
+      return current;
+    },
+  });
+}
+
 export function settleLogicalPackReviewFindingsByRewrittenHead(input: {
   prNumber: number;
   expectedTransitionSeq: number;
