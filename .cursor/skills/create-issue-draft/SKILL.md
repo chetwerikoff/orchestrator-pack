@@ -75,6 +75,8 @@ The manager launches the three GPT architectural-review sources independently an
 
 Each reviewer evaluates contradictions, feasibility, unnecessary complexity, and gaps against the live Issue and current substantive floors. Reviewers do not edit the Issue or serve as its authors. Each preserves its own findings or clean verdict in a top-level Issue comment. Do not combine, replace, or silently discard another reviewer's findings. Reviewer proposals for new gates are dispositioned as `rejected: operator direction 2026-09-30, no new gates.`
 
+Review scope stays inside the supplied brief's stated goal. A **blocking** finding must name the specific contradiction, omission, infeasibility, or ambiguity within that goal that prevents achieving it. A proposed addition beyond that goal (gate, fixture, matrix, smoke scenario, mechanism, or acceptance criterion) is **non-blocking advice**, never a new required acceptance condition. Already-binding substantive floors and this skill's existing requirements are not out-of-goal additions.
+
 A create-Issue review turn is **complete when the revision-named reviewer Issue comment is published**, even while the shared sender's terminal envelope is pending. If there is neither such a comment nor a reply in the chat, inspect the *unchanged* sender's invocation/retry contract and use only an already-permitted recovery/resend. Mere absence is not send authority. A reply recovered through a permitted path can be published as an Issue comment; duplicated published comments are harmless and do not create separate independent sources.
 
 ## Reviewer prompt preparation
@@ -83,7 +85,9 @@ For each review turn, the manager prepares one ordinary reviewer prompt from the
 live Issue and the applicable role in the fixed per-tier pipeline below. Include
 the repository and Issue URL, the reviewer role, and an instruction to read the
 live Issue/comments and publish the complete verdict as a top-level Issue comment
-whose first line names the revision actually read. The role and revision belong
+whose first line names the revision actually read. Carry the review-scope rule
+above into every reviewer prompt: blocking findings must prevent the supplied
+goal, and out-of-goal additions are labeled non-blocking advice. The role and revision belong
 in prompt content; they identify the review request without changing the shared
 transport contract.
 
@@ -97,7 +101,7 @@ revision actually read.
 
 ## Author rounds, substantive floor, and acceptance
 
-After each required review round, the GPT author publishes one Issue disposition comment resolving every finding from that round. A finding is accepted with a correction in the next Issue-body revision or rejected with a substantive reason. A clean round needs no Issue-body edit. Prior dispositions remain valid across continuation, and each Issue comment records the author's decision.
+After each required review round, the GPT author publishes one Issue disposition comment resolving every finding from that round. A finding is accepted with a correction in the next Issue-body revision or rejected with a substantive reason. Out-of-brief advice may be declined in one line that names it as outside the stated goal; a verified in-goal blocking defect still needs a substantive disposition and correction. A clean round needs no Issue-body edit. Prior dispositions remain valid across continuation, and each Issue comment records the author's decision.
 
 Keep every required existing Issue-body floor and its meaning. Immediately before
 sending the terminal review, read the current live Issue body into
