@@ -550,7 +550,8 @@ function verifiedPrimaryBindings(
 // or chrome belong to it; any left-column text above them stays an incoming message.
 function withoutOpenCodeComposer(screen: string): string {
   const lines = screen.split(/\r?\n/u);
-  const border = lines.findLastIndex((line) => /^\s*╹▀{8,}\s*$/u.test(line));
+  let border = lines.length - 1;
+  while (border >= 0 && !/^\s*╹▀{8,}\s*$/u.test(lines[border]!)) border -= 1;
   if (border < 0 || contentLines(lines.slice(border + 1).join('\n')).length > 0) return screen;
   let start = border;
   while (start > 0 && /^\s*┃/u.test(lines[start - 1]!)
