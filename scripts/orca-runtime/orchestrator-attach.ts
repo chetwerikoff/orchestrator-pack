@@ -22,6 +22,7 @@ import {
   resolveWorkerAssignmentStorePath,
   type WorkerAssignmentRecord,
 } from '../lib/worker-assignment-store.ts';
+import { TERMINAL_DISPATCH_STATES, TERMINAL_WORKER_STATES } from './dispatch-terminal-mail.ts';
 import { orcaJsonArgv, resolveOrcaExecutable } from './native.ts';
 import { resolveTargetContext, TargetContextError, type TargetContext } from '../lib/target-context.ts';
 
@@ -234,13 +235,15 @@ export async function attachOrchestratorSeat(input: AttachInput): Promise<Attach
   const oldRow = currentRun.coordinatorHandle
     ? census.rows.find((row) => row.handle === currentRun.coordinatorHandle)
     : undefined;
-  if (!sameHandle && oldRow?.live) {
+  if (!sameHandle && oldRow) {
     return refuse({
       ...base,
       runId,
       runUseCount,
       coordinatorHandle: currentRun.coordinatorHandle,
-      message: `close ${currentRun.coordinatorHandle} or attach from it`,
+      message: oldRow.live
+        ? `close ${currentRun.coordinatorHandle} or attach from it`
+        : `former coordinator ${currentRun.coordinatorHandle} is still listed. ${LIST_CORRECTION}`,
     });
   }
 
@@ -451,9 +454,11 @@ function terminalFromShow(value: unknown, handle: string): TerminalRow | null {
   return { handle, worktreePath, live: true };
 }
 
+const LIVE_TERMINAL_STATUS = new Set(['running', 'active', 'open', 'connected']);
+
 function rowIsLive(row: Record<string, unknown>): boolean {
   const status = typeof row.status === 'string' ? row.status.toLowerCase() : '';
-  if (status === 'running') return true;
+  if (LIVE_TERMINAL_STATUS.has(status)) return true;
   if (status) return false;
   return row.connected === true;
 }
@@ -590,8 +595,10 @@ function dispatchVerdict(value: unknown, taskId: string, bindingKey: string, run
   const result = asRecord(value);
   const dispatch = asRecord(result?.dispatch);
   if (!result || !dispatch) return 'unreadable';
-  if (typeof dispatch.id !== 'string') return 'unreadable';
+  if (typeof dispatch.id !== 'string' || dispatch.id === '') return 'unreadable';
   if (dispatch.id !== bindingKey) return 'inconsistent';
+  const taskIdentity = ['taskId', 'task_id'].filter((key) => typeof dispatch[key] === 'string' && dispatch[key] !== '');
+  if (taskIdentity.length === 0) return 'unreadable';
   if (!idEquals(dispatch, ['taskId', 'task_id'], taskId)) return 'inconsistent';
   if (('runId' in dispatch && dispatch.runId !== runId) || ('run_id' in dispatch && dispatch.run_id !== runId)) return 'inconsistent';
   return 'match';
@@ -603,12 +610,17 @@ function workerVerdict(value: unknown, taskId: string, bindingKey: string, runId
   const observation = asRecord(result?.observation);
   if (!result || !worker || !observation) return 'unreadable';
   if (observation.exactWorker !== true) return 'unreadable';
-  const status = typeof observation.status === 'string' ? observation.status : '';
-  if (!status || status === 'terminal_missing' || status === 'unknown' || status === 'missing') return 'unreadable';
+  const status = typeof observation.status === 'string' ? observation.status.toLowerCase() : '';
+  if (status === 'exited') return 'inconsistent';
+  if (status !== 'live' && status !== 'running') return 'unreadable';
+  const workerState = typeof worker.state === 'string' ? worker.state.toLowerCase() : '';
+  if (TERMINAL_WORKER_STATES.has(workerState)) return 'inconsistent';
   const dispatch = asRecord(result.dispatch);
   if (dispatch) {
     const kind = dispatchVerdict(result, taskId, bindingKey, runId);
     if (kind !== 'match') return kind;
+    const dispatchStatus = typeof dispatch.status === 'string' ? dispatch.status.toLowerCase() : '';
+    if (TERMINAL_DISPATCH_STATES.has(dispatchStatus)) return 'inconsistent';
   }
   const dispatchId = typeof worker.dispatchId === 'string'
     ? worker.dispatchId
@@ -686,14 +698,11 @@ function exists(file: string): boolean {
 }
 
 function redirectedPinAncestor(env: NodeJS.ProcessEnv, projectId: string): string | null {
-  const home = (env.HOME ?? '').trim() || homedir();
-  const homePath = path.resolve(home);
-  let current = fleetEnvFile(env, projectId);
+  let current = path.resolve(fleetEnvFile(env, projectId));
   const seen = new Set<string>();
   while (!seen.has(current)) {
     seen.add(current);
     if (isSymlink(current)) return 'pin path is a symlink';
-    if (current === home || current === homePath) break;
     const parent = path.dirname(current);
     if (parent === current) break;
     current = parent;

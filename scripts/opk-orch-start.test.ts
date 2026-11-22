@@ -38,8 +38,13 @@ interface World {
   listFail: boolean;
   listTruncated: boolean;
   listOmitCensus: boolean;
-  listLiveness: 'running' | 'connected' | 'unknown';
+  listLiveness: 'running' | 'connected' | 'unknown' | 'active' | 'open';
   oldLive: boolean;
+  oldListedStatus: string;
+  partialTaskDispatch: string;
+  workerObservation: string;
+  workerState: string;
+  dispatchStatus: string;
   showFail: boolean;
   runUseFail: boolean;
   readbackStale: boolean;
@@ -124,6 +129,11 @@ function world(tasks: World['tasks'], coordinator: string | null): World {
     listOmitCensus: false,
     listLiveness: 'running',
     oldLive: false,
+    oldListedStatus: '',
+    partialTaskDispatch: '',
+    workerObservation: 'running',
+    workerState: 'running',
+    dispatchStatus: '',
     showFail: false,
     runUseFail: false,
     readbackStale: false,
@@ -139,6 +149,7 @@ function world(tasks: World['tasks'], coordinator: string | null): World {
 function terminalRow(handle: string, worktreePath: string, liveness: World['listLiveness']): Record<string, unknown> {
   if (liveness === 'connected') return { handle, worktreePath, connected: true };
   if (liveness === 'unknown') return { handle, worktreePath, status: 'unknown', connected: false };
+  if (liveness === 'active' || liveness === 'open') return { handle, worktreePath, status: liveness, connected: true };
   return { handle, worktreePath, status: 'running', connected: true };
 }
 
@@ -156,6 +167,9 @@ function native(state: World, primary: string): NativeCommand {
       if (state.listFail) return { code: 1, stdout: '', stderr: 'list failed' };
       const terminals = [terminalRow(NEW_HANDLE, seat, state.listLiveness)];
       if (state.oldLive) terminals.push(terminalRow(OLD_HANDLE, seat, 'running'));
+      else if (state.oldListedStatus) {
+        terminals.push({ handle: OLD_HANDLE, worktreePath: seat, status: state.oldListedStatus, connected: false });
+      }
       if (state.listOmitCensus) return json({ terminals, hostScope: 'local' });
       return json({
         terminals,
@@ -179,11 +193,13 @@ function native(state: World, primary: string): NativeCommand {
       const taskId = args[args.indexOf('--task') + 1] ?? '';
       const task = state.tasks.find((row) => row.id === taskId);
       if (!full) return json({ dispatch: { id: task?.dispatchId, task_id: taskId } });
+      const omitTask = task?.dispatchId === state.partialTaskDispatch;
       return json({
         dispatch: {
           id: state.dispatchMismatch ? 'ctx_mismatch' : task?.dispatchId,
-          task_id: taskId,
+          ...(omitTask ? {} : { task_id: taskId }),
           run_id: RUN,
+          ...(state.dispatchStatus ? { status: state.dispatchStatus } : {}),
         },
       });
     }
@@ -193,9 +209,14 @@ function native(state: World, primary: string): NativeCommand {
       if (!task || dispatchId === state.workerFailDispatch) return { code: 1, stdout: '', stderr: 'missing worker' };
       if (!full || dispatchId === state.workerBareDispatch) return json({ dispatchId, taskId: task.id, runId: RUN });
       return json({
-        dispatch: { id: dispatchId, task_id: task.id, run_id: RUN },
-        worker: { dispatchId, taskId: task.id, state: 'running' },
-        observation: { exactWorker: true, status: 'current' },
+        dispatch: {
+          id: dispatchId,
+          task_id: task.id,
+          run_id: RUN,
+          ...(state.dispatchStatus ? { status: state.dispatchStatus } : {}),
+        },
+        worker: { dispatchId, taskId: task.id, state: state.workerState || 'running' },
+        observation: { exactWorker: true, status: state.workerObservation || 'running' },
       });
     }
     if (command === 'run-use') {
@@ -551,7 +572,7 @@ else if (command === 'list') result = { terminals: [{ handle, worktreePath: prim
 else if (command === 'run-show') result = args.includes('--full') ? { run: { id: run, coordinator_handle: handle } } : { runId: run };
 else if (command === 'task-list') result = { tasks: [{ id: task }] };
 else if (command === 'dispatch-show') result = args.includes('--full') ? { dispatch: { id: dispatch, task_id: task, run_id: run } } : { dispatch: { id: dispatch } };
-else if (command === 'worker-show') result = args.includes('--full') ? { dispatch: { id: dispatch, task_id: task, run_id: run }, worker: { dispatchId: dispatch, taskId: task, state: 'running' }, observation: { exactWorker: true, status: 'current' } } : { dispatchId: dispatch, taskId: task, runId: run };
+else if (command === 'worker-show') result = args.includes('--full') ? { dispatch: { id: dispatch, task_id: task, run_id: run }, worker: { dispatchId: dispatch, taskId: task, state: 'running' }, observation: { exactWorker: true, status: 'running' } } : { dispatchId: dispatch, taskId: task, runId: run };
 else { process.stderr.write('unexpected\\n'); process.exit(1); }
 process.stdout.write(JSON.stringify({ ok: true, result }));
 `);
@@ -722,5 +743,108 @@ process.stdout.write(JSON.stringify({ ok: true, result }));
     expect(report.message).toContain('did not confirm the coordinator');
     expect(report.message).toContain('inspect the exact Run and retry the restore only after resolving its coordinator');
     expect(report.message).not.toContain('did not rebind');
+  });
+
+  it('refuses a listed former coordinator that is unknown or exited', async () => {
+    const fx = fixture();
+    const row = await publishRow(fx.file, 'task_orch', 'ctx_orch');
+    for (const status of ['unknown', 'exited'] as const) {
+      const state = world([{ id: row.taskId, dispatchId: row.bindingKey }], OLD_HANDLE);
+      state.oldListedStatus = status;
+      const report = await attachOrchestratorSeat({
+        argv: ['attach', NEW_HANDLE],
+        env: fx.env,
+        runNative: native(state, fx.primary),
+      });
+      expect(report.ok, status).toBe(false);
+      expect(report.message, status).toContain(`former coordinator ${OLD_HANDLE} is still listed`);
+      expect(report.message, status).toContain('restore Orca terminal visibility, inspect this Run and retry');
+      expect(runUses(state), status).toBe(0);
+    }
+  });
+
+  it('accepts a requested seat whose status is active or open', async () => {
+    const fx = fixture();
+    const row = await publishRow(fx.file, 'task_orch', 'ctx_orch');
+    for (const liveness of ['active', 'open'] as const) {
+      const state = world([{ id: row.taskId, dispatchId: row.bindingKey }], NEW_HANDLE);
+      state.listLiveness = liveness;
+      const report = await attachOrchestratorSeat({
+        argv: ['attach', NEW_HANDLE],
+        env: fx.env,
+        runNative: native(state, fx.primary),
+      });
+      expect(report.ok, liveness).toBe(true);
+      expect(runUses(state), liveness).toBe(0);
+    }
+  });
+
+  it('does not promote an exited or failed native worker', async () => {
+    const fx = fixture();
+    const row = await publishRow(fx.file, 'task_orch', 'ctx_orch');
+    const exited = world([{ id: row.taskId, dispatchId: row.bindingKey }], OLD_HANDLE);
+    exited.workerObservation = 'exited';
+    exited.workerState = 'failed';
+    const exitedReport = await attachOrchestratorSeat({
+      argv: ['attach', NEW_HANDLE],
+      env: fx.env,
+      runNative: native(exited, fx.primary),
+    });
+    expect(exitedReport.ok).toBe(false);
+    expect(runUses(exited)).toBe(0);
+    expect(readOperatorPrimaryBinding(fx.file, {
+      projectId: 'orchestrator-pack',
+      repository: 'chetwerikoff/orchestrator-pack',
+    })).toMatchObject({ status: 'binding_absent' });
+
+    const failed = world([{ id: row.taskId, dispatchId: row.bindingKey }], OLD_HANDLE);
+    failed.dispatchStatus = 'failed';
+    const failedReport = await attachOrchestratorSeat({
+      argv: ['attach', NEW_HANDLE],
+      env: fx.env,
+      runNative: native(failed, fx.primary),
+    });
+    expect(failedReport.ok).toBe(false);
+    expect(runUses(failed)).toBe(0);
+  });
+
+  it('treats a competing Dispatch with no task identity as unreadable', async () => {
+    const fx = fixture();
+    const good = await publishRow(fx.file, 'task_orch', 'ctx_orch');
+    const partial = await publishRow(fx.file, 'task_other', 'ctx_other');
+    const state = world([
+      { id: good.taskId, dispatchId: good.bindingKey },
+      { id: partial.taskId, dispatchId: partial.bindingKey },
+    ], OLD_HANDLE);
+    state.partialTaskDispatch = partial.bindingKey;
+    const report = await attachOrchestratorSeat({
+      argv: ['attach', NEW_HANDLE],
+      env: fx.env,
+      runNative: native(state, fx.primary),
+    });
+    expect(report.message).toContain('native Dispatch evidence');
+    expect(report.message).toContain('unreadable');
+    expect(runUses(state)).toBe(0);
+  });
+
+  it('refuses a symlink above HOME before run-use or pin write', async () => {
+    const fx = fixture();
+    const row = await publishRow(fx.file, 'task_orch', 'ctx_orch');
+    const outside = path.join(fx.root, 'outside-tree');
+    const alias = path.join(fx.root, 'alias');
+    mkdirSync(outside);
+    symlinkSync(outside, alias);
+    const home = path.join(alias, 'user');
+    mkdirSync(home);
+    const state = world([{ id: row.taskId, dispatchId: row.bindingKey }], OLD_HANDLE);
+    const report = await attachOrchestratorSeat({
+      argv: ['attach', NEW_HANDLE],
+      env: { ...fx.env, HOME: home },
+      runNative: native(state, fx.primary),
+    });
+    expect(report.pin).toBe('refused');
+    expect(report.message).toContain('pin path is a symlink');
+    expect(runUses(state)).toBe(0);
+    expect(existsSync(path.join(outside, 'user', '.config', 'orchestrator-fleet'))).toBe(false);
   });
 });
