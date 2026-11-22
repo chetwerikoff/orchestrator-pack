@@ -1,0 +1,23 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2855,
+  "declared_paths": [
+    "docs/target_repo_setup.md",
+    "scripts/opk-orch-start",
+    "scripts/opk-orch-start.test.ts",
+    "scripts/orca-runtime/orchestrator-attach.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/target_repo_setup.md",
+    "scripts/opk-orch-start",
+    "scripts/opk-orch-start.test.ts",
+    "scripts/orca-runtime/orchestrator-attach.ts"
+  ],
+  "source_revision": "0a7b0bca17c2f3dd82959e1085bd26c231fb557d"
+}
