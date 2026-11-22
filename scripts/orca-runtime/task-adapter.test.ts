@@ -2784,3 +2784,46 @@ describe('Orca readiness path fallback', () => {
     });
   });
 });
+
+describe('Issue #2863 traced pack terminal-create call and orphaned retry', () => {
+  it('emits the exact terminal create argv and reuses an orphaned Task-owned terminal without a second create', () => {
+    const stateRoot = mkdtempSync(join(tmpdir(), 'opk-2863-terminal-'));
+    const env = { OPK_WAKE_SUPERVISOR_STATE_DIR: stateRoot };
+    const workspace = '/tmp/opk-2863-worktree';
+    const title = 'opk-manager-task_2863';
+    const terminal = { handle: 'term-2863', incarnationId: 'generation-2863', worktreePath: workspace,
+      worktreeId: 'repo::' + workspace, title, status: 'running' as const, orphaned: true };
+    const terminals: typeof terminal[] = [];
+    const operations: string[][] = [];
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      operations.push([...args]);
+      const operation = `${args[0]} ${args[1]}`;
+      if (operation === 'terminal create') {
+        terminals.push(terminal);
+        return { ok: true, result: { terminal } };
+      }
+      if (operation === 'terminal show') {
+        const shown = terminals.find((item) => item.handle === args[args.indexOf('--terminal') + 1]);
+        return shown ? { ok: true, result: { terminal: shown } } : { ok: false, error: { code: 'not_found', message: 'absent' } };
+      }
+      if (operation === 'terminal list') return { ok: true, result: { totalCount: terminals.length, truncated: false, terminals } };
+      return { ok: false, error: { code: 'unexpected_operation', message: operation } };
+    });
+    try {
+      const first = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env })
+        .spawnWorker({ title, command: 'opencode --agent pack', workspace });
+      expect(first).toMatchObject({ status: 'ok', value: { identity: { id: 'term-2863', generation: 'generation-2863' } } });
+      const creates = () => operations.filter((args) => args[0] === 'terminal' && args[1] === 'create');
+      expect(creates()).toHaveLength(1);
+      expect(creates()[0]!.slice(0, 8)).toEqual(['terminal', 'create', '--worktree', workspace, '--title', title, '--command', 'opencode --agent pack']);
+      // The launch refused the orphaned handle before Dispatch; the retry reuses it.
+      const retry = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env })
+        .spawnWorker({ title, command: 'opencode --agent pack', workspace });
+      expect(retry).toMatchObject({ status: 'ok', value: { identity: first.status === 'ok' ? first.value.identity : {}, provenance: 'internal' } });
+      expect(creates()).toHaveLength(1);
+      expect(operations.some((args) => args[1] === 'close')).toBe(false);
+    } finally {
+      rmSync(stateRoot, { recursive: true, force: true });
+    }
+  });
+});
