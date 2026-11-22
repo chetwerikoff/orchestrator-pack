@@ -4036,6 +4036,104 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(f.statuses.some((status) => status.state === 'success')).toBe(false);
   });
 
+  // Real linear H1 -> H2 -> H3 lineage; the merge variant ends with a clean
+  // merge of the advanced selected base into H2 instead of a new code commit.
+  function finalCapDeltaBoundGraph(kind: 'linear' | 'pure-merge') {
+    const root = mkdtempSync(join(tmpdir(), 'pack-review-delta-bound-'));
+    roots.push(root);
+    const remote = join(root, 'selected-remote.git');
+    const checkout = join(root, 'checkout');
+    mkdirSync(checkout);
+    const git = (cwd: string, ...args: string[]) => {
+      const result = runProcessSync({ command: 'git', args, cwd, inheritParentEnv: true });
+      if (!result.ok) throw new Error('delta bound fixture: ' + args.join(' ') + ': ' + result.stderr);
+      return result.stdout.trim();
+    };
+    const commit = (file: string, bytes: string, message: string) => {
+      writeFileSync(join(checkout, file), bytes);
+      git(checkout, 'add', file);
+      git(checkout, 'commit', '-m', message);
+      return git(checkout, 'rev-parse', 'HEAD');
+    };
+    git(root, 'init', '--bare', remote);
+    git(checkout, 'init', '-b', 'main');
+    git(checkout, 'config', 'user.name', 'Synthetic');
+    git(checkout, 'config', 'user.email', 'fixture@example.test');
+    git(checkout, 'remote', 'add', 'origin', remote);
+    commit('base.txt', 'base\n', 'base');
+    git(checkout, 'push', '-u', 'origin', 'main');
+    git(checkout, 'checkout', '-b', 'review');
+    const h1 = commit('feature.txt', 'reviewed H1\n', 'reviewed H1');
+    const h2 = commit('fix.txt', 'delta fix H2\n', 'fix H2');
+    let h3: string;
+    if (kind === 'linear') {
+      h3 = commit('fix.txt', 'second fix H3\n', 'fix H3');
+    } else {
+      git(checkout, 'checkout', 'main');
+      commit('unrelated.txt', 'base advance\n', 'base advance');
+      git(checkout, 'push', 'origin', 'main');
+      git(checkout, 'checkout', 'review');
+      git(checkout, 'merge', '--no-ff', '-m', 'merge selected base', 'main');
+      h3 = git(checkout, 'rev-parse', 'HEAD');
+    }
+    return { checkout, h1, h2, h3 };
+  }
+
+  function finalCapDeltaBoundCase(kind: 'linear' | 'pure-merge', firstDelta: 'clean' | 'findings') {
+    const g = finalCapDeltaBoundGraph(kind);
+    const f = fixture({ frozenBodyOverride: revisedBody, reviewedHeadSha: g.h1, sourceRepoRoot: g.checkout });
+    Object.assign(f.input, {
+      fixturePrBody: `Closes #${issueNumber}`, fixtureIssueNumber: issueNumber,
+      fixturePrState: 'OPEN', fixtureIssueTitle: '[T3] Frozen Issue 228',
+      fixtureIssueBody: revisedBody,
+    });
+    completeFinalCapDelta(f, g.h2, revisedBody, g.h1, undefined, firstDelta);
+    f.input.fixtureCurrentPrHeadSha = g.h3;
+    f.input.fixtureReviewCompareStatus = 'ahead';
+    const claim = vi.fn(() => true);
+    Object.assign(f.input, { deltaClaimOwned: claim });
+    return { ...f, g, claim };
+  }
+
+  it('PR 2852: a second final-cap delta after a findings delta is refused with the architect diff-check route', async () => {
+    const f = finalCapDeltaBoundCase('linear', 'findings');
+    const runsBefore = listPackReviewRuns(f.options).length;
+    const result = await reconcileStalePackReviewRuns(f.input);
+    const row = result.results.find((entry) => entry.headSha === f.g.h3);
+    expect(row, JSON.stringify(result)).toMatchObject({
+      settled: false, reason: 'final_cap_delta_findings_bound_reached',
+    });
+    expect(row?.nextAction).toContain('architect diff check');
+    expect(row?.nextAction).toContain('--merge-waiver-line');
+    expect(row).not.toHaveProperty('findingsHandoff');
+    expect(row).not.toHaveProperty('deltaRunId');
+    expect(f.claim).not.toHaveBeenCalled();
+    expect(listPackReviewRuns(f.options)).toHaveLength(runsBefore);
+    expect(f.statuses.some((status) => status.state === 'success')).toBe(false);
+    expect(f.statuses).toContainEqual(expect.objectContaining({
+      state: 'failure', context: 'orchestrator-pack/pack-review',
+    }));
+  });
+
+  it('PR 2852: a clean final-cap delta still admits the next ordinary delta on a new head', async () => {
+    const f = finalCapDeltaBoundCase('linear', 'clean');
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(JSON.stringify(result)).not.toContain('final_cap_delta_findings_bound_reached');
+    expect(f.claim).toHaveBeenCalled();
+  });
+
+  it('PR 2852: a pure selected-base merge after a findings delta keeps the zero-call route', async () => {
+    const f = finalCapDeltaBoundCase('pure-merge', 'findings');
+    const runsBefore = listPackReviewRuns(f.options).length;
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results, JSON.stringify(result)).toContainEqual(expect.objectContaining({
+      headSha: f.g.h3, settled: false,
+      reason: 'final_cap_pure_merge_original_findings_still_unresolved',
+    }));
+    expect(f.claim).not.toHaveBeenCalled();
+    expect(listPackReviewRuns(f.options)).toHaveLength(runsBefore);
+  });
+
   it('incident 1732: a published final-cap delta COMMENT is not labelled supplemental advisory', async () => {
     const f = unchangedDescendantFixture();
     completeFinalCapDelta(f, HEAD, revisedBody, undefined, undefined, 'clean', false);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildReviewPrompt } from '../plugins/codex-pr-reviewer/lib/prompt.ts';
+import { buildReviewPrompt, renderNativeDiffScope } from '../plugins/codex-pr-reviewer/lib/prompt.ts';
 import {
   CANONICAL_CONTRACT_CLAUSE_MARKERS,
   buildGptReviewPrompt,
@@ -7,6 +7,8 @@ import {
   gptPromptIncludesCanonicalContract,
   loadCanonicalReviewContract,
   loadGptPromptTemplate,
+  renderGptReviewRangeTemplate,
+  renderAuthenticatedGptFinalCapSection,
 } from './lib/pack-pr-review-contract.ts';
 
 describe('pack PR review canonical contract (Issue #1031)', () => {
@@ -29,9 +31,10 @@ describe('pack PR review canonical contract (Issue #1031)', () => {
   });
 
   it('Issue #2831 keeps unexecutable criteria non-blocking and unread sources fail-closed', () => {
-    const cleanReview = loadGptPromptTemplate().split('### Clean review')[1]?.split('### Findings review')[0] ?? '';
+    const cleanReview = renderGptReviewRangeTemplate(loadGptPromptTemplate(), false)
+      .split('### Clean review')[1]?.split('### Findings review')[0] ?? '';
     const text = cleanReview.replace(/\s+/gu, ' ');
-    expect(text).toContain('read the linked Issue in full, read every changed file and the whole diff at the bound head');
+    expect(text).toContain('read the linked Issue in full, read every changed file and the complete PR-level net diff/patch hunks at the verified live PR base/head');
     expect(text).toContain('command execution (such as tests or `make check`)');
     expect(text).toContain('GitHub search returning `incomplete_results`');
     expect(text).toContain('required CI that checks it is confirmed successful for the exact bound head');
@@ -131,7 +134,134 @@ describe('Issue #2835 ordinary templates remain unchanged in unbound mode', () =
     });
     expect(gpt).not.toContain('Authenticated final-cap delta review');
     expect(native).not.toContain('Authenticated final-cap delta');
-    expect(gpt).toContain('read every changed file and the whole diff at the bound head');
+    expect(gpt).toContain('read every changed file and the complete PR-level net diff/patch hunks at the verified live PR base/head');
     expect(native).toContain('Review **only** the changes between `origin/main` and `HEAD`');
+  });
+});
+
+describe('Issue #2864 PR net-diff selection and specific prior-finding closure instructions', () => {
+  const scope = {
+    hasScope: false, issueNumber: null, issueConstraints: null,
+    declaredPaths: [], declaredGlobs: [], unverifiedIssueConstraints: false,
+  };
+  const browser = () => buildGptReviewPrompt({
+    prUrl: 'https://github.com/example/repository/pull/2864',
+    headSha: 'f'.repeat(40),
+    scope,
+  });
+
+  it('emits live PR-level base/head net-path and hunk reads, not merge-history selection', () => {
+    const prompt = browser();
+    expect(prompt).toContain('exact bound head T');
+    expect(prompt).toContain('base.ref and base.sha');
+    expect(prompt).toContain('complete PR-level changed-file inventory');
+    expect(prompt).toContain('every per-file net patch/hunk');
+    expect(prompt).toContain('same verified PR base/head snapshot');
+    expect(prompt).toContain('base-to-T net paths AND hunks');
+    expect(prompt).toContain('Exclude M-only paths/hunks');
+    expect(prompt).toContain('include conflict-resolution hunks');
+    expect(prompt).toContain('PR base/head drifts');
+    expect(prompt).toContain('comparison is truncated');
+    expect(prompt).toContain('Do not assert P-only');
+    expect(prompt).toContain('no-valid-review outcome');
+    expect(prompt).not.toContain('Independently inspect the PR diff/code for the bound head.');
+    expect(prompt).not.toContain('{{REVIEW_DIFF_RANGE_INSTRUCTIONS}}');
+    expect(prompt).not.toContain('{{REVIEW_CHANGED_CODE_READ}}');
+  });
+
+  it('requires authenticated, independently authorized and applicable closure, never preinjects ruling bytes', () => {
+    const prompt = browser();
+    for (const witness of [
+      'authenticated **top-level comments**', 'exact reviewed PR', 'live linked Issue',
+      'GitHub comment URL/id', 'authenticated `user.login`', 'quoted explicit `closed` decision',
+      'stable finding code', 'specific prior review/finding occurrence',
+      'reviewed head/code state', 'independently authorized ARCH/operator principal',
+    ]) expect(prompt).toContain(witness);
+    for (const negative of [
+      'self-description', 'author_association', 'OWNER status',
+      'Other-repository/PR', 'wrong-code/head', 'spoofed', 'ambiguous',
+      'unverified context', 'later heads', 'different file',
+    ]) expect(prompt).toContain(negative);
+    expect(prompt).toContain('does not establish that role');
+    expect(prompt).toContain('Do not repeat it solely from the historical review');
+    expect(prompt).toContain('no longer outstanding');
+    expect(prompt).toContain('new scope/security violations');
+    expect(prompt).toContain('Closing a reviewer finding never expands');
+    expect(prompt).not.toContain('scope:backfill-file-explicitly-excluded');
+    expect(prompt).not.toContain('7073860279');
+  });
+
+  it('keeps normal review and authenticated final-cap F..T instruction branches disjoint and fails on slot drift', () => {
+    const template = loadGptPromptTemplate();
+    const ordinary = renderGptReviewRangeTemplate(template, false);
+    const finalCap = renderGptReviewRangeTemplate(template, true);
+    expect(ordinary).toContain('- Ordinary review:');
+    expect(ordinary).not.toContain('- Authenticated final-cap F..T review:');
+    expect(finalCap).toContain('- Authenticated final-cap F..T review:');
+    expect(finalCap).toContain('inspect only the complete connected GitHub F..T changed paths AND hunks');
+    expect(finalCap).toContain('read every changed F..T file and the complete F..T diff');
+    expect(finalCap).not.toContain('- Ordinary review:');
+    expect(finalCap).not.toContain('read every changed file and the complete PR-level net diff');
+    expect(finalCap).toContain('Applicable verified closed prior instances remain closed');
+    expect(finalCap).toContain('newly offending F..T code');
+    expect(finalCap).toContain('independent security/scope defects');
+    expect(() => renderGptReviewRangeTemplate(
+      template.replace('{{REVIEW_DIFF_RANGE_INSTRUCTIONS}}', 'moved'), true,
+    )).toThrow('missing or duplicate range slot');
+    expect(() => renderGptReviewRangeTemplate(
+      template.replace('{{REVIEW_CHANGED_CODE_READ}}', 'moved'), true,
+    )).toThrow('missing or duplicate range slot');
+    expect(() => renderGptReviewRangeTemplate(
+      template + '\n{{REVIEW_DIFF_RANGE_INSTRUCTIONS}}', true,
+    )).toThrow('missing or duplicate range slot');
+  });
+
+  it('renders historical F..T prior findings without turning a verified same-PR closure into an outstanding blocker', () => {
+    // The run-store authenticates F/T in production. These are synthetic section
+    // inputs, not proof of a GitHub comment read or a model NO_FINDINGS result.
+    const priorCode = 'scope:historical-instance-2864';
+    const deltaSection = renderAuthenticatedGptFinalCapSection({
+      originalRunId: 'old-reviewed-run',
+      originalCycleId: 'review-cycle-1',
+      fromSha: 'a'.repeat(40),
+      toSha: 'b'.repeat(40),
+      priorFindings: [{ code: priorCode, head: 'a'.repeat(40), severity: 'blocking' }],
+    });
+    expect(deltaSection).toContain('Authenticated final-cap delta review');
+    expect(deltaSection).toContain('frozen reviewed frontier F');
+    expect(deltaSection).toContain(priorCode);
+    expect(deltaSection).toContain('historical inputs, not proof');
+    expect(deltaSection).toContain('still-applicable ARCH/operator closure');
+    expect(deltaSection).toContain('do not re-raise an unchanged closed instance');
+    expect(deltaSection).toContain('remains in priorFindings');
+    expect(deltaSection).toContain('new F..T defect');
+    expect(deltaSection).toContain('semantically relevant changes outside an old filename');
+    expect(deltaSection).toContain('independent scope/security violations');
+    expect(deltaSection).toContain('Unverified closure evidence cannot suppress');
+    expect(deltaSection).not.toContain('Report every still-unresolved old blocker');
+    // The frozen historical row is deliberately still serialized, not erased.
+  });
+
+  it('keeps native local comparison explicitly unverified; simulated authenticated F..T retains closed-instance precedence', () => {
+    const normal = renderNativeDiffScope('origin/main');
+    expect(normal).toContain('git diff origin/main...HEAD');
+    expect(normal).toContain('NOT authenticated as this live PR target base');
+    expect(normal).toContain('stale origin/main');
+    expect(normal).toContain('overlap/conflict-resolution hunk');
+    expect(normal).toContain('label PR ownership unverified');
+    const fromSha = 'a'.repeat(40);
+    const toSha = 'b'.repeat(40);
+    const finalCap = renderNativeDiffScope(fromSha, {
+      fromSha, toSha,
+      priorFindings: [{ code: 'scope:historical', severity: 'blocking' }],
+    });
+    expect(finalCap).toContain('Authenticated final-cap delta');
+    expect(finalCap).toContain(`git diff ${fromSha}...HEAD`);
+    expect(finalCap).toContain('no longer outstanding even if it remains in priorFindings');
+    expect(finalCap).toContain('semantically relevant other-file changes');
+    expect(finalCap).toContain('independent scope/security violations');
+    expect(finalCap).toContain('cannot be verified from evidence actually available');
+    expect(finalCap).not.toContain('caller-supplied local comparison');
+    expect(finalCap).not.toContain('Review **only** the changes between');
   });
 });
