@@ -2638,6 +2638,8 @@ describe('state-light fresh conversation collision recovery', () => {
   });
 
   describe('Issue #2854 fresh account reload and blank-surface reopen share one remedy', () => {
+    const inFreshPreparation = (): boolean => /prepareStateLightFreshConversation|openBlankProjectChatSurface/u
+      .test(String(new Error().stack));
     const accountWallOnSecondStatusRead = (page: any) => {
       const fault = installAccountLoadError(page);
       let statusReads = 0;
@@ -2674,6 +2676,59 @@ describe('state-light fresh conversation collision recovery', () => {
       const fault = accountWallOnSecondStatusRead(solo.page);
       const outcome = await withActualProductWallClassifier(() =>
         runNewChatTurn(solo.page, join(stateDir, '2854-fresh-account-reopen.txt'), '300000'));
+      expect(fault.reload).toHaveBeenCalledTimes(1);
+      expect(solo.page.goto).toHaveBeenCalledTimes(1);
+      expect(outcome.result.send_count).toBe(0);
+      expect(outcome.result.send_attempted).not.toBe(true);
+      expect(solo.sendButton.click).not.toHaveBeenCalled();
+    });
+
+    it('a remedial fresh-preparation goto leaves no account-wall reload', async () => {
+      const prompt = '2854-FRESH-PREP-GOTO-THEN-ACCOUNT';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const solo = makeLoserPage(prompt, 'UNREACHED');
+      const fault = installAccountLoadError(solo.page);
+      // Preparation cannot read the landed URL, so it navigates to the blank surface once more.
+      const readUrl = solo.page.url;
+      solo.page.url = vi.fn(() => {
+        if (solo.page.goto.mock.calls.length < 2 && inFreshPreparation()) throw new Error('synthetic unreadable URL');
+        return readUrl();
+      });
+      mocks.productStatusText.mockImplementation(async (): Promise<any> => {
+        if (solo.page.goto.mock.calls.length < 2) return { text: '', composer: true };
+        fault.showError();
+        const heading = "We couldn't load your account";
+        return {
+          text: heading, composer: false,
+          parts: [{ selector: uiAdapter.ACCOUNT_LOAD_ERROR_HEADING_SELECTOR, text: heading }],
+        };
+      });
+      const outcome = await withActualProductWallClassifier(() =>
+        runNewChatTurn(solo.page, join(stateDir, '2854-fresh-prep-account.txt'), '300000'));
+      expect(solo.page.goto).toHaveBeenCalledTimes(2);
+      expect(fault.reload).not.toHaveBeenCalled();
+      expect(outcome.result).toMatchObject({ state: 'recovery_required', cause: 'account_load_error', send_count: 0 });
+      expect(solo.sendButton.click).not.toHaveBeenCalled();
+    });
+
+    it('an account-wall reload leaves no remedial fresh-preparation goto', async () => {
+      const prompt = '2854-FRESH-ACCOUNT-THEN-PREP-GOTO';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const solo = makeLoserPage(prompt, 'UNREACHED');
+      const fault = installAccountLoadError(solo.page);
+      // The wall appears when preparation starts; after the reload preparation cannot read the URL,
+      // which would need another goto.
+      const readUrl = solo.page.url;
+      let shown = false;
+      solo.page.url = vi.fn(() => {
+        if (inFreshPreparation()) {
+          if (!shown) { shown = true; fault.showError(); }
+          if (fault.reload.mock.calls.length > 0) throw new Error('synthetic unreadable URL');
+        }
+        return readUrl();
+      });
+      const outcome = await withActualProductWallClassifier(() =>
+        runNewChatTurn(solo.page, join(stateDir, '2854-fresh-account-prep.txt'), '300000'));
       expect(fault.reload).toHaveBeenCalledTimes(1);
       expect(solo.page.goto).toHaveBeenCalledTimes(1);
       expect(outcome.result.send_count).toBe(0);

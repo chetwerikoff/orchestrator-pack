@@ -4749,9 +4749,18 @@ async function runTurnCore(
       ? { ownedPreSendFetch429Page: page, ownedPreSendFetch429Url: invocationCreatedExistingChatUrl }
       : {}
   );
+  // #2854: one invocation-local pre-Send remedial reload/goto allowance shared by the incumbent
+  // remedies, fresh-preparation gotos and the C4 reload. Initial intended opening and passive
+  // hydration cost nothing.
+  const remedialNavigation = { incumbent: false, c4: false, initialGotoCount: 0 };
+  const remedialNavigationUsed = (): boolean => remedialNavigation.incumbent || remedialNavigation.c4
+    || navigation.snapshotGoto() > remedialNavigation.initialGotoCount;
   const guardedFreshPreparationNavigation = new Proxy(navigation, {
     get(target, property, receiver) {
       if (property === 'recordGoto') return () => {
+        if (!sendAttempted && sendCount === 0 && remedialNavigationUsed()) {
+          throw new Error('fresh_conversation_surface_unavailable:remedial_navigation_used');
+        }
         beforeBrowserAction();
         target.recordGoto();
         held429Witness?.beforeNavigation();
@@ -5001,11 +5010,6 @@ async function runTurnCore(
       // An existing URL-selected tab never grants cleanup or Stop authority.
       cleanupAuthorityUnprovenPages.add(page);
     }
-    // #2854: one invocation-local pre-Send remedial reload/goto allowance shared by the incumbent
-    // remedies and the C4 reload. Initial intended opening and passive hydration cost nothing.
-    const remedialNavigation = { incumbent: false, c4: false, initialGotoCount: 0 };
-    const remedialNavigationUsed = (): boolean => remedialNavigation.incumbent || remedialNavigation.c4
-      || navigation.snapshotGoto() > remedialNavigation.initialGotoCount;
     if (!page || getOwnTargetInfo(browser)?.created) {
       if (!page) {
         page = await createDedicatedTurnPage(browser, invocationBudget);
@@ -5111,7 +5115,7 @@ async function runTurnCore(
       }
       if (accountReloadAttempted) return accountErrorTerminal();
       const preSendRemedy = !sendAttempted && sendCount === 0;
-      if (preSendRemedy && (remedialNavigation.c4 || remedialNavigation.incumbent)) return accountErrorTerminal();
+      if (preSendRemedy && remedialNavigationUsed()) return accountErrorTerminal();
       // Reserve Page/CDP cleanup and terminal projection before liveness expiry.
       const returnByMs = config.newChat && (sendAttempted || sendCount > 0)
         && !ownedConversationUrl ? freshUnboundReturnByMs
