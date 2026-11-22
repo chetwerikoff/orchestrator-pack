@@ -338,6 +338,10 @@ create-issue-draft procedure and current tier, floor, and scope rules.
 For brief-only-create, author from the supplied brief. For revise-existing-issue,
 preserve the source revision marker and increment it for a substantive body
 revision. Apply these requirements: <AUTHORING_REQUIREMENTS>.
+Honor the supplied goal. Treat reviewer additions beyond it (gate, fixture,
+matrix, smoke scenario, mechanism, or AC) as non-blocking advice: decline each
+in a one-line disposition as outside the stated goal; do not import it into the
+Issue. Correct actual in-goal blocking defects.
 
 Only mutate the target Issue title/body. Do not create a PR, label, milestone,
 merge, or unrelated GitHub authority. Re-read the final body for consistency.
