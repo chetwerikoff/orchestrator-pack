@@ -2124,6 +2124,72 @@ async function existingTurnHasNothingToResume(page: any, deadlineMs: number): Pr
   }
 }
 
+/**
+ * #2854: the wrapper timeout of `locatorCount` races the underlying Playwright/CDP read, which can
+ * stay pending. The error keeps that same read's handle so recovery can require its positive
+ * settlement; the message stays the incumbent `browser_operation_timeout:locator_count` cause.
+ */
+export class PendingLocatorCountTimeoutError extends Error {
+  #settled = false;
+  readonly settlement: Promise<void>;
+
+  constructor(read: Promise<unknown>) {
+    super('browser_operation_timeout:locator_count');
+    this.settlement = read.then(() => { this.#settled = true; }, () => { this.#settled = true; });
+  }
+
+  get settled(): boolean {
+    return this.#settled;
+  }
+}
+
+/** Bounded wait for the same timed-out read to settle; a still-pending read is never quiescent. */
+async function pendingLocatorReadSettledBefore(page: any, error: unknown, deadlineMs: number): Promise<boolean> {
+  if (!(error instanceof PendingLocatorCountTimeoutError)) return false;
+  const waitUntilMs = Math.min(deadlineMs, Date.now() + MAX_LOCAL_READ_WAIT_MS);
+  while (!error.settled && Date.now() < waitUntilMs) {
+    await Promise.race([error.settlement, sleep(page, Math.min(250, waitUntilMs - Date.now()))]);
+  }
+  return error.settled && Date.now() < deadlineMs;
+}
+
+export type PreSendC4ReloadRefusal =
+  | 'cause_not_reloadable' | 'dispatch_possible' | 'locator_read_pending' | 'remedial_navigation_used'
+  | 'page_lost' | 'page_not_owned' | 'destination_mismatch' | 'busy_or_unknown' | 'budget_exhausted';
+
+/**
+ * #2854: the only pre-Send C4 failure that may earn one same-Page reload is a thrown
+ * `locator_count` timeout whose same underlying read has positively settled, with no dispatch
+ * boundary entered, the shared remedial-navigation allowance unused, the exact owned Page and
+ * conversation intact, no Stop/generation and time left before the last safe reload.
+ * Returned terminals (`baseline_transcript_incomplete`, deadline-emitted
+ * `owned_conversation_render_mismatch`) and `Target closed` never earn it.
+ */
+export function preSendC4ReloadDecision(input: {
+  readonly error: unknown;
+  readonly readSettled: boolean;
+  readonly dispatchBoundaryEntered: boolean;
+  readonly remedialNavigationUsed: boolean;
+  readonly pageLost: boolean;
+  readonly pageIsOriginalOwned: boolean;
+  readonly identityMatched: boolean;
+  readonly stopVisible: boolean | null;
+  readonly nowMs: number;
+  readonly lastSafeReloadMs: number;
+}): { readonly reload: true } | { readonly reload: false; readonly refusal: PreSendC4ReloadRefusal } {
+  const refuse = (refusal: PreSendC4ReloadRefusal) => ({ reload: false as const, refusal });
+  if (!(input.error instanceof PendingLocatorCountTimeoutError)) return refuse('cause_not_reloadable');
+  if (input.dispatchBoundaryEntered) return refuse('dispatch_possible');
+  if (!input.readSettled) return refuse('locator_read_pending');
+  if (input.remedialNavigationUsed) return refuse('remedial_navigation_used');
+  if (input.pageLost) return refuse('page_lost');
+  if (!input.pageIsOriginalOwned) return refuse('page_not_owned');
+  if (!input.identityMatched) return refuse('destination_mismatch');
+  if (input.stopVisible !== false) return refuse('busy_or_unknown');
+  if (input.nowMs >= input.lastSafeReloadMs) return refuse('budget_exhausted');
+  return { reload: true };
+}
+
 async function locatorCount(
   locator: any,
   deadlineMs = Date.now() + MAX_LOCAL_READ_WAIT_MS,
@@ -2134,15 +2200,15 @@ async function locatorCount(
     : Math.min(MAX_LOCAL_READ_WAIT_MS, deadlineMs - Date.now());
   if (waitMs <= 0) throw new BrowserOperationTimeoutError('locator_count');
   const timeoutCause = 'browser_operation_timeout:locator_count';
+  let read: Promise<unknown> | undefined;
   try {
-    return Number(await boundedBrowserRead(
-      Promise.resolve(locator.count()),
-      waitMs,
-      timeoutCause,
-    ));
+    read = Promise.resolve(locator.count());
+    return Number(await boundedBrowserRead(read, waitMs, timeoutCause));
   } catch (error) {
     if (isPostSendTargetCrash(error)) throw error;
-    if (error instanceof Error && error.message === timeoutCause) throw error;
+    if (error instanceof Error && error.message === timeoutCause) {
+      throw read ? new PendingLocatorCountTimeoutError(read) : error;
+    }
     if (preserveNetworkChange && error instanceof Error && /ERR_NETWORK_CHANGED/iu.test(error.message)) throw error;
     return 0;
   }
@@ -3324,6 +3390,22 @@ const FRESH_SEND_PREPARE_RESERVE_MS = 3 * MAX_LOCAL_READ_WAIT_MS;
 const FRESH_SEND_EXTENDED_TOTAL_MS = 600_000;
 const FRESH_SEND_TERMINAL_PROBE_MS = 5_000;
 const FRESH_SEND_EXTENDED_POLL_MS = 2_000;
+
+/**
+ * #2854: the ordinary `--new-chat` entrypoint's latest safe dispatch time. It keeps the post-Send
+ * observation, Page/CDP cleanup and terminal reserves inside `freshUnboundReturnByMs` and is never
+ * earlier than the incumbent first readiness window. Session first payloads keep their own
+ * exclusive send-slot owner cutoff; this bound never grants an ordinary turn that allowance.
+ */
+function freshLastSafeDispatchMs(readinessStartedAtMs: number, freshUnboundReturnByMs: number): number {
+  return Math.max(
+    readinessStartedAtMs + FRESH_SEND_RESERVE_MS,
+    Math.min(
+      readinessStartedAtMs + FRESH_SEND_EXTENDED_TOTAL_MS,
+      freshUnboundReturnByMs - DISPATCH_OBSERVATION_MS - 4 * MAX_LOCAL_READ_WAIT_MS,
+    ) - FRESH_SEND_TERMINAL_PROBE_MS,
+  );
+}
 
 async function waitForExtendedFreshSendButton(
   page: any,
@@ -4920,6 +5002,11 @@ async function runTurnCore(
       // An existing URL-selected tab never grants cleanup or Stop authority.
       cleanupAuthorityUnprovenPages.add(page);
     }
+    // #2854: one invocation-local pre-Send remedial reload/goto allowance shared by the incumbent
+    // remedies and the C4 reload. Initial intended opening and passive hydration cost nothing.
+    const remedialNavigation = { incumbent: false, c4: false, initialGotoCount: 0 };
+    const remedialNavigationUsed = (): boolean => remedialNavigation.incumbent || remedialNavigation.c4
+      || navigation.snapshotGoto() > remedialNavigation.initialGotoCount;
     if (!page || getOwnTargetInfo(browser)?.created) {
       if (!page) {
         page = await createDedicatedTurnPage(browser, invocationBudget);
@@ -4948,9 +5035,11 @@ async function runTurnCore(
             && !(error instanceof Error && /timeout|net::ERR_|navigation|fetch/iu.test(error.message))) {
           throw error;
         }
+        remedialNavigation.incumbent = true;
         await navigateOwnedTurnPage(page, config, navigation, invocationDeadlineMs, () => { beforeBrowserAction(); held429Witness?.beforeNavigation(); });
       }
     }
+    remedialNavigation.initialGotoCount = navigation.snapshotGoto();
 
     let baselineCount = 0;
     let baselineUserNodeCount = 0;
@@ -5022,6 +5111,8 @@ async function runTurnCore(
         return accountErrorOwnershipMismatch();
       }
       if (accountReloadAttempted) return accountErrorTerminal();
+      const preSendRemedy = !sendAttempted && sendCount === 0;
+      if (preSendRemedy && remedialNavigation.c4) return accountErrorTerminal();
       // Reserve Page/CDP cleanup and terminal projection before liveness expiry.
       const returnByMs = config.newChat && (sendAttempted || sendCount > 0)
         && !ownedConversationUrl ? freshUnboundReturnByMs
@@ -5030,6 +5121,7 @@ async function runTurnCore(
       if (availableMs <= 1_000) return accountErrorTerminal();
       beforeBrowserAction(); // Shared cooldown and first witnessed 429 forbid a new reload.
       accountReloadAttempted = true; // Failure consumes the only allowance.
+      if (preSendRemedy) remedialNavigation.incumbent = true;
       held429Witness?.beforeNavigation();
       try {
         await boundedBrowserRead(
@@ -5582,6 +5674,17 @@ async function runTurnCore(
             }
             return failExtended('fresh_send_button_never_enabled', 'terminal_unknown');
           }
+        } else {
+          // #2854: without qualified frozen-sibling evidence, a healthy owned composer may still
+          // hydrate after the first readiness window, but only before its last safe dispatch time.
+          const lateCutoffMs = freshLastSafeDispatchMs(readinessStartedAtMs, freshUnboundReturnByMs);
+          if (Date.now() < lateCutoffMs) {
+            preDispatchCutoffMs = lateCutoffMs;
+            readiness = await waitForExtendedFreshSendButton(
+              page, sendButton, assertFreshOwner, preDispatchCutoffMs,
+            );
+            assertFreshOwner();
+          }
         }
       }
       if (readiness === 'busy') {
@@ -5710,6 +5813,68 @@ async function runTurnCore(
         sendCount, sendWitness: 'numeric_send_count',
       });
       return null;
+    };
+
+    // #2854: one same-Page reload for an affirmatively zero-dispatch pre-Send C4 failure, then the
+    // unchanged existing preparation and all Send gates rerun on the original invocation and marker.
+    // Every refusal rethrows the original cause; a C4 click/Enter retry is never added.
+    const runExistingPreSendWithC4Recovery = async (
+      prepare: () => Promise<TurnRunOutcome | null>,
+    ): Promise<TurnRunOutcome | null> => {
+      try {
+        return await prepare();
+      } catch (error) {
+        if (!(error instanceof PendingLocatorCountTimeoutError)) throw error;
+        const chatUrlTarget = normalizeConversationUrl(config.chatUrl ?? '');
+        const lastSafeReloadMs = invocationDeadlineMs - deriveComposerInsertionBudgetMs(markedPayload)
+          - EXISTING_GENERATION_RESUME_WINDOW_MS - 2 * MAX_LOCAL_READ_WAIT_MS - RESOURCE_CLEANUP_BOUND_MS;
+        const dispatchBoundaryEntered = sendAttempted || afterSend || sendCount > 0
+          || held429Witness?.ownSubmissionIssued() === true;
+        const readSettled = !dispatchBoundaryEntered
+          && await pendingLocatorReadSettledBefore(page, error, lastSafeReloadMs);
+        const pageLost = browserOrPageDefinitelyLost(page, browser);
+        const identityMatched = !pageLost && readOwnedConversationIdentity(page, chatUrlTarget).matched;
+        const pageIsOriginalOwned = page === originalHeldPage && !ownershipForfeited;
+        const stopVisible = readSettled && !pageLost && identityMatched && pageIsOriginalOwned
+          ? await readFreshStopVisible(page, lastSafeReloadMs) : null;
+        const decision = preSendC4ReloadDecision({
+          error, readSettled, dispatchBoundaryEntered,
+          remedialNavigationUsed: remedialNavigationUsed(),
+          pageLost, pageIsOriginalOwned, identityMatched, stopVisible,
+          nowMs: Date.now(), lastSafeReloadMs,
+        });
+        if (!decision.reload) {
+          incident('pre_send_c4_recovery', decision.refusal, 'preserve_original_cause');
+          throw error;
+        }
+        remedialNavigation.c4 = true; // A failed attempt consumes the shared allowance.
+        incident('pre_send_c4_recovery', 'locator_count_settled_zero_dispatch', 'reload_owned_page_once');
+        beforeBrowserAction();
+        held429Witness?.beforeNavigation();
+        const reloadMs = Math.min(STATE_LIGHT_NAVIGATION_TIMEOUT_MS, lastSafeReloadMs - Date.now());
+        if (reloadMs <= 0) throw error;
+        try {
+          await boundedBrowserRead(
+            Promise.resolve(page.reload({ waitUntil: 'domcontentloaded', timeout: reloadMs })),
+            reloadMs,
+            'pre_send_c4_reload_timeout',
+          );
+        } catch {
+          if (browserOrPageDefinitelyLost(page, browser)) throw new Error('Target closed');
+          throw error;
+        }
+        if (browserOrPageDefinitelyLost(page, browser)) throw new Error('Target closed');
+        const reloadedIdentity = readOwnedConversationIdentity(page, chatUrlTarget);
+        if (!reloadedIdentity.matched) {
+          return returnOwnedConversationIdentityMismatch(
+            reloadedIdentity, page, browser, invocationId, profileKey, sendCount,
+            pollCount, navigation, incidents, journalWriteFailed, incident, false, boundGithubTarget(),
+          );
+        }
+        reopenedExistingComposer = false;
+        preSendComposerState = 'not_probed';
+        return await prepare();
+      }
     };
 
     const sendOwnedPrompt = async (): Promise<TurnRunOutcome | null> => {
@@ -6035,7 +6200,7 @@ async function runTurnCore(
         if ('result' in initialComposer) return initialComposer;
         let composerState = initialComposer;
         if (composerState.state !== 'ready' && composerState.cause === 'composer_unavailable'
-          && createdFreshPage && navigation.snapshotGoto() < 2
+          && createdFreshPage && navigation.snapshotGoto() < 2 && !remedialNavigation.c4
           && !browserOrPageDefinitelyLost(page, browser)
           && Date.now() + COMPOSER_READINESS_WAIT_MS + FRESH_SEND_RESERVE_MS
             + deriveComposerInsertionBudgetMs(markedPayload) < invocationDeadlineMs) {
@@ -6399,175 +6564,181 @@ async function runTurnCore(
         }
       }
     } else {
-      const chatUrlTarget = normalizeConversationUrl(config.chatUrl ?? '');
-      const beforeExistingIdentity = await checkAccountLoadError();
-      if (beforeExistingIdentity && beforeExistingIdentity !== 'recovered') return beforeExistingIdentity;
-      const preSendIdentity = readOwnedConversationIdentity(page, chatUrlTarget);
-      if (!preSendIdentity.matched) {
-        return returnOwnedConversationIdentityMismatch(
-          preSendIdentity,
-          page,
-          browser,
-          invocationId,
-          profileKey,
-          sendCount,
-          pollCount,
-          navigation,
-          incidents,
-          journalWriteFailed,
-          incident,
-          false,
-          boundGithubTarget(),
-        );
-      }
+      // #2854: the existing-chat pre-Send preparation reruns unchanged after one C4 reload.
+      const runExistingPreSend = async (): Promise<TurnRunOutcome | null> => {
+        const chatUrlTarget = normalizeConversationUrl(config.chatUrl ?? '');
+        const beforeExistingIdentity = await checkAccountLoadError();
+        if (beforeExistingIdentity && beforeExistingIdentity !== 'recovered') return beforeExistingIdentity;
+        const preSendIdentity = readOwnedConversationIdentity(page, chatUrlTarget);
+        if (!preSendIdentity.matched) {
+          return returnOwnedConversationIdentityMismatch(
+            preSendIdentity,
+            page,
+            browser,
+            invocationId,
+            profileKey,
+            sendCount,
+            pollCount,
+            navigation,
+            incidents,
+            journalWriteFailed,
+            incident,
+            false,
+            boundGithubTarget(),
+          );
+        }
 
-      // Preserve late hydration without freezing reopen eligibility before it.
-      // A short-budget turn keeps its original full readiness window unless
-      // there is time to reserve a full watch or an actually finished turn.
-      const insertionBudgetMs = deriveComposerInsertionBudgetMs(markedPayload);
-      const postReopenReserveMs = EXISTING_GENERATION_RESUME_WINDOW_MS
-        + insertionBudgetMs + MAX_LOCAL_READ_WAIT_MS;
-      const remainingBeforeHydrationMs = invocationDeadlineMs - Date.now();
-      const fullWatchHydrationRoom = remainingBeforeHydrationMs
-        > postReopenReserveMs + 20_000;
-      const canBoundInitialHydration = fullWatchHydrationRoom
-        || (remainingBeforeHydrationMs > 20_000 + insertionBudgetMs + MAX_LOCAL_READ_WAIT_MS
-          && await existingTurnHasNothingToResume(page, invocationDeadlineMs)
-          && Date.now() + 20_000 + insertionBudgetMs + MAX_LOCAL_READ_WAIT_MS < invocationDeadlineMs);
-      const initialHydrationWaitMs = Math.min(
-        EXISTING_GENERATION_RESUME_WINDOW_MS,
-        Math.max(20_000, remainingBeforeHydrationMs - postReopenReserveMs - INITIAL_POLL_MS),
-      );
-      const initialComposerDeadline = canBoundInitialHydration
-        ? Math.min(composerReadinessDeadline(), Date.now() + initialHydrationWaitMs)
-        : composerReadinessDeadline();
-      const initialComposer = await waitForComposerWithAccountRecovery(initialComposerDeadline);
-      if ('result' in initialComposer) return initialComposer;
-      let composerState = initialComposer;
-      // A present-tense idle snapshot cannot waive the incumbent 30s watcher.
-      // Only the existing observed finished-action/alert branch may do so.
-      const nothingToResumeBeforeReopen = composerState.state !== 'ready'
-        && composerState.cause === 'composer_unavailable'
-        && !browserOrPageDefinitelyLost(page, browser)
-        && readOwnedConversationIdentity(page, chatUrlTarget).matched
-        && await existingTurnHasNothingToResume(page, invocationDeadlineMs);
-      const reopenReserveMs = insertionBudgetMs + MAX_LOCAL_READ_WAIT_MS
-        + (nothingToResumeBeforeReopen ? 0 : EXISTING_GENERATION_RESUME_WINDOW_MS);
-      if (composerState.state !== 'ready' && composerState.cause === 'composer_unavailable'
-        && sendCount === 0 && !sendAttempted
-        && !browserOrPageDefinitelyLost(page, browser)
-        && readOwnedConversationIdentity(page, chatUrlTarget).matched
-        && Date.now() + reopenReserveMs < invocationDeadlineMs) {
-        const stop = await readFreshStopVisible(page, invocationDeadlineMs);
-        const observation = await readPageObservation(page, undefined, undefined, true, invocationDeadlineMs);
-        if (stop === false && !observation.transcriptIncomplete
-          && observation.snapshot?.complete === true
-          && observation.pageTurnEvidence?.generationInProgress === false
-          && observation.pageTurnEvidence?.continueGeneratingVisible !== true
-          && observation.snapshot.carriers.some((carrier) =>
-            carrier.role === 'user' && normalizeVisibleText(carrier.text).length > 0)
+        // Preserve late hydration without freezing reopen eligibility before it.
+        // A short-budget turn keeps its original full readiness window unless
+        // there is time to reserve a full watch or an actually finished turn.
+        const insertionBudgetMs = deriveComposerInsertionBudgetMs(markedPayload);
+        const postReopenReserveMs = EXISTING_GENERATION_RESUME_WINDOW_MS
+          + insertionBudgetMs + MAX_LOCAL_READ_WAIT_MS;
+        const remainingBeforeHydrationMs = invocationDeadlineMs - Date.now();
+        const fullWatchHydrationRoom = remainingBeforeHydrationMs
+          > postReopenReserveMs + 20_000;
+        const canBoundInitialHydration = fullWatchHydrationRoom
+          || (remainingBeforeHydrationMs > 20_000 + insertionBudgetMs + MAX_LOCAL_READ_WAIT_MS
+            && await existingTurnHasNothingToResume(page, invocationDeadlineMs)
+            && Date.now() + 20_000 + insertionBudgetMs + MAX_LOCAL_READ_WAIT_MS < invocationDeadlineMs);
+        const initialHydrationWaitMs = Math.min(
+          EXISTING_GENERATION_RESUME_WINDOW_MS,
+          Math.max(20_000, remainingBeforeHydrationMs - postReopenReserveMs - INITIAL_POLL_MS),
+        );
+        const initialComposerDeadline = canBoundInitialHydration
+          ? Math.min(composerReadinessDeadline(), Date.now() + initialHydrationWaitMs)
+          : composerReadinessDeadline();
+        const initialComposer = await waitForComposerWithAccountRecovery(initialComposerDeadline);
+        if ('result' in initialComposer) return initialComposer;
+        let composerState = initialComposer;
+        // A present-tense idle snapshot cannot waive the incumbent 30s watcher.
+        // Only the existing observed finished-action/alert branch may do so.
+        const nothingToResumeBeforeReopen = composerState.state !== 'ready'
+          && composerState.cause === 'composer_unavailable'
+          && !browserOrPageDefinitelyLost(page, browser)
+          && readOwnedConversationIdentity(page, chatUrlTarget).matched
+          && await existingTurnHasNothingToResume(page, invocationDeadlineMs);
+        const reopenReserveMs = insertionBudgetMs + MAX_LOCAL_READ_WAIT_MS
+          + (nothingToResumeBeforeReopen ? 0 : EXISTING_GENERATION_RESUME_WINDOW_MS);
+        if (composerState.state !== 'ready' && composerState.cause === 'composer_unavailable'
+          && sendCount === 0 && !sendAttempted && !remedialNavigation.c4
           && !browserOrPageDefinitelyLost(page, browser)
           && readOwnedConversationIdentity(page, chatUrlTarget).matched
           && Date.now() + reopenReserveMs < invocationDeadlineMs) {
-          const reopenDeadlineMs = invocationDeadlineMs
-            - (nothingToResumeBeforeReopen ? 0 : EXISTING_GENERATION_RESUME_WINDOW_MS)
-            - insertionBudgetMs;
-          try {
-            await navigateOwnedTurnPage(page, config, navigation, reopenDeadlineMs, () => { beforeBrowserAction(); held429Witness?.beforeNavigation(); });
-          } catch (error) {
+          const stop = await readFreshStopVisible(page, invocationDeadlineMs);
+          const observation = await readPageObservation(page, undefined, undefined, true, invocationDeadlineMs);
+          if (stop === false && !observation.transcriptIncomplete
+            && observation.snapshot?.complete === true
+            && observation.pageTurnEvidence?.generationInProgress === false
+            && observation.pageTurnEvidence?.continueGeneratingVisible !== true
+            && observation.snapshot.carriers.some((carrier) =>
+              carrier.role === 'user' && normalizeVisibleText(carrier.text).length > 0)
+            && !browserOrPageDefinitelyLost(page, browser)
+            && readOwnedConversationIdentity(page, chatUrlTarget).matched
+            && Date.now() + reopenReserveMs < invocationDeadlineMs) {
+            const reopenDeadlineMs = invocationDeadlineMs
+              - (nothingToResumeBeforeReopen ? 0 : EXISTING_GENERATION_RESUME_WINDOW_MS)
+              - insertionBudgetMs;
+            try {
+              await navigateOwnedTurnPage(page, config, navigation, reopenDeadlineMs, () => { beforeBrowserAction(); held429Witness?.beforeNavigation(); });
+            } catch (error) {
+              if (browserOrPageDefinitelyLost(page, browser)) throw new Error('Target closed');
+              const identity = readOwnedConversationIdentity(page, chatUrlTarget);
+              if (!identity.matched) return returnOwnedConversationIdentityMismatch(
+                identity, page, browser, invocationId, profileKey, sendCount,
+                pollCount, navigation, incidents, journalWriteFailed, incident, false, boundGithubTarget(),
+              );
+              // Preserve the witnessed transport/timeout/operation cause.
+              throw error;
+            }
             if (browserOrPageDefinitelyLost(page, browser)) throw new Error('Target closed');
             const identity = readOwnedConversationIdentity(page, chatUrlTarget);
             if (!identity.matched) return returnOwnedConversationIdentityMismatch(
               identity, page, browser, invocationId, profileKey, sendCount,
               pollCount, navigation, incidents, journalWriteFailed, incident, false, boundGithubTarget(),
             );
-            // Preserve the witnessed transport/timeout/operation cause.
-            throw error;
+            reopenedExistingComposer = true;
+            // A composer reading from the old Page is not post-navigation evidence.
+            preSendComposerState = 'not_probed';
+            const reopenedComposer = await waitForComposerWithAccountRecovery(Math.min(
+              composerReadinessDeadline(),
+              reopenDeadlineMs,
+            ));
+            if ('result' in reopenedComposer) return reopenedComposer;
+            composerState = reopenedComposer;
           }
+        }
+        if (composerState.state !== 'ready' && Date.now() >= invocationDeadlineMs) {
+          return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+        }
+        if (reopenedExistingComposer && composerState.state !== 'ready'
+          && composerState.cause === 'composer_unavailable') {
           if (browserOrPageDefinitelyLost(page, browser)) throw new Error('Target closed');
           const identity = readOwnedConversationIdentity(page, chatUrlTarget);
           if (!identity.matched) return returnOwnedConversationIdentityMismatch(
             identity, page, browser, invocationId, profileKey, sendCount,
             pollCount, navigation, incidents, journalWriteFailed, incident, false, boundGithubTarget(),
           );
-          reopenedExistingComposer = true;
-          // A composer reading from the old Page is not post-navigation evidence.
-          preSendComposerState = 'not_probed';
-          const reopenedComposer = await waitForComposerWithAccountRecovery(Math.min(
-            composerReadinessDeadline(),
-            reopenDeadlineMs,
-          ));
-          if ('result' in reopenedComposer) return reopenedComposer;
-          composerState = reopenedComposer;
+          if (Date.now() >= invocationDeadlineMs
+            || !['absent', 'hidden', 'disabled', 'not_editable'].includes(preSendComposerState)) {
+            // Exhausted renewed readiness without an affirmative post-goto
+            // unavailable observation is a budget failure, not a missing editor.
+            return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+          }
+          return returnComposerMutationFailure('composer_unavailable');
         }
-      }
-      if (composerState.state !== 'ready' && Date.now() >= invocationDeadlineMs) {
-        return returnComposerMutationFailure('composer_mutation_budget_exhausted');
-      }
-      if (reopenedExistingComposer && composerState.state !== 'ready'
-        && composerState.cause === 'composer_unavailable') {
-        if (browserOrPageDefinitelyLost(page, browser)) throw new Error('Target closed');
-        const identity = readOwnedConversationIdentity(page, chatUrlTarget);
-        if (!identity.matched) return returnOwnedConversationIdentityMismatch(
-          identity, page, browser, invocationId, profileKey, sendCount,
-          pollCount, navigation, incidents, journalWriteFailed, incident, false, boundGithubTarget(),
-        );
-        if (Date.now() >= invocationDeadlineMs
-          || !['absent', 'hidden', 'disabled', 'not_editable'].includes(preSendComposerState)) {
-          // Exhausted renewed readiness without an affirmative post-goto
-          // unavailable observation is a budget failure, not a missing editor.
+        // Preserve the pre-existing mutation fallback for initial readiness probes.
+        // A very short timeout can make their reserved readiness window zero,
+        // even though a physical composer remains actionable (#2495/#2538).
+        if (composerState.state !== 'ready' && composerState.cause !== 'composer_unavailable') {
+          incident('invocation_blocker', composerState.cause, 'return_local_error');
+          return {
+            page, browser,
+            ...ownedPreSendFetch429CleanupFields(composerState.state, composerState.cause),
+            result: compactResult(
+              composerState.state, 'invocation', composerState.cause, invocationId,
+              profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed,
+            ),
+          };
+        }
+        if (reopenedExistingComposer) {
+          const postReopenFailure = await verifyReopenedExistingPage();
+          if (postReopenFailure) return postReopenFailure;
+        }
+        const baselineFailure = await captureBaseline();
+        if (baselineFailure) return baselineFailure;
+        // An idle return from a deadline-clamped watch is not safe settlement.
+        const nothingToResume = reopenedExistingComposer
+          && await existingTurnHasNothingToResume(page, invocationDeadlineMs);
+        if (reopenedExistingComposer && !nothingToResume
+          && Date.now() + EXISTING_GENERATION_RESUME_WINDOW_MS + insertionBudgetMs >= invocationDeadlineMs) {
           return returnComposerMutationFailure('composer_mutation_budget_exhausted');
         }
-        return returnComposerMutationFailure('composer_unavailable');
-      }
-      // Preserve the pre-existing mutation fallback for initial readiness probes.
-      // A very short timeout can make their reserved readiness window zero,
-      // even though a physical composer remains actionable (#2495/#2538).
-      if (composerState.state !== 'ready' && composerState.cause !== 'composer_unavailable') {
-        incident('invocation_blocker', composerState.cause, 'return_local_error');
-        return {
-          page, browser,
-          ...ownedPreSendFetch429CleanupFields(composerState.state, composerState.cause),
-          result: compactResult(
-            composerState.state, 'invocation', composerState.cause, invocationId,
-            profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed,
-          ),
-        };
-      }
-      if (reopenedExistingComposer) {
-        const postReopenFailure = await verifyReopenedExistingPage();
-        if (postReopenFailure) return postReopenFailure;
-      }
-      const baselineFailure = await captureBaseline();
-      if (baselineFailure) return baselineFailure;
-      // An idle return from a deadline-clamped watch is not safe settlement.
-      const nothingToResume = reopenedExistingComposer
-        && await existingTurnHasNothingToResume(page, invocationDeadlineMs);
-      if (reopenedExistingComposer && !nothingToResume
-        && Date.now() + EXISTING_GENERATION_RESUME_WINDOW_MS + insertionBudgetMs >= invocationDeadlineMs) {
-        return returnComposerMutationFailure('composer_mutation_budget_exhausted');
-      }
-      const generationWatchStartedAt = Date.now();
-      const existingGeneration = await waitForExistingGeneration(page, invocationDeadlineMs);
-      if (existingGeneration === 'settled') {
-        const settledBaselineFailure = await captureBaseline();
-        if (settledBaselineFailure) return settledBaselineFailure;
-      }
-      if (existingGeneration === 'busy') return returnExistingBusy('stop_visible');
-      if (reopenedExistingComposer && existingGeneration === 'idle' && !nothingToResume
-        && Date.now() - generationWatchStartedAt < EXISTING_GENERATION_RESUME_WINDOW_MS) {
-        return returnComposerMutationFailure('composer_mutation_budget_exhausted');
-      }
-      // Every existing-chat Send, reopened or ready, first passes the completion/Continue/Stop predicate (K5).
-      if (reopenedExistingComposer || !config.newChat) {
-        const afterWatchFailure = await verifyReopenedExistingPage();
-        if (afterWatchFailure) return afterWatchFailure;
-        if (reopenedExistingComposer && Date.now() + insertionBudgetMs >= invocationDeadlineMs) {
+        const generationWatchStartedAt = Date.now();
+        const existingGeneration = await waitForExistingGeneration(page, invocationDeadlineMs);
+        if (existingGeneration === 'settled') {
+          const settledBaselineFailure = await captureBaseline();
+          if (settledBaselineFailure) return settledBaselineFailure;
+        }
+        if (existingGeneration === 'busy') return returnExistingBusy('stop_visible');
+        if (reopenedExistingComposer && existingGeneration === 'idle' && !nothingToResume
+          && Date.now() - generationWatchStartedAt < EXISTING_GENERATION_RESUME_WINDOW_MS) {
           return returnComposerMutationFailure('composer_mutation_budget_exhausted');
         }
-      }
-      const sendFailure = await sendOwnedPrompt();
-      if (sendFailure) return sendFailure;
+        // Every existing-chat Send, reopened or ready, first passes the completion/Continue/Stop predicate (K5).
+        if (reopenedExistingComposer || !config.newChat) {
+          const afterWatchFailure = await verifyReopenedExistingPage();
+          if (afterWatchFailure) return afterWatchFailure;
+          if (reopenedExistingComposer && Date.now() + insertionBudgetMs >= invocationDeadlineMs) {
+            return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+          }
+        }
+        const sendFailure = await sendOwnedPrompt();
+        if (sendFailure) return sendFailure;
+        return null;
+      };
+      const existingFailure = await runExistingPreSendWithC4Recovery(runExistingPreSend);
+      if (existingFailure) return existingFailure;
     }
 
     const targetChatUrl = config.newChat
@@ -9936,6 +10107,10 @@ export const __testSendDelivery = {
   conditionalClearOwnedComposerDraft,
   readRetirementComposer,
   observeExistingServerCheckedRecovery,
+  locatorCount,
+  pendingLocatorReadSettledBefore,
+  freshLastSafeDispatchMs,
+  waitForExtendedFreshSendButton,
 };
 
 // Issue #2718 (B1): explicit PR-author binding. Both --repo and --pr absent keep

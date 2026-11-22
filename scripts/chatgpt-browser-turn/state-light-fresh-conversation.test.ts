@@ -1595,6 +1595,75 @@ describe('state-light fresh conversation collision recovery', () => {
     });
   });
 
+  describe('Issue #2854 ordinary fresh readiness after the first 60 s window', () => {
+    const noSiblingEvidence = () => ({ nonresponsive: [], responsive: [], disappearedOrChanged: [], unknown: [] });
+    beforeEach(() => {
+      vi.mocked(probeCdpSiblingEvaluations).mockReset();
+      vi.mocked(probeCdpSiblingEvaluations).mockResolvedValue(noSiblingEvidence());
+    });
+
+    it('sends once when a healthy owned composer hydrates after 60 s but before its safe cutoff', async () => {
+      const prompt = '2854-LATE-HEALTHY-SEND';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'LATE-OK');
+      const startedAt = mocks.nowMs;
+      turn.sendButton.isEnabled.mockImplementation(async () => mocks.nowMs >= startedAt + 120_000);
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2854-late-healthy.txt'), '900000');
+      expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+      expect(mocks.nowMs - startedAt).toBeGreaterThanOrEqual(120_000);
+      expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+      expect(turn.getSends()).toBe(1);
+      // The #2682 read-only entry diagnostic still runs once at the end of the first window.
+      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(1);
+      expect(turn.page.goto).toHaveBeenCalledTimes(1);
+    });
+
+    it('never clicks a Send that stays disabled through the dynamic cutoff', async () => {
+      const prompt = '2854-NEVER-ENABLED';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      turn.sendButton.isEnabled.mockResolvedValue(false);
+      const startedAt = mocks.nowMs;
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2854-never.txt'), '900000');
+      expect(outcome.result).toMatchObject({
+        state: 'send_failed', cause: 'fresh_send_button_never_enabled', send_count: 0,
+      });
+      expect(outcome.result.send_attempted).not.toBe(true);
+      expect(mocks.nowMs - startedAt).toBeGreaterThan(65_000);
+      expect(mocks.nowMs - startedAt).toBeLessThanOrEqual(600_000 + 5_000);
+      expect(turn.sendButton.click).not.toHaveBeenCalled();
+      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(1);
+      expect(deriveDelivery({ ...outcome.result, resolved_send_count: outcome.result.send_count }, false))
+        .toBe('not-sent');
+    });
+
+    it('keeps the incumbent 60 s refusal when the invocation budget has no later safe time', async () => {
+      const prompt = '2854-SHORT-BUDGET';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      turn.sendButton.isEnabled.mockResolvedValue(false);
+      const startedAt = mocks.nowMs;
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2854-short.txt'), '90000');
+      expect(outcome.result).toMatchObject({ state: 'send_failed', cause: 'fresh_send_button_never_enabled' });
+      expect(mocks.nowMs - startedAt).toBeLessThan(65_000);
+      expect(turn.sendButton.click).not.toHaveBeenCalled();
+    });
+
+    it('three independent ordinary fresh turns on separate Pages each send exactly once', async () => {
+      for (const lane of ['L1', 'L2', 'L1s']) {
+        const prompt = `2854-PARALLEL-${lane}`;
+        mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+        const turn = makeLoserPage(prompt, `OK-${lane}`);
+        const startedAt = mocks.nowMs;
+        turn.sendButton.isEnabled.mockImplementation(async () => mocks.nowMs >= startedAt + 75_000);
+        const outcome = await runNewChatTurn(turn.page, join(stateDir, `2854-${lane}.txt`), '900000');
+        expect(outcome.result, lane).toMatchObject({ state: 'ok', send_count: 1 });
+        expect(turn.sendButton.click, lane).toHaveBeenCalledTimes(1);
+        expect(turn.getSends(), lane).toBe(1);
+      }
+    });
+  });
+
   it('closes a proven owned, never-clicked draft only after 60s of disabled Send (#2487)', async () => {
     const prompt = 'PROMPT-FRESH-NEVER-ENABLED';
     const invocationId = randomUUID();
@@ -5036,7 +5105,8 @@ describe('state-light fresh conversation collision recovery', () => {
     const sites = [
       ['state-light-session.ts', 0],
       ['state-light-fresh-conversation.ts', 1],
-      ['state-light-turn-base.ts', 3],
+      // Includes the pre-Send account-wall reload and the #2854 one-shot C4 reload (both DCL).
+      ['state-light-turn-base.ts', 4],
     ] as const;
     for (const [file, expectedPostSendDcl] of sites) {
       const source = readFileSync(
@@ -5571,6 +5641,131 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(fault.reload).toHaveBeenCalledTimes(1);
     expect(existing.getSends()).toBe(1);
     expect(existing.page.close).not.toHaveBeenCalled();
+  });
+
+  describe('Issue #2854 existing-chat pre-Send C4 recovery', () => {
+    // The Stop read inside the existing-generation watch hangs once; Playwright's wrapper times out
+    // while the underlying read stays pending until the fixture settles it (or never).
+    function existingC4Turn(name: string, opts: { settle: boolean; closeOnSettle?: boolean }) {
+      const existing = makeLoserPage('PROMPT', 'C4-RECOVERED-OK', undefined, true);
+      const originalUrl = existing.page.url;
+      existing.page.url = vi.fn(() => originalUrl() === PROJECT_URL ? SHARED_CONV : originalUrl());
+      let resolveHung: ((value: number) => void) | undefined;
+      let hungReads = 0;
+      let closed = false;
+      const baseLocator = existing.page.locator;
+      existing.page.locator = vi.fn((selector: string) => {
+        if (selector.includes(STOP_BUTTON_TESTID) && hungReads === 0
+          && String(new Error().stack).includes('waitForExistingGeneration')) {
+          hungReads++;
+          return scalarLocator({ count: vi.fn(() => new Promise<number>((resolve) => { resolveHung = resolve; })) });
+        }
+        return baseLocator(selector);
+      });
+      const baseWait = existing.page.waitForTimeout;
+      existing.page.waitForTimeout = vi.fn(async (ms: number) => {
+        if (opts.settle && resolveHung) {
+          resolveHung(0);
+          resolveHung = undefined;
+          if (opts.closeOnSettle) closed = true;
+        }
+        return baseWait(ms);
+      });
+      existing.page.isClosed = vi.fn(() => closed);
+      existing.page.reload = vi.fn(async () => undefined);
+      const harness = enqueueBrowserForTurn(mocks, existing.page);
+      Object.assign(harness.context, { pages: vi.fn(() => [existing.page]) });
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT'));
+      const output = join(stateDir, name);
+      const run = () => runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+        ...STATE_LIGHT_TURN_BASE_ARGV, '--invocation-id', randomUUID(),
+        '--output', output, '--chat-url', SHARED_CONV, '--timeout-ms', '900000', '--poll-ms', '1',
+      ]);
+      return { existing, run, output, hungReads: () => hungReads };
+    }
+    const expectNoDispatch = (result: Record<string, any>, existing: ReturnType<typeof makeLoserPage>) => {
+      expect(result.send_count).toBe(0);
+      expect(result.send_attempted).not.toBe(true);
+      expect(existing.sendButton.click).not.toHaveBeenCalled();
+      expect(existing.composer.press).not.toHaveBeenCalled();
+      expect(existing.getSends()).toBe(0);
+      expect(deriveDelivery({ ...result, resolved_send_count: result.send_count } as any, false)).toBe('not-sent');
+    };
+
+    it('reloads the same owned Page once after the same read settles, then sends exactly once', async () => {
+      const turn = existingC4Turn('2854-c4-settled.txt', { settle: true });
+      const { result } = await turn.run();
+      expect(turn.hungReads()).toBe(1);
+      expect(result).toMatchObject({ state: 'ok', send_count: 1 });
+      expect(turn.existing.page.reload).toHaveBeenCalledTimes(1);
+      expect(turn.existing.page.reload).toHaveBeenCalledWith({ waitUntil: 'domcontentloaded', timeout: expect.any(Number) });
+      expect(turn.existing.page.goto).not.toHaveBeenCalled();
+      // One Playwright Send call, one witnessed submission; no C4 click/Enter retry.
+      expect(turn.existing.sendButton.click).toHaveBeenCalledTimes(1);
+      expect(turn.existing.getSends()).toBe(1);
+      expect(result.incidents).toContain('pre_send_c4_recovery');
+      expect(readFileSync(turn.output, 'utf8')).toBe('C4-RECOVERED-OK');
+      expect(turn.existing.page.close).not.toHaveBeenCalled();
+    }, 30_000);
+
+    it('keeps an unresolved underlying read as the original non-reloadable cause', async () => {
+      const turn = existingC4Turn('2854-c4-pending.txt', { settle: false });
+      const { result } = await turn.run();
+      expect(result).toMatchObject({ cause: 'browser_operation_timeout:locator_count' });
+      expect(turn.existing.page.reload).not.toHaveBeenCalled();
+      expect(turn.existing.page.goto).not.toHaveBeenCalled();
+      expect(result.incidents).toContain('pre_send_c4_recovery');
+      expectNoDispatch(result, turn.existing);
+    }, 30_000);
+
+    it('never reloads or replaces a Page that closed while the read settled', async () => {
+      const turn = existingC4Turn('2854-c4-closed.txt', { settle: true, closeOnSettle: true });
+      const { result } = await turn.run();
+      expect(turn.existing.page.reload).not.toHaveBeenCalled();
+      expect(turn.existing.page.goto).not.toHaveBeenCalled();
+      expectNoDispatch(result, turn.existing);
+    }, 30_000);
+
+    it('account-wall reload first leaves no C4 reload (one shared remedy)', async () => {
+      const turn = existingC4Turn('2854-account-then-c4.txt', { settle: true });
+      const fault = installAccountLoadError(turn.existing.page);
+      mocks.productStatusText.mockImplementationOnce(async (): Promise<any> => {
+        fault.showError();
+        const heading = "We couldn't load your account";
+        return {
+          text: heading, composer: false,
+          parts: [{ selector: uiAdapter.ACCOUNT_LOAD_ERROR_HEADING_SELECTOR, text: heading }],
+        };
+      });
+      const { result } = await withActualProductWallClassifier(() => turn.run());
+      expect(fault.reload).toHaveBeenCalledTimes(1);
+      expect(turn.existing.page.goto).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ cause: 'browser_operation_timeout:locator_count' });
+      expectNoDispatch(result, turn.existing);
+    }, 30_000);
+
+    it('C4 reload first leaves no account-wall reload (one shared remedy)', async () => {
+      const turn = existingC4Turn('2854-c4-then-account.txt', { settle: true });
+      const fault = installAccountLoadError(turn.existing.page, { persistent: true, errorUrl: SHARED_CONV });
+      const reload = vi.fn(async () => { fault.showError(); });
+      turn.existing.page.reload = reload;
+      const { result } = await turn.run();
+      expect(reload).toHaveBeenCalledTimes(1);
+      expect(turn.existing.page.goto).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ state: 'recovery_required', cause: 'account_load_error' });
+      expectNoDispatch(result, turn.existing);
+    }, 30_000);
+
+    it('an existing-chat reopen goto first leaves no C4 reload (goto debits the same remedy)', async () => {
+      const turn = existingC4Turn('2854-reopen-then-c4.txt', { settle: true });
+      turn.existing.composer.count.mockImplementation(async () =>
+        turn.existing.page.goto.mock.calls.length > 0 ? 1 : 0);
+      const { result } = await turn.run();
+      expect(turn.existing.page.goto).toHaveBeenCalledTimes(1);
+      expect(turn.existing.page.reload).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ cause: 'browser_operation_timeout:locator_count' });
+      expectNoDispatch(result, turn.existing);
+    }, 30_000);
   });
 
   it('preserves possibly-delivered state after a recovered zero-witness fresh dispatch stays unbound', async () => {

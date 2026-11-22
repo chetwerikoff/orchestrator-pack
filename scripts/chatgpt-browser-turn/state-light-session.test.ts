@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { InputSnapshot } from './input.ts';
-import { STATE_LIGHT_NAVIGATION_TIMEOUT_MS } from './state-light-fresh-conversation.ts';
+import { STATE_LIGHT_NAVIGATION_TIMEOUT_MS, STATE_LIGHT_OWNER_PRE_DISPATCH_MS } from './state-light-fresh-conversation.ts';
 import { classifyPageObservation } from './state-light-turn-base.ts';
 import {
   COMPOSER_SELECTOR,
@@ -1207,5 +1208,18 @@ describe('Issue #2536: current session harvest in a long reused chat', () => {
     expect(aggregate(stream)).toMatchObject({
       state: competing ? 'observation_uncertain' : 'ok', total_send_count: 1,
     });
+  });
+});
+
+describe('Issue #2854 session first-payload owner cutoff stays separate', () => {
+  it('keeps the exclusive 300 s session owner cutoff out of the ordinary fresh entrypoint', () => {
+    expect(STATE_LIGHT_OWNER_PRE_DISPATCH_MS).toBe(300_000);
+    const ordinary = readFileSync(new URL('./state-light-turn-base.ts', import.meta.url), 'utf8');
+    expect(ordinary).not.toContain('STATE_LIGHT_OWNER_PRE_DISPATCH_MS');
+    expect(ordinary).not.toContain('acquireStateLightNewChatSendSlot');
+    const session = readFileSync(new URL('./state-light-session.ts', import.meta.url), 'utf8');
+    expect(session).toContain('acquireStateLightNewChatSendSlot');
+    expect(session).not.toContain('freshLastSafeDispatchMs');
+    expect(session).not.toContain('preSendC4ReloadDecision');
   });
 });

@@ -4895,3 +4895,73 @@ describe('Issue #2772 AC7/AC11: shared side-effect-free pre-SEND page observatio
     expect(await observePreSendPagePredicate(page, Date.now() - 1)).toEqual({ verdict: 'busy', predicate: 'unreadable' });
   });
 });
+
+describe('Issue #2854 ordinary fresh last-safe dispatch cutoff', () => {
+  const READ_RESERVE_MS = 4 * 5_000;
+  const DISPATCH_OBSERVATION_MS = 30_000;
+  const TERMINAL_PROBE_MS = 5_000;
+
+  it('is never earlier than the incumbent first window and keeps every post-Send reserve', () => {
+    const start = 100_000;
+    // Short budget: the incumbent first 60 s window still applies.
+    expect(__testSendDelivery.freshLastSafeDispatchMs(start, start + 90_000)).toBe(start + 60_000);
+    // Long budget: dispatch stays before freshUnboundReturnByMs minus observation, reads and terminal probe.
+    const unbound = start + 300_000;
+    expect(__testSendDelivery.freshLastSafeDispatchMs(start, unbound))
+      .toBe(unbound - DISPATCH_OBSERVATION_MS - READ_RESERVE_MS - TERMINAL_PROBE_MS);
+    // Very long budget: the existing bounded readiness total still caps the wait.
+    expect(__testSendDelivery.freshLastSafeDispatchMs(start, start + 3_600_000))
+      .toBe(start + 600_000 - TERMINAL_PROBE_MS);
+    // The 300 s session first-payload owner cutoff is not an input of the ordinary bound.
+    expect(__testSendDelivery.freshLastSafeDispatchMs.length).toBe(2);
+  });
+
+  const lateReadinessPage = (clock: { now: number }, stopAt = Number.POSITIVE_INFINITY) => ({
+    __fakeBrowserGptPage: true,
+    waitForTimeout: vi.fn(async (ms: number) => { clock.now += ms; }),
+    locator: vi.fn(() => ({
+      count: async () => (clock.now >= stopAt ? 1 : 0),
+      isVisible: async () => clock.now >= stopAt,
+    })),
+  });
+
+  it.each([
+    ['before the cutoff', 120_000, 'enabled'],
+    ['exactly at the cutoff', 200_000, 'never_enabled'],
+    ['never', Number.POSITIVE_INFINITY, 'never_enabled'],
+  ] as const)('a healthy owned Send enabled %s returns %s', async (_label, enabledAfterMs, expected) => {
+    const clock = { now: 0 };
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    try {
+      const button = {
+        count: vi.fn(async () => 1),
+        isVisible: vi.fn(async () => true),
+        isEnabled: vi.fn(async () => clock.now >= enabledAfterMs),
+      };
+      const assertOwner = vi.fn();
+      clock.now = 60_000;
+      const outcome = await __testSendDelivery.waitForExtendedFreshSendButton(
+        lateReadinessPage(clock), button, assertOwner, 200_000,
+      );
+      expect(outcome).toBe(expected);
+      if (expected === 'enabled') expect(clock.now).toBeLessThan(200_000);
+      expect(assertOwner).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('a Stop that appears during the late window is busy, never a Send license', async () => {
+    const clock = { now: 60_000 };
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    try {
+      const button = { count: vi.fn(async () => 1), isVisible: vi.fn(async () => true), isEnabled: vi.fn(async () => false) };
+      expect(await __testSendDelivery.waitForExtendedFreshSendButton(
+        lateReadinessPage(clock, 90_000), button, () => {}, 200_000,
+      )).toBe('busy');
+      expect(clock.now).toBeLessThan(200_000);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

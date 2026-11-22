@@ -1,0 +1,79 @@
+{
+  "schema": "state-light-c4-census/v1",
+  "issue": 2854,
+  "census_at": "2026-11-22T05:05:00Z",
+  "provenance": "recorded",
+  "source": "operator-local flow-manager terminal envelopes and state-light-turn-observation/v1 records; metadata only, no prompt, transcript or DOM content",
+  "method": "every accessible *terminal*.json under the operator state root with send_count 0, grouped by turn_result_state/turn_result_cause; read-only CDP /json/list target census at the same time",
+  "accessible_zero_send_envelopes": 214,
+  "accessible_c4_envelopes": { "ui_contract_mismatch": 40, "driver_error": 63 },
+  "reported_aggregate": {
+    "total": 46,
+    "ui_contract_mismatch": 15,
+    "driver_error": 31,
+    "individually_identified": false,
+    "note": "The operator-reported 46 are not separately enumerated anywhere accessible; the accessible pool spans a longer period and cannot be mapped one-to-one onto the reported aggregate."
+  },
+  "accessible_by_cause": {
+    "baseline_transcript_incomplete": { "ui_contract_mismatch": 2 },
+    "owned_conversation_render_mismatch": { "ui_contract_mismatch": 18 },
+    "Target closed": { "driver_error": 16 },
+    "browser_operation_timeout:locator_count": { "driver_error": 4, "ui_contract_mismatch": 4 },
+    "fresh_send_button_never_enabled": { "send_failed": 4 }
+  },
+  "defect_log_lines": [
+    {
+      "line": 1708,
+      "records": [
+        { "invocation": "99e3bbf8-8c60-43ab-a4c6-549e16e5aae2", "state": "driver_error", "cause": "Target closed", "send_count": 0, "delivery": "not-sent", "elapsed_ms": 33230, "owned_target_created": true, "observation_phase": "unobserved" },
+        { "invocation": "294b2716-9df9-4159-be95-2e082ddd3aee", "state": "driver_error", "cause": "browser_operation_timeout:locator_count", "send_count": 0, "delivery": "not-sent", "elapsed_ms": 20771, "owned_target_created": true, "observation_phase": "not_sent", "observation_reason": "terminal_pre_send" }
+      ]
+    },
+    {
+      "line": 1730,
+      "records": [
+        { "invocation": "inv-task_e6d88a8388e3-l1-arch1411", "state": "send_failed", "cause": "fresh_send_button_never_enabled", "send_count": 0, "delivery": "not-sent", "elapsed_ms": 70790, "owned_target_created": true, "observation_phase": "not_sent" },
+        { "invocation": "inv-task_e6d88a8388e3-l2-arch1411", "state": "send_failed", "cause": "fresh_send_button_never_enabled", "send_count": 0, "delivery": "not-sent", "elapsed_ms": 71224, "owned_target_created": true, "observation_phase": "unobserved" },
+        { "invocation": "inv-task_e6d88a8388e3-l1s-arch1411", "state": "send_failed", "cause": "fresh_send_button_never_enabled", "send_count": 0, "delivery": "not-sent", "elapsed_ms": 69664, "owned_target_created": true, "observation_phase": "unobserved" }
+      ]
+    },
+    {
+      "line": 1741,
+      "records": [
+        { "invocation": "invocation-686-test2-01", "state": "ui_contract_mismatch", "cause": "baseline_transcript_incomplete", "send_count": 0, "delivery": "not-sent", "elapsed_ms": 31084, "owned_target_created": true, "observation_phase": "not_sent", "observation_reason": "terminal_pre_send" },
+        { "invocation": "invocation-686-test2-02", "state": "driver_error", "cause": "Target closed", "send_count": 0, "delivery": "not-sent", "elapsed_ms": 33599, "owned_target_created": true, "observation_phase": "unobserved" }
+      ]
+    },
+    {
+      "line": 1743,
+      "records": [
+        { "invocation": "invocation-675-13", "state": "ui_contract_mismatch", "cause": "owned_conversation_render_mismatch", "send_count": 0, "delivery": "not-sent", "elapsed_ms": 1800319, "owned_target_created": false, "observation_phase": "unobserved" },
+        { "invocation": "invocation-675-14", "state": "ui_contract_mismatch", "cause": "owned_conversation_render_mismatch", "send_count": 0, "delivery": "not-sent", "elapsed_ms": 1800238, "owned_target_created": false, "observation_phase": "unobserved" }
+      ]
+    },
+    {
+      "line": 1744,
+      "records": [
+        { "invocation": "invocation-694-exec-11", "state": "ui_contract_mismatch", "cause": "owned_conversation_render_mismatch", "send_count": 0, "delivery": "not-sent", "elapsed_ms": 1800447, "owned_target_created": true, "observation_phase": "unobserved" },
+        { "invocation": "invocation-694-exec-13", "state": "ui_contract_mismatch", "cause": "owned_conversation_render_mismatch", "send_count": 0, "delivery": "not-sent", "elapsed_ms": 1800639, "owned_target_created": false, "observation_phase": "unobserved" }
+      ]
+    }
+  ],
+  "unknown_for_every_record": [
+    "historical DOM (never captured)",
+    "physical click/Enter/POST beyond the recorded send_count and terminal_pre_send phase",
+    "whether the underlying locator read ever settled"
+  ],
+  "live_cdp": {
+    "provenance": "recorded",
+    "page_targets": 1,
+    "cited_conversation_targets_live": 0,
+    "authorized_exact_owned_pages_inspected": 0,
+    "note": "The only open page was an unowned project surface; no cited conversation had a live target, so no Page was attached or read."
+  },
+  "findings": [
+    "Every owned_conversation_render_mismatch in lines 1743/1744 ended at the 30-minute invocation deadline (deadline-emitted, non-reloadable).",
+    "All three line-1730 fresh sends ended about 70 s after launch, consistent with the former fixed 60 s readiness refusal.",
+    "baseline_transcript_incomplete, Target closed and locator_count ended within 20-35 s; only a thrown locator_count with a positively settled read is a reload candidate."
+  ]
+}
