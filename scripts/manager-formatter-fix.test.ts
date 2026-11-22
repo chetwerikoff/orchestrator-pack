@@ -51,6 +51,8 @@ interface CiState {
   jobs?: CiJob[];
   omitCheckOutput?: boolean;
   logResult?: 'fail';
+  requiredContexts?: string[];
+  protection?: 'unavailable';
 }
 
 function lintSteps() {
@@ -100,7 +102,7 @@ function fixture() {
       if (options.command === 'git' && options.args?.[0] === 'fetch' && options.cwd && existsSync(join(String(options.cwd), '.git', 'shallow'))) {
         return run({ ...options, args: [...(options.args ?? []), '--depth=1'] });
       }
-      if (options.command === 'git' && options.args?.includes('--first-parent') && failRevList) {
+      if (options.command === 'git' && options.args?.[1] === 'log' && failRevList) {
         const failed = run({ command: process.execPath, args: ['-e', 'process.exit(1)'], inheritParentEnv: true });
         return { ...failed, stderr: 'bad ancestry' };
       }
@@ -129,6 +131,12 @@ function fixture() {
             id: job.id, run_id: job.runId, run_attempt: job.runAttempt, status: 'completed', conclusion: job.conclusion ?? 'failure',
             name: job.name ?? 'CI / checks', head_sha: ci.headSha, steps: job.steps,
           });
+        } else if (endpoint === 'repos/example/formatter/branches/main/protection/required_status_checks') {
+          if (ci.protection === 'unavailable') {
+            const failed = run({ command: process.execPath, args: ['-e', 'process.exit(1)'], inheritParentEnv: true });
+            return { ...failed, stderr: 'protection unavailable' };
+          }
+          stdout = JSON.stringify({ contexts: ci.requiredContexts ?? ['CI / checks'], checks: [] });
         } else if (logMatch) {
           const job = jobs.find((candidate) => candidate.id === Number(logMatch[1]));
           if (!job) throw new Error(`unexpected gh endpoint ${endpoint}`);
@@ -236,11 +244,12 @@ describe('manager formatter fix', () => {
     expect(world.calls.filter((call) => call.command === ghPath(world.context.packRoot)).map((call) => call.args?.[1])).toEqual([
       'repos/example/formatter/pulls/42',
       `repos/example/formatter/commits/${world.head}/check-runs`,
+      'repos/example/formatter/branches/main/protection/required_status_checks',
       'repos/example/formatter/actions/jobs/200',
       'repos/example/formatter/actions/jobs/200/logs',
     ]);
     expect(world.calls.filter((call) => call.command === ghPath(world.context.packRoot)).every((call) => call.args?.length === 2)).toBe(true);
-    expect(world.calls.filter((call) => call.command === 'git' && call.args?.includes('--first-parent'))).toHaveLength(1);
+    expect(world.calls.filter((call) => call.command === 'git' && call.args?.[1] === 'log')).toHaveLength(1);
     expect(world.calls.some((call) => call.args?.[0] === 'rev-list')).toBe(false);
 
     world.expectRemoved();
@@ -679,8 +688,56 @@ process.stdout.write('HTTP/2 200\\n\\n' + JSON.stringify({ total_count: 2, check
     expect(world.remoteHead()).toBe(world.head);
   });
 
+
+  it('publishes a required lint failure beside an unrelated successful job', () => {
+    for (const sameRun of [true, false]) {
+      const world = fixture();
+      world.ci.requiredContexts = ['CI / checks'];
+      world.ci.jobs = [
+        {
+          id: 501, runId: 100, runAttempt: 4, conclusion: 'failure', logs: 'source.ts:1:1 format error\n',
+          name: 'CI / checks',
+          steps: [{ name: 'lint', status: 'completed', conclusion: 'failure', number: 1 }],
+        },
+        {
+          id: 502, runId: sameRun ? 100 : 101, runAttempt: 4, conclusion: 'success', logs: 'unrelated ok\n',
+          name: 'unrelated',
+          steps: [{ name: 'notify', status: 'completed', conclusion: 'success', number: 1 }],
+        },
+      ];
+      const result = runManagerFormatterFix(world.context, 42, world.deps);
+      expect(result.outcome).toBe('published');
+      expect(result.message).not.toContain('required-check relevance is unproved');
+      expect(world.remoteHead()).not.toBe(world.head);
+    }
+  });
+
+  it('does not publish an optional lint failure when required CI is unavailable or unobserved', () => {
+    const unavailable = fixture();
+    unavailable.ci.protection = 'unavailable';
+    const missingAuthority = runManagerFormatterFix(unavailable.context, 42, unavailable.deps);
+    expect(missingAuthority.outcome).toBe('refused');
+    expect(missingAuthority.message).toContain('required-check relevance is unproved');
+    expect(missingAuthority.message).toContain('unavailable');
+    expect(unavailable.remoteHead()).toBe(unavailable.head);
+
+    const unobserved = fixture();
+    unobserved.ci.requiredContexts = ['required CI'];
+    unobserved.ci.jobs = [{
+      id: 601, runId: 100, runAttempt: 4, conclusion: 'failure', logs: 'optional format error\n',
+      name: 'optional lint',
+      steps: [{ name: 'lint', status: 'completed', conclusion: 'failure', number: 1 }],
+    }];
+    const missingCheck = runManagerFormatterFix(unobserved.context, 42, unobserved.deps);
+    expect(missingCheck.outcome).toBe('refused');
+    expect(missingCheck.message).toContain('required check required CI was not observed');
+    expect(unobserved.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+    expect(unobserved.remoteHead()).toBe(unobserved.head);
+  });
+
   it('does not publish from an optional failed lint run when another current-head run succeeded', () => {
     const world = fixture();
+    world.ci.requiredContexts = ['required CI'];
     world.ci.jobs = [
       {
         id: 301, runId: 100, runAttempt: 4, conclusion: 'success', logs: 'required ci passed\n',
@@ -702,6 +759,7 @@ process.stdout.write('HTTP/2 200\\n\\n' + JSON.stringify({ total_count: 2, check
 
   it('does not publish when a failed lint job shares a run with a successful job', () => {
     const world = fixture();
+    world.ci.requiredContexts = ['required CI'];
     world.ci.jobs = [
       {
         id: 401, runId: 100, runAttempt: 4, conclusion: 'success', logs: 'required ci passed\n',
@@ -723,6 +781,7 @@ process.stdout.write('HTTP/2 200\\n\\n' + JSON.stringify({ total_count: 2, check
 
   it('still sends a failed test job to GPT when a lint job in the same run succeeded', () => {
     const world = fixture();
+    world.ci.requiredContexts = ['test'];
     world.ci.jobs = [
       {
         id: 411, runId: 100, runAttempt: 4, conclusion: 'success', logs: 'lint clean\n',
@@ -864,6 +923,20 @@ describe('C1 hook repeat', () => {
     expect(shCommands(world, calls)).toEqual([]);
     expect(world.remoteHead()).toBe(published);
     world.expectRemoved();
+  });
+
+  it('publishes the first formatter repair when a historical merge hides no formatter commit', () => {
+    const world = fixture();
+    const root = world.head;
+    const tree = world.git(world.primary, 'rev-parse', `${root}^{tree}`);
+    const side = world.git(world.primary, 'commit-tree', tree, '-p', root, '-m', 'Side edit');
+    const merge = pushedCommit(world, root, tree, 'Merge side', side);
+    world.pointAt(merge);
+    const result = runManagerFormatterFix(world.context, 42, world.deps);
+    expect(result.outcome).toBe('published');
+    const published = world.remoteHead();
+    expect(world.git(world.remote, 'rev-parse', `${published}^`)).toBe(merge);
+    expect(world.git(world.remote, 'log', '-1', '--format=%s', published)).toBe('Apply formatter');
   });
 
   it('does not treat a merge that hides Apply formatter on the second parent as a first episode', () => {

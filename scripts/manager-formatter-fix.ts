@@ -23,12 +23,18 @@ interface FormatterFixDeps {
 type FormatterDeclaration = NonNullable<TargetVerification['formatter']>;
 
 interface CheckRun {
+  readonly name?: string | null;
   readonly status?: string;
   readonly conclusion?: string | null;
   readonly head_sha?: string;
   readonly details_url?: string | null;
   readonly html_url?: string | null;
   readonly output?: { readonly text?: string | null; readonly summary?: string | null };
+}
+
+interface RequiredCheck {
+  readonly label: string;
+  readonly aliases: readonly string[];
 }
 
 interface JobStep {
@@ -397,6 +403,51 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
   }
   return cleanupFailure ? { outcome: 'refused', message: `${result.message}; ${cleanupFailure}` } : result;
 
+  function readRequiredChecks(): RequiredCheck[] | null {
+    const alias = (value: string) => value.trim().toLowerCase();
+    if (context.requiredCi && context.requiredCi.length > 0) {
+      return context.requiredCi.map((selector) => {
+        const job = selector.split(' / ')[1]?.trim() ?? '';
+        return {
+          label: selector,
+          aliases: [...new Set([alias(selector), ...(job ? [alias(job)] : [])])],
+        };
+      });
+    }
+    const endpoint = `repos/${context.repository}/branches/${encodeURIComponent(context.defaultBranch)}/protection/required_status_checks`;
+    const response = run({
+      command: ghBin,
+      args: ['api', endpoint],
+      cwd: context.packRoot,
+      inheritParentEnv: true,
+      timeoutMs: 240_000,
+      env: {
+        OPK_TARGET_REPOSITORY: context.repository,
+        OPK_TARGET_DEFAULT_BRANCH: context.defaultBranch,
+      },
+    });
+    if (!response.ok) return null;
+    let policy: { contexts?: unknown; checks?: unknown };
+    try {
+      policy = JSON.parse(response.stdout) as { contexts?: unknown; checks?: unknown };
+    } catch {
+      return null;
+    }
+    const labels: string[] = [];
+    const add = (value: unknown) => {
+      if (typeof value !== 'string' || !value.trim()) return;
+      labels.push(value.trim());
+    };
+    if (Array.isArray(policy.contexts)) for (const value of policy.contexts) add(value);
+    if (Array.isArray(policy.checks)) {
+      for (const value of policy.checks) {
+        if (typeof value === 'string') add(value);
+        else if (value && typeof value === 'object' && 'context' in value) add((value as { context?: unknown }).context);
+      }
+    }
+    return labels.map((label) => ({ label, aliases: [alias(label)] }));
+  }
+
   function readGhJson(endpoint: string): unknown {
     const response = execute(context.packRoot, ghBin, ['api', endpoint]);
     if (!response.ok) throw new RouteStop(`CI evidence is unavailable for ${endpoint}`, NO_GUESSED_GPT);
@@ -419,10 +470,31 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
     if (runs.some((run) => run.head_sha && run.head_sha !== sha)) {
       return { kind: 'hold', reason: `CI evidence is not bound to current head ${sha}` };
     }
-    if (runs.some((run) => run.status !== 'completed')) {
-      return { kind: 'hold', reason: `CI run for ${sha} is still pending` };
+    const required = readRequiredChecks();
+    if (!required) {
+      return { kind: 'hold', reason: `required-check relevance is unproved on ${sha}: branch-protection required status checks are unavailable` };
     }
-    const jobIds = [...new Set(runs.map((run) => jobIdFromUrl(run.details_url ?? run.html_url)).filter((id): id is number => id !== null))];
+    if (required.length === 0) {
+      return { kind: 'hold', reason: `required-check relevance is unproved on ${sha}: no required status checks are configured` };
+    }
+    const norm = (value: string | null | undefined) => (value ?? '').trim().toLowerCase();
+    const matches = (run: CheckRun, check: RequiredCheck) => check.aliases.includes(norm(run.name));
+    const missing = required.filter((check) => !runs.some((run) => matches(run, check)));
+    if (missing.length > 0) {
+      return {
+        kind: 'hold',
+        reason: `required-check relevance is unproved on ${sha}: required check ${missing.map((check) => check.label).join(', ')} was not observed`,
+      };
+    }
+    const requiredRuns = runs.filter((run) => required.some((check) => matches(run, check)));
+    if (requiredRuns.some((run) => run.status !== 'completed'
+      || (run.conclusion !== 'success' && run.conclusion !== 'failure' && run.conclusion !== 'timed_out'))) {
+      return { kind: 'hold', reason: `required-check relevance is unproved on ${sha}: required CI was not observed complete` };
+    }
+    if (requiredRuns.some((run) => jobIdFromUrl(run.details_url ?? run.html_url) === null)) {
+      return { kind: 'hold', reason: `CI job steps for ${sha} are unavailable` };
+    }
+    const jobIds = [...new Set(requiredRuns.map((run) => jobIdFromUrl(run.details_url ?? run.html_url)).filter((id): id is number => id !== null))];
     const jobs: JobPayload[] = [];
     for (const id of jobIds) {
       const job = readGhJson(`repos/${context.repository}/actions/jobs/${id}`) as JobPayload;
@@ -433,12 +505,8 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
     }
     const selected = selectedAttemptJobs(jobs);
     const failedJobs = selected.filter((job) => job.conclusion === 'failure' || job.conclusion === 'timed_out');
-    const successfulRunIds = new Set<number>();
-    for (const job of selected) {
-      if (job.conclusion === 'success') successfulRunIds.add(job.run_id ?? job.id ?? 0);
-    }
-    if (selected.length > 0 && failedJobs.length === 0) {
-      return { kind: 'hold', reason: `required CI on ${sha} has no failed check-run or job conclusion` };
+    if (failedJobs.length === 0) {
+      return { kind: 'hold', reason: `required-check relevance is unproved on ${sha}: required checks succeeded` };
     }
     const steps = failedJobs.flatMap((job) => job.steps ?? []);
     let attempt: number | null = null;
@@ -517,21 +585,15 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
     if (lintFailed.length === 0) {
       return { kind: 'hold', reason: `required CI on ${sha} has no proved lint or substantive failing step` };
     }
-    if (successfulRunIds.size > 0) {
-      return {
-        kind: 'hold',
-        reason: `current-head CI has a successful job alongside a failed lint job, so required-check relevance is unproved on ${sha}`,
-      };
-    }
     return { kind: 'lint', skippedDownstream, attempt };
   }
 
   function readAncestry(sha: string): Ancestry {
     const listed = git(context.primaryRoot, [
-      '--no-pager', 'log', '--first-parent', '--format=%H%x1e%P%x1e%T%x1e%s', sha,
+      '--no-pager', 'log', '--format=%H%x1e%P%x1e%T%x1e%s', sha,
     ]);
     if (!listed.ok) return { kind: 'blocked', reason: 'first-parent ancestry is missing' };
-    const rows: Array<{ commit: string; parents: string[]; tree: string; subject: string }> = [];
+    const byCommit = new Map<string, { commit: string; parents: string[]; tree: string; subject: string }>();
     for (const line of listed.stdout.split(/\n/u)) {
       if (!line) continue;
       const [commit, parentField, tree, ...subjectParts] = line.split('\u001e');
@@ -543,10 +605,25 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
       if (parents.some((parent) => !/^[0-9a-f]{40}$/u.test(parent))) {
         return { kind: 'blocked', reason: 'first-parent ancestry is missing' };
       }
-      rows.push({ commit, parents, tree, subject: subjectParts.join('\u001e') });
+      if (byCommit.has(commit)) return { kind: 'blocked', reason: 'first-parent ancestry is missing' };
+      byCommit.set(commit, { commit, parents, tree, subject: subjectParts.join('\u001e') });
     }
-    if (rows.length === 0 || rows[0]?.commit !== sha) {
-      return { kind: 'blocked', reason: 'first-parent ancestry is missing' };
+    if (!byCommit.has(sha)) return { kind: 'blocked', reason: 'first-parent ancestry is missing' };
+    const missingParent = [...byCommit.values()].some((row) => row.parents.some((parent) => !byCommit.has(parent)));
+    const shallow = git(context.primaryRoot, ['rev-parse', '--is-shallow-repository']);
+    if (!shallow.ok || shallow.stdout.trim() === 'true' || missingParent) {
+      return { kind: 'blocked', reason: 'first-parent ancestry is incomplete' };
+    }
+    const rows: Array<{ commit: string; parents: string[]; tree: string; subject: string }> = [];
+    const seen = new Set<string>();
+    let cursor: string | undefined = sha;
+    while (cursor) {
+      if (seen.has(cursor)) return { kind: 'blocked', reason: 'first-parent ancestry is missing' };
+      const row = byCommit.get(cursor);
+      if (!row) return { kind: 'blocked', reason: 'first-parent ancestry is missing' };
+      seen.add(cursor);
+      rows.push(row);
+      cursor = row.parents[0];
     }
     let formatterAt = -1;
     for (let index = 0; index < rows.length; index += 1) {
@@ -555,17 +632,9 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
         break;
       }
     }
-    if (formatterAt === -1) {
-      if (rows.some((row) => row.parents.length > 1)) {
-        return { kind: 'blocked', reason: 'first-parent line is ambiguous' };
-      }
-      const oldest = rows[rows.length - 1]!;
-      const shallow = git(context.primaryRoot, ['rev-parse', '--is-shallow-repository']);
-      if (!shallow.ok || shallow.stdout.trim() === 'true' || oldest.parents.length > 0) {
-        return { kind: 'blocked', reason: 'first-parent ancestry is incomplete' };
-      }
-      return { kind: 'first' };
-    }
+    const hiddenRepair = [...byCommit.values()].some((row) => row.subject === 'Apply formatter' && !seen.has(row.commit));
+    if (hiddenRepair) return { kind: 'blocked', reason: 'first-parent line is ambiguous' };
+    if (formatterAt === -1) return { kind: 'first' };
     for (let index = 0; index <= formatterAt; index += 1) {
       if (rows[index]!.parents.length !== 1) return { kind: 'blocked', reason: 'first-parent line is ambiguous' };
     }
