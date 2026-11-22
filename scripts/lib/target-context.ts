@@ -54,7 +54,11 @@ export class TargetVerificationError extends Error {
 export interface TargetVerification {
   readonly local?: readonly string[];
   readonly focused?: string;
-  readonly formatter?: Readonly<{ fix: readonly string[]; check: string }>;
+  readonly formatter?: Readonly<{
+    fix: readonly string[];
+    check?: string;
+    checks?: readonly string[];
+  }>;
 }
 
 export interface ContractEvidenceProducer {
@@ -228,21 +232,42 @@ function parseVerification(value: unknown, cardPath: string): TargetVerification
   }
   let formatter: TargetVerification['formatter'];
   if (record.formatter !== undefined) {
-    const value = record.formatter as Record<string, unknown> | null;
-    if (!value || typeof value !== 'object' || Array.isArray(value)
-      || !Array.isArray(value.fix) || value.fix.length === 0
-      || value.fix.some((command) => typeof command !== 'string' || !command.trim())
-      || typeof value.check !== 'string' || !value.check.trim()) {
-      throw new TargetContextError('card-invalid',
-        `verification.formatter requires a non-empty fix command list and check command in ${cardPath}`, cardPath);
-    }
-    formatter = Object.freeze({ fix: Object.freeze([...value.fix] as string[]), check: value.check });
+    formatter = parseFormatter(record.formatter, cardPath);
   }
   return Object.freeze({
     ...(local ? { local } : {}),
     ...(focused ? { focused } : {}),
     ...(formatter ? { formatter } : {}),
   });
+}
+
+function parseFormatter(value: unknown, cardPath: string): NonNullable<TargetVerification['formatter']> {
+  function invalid(): never {
+    throw new TargetContextError(
+      'card-invalid',
+      `verification.formatter is card-invalid in ${cardPath}: declare a non-empty fix command list and exactly one of a non-empty check string or a non-empty ordered checks array; next step: correct the formatter card so check and checks are not both present, both missing, blank, or the wrong type, then retry`,
+      cardPath,
+    );
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) invalid();
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.fix) || record.fix.length === 0
+    || record.fix.some((command) => typeof command !== 'string' || !command.trim())) invalid();
+  const hasCheck = Object.prototype.hasOwnProperty.call(record, 'check');
+  const hasChecks = Object.prototype.hasOwnProperty.call(record, 'checks');
+  if (hasCheck === hasChecks) invalid();
+  const fix = Object.freeze([...(record.fix as string[])]);
+  if (hasCheck) {
+    const check: unknown = record.check;
+    if (typeof check === 'string' && check.trim()) return Object.freeze({ fix, check });
+    invalid();
+  }
+  const checks: unknown = record.checks;
+  if (Array.isArray(checks) && checks.length > 0
+    && checks.every((command) => typeof command === 'string' && command.trim())) {
+    return Object.freeze({ fix, checks: Object.freeze([...(checks as string[])]) });
+  }
+  invalid();
 }
 
 function parseContractEvidenceProducer(value: unknown, cardPath: string): ContractEvidenceProducer | undefined {

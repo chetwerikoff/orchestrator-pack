@@ -128,6 +128,30 @@ describe('target context', () => {
     }
   });
 
+  it('C1 card gate accepts checks XOR check and rejects both or neither', () => {
+    const target = fixture();
+    const checks = ['uv run --locked ruff check .', 'uv run --locked ruff format --check .'];
+    const formatter = { fix: ['uv run --locked ruff format .'], checks };
+    writeFileSync(target.cardPath, JSON.stringify({ ...target.card, verification: { formatter } }));
+    const actual = resolveTargetContext({ env: target.env, projectId: target.card.projectId }).verification?.formatter;
+    expect(actual).toEqual(formatter);
+    expect(Object.isFrozen(actual?.checks)).toBe(true);
+    for (const malformed of [
+      { fix: ['ruff format .'], check: 'make lint', checks },
+      { fix: ['ruff format .'], checks: [] },
+      { fix: ['ruff format .'], checks: [' '] },
+      { fix: ['ruff format .'], checks: 'make lint' },
+    ]) {
+      writeFileSync(target.cardPath, JSON.stringify({ ...target.card, verification: { formatter: malformed } }));
+      let error: unknown;
+      try { resolveTargetContext({ env: target.env, projectId: target.card.projectId }); }
+      catch (caught) { error = caught; }
+      expect(codeOf(() => { throw error; })).toBe('card-invalid');
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain('next step:');
+    }
+  });
+
   it('resolves one valid selected card into a frozen cwd-independent context', () => {
     const { env, primaryRoot } = fixture();
     const context = resolveTargetContext({ projectId: 'orchestrator-pack', env });

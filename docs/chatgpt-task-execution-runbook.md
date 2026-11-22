@@ -170,6 +170,23 @@ footer request accompany, not replace, the context above. Use published
 GitHub URLs or safe pasted source text; a local path/unpushed branch alone
 is not accessible in another execution conversation. No new send gate.
 
+After those send and settlement gates, and after the GitHub-first read of the
+current Issue-bound PR head and required CI, run the selected card's formatter
+CLI before any manager-authored `execute:implementation` or `execute:fixer`
+ChatGPT continuation. Use the same command as target setup
+(`scripts/manager-formatter-fix.ts --project <id> --pr <n>`) and follow its
+printed next step. The procedure is the same whether that owned manager was
+STOPPED, assigned/PARKED, or already awake. The CLI never grants Send
+authority. A formatter candidate waits for fresh required CI on the published
+SHA and is not a style-only GPT turn. A proved non-lint result selects the
+existing GPT fixer and keeps the original substantive error lines. An
+investigation, card, tool, or CI-parity refusal is not a GPT style turn.
+Tests of an invoked CLI do not prove that an already-awake manager calls it.
+Until the operator reads back the external project card and manager preamble
+and observes one already-awake or assigned manager using this rule, fleet-wide
+routing stays operationally unverified; the next step is that read-back and
+one live observation.
+
 **Synthetic existing-PR prompt** (replace every identity with the live one):
 
 ```text

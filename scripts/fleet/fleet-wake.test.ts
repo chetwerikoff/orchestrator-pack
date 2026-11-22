@@ -1049,6 +1049,30 @@ describe('fleet alarm', () => {
     expect(sendsTo(rerun.calls, 'mgr')).toHaveLength(0);
   });
 
+  it('C1 routing matrix keeps the STOPPED formatter hint scoped and the assigned fact wake generic', async () => {
+    const store = new MemoryWakeStore();
+    const now = Date.parse('2026-10-02T12:00:00Z');
+    const headA = 'a'.repeat(40);
+    const owned: FleetTerminal[] = [
+      { handle: 'coord', title: 'Cursor coordinator', worktreePath: primary },
+      { handle: 'one', title: 'OpenCode manager one', worktreePath: `${workerBase}/one`, branch: 'refs/heads/fix/a' },
+    ];
+    const wakeConfig = config({ chatScope: { projectUrl: 'https://chatgpt.com/g/g-p/project/test', repository: 'chetwerikoff/orchestrator-pack' } });
+    const listOpenPulls = () => [{ number: 7, ref: 'fix/a', sha: headA }];
+    const screens = { coord: 'idle', one: 'done' };
+    const readNamedPull = (_repository: string, number: number) => ({ number, headSha: headA, state: 'open' as const, merged: false });
+    const first = await tick({ screens, store, config: wakeConfig, terminals: owned, listOpenPulls, readNamedPull,
+      checkRunsFinishedAt: () => now - 60_000 });
+    const formatterHint = sendsTo(first.calls, 'one')[0]?.join(' ') ?? '';
+    expect(formatterHint).toContain(`If a check failed, run node ${JSON.stringify(resolve(import.meta.dirname, '../manager-formatter-fix.ts'))} --project ${JSON.stringify(wakeConfig.projectId)} --pr 7 first.`);
+    expect(formatterHint).toContain('Follow its printed next step before any GPT fix turn. The command does not grant Send.');
+    expect(formatterHint).not.toContain('published GitHub facts changed');
+    expect(formatterHint).not.toContain('`');
+    expect(formatterHint).not.toContain('!');
+    const source = readFileSync(new URL('./fleet-wake.ts', import.meta.url), 'utf8');
+    expect(source).toContain('Wake: Issue #${issue} published GitHub facts changed (${keys.length}) - re-check exact Issue, current PR/head and reviews; do not infer completion');
+  });
+
   it('wakes only the exact Issue manager when the PR ref and manager worktree/branch differ', async () => {
     const manager: FleetTerminal = {
       handle: 'mgr', title: 'OpenCode manager', worktreePath: `${workerBase}/issue-145-r08-manager`,
