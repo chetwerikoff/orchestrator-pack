@@ -6682,6 +6682,11 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
     return { state: 'clean', reason: 'final_cap_pure_base_merge_verified',
       fromSha: frontier, zeroCall: true };
   }
+  // At most one final-cap delta per original cycle may end with findings; the
+  // fix of those findings goes to the architect diff check, not another delta.
+  if (lastComplete?.reviewVerdict === 'findings') {
+    return { state: 'findings', reason: 'final_cap_delta_findings_bound_reached', fromSha: frontier };
+  }
   const contextDigest = sha256Bytes(stableJson({
     originalRunId: original.id, cycleId: opts.originalCycleId,
     repository: opts.repoSlug.toLowerCase(), prNumber: opts.prNumber,
@@ -7664,6 +7669,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
             && sameHeadPublicationDigest !== undefined),
       });
       if (deltaOutcome.state !== 'clean') {
+        const boundReached = deltaOutcome.reason === 'final_cap_delta_findings_bound_reached';
         // Use the existing fixer/worker transport, once per persisted delta.
         const findingsHandoff = deltaOutcome.state === 'findings' && deltaOutcome.runId
           ? await handoffFinalCapDeltaFindings({
@@ -7681,7 +7687,9 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
             })))({
               state: deltaOutcome.state === 'findings' ? 'failure' : 'pending',
               context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-              description: deltaOutcome.state === 'findings'
+              description: boundReached
+                ? 'Final-cap delta findings bound reached; architect diff check required.'
+                : deltaOutcome.state === 'findings'
                 ? 'Final-cap ordinary delta has unresolved review findings.'
                 : 'Final-cap F..T ordinary review unresolved; no ancestry shortcut.',
               idempotencyKey: 'final-cap-delta:' + priorRun.id + ':' + currentTarget
@@ -7694,7 +7702,11 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
           reason: deltaOutcome.reason,
           ...(deltaOutcome.runId ? { deltaRunId: deltaOutcome.runId } : {}),
           ...(findingsHandoff ? { findingsHandoff } : {}),
-          nextAction: deltaOutcome.state === 'findings'
+          nextAction: boundReached
+            ? 'final-cap delta findings bound reached for PR #' + prNumber + ': no further delta review; '
+              + 'get the architect diff check of the fix against the last delta findings (PROMPT order C); '
+              + 'on PASS run smoke, then merge with "мерж ' + prNumber + ' без ревью" via --merge-waiver-line'
+            : deltaOutcome.state === 'findings'
             ? findingsHandoff?.state === 'submitted' || findingsHandoff?.state === 'already_attempted'
               ? 'continue the existing fixer from the persisted delta REVIEW, then review only the next F..T'
               : 'restore the bound worker notification route for persisted findings before fixer continuation'
