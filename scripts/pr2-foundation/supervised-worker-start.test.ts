@@ -656,6 +656,39 @@ describe('supervised worker start exact assignment admission',()=>{
     expect(currentWorkerAssignment(file, 1416)).toEqual(old.assignment);
   });
 
+  it('Issue #2865 live-holder refusal adds only a plain-text sequential handoff note and leaves the incumbent unchanged', async () => {
+    const base = root();
+    const env = { ...process.env, OPK_BASE_DIR: base };
+    const file = resolveWorkerAssignmentStorePath('orchestrator-pack', env);
+    const old = await publishCurrentWorkerAssignment({ file, repository: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1416, taskId: 'task_old', kind: 'local', provider: 'orca', bindingKey: 'dispatch_old', role: 'worker' });
+    if (!old.ok) throw new Error(old.reason);
+    const shown = { ...terminallyFailedExactLiveRetainedShow(),
+      dispatch: { id: 'dispatch_old', taskId: 'task_old', status: 'running' },
+      observation: { exactWorker: true, status: 'live' },
+      terminal: { handle: 'term-holder', incarnationId: 'holder-incarnation' } };
+    const placement = inspectPlacement({ terminal: 'foreign-terminal' });
+    const runJson = vi.fn((): OrcaJsonResponse => ({ ok: true, result: terminallyFailedExactLiveRetainedShow() }));
+    const inspected: string[][] = [];
+    let starts = 0;
+    const result = await runSupervisedWorkerStart({ role: 'worker', issueNumber: 1416,
+      repository: 'chetwerikoff/orchestrator-pack', env, orcaArgs: argsForTerminal('terminal:foreign-owned', 'task_new'),
+      adapter: new OrcaTaskRuntimeAdapter({ runJson: runJson as never }),
+      inspect: async (argv) => { inspected.push([...argv]); return argv[1] === 'worker-show' ? { ok: true, stdout: envelope(shown) } : placement(argv); },
+      execute: async () => { starts += 1; return { ok: false, stdout: '' }; },
+    });
+    expect(result).toMatchObject({ ok: false, reason: 'target_unresolved', errorMessage: 'holder_live_no_replacement_authority',
+      admissionEvidence: { assignmentDispatchId: 'dispatch_old', terminalHandle: 'term-holder', missingWitness: 'holder_live_no_replacement_authority' } });
+    expect(Object.keys(result.nextAction ?? {})).toEqual(['note']);
+    expect(result.nextAction?.note).toMatch(/coordinator.*Dispatch dispatch_old.*existing worker-stop operation.*named holder terminal term-holder.*existing terminal-close operation.*rerun the same launch after the current holder ends/su);
+    expect(starts).toBe(0);
+    expect(currentWorkerAssignment(file, 1416)).toEqual(old.assignment);
+    const effects = [...runJson.mock.calls.map((call) => (call as unknown[])[0] as string[]), ...inspected]
+      .map((argv) => argv.slice(0, 2).join(' '));
+    expect(effects).not.toContain('orchestration worker-stop');
+    expect(effects).not.toContain('terminal close');
+  });
+
   it('rejects a missing/failed/retained historical terminal on all three repeated start attempts', async () => {
     const base = root();
     const env = { ...process.env, OPK_BASE_DIR: base };
