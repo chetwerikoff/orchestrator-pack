@@ -1,6 +1,6 @@
 import { jsonFieldsEqual, parseGhArgv } from './gh-parse-argv.mjs';
 
-/** @typedef {'pr-list-open' | 'pr-list-head' | 'pr-list-merged-closes' | 'pr-view' | 'pr-checks' | 'pr-diff-name-only' | 'issue-view-body' | 'issue-view-json' | 'repo-view-name-with-owner' | 'target-required-status-checks' | 'runtime-history-main-required-status-checks' | 'runtime-history-actions-run' | 'runtime-history-status-history' | 'run-view-log-failed' | 'actions-job-log' | 'actions-job' | 'commit-check-runs'} InventoryRouteId */
+/** @typedef {'pr-list-open' | 'pr-list-head' | 'pr-list-merged-closes' | 'pr-view' | 'pr-checks' | 'pr-diff-name-only' | 'issue-view-body' | 'issue-view-json' | 'repo-view-name-with-owner' | 'target-required-status-checks' | 'runtime-history-main-required-status-checks' | 'runtime-history-actions-run' | 'runtime-history-status-history' | 'run-view-log-failed' | 'actions-job-log' | 'actions-job' | 'commit-check-runs' | 'commit-statuses'} InventoryRouteId */
 /** @typedef {{ repository: string, defaultBranch: string }} TargetAuthorization */
 /** @typedef {{ targetAuthorization?: TargetAuthorization }} InventoryMatchOptions */
 
@@ -210,6 +210,12 @@ export function matchInventoryRoute(parsed, options = {}) {
     if (checkRuns && parsed.positionals.length === 0 && !parsed.jq && !parsed.jsonFields
       && !parsed.repo && hasOnlyAllowedFlags(parsed, [])) {
       return { id: 'commit-check-runs', repoSlug: checkRuns[1], headSha: checkRuns[2].toLowerCase() };
+    }
+    const commitStatuses = endpoint.match(/^repos\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/commits\/([0-9a-fA-F]{40})\/statuses$/);
+    if (commitStatuses && parsed.positionals.length === 0 && !parsed.jq && !parsed.jsonFields
+      && !parsed.repo && hasOnlyAllowedFlags(parsed, [])
+      && commitStatuses[1].toLowerCase() !== RUNTIME_HISTORY_REPO) {
+      return { id: 'commit-statuses', repoSlug: commitStatuses[1], headSha: commitStatuses[2].toLowerCase() };
     }
     return matchRuntimeHistoryApiRoute(parsed, options.targetAuthorization);
   }

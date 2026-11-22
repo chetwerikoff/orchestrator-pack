@@ -431,6 +431,10 @@ describe('Issue #2605 escape-safe Actions job logs', () => {
       id: 'commit-check-runs', repoSlug: 'example/target', headSha: 'a'.repeat(40),
     });
     expect(isClassifiedGhReadCommand('gh api repos/example/target/commits/' + 'a'.repeat(40) + '/check-runs')).toBe(true);
+    expect(classifyArgv(['api', 'repos/example/target/commits/' + 'a'.repeat(40) + '/statuses']).route).toMatchObject({
+      id: 'commit-statuses', repoSlug: 'example/target', headSha: 'a'.repeat(40),
+    });
+    expect(isClassifiedGhReadCommand('gh api repos/example/target/commits/' + 'a'.repeat(40) + '/statuses')).toBe(true);
     for (const argv of [
       [...job, '--allow-escape-sequences'],
       [...job, '--allow-escape-sequences=true'],
@@ -2999,6 +3003,7 @@ describe('Issue #2507 exact checks arguments and actionable non-equivalent read 
       'gh api repos/example/target/actions/jobs/17001/logs',
       'gh api repos/example/target/actions/jobs/17001',
       'gh api repos/example/target/commits/' + 'a'.repeat(40) + '/check-runs',
+      'gh api repos/example/target/commits/' + 'a'.repeat(40) + '/statuses',
     ]) expect(isClassifiedGhReadCommand(command), command).toBe(true);
     for (const command of [
       'gh api repos/example/target/issues/228',

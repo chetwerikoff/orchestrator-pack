@@ -36,7 +36,10 @@ interface CiJob {
   steps: CiStep[];
   logs: string;
   name?: string;
-  conclusion?: string;
+  conclusion?: string | null;
+  status?: string;
+  workflow?: string;
+  appId?: number | null;
   omitCheckOutput?: boolean;
   logResult?: 'fail';
 }
@@ -52,6 +55,8 @@ interface CiState {
   omitCheckOutput?: boolean;
   logResult?: 'fail';
   requiredContexts?: string[];
+  requiredChecks?: Array<{ context: string; app_id: number | null }>;
+  statuses?: Array<{ id?: number; context: string; state?: string }>;
   protection?: 'unavailable';
 }
 
@@ -117,10 +122,13 @@ function fixture() {
         if (endpoint === 'repos/example/formatter/pulls/42') stdout = JSON.stringify(pull);
         else if (endpoint === `repos/example/formatter/commits/${pull.head.sha}/check-runs`) {
           const runs = jobs.map((job, index) => ({
-            id: index + 1, name: job.name ?? 'CI / checks', status: ci.status, conclusion: ci.conclusion,
+            id: index + 1,
+            name: job.name ?? 'CI / checks',
+            status: job.status ?? ci.status,
+            conclusion: job.conclusion !== undefined ? job.conclusion : ci.conclusion,
             head_sha: ci.headSha,
             details_url: `https://github.com/example/formatter/actions/runs/${job.runId}/job/${job.id}`,
-            conclusion: job.conclusion ?? ci.conclusion,
+            ...(job.appId !== undefined ? { app: { id: job.appId } } : {}),
             output: (job.omitCheckOutput ?? ci.omitCheckOutput) ? { title: 'lint' } : { title: 'lint', summary: job.logs, text: job.logs },
           }));
           stdout = JSON.stringify({ total_count: ci.totalCount ?? runs.length, check_runs: runs });
@@ -128,15 +136,30 @@ function fixture() {
           const job = jobs.find((candidate) => candidate.id === Number(jobMatch[1]));
           if (!job) throw new Error(`unexpected gh endpoint ${endpoint}`);
           stdout = JSON.stringify({
-            id: job.id, run_id: job.runId, run_attempt: job.runAttempt, status: 'completed', conclusion: job.conclusion ?? 'failure',
-            name: job.name ?? 'CI / checks', head_sha: ci.headSha, steps: job.steps,
+            id: job.id, run_id: job.runId, run_attempt: job.runAttempt,
+            status: job.status ?? 'completed',
+            conclusion: job.conclusion !== undefined ? job.conclusion : 'failure',
+            name: job.name ?? 'CI / checks',
+            ...(job.workflow ? { workflow_name: job.workflow } : {}),
+            head_sha: ci.headSha, steps: job.steps,
           });
         } else if (endpoint === 'repos/example/formatter/branches/main/protection/required_status_checks') {
           if (ci.protection === 'unavailable') {
             const failed = run({ command: process.execPath, args: ['-e', 'process.exit(1)'], inheritParentEnv: true });
             return { ...failed, stderr: 'protection unavailable' };
           }
-          stdout = JSON.stringify({ contexts: ci.requiredContexts ?? ['CI / checks'], checks: [] });
+          stdout = JSON.stringify({
+            contexts: ci.requiredContexts ?? ['CI / checks'],
+            checks: ci.requiredChecks ?? [],
+          });
+        } else if (endpoint === `repos/example/formatter/commits/${pull.head.sha}/statuses`) {
+          const statuses = ci.statuses ?? [];
+          stdout = JSON.stringify(statuses.map((row, index) => ({
+            id: row.id ?? index + 1,
+            context: row.context,
+            state: row.state ?? 'success',
+            sha: pull.head.sha,
+          })));
         } else if (logMatch) {
           const job = jobs.find((candidate) => candidate.id === Number(logMatch[1]));
           if (!job) throw new Error(`unexpected gh endpoint ${endpoint}`);
@@ -817,6 +840,145 @@ process.stdout.write('HTTP/2 200\\n\\n' + JSON.stringify({ total_count: 2, check
     expect(world.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
     expect(world.remoteHead()).toBe(world.head);
     world.expectRemoved();
+  });
+
+  it('does not let a same-named job from another workflow satisfy requiredCi', () => {
+    const absent = fixture();
+    absent.ci.jobs = [{
+      id: 901, runId: 100, runAttempt: 1, name: 'checks', workflow: 'Experiment', conclusion: 'failure',
+      logs: 'optional format error\n', steps: [{ name: 'lint', status: 'completed', conclusion: 'failure', number: 1 }],
+    }];
+    const absentResult = runManagerFormatterFix({ ...absent.context, requiredCi: ['CI / checks'] }, 42, absent.deps);
+    expect(absentResult.outcome).toBe('refused');
+    expect(absentResult.message).toContain('required check CI / checks was not observed');
+    expect(absent.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+    expect(absent.remoteHead()).toBe(absent.head);
+
+    const green = fixture();
+    green.ci.jobs = [
+      {
+        id: 911, runId: 100, runAttempt: 1, name: 'checks', workflow: 'CI', conclusion: 'success',
+        logs: 'required ci passed\n', steps: [{ name: 'lint', status: 'completed', conclusion: 'success', number: 1 }],
+      },
+      {
+        id: 912, runId: 101, runAttempt: 1, name: 'checks', workflow: 'Experiment', conclusion: 'failure',
+        logs: 'optional format error\n', steps: [{ name: 'lint', status: 'completed', conclusion: 'failure', number: 1 }],
+      },
+    ];
+    const greenResult = runManagerFormatterFix({ ...green.context, requiredCi: ['CI / checks'] }, 42, green.deps);
+    expect(greenResult.outcome).toBe('refused');
+    expect(greenResult.message).toContain('required checks succeeded');
+    expect(green.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+    expect(green.remoteHead()).toBe(green.head);
+
+    const unnamed = fixture();
+    unnamed.ci.jobs = [{
+      id: 921, runId: 100, runAttempt: 1, name: 'checks', conclusion: 'failure',
+      logs: 'source.ts:1:1 format error\n', steps: [{ name: 'lint', status: 'completed', conclusion: 'failure', number: 1 }],
+    }];
+    const unnamedResult = runManagerFormatterFix({ ...unnamed.context, requiredCi: ['CI / checks'] }, 42, unnamed.deps);
+    expect(unnamedResult.outcome).toBe('refused');
+    expect(unnamedResult.message).toContain('required check identity is ambiguous');
+    expect(unnamed.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+  });
+
+  it('publishes the required workflow when another workflow reuses the job name', () => {
+    const world = fixture();
+    world.ci.jobs = [
+      {
+        id: 931, runId: 100, runAttempt: 1, name: 'checks', workflow: 'Experiment', conclusion: 'success',
+        logs: 'optional ok\n', steps: [{ name: 'lint', status: 'completed', conclusion: 'success', number: 1 }],
+      },
+      {
+        id: 932, runId: 101, runAttempt: 1, name: 'checks', workflow: 'CI', conclusion: 'failure',
+        logs: 'source.ts:1:1 format error\n', steps: [{ name: 'lint', status: 'completed', conclusion: 'failure', number: 1 }],
+      },
+    ];
+    const result = runManagerFormatterFix({ ...world.context, requiredCi: ['CI / checks'] }, 42, world.deps);
+    expect(result.outcome).toBe('published');
+    expect(world.remoteHead()).not.toBe(world.head);
+  });
+
+  it('does not let an older failed run override a newer green required run', () => {
+    const world = fixture();
+    world.ci.jobs = [
+      {
+        id: 801, runId: 100, runAttempt: 4, name: 'CI / checks', workflow: 'CI', conclusion: 'failure',
+        logs: 'source.ts:1:1 format error\n', steps: [{ name: 'lint', status: 'completed', conclusion: 'failure', number: 1 }],
+      },
+      {
+        id: 802, runId: 300, runAttempt: 1, name: 'CI / checks', workflow: 'CI', conclusion: 'success',
+        logs: 'required ci passed\n', steps: [{ name: 'lint', status: 'completed', conclusion: 'success', number: 1 }],
+      },
+    ];
+    const result = runManagerFormatterFix(world.context, 42, world.deps);
+    expect(result.outcome).toBe('refused');
+    expect(result.message).toContain('required checks succeeded');
+    expect(world.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+    expect(world.remoteHead()).toBe(world.head);
+
+    const pending = fixture();
+    pending.ci.jobs = [
+      {
+        id: 811, runId: 100, runAttempt: 4, name: 'CI / checks', workflow: 'CI', conclusion: 'failure', status: 'completed',
+        logs: 'source.ts:1:1 format error\n', steps: [{ name: 'lint', status: 'completed', conclusion: 'failure', number: 1 }],
+      },
+      {
+        id: 812, runId: 400, runAttempt: 1, name: 'CI / checks', workflow: 'CI', conclusion: null, status: 'in_progress',
+        logs: '', steps: [],
+      },
+    ];
+    const pendingResult = runManagerFormatterFix(pending.context, 42, pending.deps);
+    expect(pendingResult.outcome).toBe('refused');
+    expect(pendingResult.message).toContain('required CI was not observed complete');
+    expect(pending.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+    expect(pending.remoteHead()).toBe(pending.head);
+  });
+
+  it('publishes a required lint failure when another required context is only a commit status', () => {
+    const world = fixture();
+    world.ci.requiredContexts = ['CI / checks', 'orchestrator-pack/pack-review'];
+    world.ci.statuses = [{ context: 'orchestrator-pack/pack-review', state: 'success' }];
+    const result = runManagerFormatterFix(world.context, 42, world.deps);
+    expect(result.outcome).toBe('published');
+    expect(result.message).not.toContain('was not observed');
+    expect(world.remoteHead()).not.toBe(world.head);
+
+    const absent = fixture();
+    absent.ci.requiredContexts = ['CI / checks', 'orchestrator-pack/pack-review'];
+    const missing = runManagerFormatterFix(absent.context, 42, absent.deps);
+    expect(missing.outcome).toBe('refused');
+    expect(missing.message).toContain('required check orchestrator-pack/pack-review was not observed');
+    expect(absent.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+  });
+
+  it('does not let another app failure replace the required app check', () => {
+    const world = fixture();
+    world.ci.requiredContexts = ['CI / lint'];
+    world.ci.requiredChecks = [{ context: 'CI / lint', app_id: 1 }];
+    world.ci.jobs = [
+      {
+        id: 701, runId: 200, runAttempt: 1, name: 'CI / lint', workflow: 'CI', appId: 1, conclusion: 'success',
+        logs: 'required ci passed\n', steps: [{ name: 'lint', status: 'completed', conclusion: 'success', number: 1 }],
+      },
+      {
+        id: 702, runId: 201, runAttempt: 1, name: 'CI / lint', workflow: 'CI', appId: 2, conclusion: 'failure',
+        logs: 'source.ts:1:1 format error\n', steps: [{ name: 'lint', status: 'completed', conclusion: 'failure', number: 1 }],
+      },
+    ];
+    const result = runManagerFormatterFix(world.context, 42, world.deps);
+    expect(result.outcome).toBe('refused');
+    expect(result.message).toContain('required checks succeeded');
+    expect(world.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+    expect(world.remoteHead()).toBe(world.head);
+
+    const unproved = fixture();
+    unproved.ci.requiredContexts = ['CI / checks'];
+    unproved.ci.requiredChecks = [{ context: 'CI / checks', app_id: 1 }];
+    const unprovedResult = runManagerFormatterFix(unproved.context, 42, unproved.deps);
+    expect(unprovedResult.outcome).toBe('refused');
+    expect(unprovedResult.message).toContain('required check identity is ambiguous');
+    expect(unproved.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
   });
 
   it('refuses a mutating pre-fix diagnostic before fix and publication', () => {

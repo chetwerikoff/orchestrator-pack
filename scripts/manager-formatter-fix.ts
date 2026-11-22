@@ -29,12 +29,16 @@ interface CheckRun {
   readonly head_sha?: string;
   readonly details_url?: string | null;
   readonly html_url?: string | null;
+  readonly app?: { readonly id?: number | null } | null;
   readonly output?: { readonly text?: string | null; readonly summary?: string | null };
 }
 
 interface RequiredCheck {
   readonly label: string;
-  readonly aliases: readonly string[];
+  readonly kind: 'card' | 'context';
+  readonly workflow: string;
+  readonly job: string;
+  readonly appId: number | null;
 }
 
 interface JobStep {
@@ -49,6 +53,8 @@ interface JobPayload {
   readonly run_attempt?: number;
   readonly conclusion?: string | null;
   readonly head_sha?: string;
+  readonly name?: string | null;
+  readonly workflow_name?: string | null;
   readonly steps?: readonly JobStep[];
 }
 
@@ -98,6 +104,13 @@ function clip(text: string): string {
 
 function jobIdFromUrl(url: string | null | undefined): number | null {
   const match = /\/actions\/runs\/\d+\/job\/(\d+)/u.exec(url ?? '');
+  if (!match) return null;
+  const id = Number(match[1]);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+function runIdFromUrl(url: string | null | undefined): number | null {
+  const match = /\/actions\/runs\/(\d+)\/job\/\d+/u.exec(url ?? '');
   if (!match) return null;
   const id = Number(match[1]);
   return Number.isSafeInteger(id) && id > 0 ? id : null;
@@ -404,15 +417,17 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
   return cleanupFailure ? { outcome: 'refused', message: `${result.message}; ${cleanupFailure}` } : result;
 
   function readRequiredChecks(): RequiredCheck[] | null {
-    const alias = (value: string) => value.trim().toLowerCase();
     if (context.requiredCi && context.requiredCi.length > 0) {
-      return context.requiredCi.map((selector) => {
-        const job = selector.split(' / ')[1]?.trim() ?? '';
-        return {
-          label: selector,
-          aliases: [...new Set([alias(selector), ...(job ? [alias(job)] : [])])],
-        };
-      });
+      const parsed: RequiredCheck[] = [];
+      for (const selector of context.requiredCi) {
+        const parts = selector.split(' / ');
+        if (parts.length !== 2) return null;
+        const workflow = parts[0]?.trim() ?? '';
+        const job = parts[1]?.trim() ?? '';
+        if (!workflow || !job) return null;
+        parsed.push({ kind: 'card', label: selector, workflow, job, appId: null });
+      }
+      return parsed;
     }
     const endpoint = `repos/${context.repository}/branches/${encodeURIComponent(context.defaultBranch)}/protection/required_status_checks`;
     const response = run({
@@ -433,19 +448,40 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
     } catch {
       return null;
     }
-    const labels: string[] = [];
-    const add = (value: unknown) => {
-      if (typeof value !== 'string' || !value.trim()) return;
-      labels.push(value.trim());
+    const required: RequiredCheck[] = [];
+    const seen = new Set<string>();
+    const remember = (check: RequiredCheck) => {
+      const key = check.label.trim().toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      required.push(check);
     };
-    if (Array.isArray(policy.contexts)) for (const value of policy.contexts) add(value);
     if (Array.isArray(policy.checks)) {
       for (const value of policy.checks) {
-        if (typeof value === 'string') add(value);
-        else if (value && typeof value === 'object' && 'context' in value) add((value as { context?: unknown }).context);
+        if (!value || typeof value !== 'object' || !('context' in value)) continue;
+        const contextName = (value as { context?: unknown }).context;
+        if (typeof contextName !== 'string' || !contextName.trim()) continue;
+        const rawApp = (value as { app_id?: unknown }).app_id;
+        if (rawApp !== null && rawApp !== undefined
+          && (typeof rawApp !== 'number' || !Number.isSafeInteger(rawApp) || rawApp <= 0)) {
+          return null;
+        }
+        remember({
+          kind: 'context',
+          label: contextName.trim(),
+          workflow: '',
+          job: '',
+          appId: typeof rawApp === 'number' ? rawApp : null,
+        });
       }
     }
-    return labels.map((label) => ({ label, aliases: [alias(label)] }));
+    if (Array.isArray(policy.contexts)) {
+      for (const value of policy.contexts) {
+        if (typeof value !== 'string' || !value.trim()) continue;
+        remember({ kind: 'context', label: value.trim(), workflow: '', job: '', appId: null });
+      }
+    }
+    return required;
   }
 
   function readGhJson(endpoint: string): unknown {
@@ -478,30 +514,192 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
       return { kind: 'hold', reason: `required-check relevance is unproved on ${sha}: no required status checks are configured` };
     }
     const norm = (value: string | null | undefined) => (value ?? '').trim().toLowerCase();
-    const matches = (run: CheckRun, check: RequiredCheck) => check.aliases.includes(norm(run.name));
-    const missing = required.filter((check) => !runs.some((run) => matches(run, check)));
+    const jobsById = new Map<number, JobPayload>();
+    const loadJob = (id: number): JobPayload | 'unbound' => {
+      const cached = jobsById.get(id);
+      if (cached) return cached;
+      const job = readGhJson(`repos/${context.repository}/actions/jobs/${id}`) as JobPayload;
+      if (job.head_sha && job.head_sha !== sha) return 'unbound';
+      jobsById.set(id, job);
+      return job;
+    };
+    const nameMatches = (run: CheckRun, check: RequiredCheck) => {
+      const name = norm(run.name);
+      if (!name) return false;
+      if (check.kind === 'context') return name === norm(check.label);
+      return name === norm(check.job) || name === norm(check.label);
+    };
+    const appMatches = (run: CheckRun, check: RequiredCheck) => {
+      if (check.kind !== 'context' || check.appId === null) return true;
+      return run.app?.id === check.appId;
+    };
+    let statusNames: Set<string> | null | undefined;
+    const statusContexts = (): Set<string> | null => {
+      if (statusNames !== undefined) return statusNames;
+      const response = run({
+        command: ghBin,
+        args: ['api', `repos/${context.repository}/commits/${sha}/statuses`],
+        cwd: context.packRoot,
+        inheritParentEnv: true,
+        timeoutMs: 240_000,
+      });
+      if (!response.ok) {
+        statusNames = null;
+        return null;
+      }
+      let payload: unknown;
+      try {
+        payload = JSON.parse(response.stdout) as unknown;
+      } catch {
+        statusNames = null;
+        return null;
+      }
+      if (!Array.isArray(payload)) {
+        statusNames = null;
+        return null;
+      }
+      const names = new Set<string>();
+      for (const row of payload) {
+        if (!row || typeof row !== 'object' || typeof (row as { context?: unknown }).context !== 'string') {
+          statusNames = null;
+          return null;
+        }
+        const contextName = (row as { context: string }).context.trim();
+        if (!contextName) {
+          statusNames = null;
+          return null;
+        }
+        names.add(norm(contextName));
+      }
+      statusNames = names;
+      return names;
+    };
+    const selectLatest = (candidates: readonly CheckRun[]): CheckRun[] | 'uncertain' | 'pending' => {
+      const parsed = candidates.map((run) => ({ run, runId: runIdFromUrl(run.details_url ?? run.html_url) }));
+      if (parsed.some((item) => item.runId === null)) return 'uncertain';
+      const latestId = Math.max(...parsed.map((item) => item.runId ?? 0));
+      const latest = parsed.filter((item) => item.runId === latestId).map((item) => item.run);
+      if (latest.some((run) => run.status !== 'completed'
+        || (run.conclusion !== 'success' && run.conclusion !== 'failure' && run.conclusion !== 'timed_out'))) {
+        return 'pending';
+      }
+      return latest;
+    };
+    const chosen: CheckRun[] = [];
+    const missing: string[] = [];
+    let pending = false;
+    let ambiguous = false;
+    for (const check of required) {
+      const named = runs.filter((run) => nameMatches(run, check));
+      let matched = named.filter((run) => appMatches(run, check));
+      if (check.kind === 'context' && check.appId !== null && matched.length === 0) {
+        if (named.some((run) => typeof run.app?.id !== 'number')) ambiguous = true;
+        else missing.push(check.label);
+        continue;
+      }
+      if (check.kind === 'card') {
+        const kept: CheckRun[] = [];
+        let unproved = false;
+        for (const run of matched) {
+          const id = jobIdFromUrl(run.details_url ?? run.html_url);
+          if (id === null) {
+            unproved = true;
+            continue;
+          }
+          const job = loadJob(id);
+          if (job === 'unbound') {
+            return { kind: 'hold', reason: `CI job evidence is not bound to current head ${sha}` };
+          }
+          const workflow = norm(job.workflow_name);
+          const jobName = norm(job.name) || norm(run.name);
+          if (!workflow) {
+            unproved = true;
+            continue;
+          }
+          if (workflow === norm(check.workflow) && (jobName === norm(check.job) || jobName === norm(check.label))) {
+            kept.push(run);
+          }
+        }
+        if (kept.length === 0) {
+          if (unproved) ambiguous = true;
+          else missing.push(check.label);
+          continue;
+        }
+        matched = kept;
+      } else if (matched.length > 1) {
+        const workflows = new Set<string>();
+        let sawWorkflow = false;
+        let sawBlank = false;
+        let unproved = false;
+        for (const run of matched) {
+          const id = jobIdFromUrl(run.details_url ?? run.html_url);
+          if (id === null) {
+            unproved = true;
+            continue;
+          }
+          const job = loadJob(id);
+          if (job === 'unbound') {
+            return { kind: 'hold', reason: `CI job evidence is not bound to current head ${sha}` };
+          }
+          const workflow = norm(job.workflow_name);
+          if (workflow) {
+            workflows.add(workflow);
+            sawWorkflow = true;
+          } else sawBlank = true;
+        }
+        if (unproved || workflows.size > 1 || (sawWorkflow && sawBlank)) {
+          ambiguous = true;
+          continue;
+        }
+      }
+      if (matched.length === 0) {
+        if (check.kind === 'context') {
+          const names = statusContexts();
+          if (names === null) {
+            return { kind: 'hold', reason: `required-check relevance is unproved on ${sha}: commit statuses are unavailable` };
+          }
+          if (names.has(norm(check.label))) continue;
+        }
+        missing.push(check.label);
+        continue;
+      }
+      const latest = selectLatest(matched);
+      if (latest === 'uncertain') {
+        ambiguous = true;
+        continue;
+      }
+      if (latest === 'pending') {
+        pending = true;
+        continue;
+      }
+      chosen.push(...latest);
+    }
+    if (ambiguous) {
+      return { kind: 'hold', reason: `required-check relevance is unproved on ${sha}: required check identity is ambiguous` };
+    }
     if (missing.length > 0) {
       return {
         kind: 'hold',
-        reason: `required-check relevance is unproved on ${sha}: required check ${missing.map((check) => check.label).join(', ')} was not observed`,
+        reason: `required-check relevance is unproved on ${sha}: required check ${missing.join(', ')} was not observed`,
       };
     }
-    const requiredRuns = runs.filter((run) => required.some((check) => matches(run, check)));
-    if (requiredRuns.some((run) => run.status !== 'completed'
-      || (run.conclusion !== 'success' && run.conclusion !== 'failure' && run.conclusion !== 'timed_out'))) {
+    if (pending) {
       return { kind: 'hold', reason: `required-check relevance is unproved on ${sha}: required CI was not observed complete` };
     }
-    if (requiredRuns.some((run) => jobIdFromUrl(run.details_url ?? run.html_url) === null)) {
+    if (chosen.length === 0) {
+      return { kind: 'hold', reason: `required-check relevance is unproved on ${sha}: required checks succeeded` };
+    }
+    if (chosen.some((run) => jobIdFromUrl(run.details_url ?? run.html_url) === null)) {
       return { kind: 'hold', reason: `CI job steps for ${sha} are unavailable` };
     }
-    const jobIds = [...new Set(requiredRuns.map((run) => jobIdFromUrl(run.details_url ?? run.html_url)).filter((id): id is number => id !== null))];
+    const jobIds = [...new Set(chosen.map((run) => jobIdFromUrl(run.details_url ?? run.html_url)).filter((id): id is number => id !== null))];
     const jobs: JobPayload[] = [];
     for (const id of jobIds) {
-      const job = readGhJson(`repos/${context.repository}/actions/jobs/${id}`) as JobPayload;
-      if (job.head_sha && job.head_sha !== sha) {
+      const loaded = loadJob(id);
+      if (loaded === 'unbound') {
         return { kind: 'hold', reason: `CI job evidence is not bound to current head ${sha}` };
       }
-      jobs.push(job);
+      jobs.push(loaded);
     }
     const selected = selectedAttemptJobs(jobs);
     const failedJobs = selected.filter((job) => job.conclusion === 'failure' || job.conclusion === 'timed_out');

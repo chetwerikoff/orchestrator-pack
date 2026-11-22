@@ -692,6 +692,48 @@ function routeActionsJob(realGh, repo, jobId, cwd) {
  * @param {import('./gh-inventory-match.mjs').InventoryRouteId} routeId
  * @param {object} ctx
  */
+
+function routeCommitStatuses(realGh, repo, headSha, cwd) {
+  if (!/^[0-9a-f]{40}$/.test(headSha)) {
+    throw new Error(`${REST_ERROR_MARKER}: invalid commit-statuses head sha`);
+  }
+  const rows = [];
+  const seenIds = new Set();
+  const perPage = 100;
+  let page = 1;
+  while (true) {
+    if (page > 20) {
+      throw new Error(`${REST_ERROR_MARKER}: commit statuses pagination completeness unprovable`);
+    }
+    const batch = ghApiJson(
+      realGh,
+      `repos/${repo.slug}/commits/${headSha}/statuses?per_page=${perPage}&page=${page}`,
+      { hostname: repo.host, cwd },
+    );
+    if (!Array.isArray(batch)) {
+      throw new Error(`${REST_ERROR_MARKER}: commit statuses payload is not an array`);
+    }
+    for (const row of batch) {
+      const id = Number(row?.id);
+      if (!Number.isSafeInteger(id) || id <= 0 || seenIds.has(id)) {
+        throw new Error(`${REST_ERROR_MARKER}: commit status identity is malformed`);
+      }
+      if (row.sha && String(row.sha).toLowerCase() !== headSha.toLowerCase()) {
+        throw new Error(`${REST_ERROR_MARKER}: commit status escaped exact head`);
+      }
+      const context = typeof row.context === 'string' ? row.context.trim() : '';
+      if (!context) {
+        throw new Error(`${REST_ERROR_MARKER}: commit status context is absent`);
+      }
+      seenIds.add(id);
+      rows.push(row);
+    }
+    if (batch.length < perPage) break;
+    page += 1;
+  }
+  return rows;
+}
+
 export function executeRestRoute(routeId, ctx) {
   const {
     realGh,
@@ -700,7 +742,7 @@ export function executeRestRoute(routeId, ctx) {
     cwd = process.cwd(),
   } = ctx;
 
-  const repo = routeId === 'actions-job-log' || routeId === 'actions-job' || routeId === 'commit-check-runs'
+  const repo = routeId === 'actions-job-log' || routeId === 'actions-job' || routeId === 'commit-check-runs' || routeId === 'commit-statuses'
     ? { slug: route.repoSlug, host: parsed.hostname ?? process.env.GH_HOST ?? 'github.com' }
     : resolveRepoContext({
       cwd,
@@ -720,6 +762,8 @@ export function executeRestRoute(routeId, ctx) {
         return routeActionsJob(realGh, repo, route.jobId, cwd);
       case 'commit-check-runs':
         return routeCommitCheckRuns(realGh, repo, route.headSha, cwd);
+      case 'commit-statuses':
+        return routeCommitStatuses(realGh, repo, route.headSha, cwd);
       case 'pr-list-open': {
         const limit = Number(parsed.flags['--limit'] ?? 200);
         const fields = parsed.jsonFields ?? [];
