@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   isRetryablePackReviewZeroSendCollision,
   reconcileStalePackReviewRuns,
@@ -201,11 +201,49 @@ function threeSlotRound(): PackReviewGptRoundRecord {
   };
 }
 
-function startedStaleRun(storeRoot: string): {
+function listedTransport(comments: () => PackGptSourceGithubComment[]): PackGptSourceCommentTransport {
+  return {
+    resolveActorLogin: async () => 'browser-gpt-bot',
+    listComments: async () => comments(),
+    getComment: async (id) => {
+      const selected = comments().find((row) => row.id === id);
+      if (!selected) throw new Error(`fixture comment ${String(id)} missing`);
+      return selected;
+    },
+  };
+}
+
+function timedComment(publication: PublishedSource, id: number, createdAt: string): PackGptSourceGithubComment {
+  return { ...sourceComment(publication, id), createdAt, updatedAt: createdAt };
+}
+
+function recoveryInput(
+  storeRoot: string,
+  transport: PackGptSourceCommentTransport,
+  review: { posts: number },
+) {
+  return {
+    repoSlug: REPO,
+    sourceRepoRoot: process.cwd(),
+    projectId: 'orchestrator-pack',
+    storeRoot,
+    fixtureCurrentPrHeadSha: HEAD,
+    fixtureGptSourceCommentTransport: transport,
+    fixtureGithubReviewTransport: finalReviewTransport(review),
+    fixtureRequiredStatusWriter: async () => {},
+    fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+    fixtureIssueTitle: '[T1] Source recovery fixture', fixtureIssueBody: ISSUE_BODY,
+    fixtureIssueNumber: 1435,
+    fixtureChangedPaths: ['scripts/pack-review-runner.ts'],
+    fixtureBoundIssueSnapshotBytes: ISSUE_BODY,
+    resolveRepositorySlug: async () => REPO,
+  };
+}
+
+function startedStaleRun(storeRoot: string, staleAt = new Date('2026-08-16T00:00:00Z')): {
   runId: string;
   publications: Map<string, PublishedSource>;
 } {
-  const staleAt = new Date('2026-08-16T00:00:00Z');
   initializePackReviewAuthority({
     prNumber: 1436,
     headSha: HEAD,
@@ -546,6 +584,134 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
     expect(recovered?.deliveryOutcomes.githubComment?.state).toBe('succeeded');
     expect(recovered?.deliveryOutcomes.requiredStatus?.state).toBe('succeeded');
     expect(recovered?.deliveryOutcomes.workerNotification?.state).toBe('delivered');
+  });
+
+  it('incident 1710: a dead runner pid inside grace finalizes from already-published credentialable sources', async () => {
+    const storeRoot = tempRoot();
+    process.env.OPK_VITEST_HARNESS = '1';
+    const { runId, publications } = startedStaleRun(storeRoot, new Date());
+    const review = { posts: 0 };
+    const result = await reconcileStalePackReviewRuns(
+      recoveryInput(storeRoot, dynamicTransport(publications), review),
+    );
+    expect(result.results, JSON.stringify(result)).toContainEqual(expect.objectContaining({
+      runId, recovered: true, reason: 'gpt_source_comments_recovered_and_delivered',
+    }));
+    expect(review.posts).toBe(1);
+    const recovered = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
+    expect(recovered?.reviewVerdict).toBe('findings');
+    expect(recovered?.deliveryOutcomes.githubComment?.state).toBe('succeeded');
+  });
+
+  it('incident 1710: a dead runner pid inside grace without published sources keeps the existing recovery state', async () => {
+    const storeRoot = tempRoot();
+    process.env.OPK_VITEST_HARNESS = '1';
+    const { runId } = startedStaleRun(storeRoot, new Date());
+    const review = { posts: 0 };
+    const result = await reconcileStalePackReviewRuns(
+      recoveryInput(storeRoot, dynamicTransport(new Map()), review),
+    );
+    expect(result.results, JSON.stringify(result)).toContainEqual(expect.objectContaining({
+      runId, terminalized: false,
+      reason: expect.stringMatching(/^dead_runner_sources_not_published:/),
+      nextAction: expect.any(String),
+    }));
+    expect(review.posts).toBe(0);
+    const unchanged = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
+    expect(unchanged?.status).toBe('running');
+    expect(unchanged?.reviewVerdict).toBeUndefined();
+  });
+
+  it.each([
+    ['later createdAt wins over a higher id', [6001, '2026-08-17T00:00:00Z'], [6000, '2026-08-17T00:05:00Z'], 6000],
+    ['numeric id breaks an equal createdAt', [6000, '2026-08-17T00:00:00Z'], [6002, '2026-08-17T00:00:00Z'], 6002],
+  ] as const)('incident 1716: before freeze the %s among duplicate exact-identity comments', async (_name, loser, winner, expectedId) => {
+    const storeRoot = tempRoot();
+    process.env.OPK_VITEST_HARNESS = '1';
+    const { runId, publications } = startedStaleRun(storeRoot);
+    const first = publications.get('source-01')!;
+    const comments = [
+      timedComment(first, loser[0], loser[1]),
+      timedComment({ ...first, payload: 'NO_FINDINGS' }, winner[0], winner[1]),
+      timedComment(publications.get('source-02')!, 6010, '2026-08-17T00:00:00Z'),
+      timedComment(publications.get('source-03')!, 6020, '2026-08-17T00:00:00Z'),
+    ];
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const review = { posts: 0 };
+      const result = await reconcileStalePackReviewRuns(
+        recoveryInput(storeRoot, listedTransport(() => comments), review),
+      );
+      expect(result.results, JSON.stringify(result)).toContainEqual(expect.objectContaining({ runId, recovered: true }));
+      const recovered = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
+      const slot = recovered?.reviewRound?.sourceSlots.find((entry) => entry.slotId === 'source-01');
+      expect((slot?.terminalResult as { source_comment_receipt?: { commentId?: number } })
+        .source_comment_receipt?.commentId).toBe(expectedId);
+      expect(recovered?.reviewVerdict).toBe('clean');
+      expect(stderr.mock.calls.map(([chunk]) => String(chunk)).join(''))
+        .toContain(`duplicate source comment elected: source-01 selected=${expectedId} ignored=${loser[0]}`);
+    } finally { stderr.mockRestore(); }
+  });
+
+  it('incident 1716: before freeze an edited or malformed newer marker copy cannot block electing the latest valid duplicate', async () => {
+    const storeRoot = tempRoot();
+    process.env.OPK_VITEST_HARNESS = '1';
+    const { runId, publications } = startedStaleRun(storeRoot);
+    const first = publications.get('source-01')!;
+    const edited = { ...timedComment(first, 6003, '2026-08-17T00:09:00Z'), updatedAt: '2026-08-17T00:10:00Z' };
+    const valid = timedComment({ ...first, payload: 'NO_FINDINGS' }, 6001, '2026-08-17T00:05:00Z');
+    const malformed = timedComment(first, 6004, '2026-08-17T00:11:00Z');
+    malformed.body = valid.body.split('\n', 1)[0] + '\nnot a source envelope';
+    const comments = [
+      timedComment(first, 6000, '2026-08-17T00:00:00Z'), valid, edited, malformed,
+      timedComment(publications.get('source-02')!, 6010, '2026-08-17T00:00:00Z'),
+      timedComment(publications.get('source-03')!, 6020, '2026-08-17T00:00:00Z'),
+    ];
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const result = await reconcileStalePackReviewRuns(
+        recoveryInput(storeRoot, listedTransport(() => comments), { posts: 0 }),
+      );
+      expect(result.results, JSON.stringify(result)).toContainEqual(expect.objectContaining({ runId, recovered: true }));
+      const recovered = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
+      const slot = recovered?.reviewRound?.sourceSlots.find((entry) => entry.slotId === 'source-01');
+      expect((slot?.terminalResult as { source_comment_receipt?: { commentId?: number } })
+        .source_comment_receipt?.commentId).toBe(6001);
+      expect(recovered?.reviewVerdict).toBe('clean');
+      expect(stderr.mock.calls.map(([chunk]) => String(chunk)).join(''))
+        .toContain('duplicate source comment elected: source-01 selected=6001 ignored=6000,6003,6004');
+    } finally { stderr.mockRestore(); }
+  });
+
+  it('incident 1716: after freeze the frozen receipt stands and a later duplicate is ignored and logged', async () => {
+    const storeRoot = tempRoot();
+    process.env.OPK_VITEST_HARNESS = '1';
+    const { runId, publications } = startedStaleRun(storeRoot, new Date());
+    const frozen = timedComment(publications.get('source-01')!, 6000, '2026-08-17T00:00:00Z');
+    const comments = [frozen];
+    const transport = listedTransport(() => comments);
+    const review = { posts: 0 };
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await reconcileStalePackReviewRuns(recoveryInput(storeRoot, transport, review));
+      const frozenSlot = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot })
+        ?.reviewRound?.sourceSlots.find((entry) => entry.slotId === 'source-01');
+      expect(frozenSlot?.terminalClass).toBe('complete_findings');
+      comments.push(
+        timedComment({ ...publications.get('source-01')!, payload: 'NO_FINDINGS' }, 6100, '2026-08-17T00:09:00Z'),
+        timedComment(publications.get('source-02')!, 6010, '2026-08-17T00:00:00Z'),
+        timedComment(publications.get('source-03')!, 6020, '2026-08-17T00:00:00Z'),
+      );
+      const result = await reconcileStalePackReviewRuns(recoveryInput(storeRoot, transport, review));
+      expect(result.results, JSON.stringify(result)).toContainEqual(expect.objectContaining({ runId, recovered: true }));
+      const recovered = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
+      const slot = recovered?.reviewRound?.sourceSlots.find((entry) => entry.slotId === 'source-01');
+      expect(slot?.terminalResult).toEqual(frozenSlot?.terminalResult);
+      expect(recovered?.reviewVerdict).toBe('findings');
+      expect(review.posts).toBe(1);
+      expect(stderr.mock.calls.map(([chunk]) => String(chunk)).join(''))
+        .toContain('frozen source slot kept; later duplicate ignored: source-01 selected=6000 ignored=6100');
+    } finally { stderr.mockRestore(); }
   });
 
   it('settles an active all-slots-credentialed crash without reviewer resend and preserves a lost browser finding', async () => {

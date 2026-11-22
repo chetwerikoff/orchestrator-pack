@@ -16,7 +16,7 @@ import {
   type LifecycleOperations,
 } from './operations.ts';
 import type { ExpectedWorktreeIdentity } from './core.ts';
-import { closeSync, openSync, realpathSync, readdirSync, readFileSync, readlinkSync } from 'node:fs';
+import { closeSync, openSync, realpathSync, readdirSync, readFileSync, readlinkSync, symlinkSync } from 'node:fs';
 import { defaultProcessCensus } from '../worktree-teardown.ts';
 import {
   removeIdenticalLaunchCopies,
@@ -1152,6 +1152,171 @@ describe('removeIdenticalLaunchCopies', () => {
     expect(result.preserved).toEqual([{ path: '.env', reason: 'primary_copy_missing' }]);
     expect(existsSync(join(fx.manager, '.env'))).toBe(true);
   });
+
+  it('removes an identical ignored copy when the tracked listing is successfully empty', () => {
+    const fx = fixture();
+    const calls: string[][] = [];
+    const git: GitRunner = (args) => {
+      if (args.includes('ls-files')) {
+        calls.push([...args]);
+        return { ok: true, stdout: '', stderr: '' };
+      }
+      return fx.git(args);
+    };
+    const result = removeIdenticalLaunchCopies(fx.manager, fx.primary, git);
+    expect(calls).toEqual([
+      ['-C', fx.manager, 'ls-files', '--cached', '-z', '--', '.env'],
+      ['-C', fx.manager, 'ls-files', '--cached', '-z', '--', LOCAL_CONFIG],
+    ]);
+    expect(result.removed).toEqual(['.env', LOCAL_CONFIG]);
+    expect(result.preserved).toEqual([]);
+    expect(existsSync(join(fx.manager, '.env'))).toBe(false);
+    expect(existsSync(join(fx.manager, LOCAL_CONFIG))).toBe(false);
+  });
+
+  it('preserves equal bytes when a successful tracked listing is nonempty', () => {
+    const fx = fixture();
+    const envBytes = readFileSync(join(fx.manager, '.env'));
+    const configBytes = readFileSync(join(fx.manager, LOCAL_CONFIG));
+    const git: GitRunner = (args) => args.includes('ls-files')
+      ? { ok: true, stdout: `${args.at(-1) ?? ''}\0`, stderr: '' }
+      : fx.git(args);
+    const result = removeIdenticalLaunchCopies(fx.manager, fx.primary, git);
+    expect(result.removed).toEqual([]);
+    expect(result.preserved).toEqual([
+      { path: '.env', reason: 'not_ignored' },
+      { path: LOCAL_CONFIG, reason: 'not_ignored' },
+    ]);
+    expect(readFileSync(join(fx.manager, '.env'))).toEqual(envBytes);
+    expect(readFileSync(join(fx.manager, LOCAL_CONFIG))).toEqual(configBytes);
+  });
+
+  it('preserves equal bytes when the tracked listing fails', () => {
+    const fx = fixture();
+    const envBytes = readFileSync(join(fx.manager, '.env'));
+    const git: GitRunner = (args) => args.includes('ls-files')
+      ? { ok: false, stdout: '', stderr: 'ls-files failed' }
+      : fx.git(args);
+    const result = removeIdenticalLaunchCopies(fx.manager, fx.primary, git);
+    expect(result.removed).toEqual([]);
+    expect(result.preserved).toEqual([
+      { path: '.env', reason: 'unverified' },
+      { path: LOCAL_CONFIG, reason: 'unverified' },
+    ]);
+    expect(readFileSync(join(fx.manager, '.env'))).toEqual(envBytes);
+  });
+
+  it('does not remove a recognized generated env when the tracked listing fails', () => {
+    const fx = fixture();
+    rmSync(join(fx.primary, '.env'));
+    writeFileSync(join(fx.manager, '.env'), generated);
+    const git: GitRunner = (args) => args.includes('ls-files')
+      ? { ok: false, stdout: '', stderr: 'ls-files failed' }
+      : fx.git(args);
+    const result = removeIdenticalLaunchCopies(fx.manager, fx.primary, git);
+    expect(result.removed).not.toContain('.env');
+    expect(result.preserved).toContainEqual({ path: '.env', reason: 'unverified' });
+    expect(readFileSync(join(fx.manager, '.env'), 'utf8')).toBe(generated);
+  });
+
+  it('preserves a tracked copy and a non-ignored copy', () => {
+    const tracked = fixture();
+    sh(tracked.manager, 'add', '-f', '--', '.env');
+    const trackedBytes = readFileSync(join(tracked.primary, '.env'));
+    const trackedResult = removeIdenticalLaunchCopies(tracked.manager, tracked.primary, tracked.git);
+    expect(trackedResult.removed).not.toContain('.env');
+    expect(trackedResult.preserved).toContainEqual({ path: '.env', reason: 'not_ignored' });
+    expect(readFileSync(join(tracked.manager, '.env'))).toEqual(trackedBytes);
+
+    const ignored = fixture();
+    writeFileSync(join(ignored.manager, '.gitignore'), 'nothing\n');
+    const ignoredBytes = readFileSync(join(ignored.primary, '.env'));
+    const ignoredResult = removeIdenticalLaunchCopies(ignored.manager, ignored.primary, ignored.git);
+    expect(ignoredResult.removed).toEqual([]);
+    expect(ignoredResult.preserved).toEqual([
+      { path: '.env', reason: 'not_ignored' },
+      { path: LOCAL_CONFIG, reason: 'not_ignored' },
+    ]);
+    expect(readFileSync(join(ignored.manager, '.env'))).toEqual(ignoredBytes);
+  });
+
+  it('skips a genuinely missing worktree copy', () => {
+    const fx = fixture();
+    rmSync(join(fx.manager, '.env'));
+    const result = removeIdenticalLaunchCopies(fx.manager, fx.primary, fx.git);
+    expect(result.removed).toEqual([LOCAL_CONFIG]);
+    expect(result.preserved).toEqual([]);
+    expect(existsSync(join(fx.manager, '.env'))).toBe(false);
+  });
+
+  it('preserves a dangling worktree symlink and a nonregular directory entry', () => {
+    const dangling = fixture();
+    rmSync(join(dangling.manager, '.env'));
+    symlinkSync('missing-target', join(dangling.manager, '.env'));
+    const danglingResult = removeIdenticalLaunchCopies(dangling.manager, dangling.primary, dangling.git);
+    expect(danglingResult.removed).not.toContain('.env');
+    expect(danglingResult.preserved).toContainEqual({ path: '.env', reason: 'unverified' });
+    expect(readlinkSync(join(dangling.manager, '.env'))).toBe('missing-target');
+
+    const directory = fixture();
+    rmSync(join(directory.manager, '.env'));
+    mkdirSync(join(directory.manager, '.env'));
+    writeFileSync(join(directory.manager, '.env', 'keep.txt'), 'keep');
+    const directoryResult = removeIdenticalLaunchCopies(directory.manager, directory.primary, directory.git);
+    expect(directoryResult.removed).not.toContain('.env');
+    expect(directoryResult.preserved).toContainEqual({ path: '.env', reason: 'unverified' });
+    expect(readFileSync(join(directory.manager, '.env', 'keep.txt'), 'utf8')).toBe('keep');
+  });
+
+  it('preserves a copy whose inspection fails because a parent is not a directory', () => {
+    const fx = fixture();
+    rmSync(join(fx.manager, '.claude'), { recursive: true });
+    writeFileSync(join(fx.manager, '.claude'), 'not-a-directory');
+    const result = removeIdenticalLaunchCopies(fx.manager, fx.primary, fx.git);
+    expect(result.removed).not.toContain(LOCAL_CONFIG);
+    expect(result.preserved).toContainEqual({ path: LOCAL_CONFIG, reason: 'unverified' });
+    expect(readFileSync(join(fx.manager, '.claude'), 'utf8')).toBe('not-a-directory');
+  });
+
+  it('reports a dangling or nonregular primary as unverified, including a generated env', () => {
+    const dangling = fixture();
+    rmSync(join(dangling.primary, '.env'));
+    symlinkSync('nowhere', join(dangling.primary, '.env'));
+    writeFileSync(join(dangling.manager, '.env'), generated);
+    const danglingResult = removeIdenticalLaunchCopies(dangling.manager, dangling.primary, dangling.git);
+    expect(danglingResult.removed).not.toContain('.env');
+    expect(danglingResult.preserved).toContainEqual({ path: '.env', reason: 'unverified' });
+    expect(readFileSync(join(dangling.manager, '.env'), 'utf8')).toBe(generated);
+    expect(readlinkSync(join(dangling.primary, '.env'))).toBe('nowhere');
+
+    const directory = fixture();
+    const original = readFileSync(join(directory.manager, '.env'));
+    rmSync(join(directory.primary, '.env'));
+    mkdirSync(join(directory.primary, '.env'));
+    const directoryResult = removeIdenticalLaunchCopies(directory.manager, directory.primary, directory.git);
+    expect(directoryResult.removed).not.toContain('.env');
+    expect(directoryResult.preserved).toContainEqual({ path: '.env', reason: 'unverified' });
+    expect(readFileSync(join(directory.manager, '.env'))).toEqual(original);
+  });
+
+  it('reports an uninspectable primary as unverified and keeps differing bytes', () => {
+    const broken = fixture();
+    const original = readFileSync(join(broken.manager, LOCAL_CONFIG));
+    rmSync(join(broken.primary, '.claude'), { recursive: true });
+    writeFileSync(join(broken.primary, '.claude'), 'not-a-directory');
+    const brokenResult = removeIdenticalLaunchCopies(broken.manager, broken.primary, broken.git);
+    expect(brokenResult.removed).not.toContain(LOCAL_CONFIG);
+    expect(brokenResult.preserved).toContainEqual({ path: LOCAL_CONFIG, reason: 'unverified' });
+    expect(readFileSync(join(broken.manager, LOCAL_CONFIG))).toEqual(original);
+
+    const changed = Buffer.from('LOCAL_ONLY=1\n');
+    const differing = fixture();
+    writeFileSync(join(differing.manager, '.env'), changed);
+    const differingResult = removeIdenticalLaunchCopies(differing.manager, differing.primary, differing.git);
+    expect(differingResult.removed).toEqual([LOCAL_CONFIG]);
+    expect(differingResult.preserved).toEqual([{ path: '.env', reason: 'differs_from_primary' }]);
+    expect(readFileSync(join(differing.manager, '.env'))).toEqual(changed);
+  });
 });
 
 describe('runMergeCleanup', () => {
@@ -1280,6 +1445,31 @@ describe('runMergeCleanup', () => {
     expect(existsSync(fx.smoke)).toBe(false);
     expect(log.filter((entry) => entry.startsWith('send:'))).toHaveLength(1);
     expect(report.message).toMatch(/^CLEANUP_BLOCKED 7 s7 merged; .*unexpected error, tree preserved: process census could not read/);
+  });
+
+  it('preserves a listed tree whose .env is a dangling symlink', () => {
+    const fx = fixture();
+    rmSync(join(fx.manager, '.env'));
+    symlinkSync('missing-target', join(fx.manager, '.env'));
+    const log: string[] = [];
+    const report = runMergeCleanup(
+      { primaryRoot: fx.primary, ownWorktree: fx.own, listed: [fx.manager], prNumber: 2856, mergeSha: 's2856', orchestratorHandle: 'h' },
+      deps(fx, {
+        removeTree: () => {
+          log.push('remove');
+          return { ok: true, detail: 'unexpected removal' };
+        },
+      }, log),
+    );
+    expect(report.trees[0]?.status).toBe('preserved');
+    expect(report.trees[0]?.launchCopies?.preserved).toEqual([{ path: '.env', reason: 'unverified' }]);
+    expect(readlinkSync(join(fx.manager, '.env'))).toBe('missing-target');
+    expect(existsSync(fx.manager)).toBe(true);
+    expect(log.filter((entry) => entry === 'remove' || entry.startsWith('remove:'))).toEqual([]);
+    expect(log.filter((entry) => entry.startsWith('send:'))).toHaveLength(1);
+    expect(report.message).toMatch(/launch copy kept: \.env \(unverified\)/);
+    expect(report.message).toMatch(/^CLEANUP_BLOCKED 2856 s2856 merged;/);
+    expect(report.message).not.toMatch(/^MERGED/);
   });
 
   it('preserves a tree whose differing launch copy remains instead of removing it', () => {
