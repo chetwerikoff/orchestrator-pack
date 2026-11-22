@@ -1,5 +1,5 @@
 // @vitest-ci-lane light
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -36,6 +36,9 @@ interface CiJob {
   steps: CiStep[];
   logs: string;
   name?: string;
+  conclusion?: string;
+  omitCheckOutput?: boolean;
+  logResult?: 'fail';
 }
 
 interface CiState {
@@ -94,6 +97,9 @@ function fixture() {
     run: (options: RunProcessSyncOptions) => {
       calls.push(options);
       beforeRun?.(options);
+      if (options.command === 'git' && options.args?.[0] === 'fetch' && options.cwd && existsSync(join(String(options.cwd), '.git', 'shallow'))) {
+        return run({ ...options, args: [...(options.args ?? []), '--depth=1'] });
+      }
       if (options.command === 'git' && options.args?.includes('--first-parent') && failRevList) {
         const failed = run({ command: process.execPath, args: ['-e', 'process.exit(1)'], inheritParentEnv: true });
         return { ...failed, stderr: 'bad ancestry' };
@@ -112,20 +118,21 @@ function fixture() {
             id: index + 1, name: job.name ?? 'CI / checks', status: ci.status, conclusion: ci.conclusion,
             head_sha: ci.headSha,
             details_url: `https://github.com/example/formatter/actions/runs/${job.runId}/job/${job.id}`,
-            output: ci.omitCheckOutput ? { title: 'lint' } : { title: 'lint', summary: job.logs, text: job.logs },
+            conclusion: job.conclusion ?? ci.conclusion,
+            output: (job.omitCheckOutput ?? ci.omitCheckOutput) ? { title: 'lint' } : { title: 'lint', summary: job.logs, text: job.logs },
           }));
           stdout = JSON.stringify({ total_count: ci.totalCount ?? runs.length, check_runs: runs });
         } else if (jobMatch) {
           const job = jobs.find((candidate) => candidate.id === Number(jobMatch[1]));
           if (!job) throw new Error(`unexpected gh endpoint ${endpoint}`);
           stdout = JSON.stringify({
-            id: job.id, run_id: job.runId, run_attempt: job.runAttempt, status: 'completed', conclusion: 'failure',
+            id: job.id, run_id: job.runId, run_attempt: job.runAttempt, status: 'completed', conclusion: job.conclusion ?? 'failure',
             name: job.name ?? 'CI / checks', head_sha: ci.headSha, steps: job.steps,
           });
         } else if (logMatch) {
           const job = jobs.find((candidate) => candidate.id === Number(logMatch[1]));
           if (!job) throw new Error(`unexpected gh endpoint ${endpoint}`);
-          if (ci.logResult === 'fail') {
+          if ((job.logResult ?? ci.logResult) === 'fail') {
             const failed = run({ command: process.execPath, args: ['-e', 'process.exit(1)'], inheritParentEnv: true });
             return { ...failed, stderr: 'log unavailable' };
           }
@@ -491,8 +498,7 @@ describe('C1 routing matrix', () => {
     expect(world.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
     expect(world.remoteHead()).toBe(world.head);
     const logCalls = world.calls.filter((call) => String(call.args?.[1] ?? '').endsWith('/logs'));
-    const ids = order === 'lint job then test job' ? [201, 202] : [202, 201];
-    expect(logCalls.map((call) => call.args)).toEqual(ids.map((id) => ['api', `repos/example/formatter/actions/jobs/${id}/logs`]));
+    expect(logCalls.map((call) => call.args)).toEqual([['api', 'repos/example/formatter/actions/jobs/202/logs']]);
     world.expectRemoved();
   });
 
@@ -653,6 +659,47 @@ process.stdout.write('HTTP/2 200\\n\\n' + JSON.stringify({ total_count: 2, check
     expect(secret.remoteHead()).toBe(secret.head);
   });
 
+  it('does not send a sibling lint log when the failed test job has no sanitized lines', () => {
+    const world = fixture();
+    world.ci.jobs = [
+      {
+        id: 201, runId: 100, runAttempt: 4, logs: 'source.ts:1:1 format error from lint job\n',
+        steps: [{ name: 'lint', status: 'completed', conclusion: 'failure', number: 1 }],
+      },
+      {
+        id: 202, runId: 100, runAttempt: 4, logs: '', conclusion: 'failure', omitCheckOutput: true, logResult: 'fail',
+        steps: [{ name: 'test', status: 'completed', conclusion: 'failure', number: 1 }],
+      },
+    ];
+    const result = runManagerFormatterFix(world.context, 42, world.deps);
+    expect(result.outcome).toBe('refused');
+    expect(result.message).toContain('sanitized CI logs and check output are unavailable');
+    expect(result.message).not.toContain('format error from lint job');
+    expect(result.message).not.toContain('GPT fixer');
+    expect(world.remoteHead()).toBe(world.head);
+  });
+
+  it('does not publish from an optional failed lint run when another current-head run succeeded', () => {
+    const world = fixture();
+    world.ci.jobs = [
+      {
+        id: 301, runId: 100, runAttempt: 4, conclusion: 'success', logs: 'required ci passed\n',
+        name: 'required CI',
+        steps: [{ name: 'test', status: 'completed', conclusion: 'success', number: 1 }],
+      },
+      {
+        id: 302, runId: 101, runAttempt: 1, conclusion: 'failure', logs: 'optional format error\n',
+        name: 'optional lint experiment',
+        steps: [{ name: 'lint', status: 'completed', conclusion: 'failure', number: 1 }],
+      },
+    ];
+    const result = runManagerFormatterFix(world.context, 42, world.deps);
+    expect(result.outcome).toBe('refused');
+    expect(result.message).toContain('required-check relevance is unproved');
+    expect(world.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+    expect(world.remoteHead()).toBe(world.head);
+  });
+
   it('gives a mixed lint and test failure to GPT and does not publish', () => {
     const world = fixture();
     world.ci.steps = [
@@ -714,6 +761,27 @@ describe('C1 card gate', () => {
     world.expectRemoved();
   });
 
+  it('refuses a post-fix check that retargets a tracked symlink and exits zero', () => {
+    const world = fixture();
+    writeFileSync(join(world.primary, 'target-a'), 'same\n');
+    writeFileSync(join(world.primary, 'target-b'), 'same\n');
+    symlinkSync('target-a', join(world.primary, 'link'));
+    world.git(world.primary, 'add', 'target-a', 'target-b', 'link');
+    world.git(world.primary, 'commit', '-m', 'Track a symlink');
+    const head = world.git(world.primary, 'rev-parse', 'HEAD');
+    world.git(world.primary, 'push', 'origin', `${head}:refs/heads/fix/format`);
+    world.pointAt(head);
+    const retarget = node('const fs=require("node:fs"); const text=fs.readFileSync("source.ts","utf8"); if (text!==' + JSON.stringify(formatted) + ') process.exit(0); fs.unlinkSync("link"); fs.symlinkSync("target-b","link");');
+    const context = { ...world.context, verification: { formatter: { fix: [fix], checks: [check, retarget] } } };
+    const result = runManagerFormatterFix(context, 42, world.deps);
+    expect(result.outcome).toBe('refused');
+    expect(result.message).toContain('post-fix check mutated tracked files');
+    expect(result.message).toContain(retarget);
+    expect(world.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+    expect(world.remoteHead()).toBe(head);
+    world.expectRemoved();
+  });
+
   it('refuses a post-fix check that changes tracked content and exits zero', () => {
     const world = fixture();
     const mutateAfter = node(`const fs=require("node:fs"); const text=fs.readFileSync("source.ts","utf8"); if (text===${JSON.stringify(formatted)}) fs.writeFileSync("source.ts", text+"\\nmutated"); else process.exit(1);`);
@@ -753,6 +821,24 @@ describe('C1 hook repeat', () => {
     expect(shCommands(world, calls)).toEqual([]);
     expect(world.remoteHead()).toBe(published);
     world.expectRemoved();
+  });
+
+  it('does not treat a shallow history that hides Apply formatter as a first episode', () => {
+    const world = fixture();
+    expect(runManagerFormatterFix(world.context, 42, world.deps).outcome).toBe('published');
+    const published = world.remoteHead();
+    const tree = world.git(world.primary, 'rev-parse', `${published}^{tree}`);
+    const rerun = pushedCommit(world, published, tree, 'ci: rerun');
+    world.pointAt(rerun);
+    const shallow = join(world.root, 'shallow');
+    world.git(world.root, 'clone', '--no-local', '--depth', '1', '--branch', 'fix/format', world.remote, shallow);
+    const context = { ...world.context, primaryRoot: shallow };
+    const calls = world.calls.length;
+    const result = runManagerFormatterFix(context, 42, world.deps);
+    expect(result.outcome).toBe('refused');
+    expect(result.message).toContain('first-parent ancestry is incomplete');
+    expect(world.calls.slice(calls).some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+    expect(world.remoteHead()).toBe(rerun);
   });
 
   it('does not re-arm for a tree-identical ci: rerun child', () => {

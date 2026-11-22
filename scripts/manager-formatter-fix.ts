@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --experimental-strip-types
 import './toolchain/native-entrypoint-preflight.ts';
 
-import { mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,6 +41,7 @@ interface JobPayload {
   readonly id?: number;
   readonly run_id?: number;
   readonly run_attempt?: number;
+  readonly conclusion?: string | null;
   readonly head_sha?: string;
   readonly steps?: readonly JobStep[];
 }
@@ -182,35 +183,49 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
   const trackedSnapshot = (cwd: string): string => {
     const index = quietGit(cwd, ['ls-files', '--stage'], false);
     const paths = quietGit(cwd, ['ls-files', '-z'], false).split('\0').filter(Boolean);
-    const present: string[] = [];
-    const rows = paths.map((path) => {
+    const files: string[] = [];
+    const rows: Array<{ kind: 'deleted' | 'link' | 'file'; text: string }> = paths.map((path) => {
+      const full = join(cwd, path);
+      let info;
       try {
-        const mode = (statSync(join(cwd, path)).mode & 0o777).toString(8);
-        present.push(path);
-        return `${path}\t${mode}`;
+        info = lstatSync(full);
       } catch {
-        return `${path}\tdeleted`;
+        return { kind: 'deleted', text: `${path}\tdeleted` };
       }
+      const mode = (info.mode & 0o777).toString(8);
+      if (info.isSymbolicLink()) {
+        try {
+          return { kind: 'link', text: `${path}\tlink\t${mode}\t${readlinkSync(full)}` };
+        } catch {
+          throw new Error(`tracked symlink is unreadable: ${path}`);
+        }
+      }
+      if (!info.isFile()) throw new Error(`tracked path is not a regular file: ${path}`);
+      files.push(path);
+      return { kind: 'file', text: `${path}\tfile\t${mode}` };
     });
     let hashes: string[] = [];
-    if (present.length > 0 && present.every((path) => !path.includes('\n'))) {
+    if (files.length > 0 && files.every((path) => !path.includes('\n'))) {
       const hashed = run({
         command: 'git', args: ['hash-object', '--stdin-paths'], cwd,
-        input: `${present.join('\n')}\n`, inheritParentEnv: true, timeoutMs: 240_000,
+        input: `${files.join('\n')}\n`, inheritParentEnv: true, timeoutMs: 240_000,
       });
       if (hashed.ok) hashes = hashed.stdout.trim().split(/\r?\n/u);
     }
-    if (hashes.length !== present.length) {
-      hashes = present.map((path) => {
+    if (hashes.length !== files.length) {
+      hashes = files.map((path) => {
         const hashed = run({
           command: 'git', args: ['hash-object', '--', path], cwd,
           inheritParentEnv: true, timeoutMs: 240_000,
         });
-        return hashed.ok ? hashed.stdout.trim() : 'unreadable';
+        return hashed.ok ? hashed.stdout.trim() : '';
       });
     }
+    if (hashes.length !== files.length || hashes.some((hash) => !/^[0-9a-f]{40}$/u.test(hash))) {
+      throw new Error('tracked file bytes are unreadable');
+    }
     let hashIndex = 0;
-    const work = rows.map((row) => row.endsWith('\tdeleted') ? row : `${row}\t${hashes[hashIndex++]}`);
+    const work = rows.map((row) => row.kind === 'file' ? `${row.text}\t${hashes[hashIndex++]}` : row.text);
     return `${index}\n--\n${work.join('\n')}`;
   };
 
@@ -417,31 +432,53 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
       jobs.push(job);
     }
     const selected = selectedAttemptJobs(jobs);
-    const selectedIds = new Set(selected.map((job) => job.id).filter((id): id is number => Number.isInteger(id)));
-    const steps = selected.flatMap((job) => job.steps ?? []);
-    let attempt: number | null = null;
+    const failedJobs = selected.filter((job) => job.conclusion === 'failure' || job.conclusion === 'timed_out');
+    const failedRunIds = new Set<number>();
+    const successfulRunIds = new Set<number>();
     for (const job of selected) {
+      const runId = job.run_id ?? job.id ?? 0;
+      if (job.conclusion === 'failure' || job.conclusion === 'timed_out') failedRunIds.add(runId);
+      else if (job.conclusion === 'success') successfulRunIds.add(runId);
+    }
+    for (const runId of failedRunIds) successfulRunIds.delete(runId);
+    if (selected.length > 0 && failedJobs.length === 0) {
+      return { kind: 'hold', reason: `required CI on ${sha} has no failed check-run or job conclusion` };
+    }
+    if (successfulRunIds.size > 0 && failedRunIds.size > 0) {
+      return {
+        kind: 'hold',
+        reason: `current-head CI has a successful run alongside a failed run, so required-check relevance is unproved on ${sha}`,
+      };
+    }
+    const steps = failedJobs.flatMap((job) => job.steps ?? []);
+    let attempt: number | null = null;
+    for (const job of failedJobs) {
       const value = job.run_attempt;
       if (typeof value !== 'number' || !Number.isInteger(value)) continue;
       if (attempt === null || value > attempt) attempt = value;
     }
-    if (jobIds.length > 0 && steps.length === 0) {
+    if (jobIds.length > 0 && steps.length === 0 && failedJobs.length > 0) {
       return { kind: 'hold', reason: `CI job steps for ${sha} are unavailable` };
     }
     const lintFailed: string[] = [];
     const substantiveFailed: string[] = [];
     const unknownFailed: string[] = [];
+    const substantiveJobIds = new Set<number>();
     let skippedDownstream = false;
-    for (const step of steps) {
-      const name = step.name ?? '';
-      const kind = stepKind(name);
-      const completed = step.status === 'completed';
-      const failed = completed && (step.conclusion === 'failure' || step.conclusion === 'timed_out');
-      const unknown = !completed || step.conclusion === 'skipped' || step.conclusion == null;
-      if (failed && kind === 'lint') lintFailed.push(name);
-      else if (failed && kind === 'substantive') substantiveFailed.push(name);
-      else if (failed) unknownFailed.push(name || '(unnamed step)');
-      else if (unknown && kind !== 'lint') skippedDownstream = true;
+    for (const job of failedJobs) {
+      for (const step of job.steps ?? []) {
+        const name = step.name ?? '';
+        const kind = stepKind(name);
+        const completed = step.status === 'completed';
+        const failed = completed && (step.conclusion === 'failure' || step.conclusion === 'timed_out');
+        const unknown = !completed || step.conclusion === 'skipped' || step.conclusion == null;
+        if (failed && kind === 'lint') lintFailed.push(name);
+        else if (failed && kind === 'substantive') {
+          substantiveFailed.push(name);
+          if (Number.isInteger(job.id)) substantiveJobIds.add(job.id!);
+        } else if (failed) unknownFailed.push(name || '(unnamed step)');
+        else if (unknown && kind !== 'lint') skippedDownstream = true;
+      }
     }
     const texts: string[] = [];
     const consider = (text: string | null | undefined) => {
@@ -449,13 +486,16 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
       const safe = sanitizeDiagnosticText(text);
       if (safe) texts.push(safe);
     };
+    const evidenceIds = substantiveFailed.length > 0
+      ? substantiveJobIds
+      : new Set(failedJobs.map((job) => job.id).filter((id): id is number => Number.isInteger(id)));
     for (const run of runs) {
       const id = jobIdFromUrl(run.details_url ?? run.html_url);
-      if (id !== null && !selectedIds.has(id)) continue;
+      if (id === null || !evidenceIds.has(id)) continue;
       consider(run.output?.text);
       consider(run.output?.summary);
     }
-    for (const id of selectedIds) {
+    for (const id of evidenceIds) {
       const logs = execute(context.packRoot, ghBin, [
         'api', `repos/${context.repository}/actions/jobs/${id}/logs`,
       ]);
@@ -519,7 +559,14 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
         break;
       }
     }
-    if (formatterAt === -1) return { kind: 'first' };
+    if (formatterAt === -1) {
+      const oldest = rows[rows.length - 1]!;
+      const shallow = git(context.primaryRoot, ['rev-parse', '--is-shallow-repository']);
+      if (!shallow.ok || shallow.stdout.trim() === 'true' || oldest.parents.length > 0) {
+        return { kind: 'blocked', reason: 'first-parent ancestry is incomplete' };
+      }
+      return { kind: 'first' };
+    }
     for (let index = 0; index <= formatterAt; index += 1) {
       if (rows[index]!.parents.length !== 1) return { kind: 'blocked', reason: 'first-parent line is ambiguous' };
     }
