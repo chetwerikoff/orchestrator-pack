@@ -1859,29 +1859,35 @@ function nativeReceiptLaunchingOwner(
   executor: OrcaExecutor,
   assignments: readonly WorkerAssignmentRecord[] | null,
   requireFailure = true,
+  failedLink?: (link: string) => void,
 ): { readonly pane: FleetPaneObservation; readonly invocationId: string } | undefined {
+  const unbound = (link: string): undefined => { failedLink?.(link); return undefined; };
   const repository = namedRepository(options.config);
   if (!repository || (requireFailure && !failureTerminalEnvelope(event)) || !assignments
     || !event.runIdentity || !event.attemptIdentity
-    || !event.handoffReceiptPath) return undefined;
+    || !event.handoffReceiptPath) return unbound('envelope identity (run, attempt or handoff path)');
   const receipt = (options.readOriginalHandoffReceipt ?? readHandoffReceipt)(event.handoffReceiptPath, {
     runIdentity: event.runIdentity, attemptIdentity: event.attemptIdentity,
   });
   if (!receipt || receipt.run_identity !== event.runIdentity
-    || receipt.attempt_identity !== event.attemptIdentity
-    || !receipt.invocation_id
+    || receipt.attempt_identity !== event.attemptIdentity) return unbound('handoff receipt (unreadable or run/attempt mismatch)');
+  if (!receipt.invocation_id
     // When a child never produced a result there is no observed invocation.
     // The original path/run/attempt-bound receipt supplies it; a present
     // observed identity must still match exactly, never be overridden.
     || (event.observedInvocationId !== undefined
-      && receipt.invocation_id !== event.observedInvocationId)
-    || !receipt.launching_terminal_handle || !receipt.owner_task_id || !receipt.owner_dispatch_id) return undefined;
+      && receipt.invocation_id !== event.observedInvocationId)) return unbound('invocation id (receipt vs envelope)');
+  if (!receipt.launching_terminal_handle || !receipt.owner_task_id || !receipt.owner_dispatch_id) {
+    return unbound('handoff receipt owner (Task, Dispatch or launching pane absent)');
+  }
   const candidates = assignments.filter((row) => row.projectId === options.config.projectId
     && row.repository.toLowerCase() === repository.toLowerCase() && row.role === 'orchestrator'
     && row.kind === 'local' && row.provider === 'orca'
     && row.taskId === receipt.owner_task_id && row.bindingKey === receipt.owner_dispatch_id
     && row.assignmentId && Number.isSafeInteger(row.generation) && row.generation > 0);
-  if (candidates.length !== 1) return undefined;
+  if (candidates.length !== 1) {
+    return unbound(`Task/Dispatch assignment (${candidates.length} current manager rows match the receipt)`);
+  }
   const witness = orcaReceipt(executor, ['orchestration', 'worker-show', '--dispatch', receipt.owner_dispatch_id, '--full', '--json']);
   const dispatch = witness?.dispatch as { id?: unknown; taskId?: unknown; status?: unknown } | undefined;
   const native = witness?.terminal as {
@@ -1889,18 +1895,26 @@ function nativeReceiptLaunchingOwner(
   } | undefined;
   const observation = witness?.observation as { status?: unknown; exactWorker?: unknown } | undefined;
   if (dispatch?.id !== receipt.owner_dispatch_id || dispatch.taskId !== receipt.owner_task_id
-    || dispatch.status !== 'dispatched' || observation?.status !== 'live' || observation.exactWorker !== true
-    || native?.handle !== receipt.launching_terminal_handle
+    || dispatch.status !== 'dispatched' || observation?.status !== 'live' || observation.exactWorker !== true) {
+    return unbound('Dispatch witness (worker-show is not the live exact Task/Dispatch worker)');
+  }
+  if (native?.handle !== receipt.launching_terminal_handle
     || typeof native.incarnationId !== 'string' || !native.incarnationId
-    || typeof native.worktreePath !== 'string' || typeof native.branch !== 'string') return undefined;
+    || typeof native.worktreePath !== 'string' || typeof native.branch !== 'string') {
+    return unbound('native pane (Dispatch terminal is not the receipt launching pane)');
+  }
   const matchedTerminals = terminals.filter((row) => row.handle === native.handle
     && row.incarnationId === native.incarnationId && row.worktreePath === native.worktreePath
     && row.branch === native.branch && row.status?.toLowerCase() !== 'exited');
+  if (matchedTerminals.length !== 1) {
+    return unbound('native pane (handle/incarnation/worktree/branch not exactly once in the census)');
+  }
   const matchedPanes = observations.filter((row) => row.handle === native.handle
     && row.incarnationId === native.incarnationId && row.worktreePath === native.worktreePath
     && row.branch === native.branch && (row.state === 'PARKED' || row.state === 'STOPPED'));
-  return matchedTerminals.length === 1 && matchedPanes.length === 1
-    ? { pane: matchedPanes[0]!, invocationId: receipt.invocation_id } : undefined;
+  return matchedPanes.length === 1
+    ? { pane: matchedPanes[0]!, invocationId: receipt.invocation_id }
+    : unbound('park state (launching pane is not observed PARKED or STOPPED this tick)');
 }
 
 /** A non-ok envelope with its original receipt wakes its exact live launcher directly. */
@@ -1922,7 +1936,9 @@ async function wakeOriginalTerminalFailures(
   catch { assignments = null; }
   const events = (options.listTerminalEnvelopes ?? listTerminalEnvelopes)().filter(failureTerminalEnvelope);
   for (const event of events) {
-    const owner = nativeReceiptLaunchingOwner(event, options, observations, terminals, executor, assignments);
+    let failedLink = 'unknown';
+    const owner = nativeReceiptLaunchingOwner(event, options, observations, terminals, executor, assignments,
+      true, (link) => { failedLink = link; });
     if (!owner) {
       // A published receipt-bound fact with no bindable current owner has no supported
       // coordinator route: one log line, never a guessed pane or coordinator Wake.
@@ -1931,7 +1947,7 @@ async function wakeOriginalTerminalFailures(
         if (!store.hasParkedWakeEvent(unowned)) {
           try { store.markParkedWakeEvent(unowned); }
           catch { continue; }
-          log(`no bindable owner for terminal envelope ${event.path}: re-check it with the original caller`);
+          log(`no bindable owner for terminal envelope ${event.path}: failed link=${failedLink}; re-check it with the original caller`);
         }
       }
       continue;
@@ -2172,9 +2188,10 @@ async function sendMarkedUnitMessage(
     counts.attempts += 1;
     if (producerFactId) counts.attemptedProducerFacts.add(handle + ':' + producerFactId);
   }
-  // Only a native turn_started receipt proves the Enter was submitted.
-  const receipt = sendCoordinatorReceipt(executor, pane, message);
-  if (receipt.status !== 'turn_started') {
+  // A native turn_started receipt proves the Enter was submitted; an exact
+  // accepted send without prompt observation settles this advisory Wake only.
+  const receipt = sendAdvisoryReceipt(executor, pane, message);
+  if (receipt.status === 'unverified') {
     log('unit wake delivery unverified: ' + key + ' reason=' + receipt.reason
       + '; retry after 5 min if the exact pane and park remain selected');
     return false;
@@ -2182,7 +2199,8 @@ async function sendMarkedUnitMessage(
   try { for (const mark of allMarks) store.markParkedWakeEvent(mark, 'sent'); }
   catch { log('unit wake delivered but final mark unverified: ' + key); return false; }
   if (counts) counts.confirmed += 1;
-  log('sent re-check to ' + handle + ': ' + key);
+  log('sent re-check to ' + handle + ': ' + key
+    + (receipt.status === 'accepted_unobserved' ? ' (native send accepted; prompt observation unavailable)' : ''));
   return true;
 }
 
@@ -2589,16 +2607,51 @@ function defaultSleep(milliseconds: number): Promise<void> {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
 }
 
+/** Every fleet-wake journal line starts with its ISO-8601 UTC emission time. */
+function stdoutLog(line: string): void {
+  process.stdout.write(`${new Date().toISOString()} ${line}\n`);
+}
+
+type AdvisorySendReceipt = PromptSendReceipt | { readonly status: 'accepted_unobserved' };
+
 function sendCoordinatorReceipt(
   executor: OrcaExecutor,
   pane: FleetTerminal,
   message: string,
 ): PromptSendReceipt {
+  const receipt = sendAdvisoryReceipt(executor, pane, message);
+  return receipt.status === 'accepted_unobserved'
+    ? { status: 'unverified', reason: 'submission_observation_unavailable' } : receipt;
+}
+
+/**
+ * Issue #2849 fleet-wake advisory receipt/dedup exception only: Orca accepted
+ * the exact native send but cannot observe the agent prompt. A present
+ * prompt.processIncarnation must still name the verified pane's process.
+ */
+function sendAdvisoryReceipt(
+  executor: OrcaExecutor,
+  pane: FleetTerminal,
+  message: string,
+): AdvisorySendReceipt {
   try {
     const response = executor(promptSendArgv(pane.handle, message));
     if (!response.ok) return { status: 'unverified', reason: 'native_send_failed' };
-    try { return classifyPromptSendReceipt(JSON.parse(response.stdout), pane.handle, pane.incarnationId); }
+    let value: unknown;
+    try { value = JSON.parse(response.stdout); }
     catch { return { status: 'unverified', reason: 'invalid_send_receipt' }; }
+    const receipt = classifyPromptSendReceipt(value, pane.handle, pane.incarnationId);
+    if (receipt.status !== 'unverified' || receipt.reason !== 'submission_observation_unavailable') return receipt;
+    const envelope = value as { ok?: unknown; result?: { send?: { handle?: unknown; accepted?: unknown; prompt?: unknown } } };
+    const send = envelope.ok === true ? envelope.result?.send : undefined;
+    const prompt = send?.prompt && typeof send.prompt === 'object'
+      ? send.prompt as { observation?: unknown; processIncarnation?: unknown } : undefined;
+    const incarnation = prompt?.processIncarnation;
+    // Orca reports an unobservable provider explicitly; a prompt-less receipt is not that case.
+    return send?.handle === pane.handle && send.accepted === true && prompt?.observation === 'unsupported'
+      && (incarnation === undefined
+        || (typeof incarnation === 'string' && Boolean(pane.incarnationId?.trim()) && incarnation === pane.incarnationId))
+      ? { status: 'accepted_unobserved' } : receipt;
   } catch { return { status: 'unverified', reason: 'native_send_threw' }; }
 }
 
@@ -2637,7 +2690,7 @@ export async function runFleetDiagnosticTick(options: FleetDiagnosticTickOptions
   const { config } = options;
   const executor = options.executor ?? defaultOrcaExecutor;
   const store = options.store ?? new FileFleetStateStore(config.projectId);
-  const log = options.log ?? ((line: string) => process.stdout.write(`${line}\n`));
+  const log = options.log ?? stdoutLog;
   let terminals: readonly FleetTerminal[];
   try {
     terminals = options.terminals ?? listFleetTerminals(executor);
@@ -2775,7 +2828,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
   const executor = options.executor ?? defaultOrcaExecutor;
   const store = options.store ?? new FileFleetWakeStateStore(config.projectId);
   const sleepMs = options.sleepMs ?? defaultSleep;
-  const log = options.log ?? ((line: string) => process.stdout.write(`${line}\n`));
+  const log = options.log ?? stdoutLog;
 
   // Keep legacy fleet effects first: stale recovery belongs to this same
   // already-scheduled tick, but must not delay coordinator/banner delivery.
@@ -3202,7 +3255,7 @@ export async function runFleetWakeLoop(
   dependencies: Omit<FleetAlarmTickOptions, 'config'> = {},
 ): Promise<never> {
   const sleepMs = dependencies.sleepMs ?? defaultSleep;
-  const log = dependencies.log ?? ((line: string) => process.stdout.write(`${line}\n`));
+  const log = dependencies.log ?? stdoutLog;
   log(`start ${config.projectId} interval=${config.intervalSeconds}s`);
   let startupWakePending = true;
   while (true) {
