@@ -79,6 +79,6 @@ must not present a historical finding as preverified closed.
 Closure is **not** a code-wide exception: a semantically relevant new changed
 hunk, including outside the old filename or in F..T, can support a fresh
 finding with exact current changed-code evidence. An independently material
-security/scope violation remains reportable under section 6. Closing a
-reviewer finding never expands the live Issue's allowed edit paths or waives
-review, CI, smoke, status, or merge authority.
+security/scope violation remains reportable under section 6.
+Closing a reviewer finding never expands the live Issue's allowed edit paths
+or waives review, CI, smoke, status, or merge authority.
