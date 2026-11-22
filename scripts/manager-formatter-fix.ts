@@ -533,9 +533,14 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
       if (check.kind !== 'context' || check.appId === null) return true;
       return run.app?.id === check.appId;
     };
-    let statusNames: Set<string> | null | undefined;
-    const statusContexts = (): Set<string> | null => {
-      if (statusNames !== undefined) return statusNames;
+    interface StatusObservation {
+      readonly state: string;
+      readonly at: number | null;
+      readonly id: number | null;
+    }
+    let statusWitness: Map<string, StatusObservation | 'ambiguous'> | null | undefined;
+    const statusWitnesses = (): Map<string, StatusObservation | 'ambiguous'> | null => {
+      if (statusWitness !== undefined) return statusWitness;
       const response = run({
         command: ghBin,
         args: ['api', `repos/${context.repository}/commits/${sha}/statuses`],
@@ -543,36 +548,61 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
         inheritParentEnv: true,
         timeoutMs: 240_000,
       });
-      if (!response.ok) {
-        statusNames = null;
+      const fail = () => {
+        statusWitness = null;
         return null;
-      }
+      };
+      if (!response.ok) return fail();
       let payload: unknown;
       try {
         payload = JSON.parse(response.stdout) as unknown;
       } catch {
-        statusNames = null;
-        return null;
+        return fail();
       }
-      if (!Array.isArray(payload)) {
-        statusNames = null;
-        return null;
-      }
-      const names = new Set<string>();
+      if (!Array.isArray(payload)) return fail();
+      const groups = new Map<string, StatusObservation[]>();
       for (const row of payload) {
-        if (!row || typeof row !== 'object' || typeof (row as { context?: unknown }).context !== 'string') {
-          statusNames = null;
-          return null;
-        }
-        const contextName = (row as { context: string }).context.trim();
-        if (!contextName) {
-          statusNames = null;
-          return null;
-        }
-        names.add(norm(contextName));
+        if (!row || typeof row !== 'object') return fail();
+        const record = row as { context?: unknown; state?: unknown; sha?: unknown; created_at?: unknown; updated_at?: unknown; id?: unknown };
+        if (typeof record.context !== 'string' || typeof record.state !== 'string') return fail();
+        const contextName = record.context.trim();
+        const state = record.state.trim();
+        if (!contextName || !state) return fail();
+        if (typeof record.sha === 'string' && record.sha !== sha) return fail();
+        const stamp = typeof record.updated_at === 'string' ? record.updated_at : record.created_at;
+        const parsedAt = typeof stamp === 'string' ? Date.parse(stamp) : Number.NaN;
+        const at = Number.isFinite(parsedAt) ? parsedAt : null;
+        const id = typeof record.id === 'number' && Number.isSafeInteger(record.id) && record.id > 0 ? record.id : null;
+        const key = norm(contextName);
+        const group = groups.get(key) ?? [];
+        group.push({ state, at, id });
+        groups.set(key, group);
       }
-      statusNames = names;
-      return names;
+      const witnesses = new Map<string, StatusObservation | 'ambiguous'>();
+      const newer = (left: StatusObservation, right: StatusObservation): StatusObservation | null => {
+        if (left.at !== null && right.at !== null) {
+          if (left.at !== right.at) return left.at > right.at ? left : right;
+          if (left.id !== null && right.id !== null && left.id !== right.id) return left.id > right.id ? left : right;
+          return null;
+        }
+        if (left.at === null && right.at === null && left.id !== null && right.id !== null && left.id !== right.id) {
+          return left.id > right.id ? left : right;
+        }
+        return null;
+      };
+      for (const [key, group] of groups) {
+        let winner: StatusObservation | null = group[0] ?? null;
+        for (const candidate of group.slice(1)) {
+          if (!winner) {
+            winner = null;
+            break;
+          }
+          winner = newer(winner, candidate);
+        }
+        witnesses.set(key, winner ?? 'ambiguous');
+      }
+      statusWitness = witnesses;
+      return witnesses;
     };
     const selectLatest = (candidates: readonly CheckRun[]): CheckRun[] | 'uncertain' | 'pending' => {
       const parsed = candidates.map((run) => ({ run, runId: runIdFromUrl(run.details_url ?? run.html_url) }));
@@ -654,11 +684,24 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
       }
       if (matched.length === 0) {
         if (check.kind === 'context') {
-          const names = statusContexts();
-          if (names === null) {
+          const witnesses = statusWitnesses();
+          if (witnesses === null) {
             return { kind: 'hold', reason: `required-check relevance is unproved on ${sha}: commit statuses are unavailable` };
           }
-          if (names.has(norm(check.label))) continue;
+          const witness = witnesses.get(norm(check.label));
+          if (witness === 'ambiguous') {
+            return {
+              kind: 'hold',
+              reason: `required-check relevance is unproved on ${sha}: required status ${check.label} state is unproved; re-read commit status ${check.label} and the current CI`,
+            };
+          }
+          if (witness && witness.state !== 'success') {
+            return {
+              kind: 'hold',
+              reason: `required-check relevance is unproved on ${sha}: required status ${check.label} is ${witness.state}; re-read commit status ${check.label} and the current CI`,
+            };
+          }
+          if (witness?.state === 'success') continue;
         }
         missing.push(check.label);
         continue;

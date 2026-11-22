@@ -56,7 +56,7 @@ interface CiState {
   logResult?: 'fail';
   requiredContexts?: string[];
   requiredChecks?: Array<{ context: string; app_id: number | null }>;
-  statuses?: Array<{ id?: number; context: string; state?: string }>;
+  statuses?: Array<{ id?: number; context: string; state?: string; createdAt?: string; updatedAt?: string }>;
   protection?: 'unavailable';
 }
 
@@ -154,10 +154,12 @@ function fixture() {
           });
         } else if (endpoint === `repos/example/formatter/commits/${pull.head.sha}/statuses`) {
           const statuses = ci.statuses ?? [];
-          stdout = JSON.stringify(statuses.map((row, index) => ({
-            id: row.id ?? index + 1,
+          stdout = JSON.stringify(statuses.map((row) => ({
+            ...(row.id !== undefined ? { id: row.id } : {}),
             context: row.context,
             state: row.state ?? 'success',
+            ...(row.createdAt ? { created_at: row.createdAt } : {}),
+            ...(row.updatedAt ? { updated_at: row.updatedAt } : {}),
             sha: pull.head.sha,
           })));
         } else if (logMatch) {
@@ -950,6 +952,43 @@ process.stdout.write('HTTP/2 200\\n\\n' + JSON.stringify({ total_count: 2, check
     expect(missing.outcome).toBe('refused');
     expect(missing.message).toContain('required check orchestrator-pack/pack-review was not observed');
     expect(absent.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+  });
+
+  it('does not publish when a required commit status is pending, failed, or newer than an older success', () => {
+    for (const state of ['pending', 'failure', 'error'] as const) {
+      const world = fixture();
+      world.ci.requiredContexts = ['CI / checks', 'orchestrator-pack/pack-review'];
+      world.ci.statuses = [{ context: 'orchestrator-pack/pack-review', state }];
+      const result = runManagerFormatterFix(world.context, 42, world.deps);
+      expect(result.outcome).toBe('refused');
+      expect(result.message).toContain(`required status orchestrator-pack/pack-review is ${state}`);
+      expect(result.message).toContain('re-read commit status orchestrator-pack/pack-review and the current CI');
+      expect(world.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+      expect(world.remoteHead()).toBe(world.head);
+    }
+    for (const statuses of [
+      [
+        { context: 'typecheck', state: 'pending', id: 2, createdAt: '2026-11-22T01:00:00Z' },
+        { context: 'typecheck', state: 'success', id: 1, createdAt: '2026-11-22T00:00:00Z' },
+      ],
+      [
+        { context: 'typecheck', state: 'success', id: 1, createdAt: '2026-11-22T00:00:00Z' },
+        { context: 'typecheck', state: 'pending', id: 2, createdAt: '2026-11-22T01:00:00Z' },
+      ],
+      [
+        { context: 'typecheck', state: 'success', id: 1, createdAt: '2026-11-22T00:00:00Z' },
+        { context: 'typecheck', state: 'failure', id: 2, updatedAt: '2026-11-22T02:00:00Z' },
+      ],
+    ]) {
+      const world = fixture();
+      world.ci.requiredContexts = ['CI / checks', 'typecheck'];
+      world.ci.statuses = statuses;
+      const result = runManagerFormatterFix(world.context, 42, world.deps);
+      expect(result.outcome).toBe('refused');
+      expect(result.message).toContain('required status typecheck is');
+      expect(world.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+      expect(world.remoteHead()).toBe(world.head);
+    }
   });
 
   it('does not let another app failure replace the required app check', () => {
