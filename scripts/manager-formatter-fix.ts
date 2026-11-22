@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runProcessSync, type RunProcessSyncResult } from './kernel/subprocess.ts';
+import { runProcessSync, type ProcessResult } from './kernel/subprocess.ts';
 import { resolveTargetContext, type TargetContext, type TargetVerification } from './lib/target-context.ts';
 import { parseRemoteSlug } from './lib/git-origin-slug.mjs';
 
@@ -92,7 +92,7 @@ function stepKind(name: string): 'lint' | 'substantive' | 'other' {
   return 'other';
 }
 
-function toolMissing(result: RunProcessSyncResult, output: string): boolean {
+function toolMissing(result: ProcessResult, output: string): boolean {
   return result.exitCode === 126 || result.exitCode === 127 || /command not found|Failed to spawn/iu.test(output);
 }
 

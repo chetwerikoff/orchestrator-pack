@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { runProcessSync, type RunProcessSyncOptions, type RunProcessSyncResult } from './kernel/subprocess.ts';
+import { runProcessSync, type ProcessResult, type RunProcessSyncOptions } from './kernel/subprocess.ts';
 import type { TargetContext } from './lib/target-context.ts';
 import { formatterFixCli, runManagerFormatterFix } from './manager-formatter-fix.ts';
 
@@ -65,7 +65,7 @@ function fixture() {
   const diagnostics: string[] = [];
   let beforeRun: ((options: RunProcessSyncOptions) => void) | undefined;
   let failRevList = false;
-  const blank = (): RunProcessSyncResult => run({ command: process.execPath, args: ['-e', ''], inheritParentEnv: true });
+  const blank = (): ProcessResult => run({ command: process.execPath, args: ['-e', ''], inheritParentEnv: true });
   const deps = {
     home: root,
     diagnostic: (text: string) => { diagnostics.push(text); },
