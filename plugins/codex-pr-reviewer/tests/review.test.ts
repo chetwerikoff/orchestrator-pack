@@ -2111,6 +2111,101 @@ describe('buildReviewPrompt', () => {
   });
 });
 
+describe('Issue #2864 synthetic PR base/merge comparisons (offline Git semantics)', () => {
+  function git(root: string, args: string[]): string {
+    const result = runProcessSync({ command: 'git', args, cwd: root, inheritParentEnv: true });
+    if (!result.ok) throw new Error(result.stderr || result.error || `git ${args.join(' ')} failed`);
+    return result.stdout.trim();
+  }
+  function init(root: string): void {
+    git(root, ['init', '--quiet']);
+    git(root, ['config', 'user.name', 'opk-test']);
+    git(root, ['config', 'user.email', 'opk-test@example.invalid']);
+    git(root, ['config', 'commit.gpgsign', 'false']);
+    writeFileSync(join(root, 'shared.txt'), 'B base\n', 'utf8');
+    git(root, ['add', 'shared.txt']);
+    git(root, ['commit', '--quiet', '-m', 'base B']);
+    git(root, ['branch', '-M', 'main']);
+  }
+
+  it('fresh M...T includes only P net paths/hunks; stale origin/main=B...T incorrectly includes M; B...P is the ordinary control', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2864-disjoint-'));
+    try {
+      init(root);
+      const B = git(root, ['rev-parse', 'HEAD']);
+      git(root, ['checkout', '--quiet', '-b', 'feature']);
+      writeFileSync(join(root, 'feature.txt'), 'P-only changed line\n', 'utf8');
+      git(root, ['add', 'feature.txt']);
+      git(root, ['commit', '--quiet', '-m', 'feature P']);
+      const P = git(root, ['rev-parse', 'HEAD']);
+      expect(git(root, ['diff', '--name-only', B + '...' + P])).toBe('feature.txt');
+      expect(git(root, ['diff', B + '...' + P, '--', 'feature.txt'])).toContain('+P-only changed line');
+      git(root, ['checkout', '--quiet', 'main']);
+      writeFileSync(join(root, 'main-only.txt'), 'M-only changed line\n', 'utf8');
+      git(root, ['add', 'main-only.txt']);
+      git(root, ['commit', '--quiet', '-m', 'main M']);
+      const M = git(root, ['rev-parse', 'HEAD']);
+      // This is intentionally a stale local tracking ref; the PR target base is M.
+      git(root, ['update-ref', 'refs/remotes/origin/main', B]);
+      git(root, ['checkout', '--quiet', 'feature']);
+      git(root, ['merge', '--no-ff', '--no-edit', 'main']);
+      const T = git(root, ['rev-parse', 'HEAD']);
+      expect(git(root, ['merge-base', M, T])).toBe(M);
+      const fresh = git(root, ['diff', '--name-only', M + '...' + T]);
+      const freshPatch = git(root, ['diff', M + '...' + T]);
+      expect(fresh).toBe('feature.txt');
+      expect(freshPatch).toContain('+P-only changed line');
+      expect(freshPatch).not.toContain('M-only changed line');
+      expect(freshPatch).not.toContain('main-only.txt');
+      expect(git(root, ['rev-parse', 'origin/main'])).toBe(B);
+      const stale = git(root, ['diff', '--name-only', 'origin/main...HEAD']).split('\n').sort();
+      const stalePatch = git(root, ['diff', 'origin/main...HEAD']);
+      expect(stale).toEqual(['feature.txt', 'main-only.txt']);
+      expect(stalePatch).toContain('+P-only changed line');
+      expect(stalePatch).toContain('+M-only changed line');
+      // Stale local B...T is a negative; it is NOT a verified P-only PR diff.
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('M/P overlap and a real merge-resolution hunk remain reviewable against live base M', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2864-overlap-'));
+    try {
+      init(root);
+      const B = git(root, ['rev-parse', 'HEAD']);
+      git(root, ['checkout', '--quiet', '-b', 'feature']);
+      writeFileSync(join(root, 'shared.txt'), 'P feature version\n', 'utf8');
+      git(root, ['add', 'shared.txt']);
+      git(root, ['commit', '--quiet', '-m', 'feature P']);
+      git(root, ['checkout', '--quiet', 'main']);
+      writeFileSync(join(root, 'shared.txt'), 'M main version\n', 'utf8');
+      git(root, ['add', 'shared.txt']);
+      git(root, ['commit', '--quiet', '-m', 'main M']);
+      const M = git(root, ['rev-parse', 'HEAD']);
+      git(root, ['update-ref', 'refs/remotes/origin/main', B]);
+      git(root, ['checkout', '--quiet', 'feature']);
+      const conflict = runProcessSync({
+        command: 'git', args: ['merge', '--no-ff', '--no-edit', 'main'],
+        cwd: root, inheritParentEnv: true,
+      });
+      expect(conflict.ok).toBe(false);
+      writeFileSync(join(root, 'shared.txt'), 'resolved P and M\n', 'utf8');
+      git(root, ['add', 'shared.txt']);
+      git(root, ['commit', '--quiet', '--no-edit']);
+      const T = git(root, ['rev-parse', 'HEAD']);
+      expect(git(root, ['merge-base', M, T])).toBe(M);
+      expect(git(root, ['diff', '--name-only', M + '...' + T])).toBe('shared.txt');
+      const patch = git(root, ['diff', M + '...' + T, '--', 'shared.txt']);
+      expect(patch).toContain('-M main version');
+      expect(patch).toContain('+resolved P and M');
+      // A blanket M-touched filename exclusion would wrongly remove this hunk.
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('resolveScopeContext committed snapshots', () => {
   it('uses a PR release base even if the remote default and tracking origin/HEAD disagree', () => {
     const dir = mkdtempSync(join(tmpdir(), 'codex-pr-base-'));

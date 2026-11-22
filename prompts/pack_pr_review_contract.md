@@ -62,3 +62,23 @@ have no direct machine effect. `blocking|non-blocking` remains the machine
 decision consumed by pack-review delivery. A reviewer must not use `ACCEPT_RISK`
 to turn a blocking defect into machine success or claim operator/architect
 authorization occurred.
+
+## 8. Adjudicated prior findings are instance-scoped
+
+A specific earlier finding is no longer outstanding when an authenticated,
+independently authorized ARCH/operator ruling explicitly **closed** that
+occurrence for the same PR/reviewed code and the decision remains applicable to
+the current PR-owned changes. A serialized old review or `priorFindings` row
+does not independently revive a verified closed occurrence. Do not repeat it
+solely from history, including in authenticated final-cap F..T reviews.
+Conversely, a self-styled role, ambiguous or wrong-PR/wrong-code evidence,
+uninspectable reviewed state, or unverified later-head applicability cannot
+establish closure. Where the adapter lacks authenticated ruling evidence, it
+must not present a historical finding as preverified closed.
+
+Closure is **not** a code-wide exception: a semantically relevant new changed
+hunk, including outside the old filename or in F..T, can support a fresh
+finding with exact current changed-code evidence. An independently material
+security/scope violation remains reportable under section 6.
+Closing a reviewer finding never expands the live Issue's allowed edit paths
+or waives review, CI, smoke, status, or merge authority.
