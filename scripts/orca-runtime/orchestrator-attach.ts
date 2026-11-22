@@ -22,6 +22,7 @@ import {
   resolveWorkerAssignmentStorePath,
   type WorkerAssignmentRecord,
 } from '../lib/worker-assignment-store.ts';
+import { orcaJsonArgv, resolveOrcaExecutable } from './native.ts';
 import { resolveTargetContext, TargetContextError, type TargetContext } from '../lib/target-context.ts';
 
 const USAGE = [
@@ -37,7 +38,6 @@ const RUN_ID_CORRECTION = 'set OPK_RUN_ID to the existing Run and retry';
 const LIST_CORRECTION = 'restore Orca terminal visibility, inspect this Run and retry';
 const READBACK_CORRECTION = 'inspect the exact Run and retry the restore only after resolving its coordinator';
 const ASSIGNMENT_CORRECTION = 'reconcile the existing local WorkerAssignment/Dispatch and primary pointer, then retry';
-const DEAD_STATUS = new Set(['exited', 'closed', 'dead', 'stopped', 'gone', 'terminated']);
 
 export interface NativeCommandResult {
   readonly code: number;
@@ -94,7 +94,12 @@ interface ParsedRun {
 
 export function orcaCommand(env: NodeJS.ProcessEnv): NativeCommand {
   return async (args) => {
-    const result = await runProcess({ command: 'orca', args, env, inheritParentEnv: false });
+    const result = await runProcess({
+      command: resolveOrcaExecutable(env),
+      args,
+      env,
+      inheritParentEnv: false,
+    });
     return {
       code: result.exitCode ?? 1,
       stdout: result.stdout,
@@ -173,10 +178,12 @@ export async function attachOrchestratorSeat(input: AttachInput): Promise<Attach
   const runNative = input.runNative ?? orcaCommand(env);
   let runUseCount = 0;
   const call = async (args: readonly string[]): Promise<unknown | null> => {
-    if (args[0] === 'orchestration' && args[1] === 'run-use') runUseCount += 1;
+    const logical = args[args.length - 1] === '--json' ? args.slice(0, -1) : args;
+    const argv = orcaJsonArgv(logical);
+    if (logical[0] === 'orchestration' && logical[1] === 'run-use') runUseCount += 1;
     let result: NativeCommandResult;
     try {
-      result = await runNative(args);
+      result = await runNative(argv);
     } catch (error) {
       return failNative(error instanceof Error ? error.message : String(error));
     }
@@ -224,7 +231,10 @@ export async function attachOrchestratorSeat(input: AttachInput): Promise<Attach
     return refuse({ ...base, runId, runUseCount, message: READBACK_CORRECTION });
   }
   const sameHandle = currentRun.coordinatorHandle === requestedHandle;
-  if (!sameHandle && currentRun.coordinatorHandle && census.handles.has(currentRun.coordinatorHandle)) {
+  const oldRow = currentRun.coordinatorHandle
+    ? census.rows.find((row) => row.handle === currentRun.coordinatorHandle)
+    : undefined;
+  if (!sameHandle && oldRow?.live) {
     return refuse({
       ...base,
       runId,
@@ -273,7 +283,18 @@ export async function attachOrchestratorSeat(input: AttachInput): Promise<Attach
     && pointer.binding.assignmentGeneration === selectedAssignment.generation;
 
   let coordinatorHandle = currentRun.coordinatorHandle;
-  let runRebound = false;
+  let runRebound: boolean | 'unknown' = false;
+  const pinRedirect = redirectedPinAncestor(env, target.projectId);
+  if (pinRedirect) {
+    return refuse({
+      ...base,
+      runId,
+      runUseCount,
+      coordinatorHandle,
+      pin: 'refused',
+      message: `selected pin path is redirected (${pinRedirect}). Repair the selected project pin and retry; do not repeat run-use.`,
+    });
+  }
   if (!sameHandle) {
     const used = await call(['orchestration', 'run-use', '--id', runId, '--json']);
     if (used instanceof NativeFailure) {
@@ -282,21 +303,28 @@ export async function attachOrchestratorSeat(input: AttachInput): Promise<Attach
         runId,
         runUseCount,
         coordinatorHandle,
-        message: `run-use failed (${used.detail}). ${READBACK_CORRECTION}`,
-        partial: { runRebound: false, primary: 'not-attempted', pin: 'not-attempted' },
+        message: `run-use reported failure (${used.detail}); the Run coordinator is unverified. ${READBACK_CORRECTION}`,
+        partial: { runRebound: 'unknown', primary: 'not-attempted', pin: 'not-attempted' },
       });
     }
     const readback = await call(['orchestration', 'run-show', '--id', runId, '--full', '--json']);
     const confirmed = readback instanceof NativeFailure ? null : parseRun(readback, runId);
     if (!confirmed || confirmed.coordinatorHandle !== requestedHandle) {
-      const observed = confirmed?.coordinatorHandle ?? 'unknown';
+      const observed = confirmed ? String(confirmed.coordinatorHandle) : 'unknown';
+      const positivelyUnchanged = confirmed !== null && confirmed.coordinatorHandle === currentRun.coordinatorHandle;
       return refuse({
         ...base,
         runId,
         runUseCount,
-        coordinatorHandle: confirmed?.coordinatorHandle ?? coordinatorHandle,
-        message: `run-show coordinator is ${String(observed)} after one run-use. ${READBACK_CORRECTION}`,
-        partial: { runRebound: false, primary: 'not-attempted', pin: 'not-attempted' },
+        coordinatorHandle: confirmed?.coordinatorHandle ?? null,
+        message: confirmed
+          ? `run-show coordinator is ${observed} after one run-use. ${READBACK_CORRECTION}`
+          : `run-use was invoked but run-show did not confirm the coordinator. ${READBACK_CORRECTION}`,
+        partial: {
+          runRebound: positivelyUnchanged ? false : 'unknown',
+          primary: 'not-attempted',
+          pin: 'not-attempted',
+        },
       });
     }
     coordinatorHandle = confirmed.coordinatorHandle;
@@ -423,12 +451,19 @@ function terminalFromShow(value: unknown, handle: string): TerminalRow | null {
   return { handle, worktreePath, live: true };
 }
 
+function rowIsLive(row: Record<string, unknown>): boolean {
+  const status = typeof row.status === 'string' ? row.status.toLowerCase() : '';
+  if (status === 'running') return true;
+  if (status) return false;
+  return row.connected === true;
+}
+
 function terminalCensus(value: unknown): { readonly rows: readonly TerminalRow[]; readonly handles: ReadonlySet<string> } | null {
   const result = asRecord(value);
-  if (!result || result.truncated === true) return null;
+  if (!result || result.truncated !== false) return null;
   const terminals = result.terminals;
   if (!Array.isArray(terminals)) return null;
-  if (typeof result.totalCount === 'number' && result.totalCount !== terminals.length) return null;
+  if (!Number.isInteger(result.totalCount) || Number(result.totalCount) < 0 || result.totalCount !== terminals.length) return null;
   const rows: TerminalRow[] = [];
   const handles = new Set<string>();
   for (const entry of terminals) {
@@ -436,9 +471,8 @@ function terminalCensus(value: unknown): { readonly rows: readonly TerminalRow[]
     const handle = typeof row?.handle === 'string' ? row.handle : '';
     const worktreePath = row ? worktreePathOf(row) : '';
     if (!handle || !worktreePath || handles.has(handle)) return null;
-    const status = typeof row?.status === 'string' ? row.status.toLowerCase() : '';
     handles.add(handle);
-    rows.push({ handle, worktreePath, live: !DEAD_STATUS.has(status) });
+    rows.push({ handle, worktreePath, live: rowIsLive(row) });
   }
   return { rows, handles };
 }
@@ -452,20 +486,11 @@ function sameWorktree(left: string, right: string): boolean {
 }
 
 function worktreeMatchesProject(worktreePath: string, target: TargetContext): boolean {
-  let resolved = '';
   try {
-    resolved = realpathSync(worktreePath);
+    return realpathSync(worktreePath) === realpathSync(target.primaryRoot);
   } catch {
     return false;
   }
-  if (resolved === realpathSync(target.primaryRoot)) return true;
-  let pattern: RegExp;
-  try {
-    pattern = new RegExp(target.orcaWorkspacePattern, 'u');
-  } catch {
-    return false;
-  }
-  return pattern.test(worktreePath) || pattern.test(resolved);
 }
 
 function parseRun(value: unknown, runId: string): ParsedRun | null {
@@ -507,9 +532,23 @@ async function selectAssignment(
   const eligible: WorkerAssignmentRecord[] = [];
   for (const row of members) {
     const dispatch = await call(['orchestration', 'dispatch-show', '--task', row.taskId, '--json']);
-    if (dispatch instanceof NativeFailure || !dispatchMatches(dispatch, row.taskId, row.bindingKey, runId)) continue;
+    if (dispatch instanceof NativeFailure) {
+      return new SelectionFailure(`native Dispatch evidence for ${row.taskId} is unavailable (${dispatch.detail}).`);
+    }
+    const dispatchKind = dispatchVerdict(dispatch, row.taskId, row.bindingKey, runId);
+    if (dispatchKind === 'unreadable') {
+      return new SelectionFailure(`native Dispatch evidence for ${row.taskId} is unreadable.`);
+    }
+    if (dispatchKind === 'inconsistent') continue;
     const worker = await call(['orchestration', 'worker-show', '--dispatch', row.bindingKey, '--json']);
-    if (worker instanceof NativeFailure || !workerMatches(worker, row.taskId, row.bindingKey, runId)) continue;
+    if (worker instanceof NativeFailure) {
+      return new SelectionFailure(`native worker evidence for ${row.bindingKey} is unavailable (${worker.detail}).`);
+    }
+    const workerKind = workerVerdict(worker, row.taskId, row.bindingKey, runId);
+    if (workerKind === 'unreadable') {
+      return new SelectionFailure(`native worker evidence for ${row.bindingKey} is unreadable.`);
+    }
+    if (workerKind === 'inconsistent') continue;
     eligible.push(row);
   }
   if (eligible.length !== 1) {
@@ -545,24 +584,42 @@ function idEquals(row: Record<string, unknown>, keys: readonly string[], expecte
   return keys.some((key) => row[key] === expected);
 }
 
-function dispatchMatches(value: unknown, taskId: string, bindingKey: string, runId: string): boolean {
+type NativeVerdict = 'match' | 'inconsistent' | 'unreadable';
+
+function dispatchVerdict(value: unknown, taskId: string, bindingKey: string, runId: string): NativeVerdict {
   const result = asRecord(value);
   const dispatch = asRecord(result?.dispatch);
-  if (!dispatch || dispatch.id !== bindingKey) return false;
-  if (!idEquals(dispatch, ['taskId', 'task_id'], taskId)) return false;
-  if (('runId' in dispatch && dispatch.runId !== runId) || ('run_id' in dispatch && dispatch.run_id !== runId)) return false;
-  return true;
+  if (!result || !dispatch) return 'unreadable';
+  if (typeof dispatch.id !== 'string') return 'unreadable';
+  if (dispatch.id !== bindingKey) return 'inconsistent';
+  if (!idEquals(dispatch, ['taskId', 'task_id'], taskId)) return 'inconsistent';
+  if (('runId' in dispatch && dispatch.runId !== runId) || ('run_id' in dispatch && dispatch.run_id !== runId)) return 'inconsistent';
+  return 'match';
 }
 
-function workerMatches(value: unknown, taskId: string, bindingKey: string, runId: string): boolean {
+function workerVerdict(value: unknown, taskId: string, bindingKey: string, runId: string): NativeVerdict {
   const result = asRecord(value);
-  if (!result) return false;
-  const nested = asRecord(result.dispatch);
-  if (nested) return dispatchMatches(result, taskId, bindingKey, runId);
-  if (!idEquals(result, ['dispatchId', 'dispatch_id'], bindingKey)) return false;
-  if (!idEquals(result, ['taskId', 'task_id'], taskId)) return false;
-  if (('runId' in result && result.runId !== runId) || ('run_id' in result && result.run_id !== runId)) return false;
-  return true;
+  const worker = asRecord(result?.worker);
+  const observation = asRecord(result?.observation);
+  if (!result || !worker || !observation) return 'unreadable';
+  if (observation.exactWorker !== true) return 'unreadable';
+  const status = typeof observation.status === 'string' ? observation.status : '';
+  if (!status || status === 'terminal_missing' || status === 'unknown' || status === 'missing') return 'unreadable';
+  const dispatch = asRecord(result.dispatch);
+  if (dispatch) {
+    const kind = dispatchVerdict(result, taskId, bindingKey, runId);
+    if (kind !== 'match') return kind;
+  }
+  const dispatchId = typeof worker.dispatchId === 'string'
+    ? worker.dispatchId
+    : typeof worker.dispatch_id === 'string' ? worker.dispatch_id : '';
+  if (dispatchId && dispatchId !== bindingKey) return 'inconsistent';
+  const workerTask = typeof worker.taskId === 'string'
+    ? worker.taskId
+    : typeof worker.task_id === 'string' ? worker.task_id : '';
+  if (workerTask && workerTask !== taskId) return 'inconsistent';
+  if (!dispatch && !dispatchId) return 'unreadable';
+  return 'match';
 }
 
 function fleetEnvFile(env: NodeJS.ProcessEnv, projectId: string): string {
@@ -579,10 +636,10 @@ function writeProjectPin(
   const file = fleetEnvFile(env, projectId);
   const directory = path.dirname(file);
   try {
-    if (isSymlink(file) || isSymlink(directory)) return { ok: false, reason: 'pin path is a symlink' };
+    const redirected = redirectedPinAncestor(env, projectId);
+    if (redirected) return { ok: false, reason: redirected };
     if (exists(directory) && !lstatSync(directory).isDirectory()) return { ok: false, reason: 'pin directory is not a directory' };
     mkdirSync(directory, { recursive: true, mode: 0o700 });
-    if (isSymlink(file)) return { ok: false, reason: 'pin path is a symlink' };
     let current = '';
     if (exists(file)) {
       const info = lstatSync(file);
@@ -628,11 +685,28 @@ function exists(file: string): boolean {
   }
 }
 
+function redirectedPinAncestor(env: NodeJS.ProcessEnv, projectId: string): string | null {
+  const home = (env.HOME ?? '').trim() || homedir();
+  const homePath = path.resolve(home);
+  let current = fleetEnvFile(env, projectId);
+  const seen = new Set<string>();
+  while (!seen.has(current)) {
+    seen.add(current);
+    if (isSymlink(current)) return 'pin path is a symlink';
+    if (current === home || current === homePath) break;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return null;
+}
+
 function isSymlink(file: string): boolean {
   try {
     return lstatSync(file).isSymbolicLink();
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return false;
     throw error;
   }
 }

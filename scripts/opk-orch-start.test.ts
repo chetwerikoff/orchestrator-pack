@@ -1,6 +1,6 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { fleetWakeConfigFromEnv } from './fleet/fleet-wake.ts';
@@ -37,11 +37,17 @@ interface World {
   readonly tasks: { readonly id: string; readonly dispatchId: string }[];
   listFail: boolean;
   listTruncated: boolean;
+  listOmitCensus: boolean;
+  listLiveness: 'running' | 'connected' | 'unknown';
   oldLive: boolean;
   showFail: boolean;
   runUseFail: boolean;
   readbackStale: boolean;
+  readbackFail: boolean;
   dispatchMismatch: boolean;
+  workerFailDispatch: string;
+  workerBareDispatch: string;
+  showPath: string;
   readonly calls: string[][];
 }
 
@@ -115,27 +121,42 @@ function world(tasks: World['tasks'], coordinator: string | null): World {
     tasks,
     listFail: false,
     listTruncated: false,
+    listOmitCensus: false,
+    listLiveness: 'running',
     oldLive: false,
     showFail: false,
     runUseFail: false,
     readbackStale: false,
+    readbackFail: false,
     dispatchMismatch: false,
+    workerFailDispatch: '',
+    workerBareDispatch: '',
+    showPath: '',
     calls: [],
   };
+}
+
+function terminalRow(handle: string, worktreePath: string, liveness: World['listLiveness']): Record<string, unknown> {
+  if (liveness === 'connected') return { handle, worktreePath, connected: true };
+  if (liveness === 'unknown') return { handle, worktreePath, status: 'unknown', connected: false };
+  return { handle, worktreePath, status: 'running', connected: true };
 }
 
 function native(state: World, primary: string): NativeCommand {
   return async (args) => {
     state.calls.push([...args]);
     const command = args[1] ?? '';
+    const full = args.includes('--full');
+    const seat = state.showPath || primary;
     if (state.showFail && command === 'show') return { code: 1, stdout: '', stderr: 'missing terminal' };
     if (command === 'show') {
-      return json({ terminal: { handle: NEW_HANDLE, worktreePath: primary } });
+      return json({ terminal: { handle: NEW_HANDLE, worktreePath: seat, status: 'running', connected: true } });
     }
     if (command === 'list') {
       if (state.listFail) return { code: 1, stdout: '', stderr: 'list failed' };
-      const terminals = [{ handle: NEW_HANDLE, worktreePath: primary }];
-      if (state.oldLive) terminals.push({ handle: OLD_HANDLE, worktreePath: primary });
+      const terminals = [terminalRow(NEW_HANDLE, seat, state.listLiveness)];
+      if (state.oldLive) terminals.push(terminalRow(OLD_HANDLE, seat, 'running'));
+      if (state.listOmitCensus) return json({ terminals, hostScope: 'local' });
       return json({
         terminals,
         truncated: state.listTruncated,
@@ -145,15 +166,19 @@ function native(state: World, primary: string): NativeCommand {
     }
     if (command === 'run-show') {
       const used = state.calls.filter((call) => call[1] === 'run-use').length;
+      if (state.readbackFail && used > 0) return { code: 1, stdout: '', stderr: 'run-show failed' };
+      if (!full) return json({ runId: RUN, objective: 'restore', removedWork: [] });
       const coordinator = state.readbackStale && used > 0 ? OLD_HANDLE : state.coordinator;
       return json({ run: { id: RUN, coordinator_handle: coordinator } });
     }
     if (command === 'task-list') {
+      if (!full) return json({ tasks: state.tasks.map((task) => ({ id: task.id })) });
       return json({ tasks: state.tasks.map((task) => ({ id: task.id, status: 'dispatched', title: 'orchestrator' })) });
     }
     if (command === 'dispatch-show') {
       const taskId = args[args.indexOf('--task') + 1] ?? '';
       const task = state.tasks.find((row) => row.id === taskId);
+      if (!full) return json({ dispatch: { id: task?.dispatchId, task_id: taskId } });
       return json({
         dispatch: {
           id: state.dispatchMismatch ? 'ctx_mismatch' : task?.dispatchId,
@@ -165,8 +190,13 @@ function native(state: World, primary: string): NativeCommand {
     if (command === 'worker-show') {
       const dispatchId = args[args.indexOf('--dispatch') + 1] ?? '';
       const task = state.tasks.find((row) => row.dispatchId === dispatchId);
-      if (!task) return { code: 1, stdout: '', stderr: 'missing worker' };
-      return json({ dispatchId, taskId: task.id, runId: RUN });
+      if (!task || dispatchId === state.workerFailDispatch) return { code: 1, stdout: '', stderr: 'missing worker' };
+      if (!full || dispatchId === state.workerBareDispatch) return json({ dispatchId, taskId: task.id, runId: RUN });
+      return json({
+        dispatch: { id: dispatchId, task_id: task.id, run_id: RUN },
+        worker: { dispatchId, taskId: task.id, state: 'running' },
+        observation: { exactWorker: true, status: 'current' },
+      });
     }
     if (command === 'run-use') {
       if (state.runUseFail) return { code: 1, stdout: '', stderr: 'run-use failed' };
@@ -299,6 +329,8 @@ describe('opk-orch-start attach', () => {
       } else {
         expect(report.message, tweak).toContain('inspect the exact Run and retry the restore only after resolving its coordinator');
       }
+      if (tweak === 'use') expect(report.partial?.runRebound, tweak).toBe('unknown');
+      if (tweak === 'readback') expect(report.partial?.runRebound, tweak).toBe(false);
     }
   });
 
@@ -515,11 +547,11 @@ const dispatch = ${JSON.stringify(row.bindingKey)};
 const command = args[1];
 let result;
 if (command === 'show') result = { terminal: { handle, worktreePath: primary } };
-else if (command === 'list') result = { terminals: [{ handle, worktreePath: primary }], truncated: false, totalCount: 1 };
-else if (command === 'run-show') result = { run: { id: run, coordinator_handle: handle } };
+else if (command === 'list') result = { terminals: [{ handle, worktreePath: primary, status: 'running', connected: true }], truncated: false, totalCount: 1 };
+else if (command === 'run-show') result = args.includes('--full') ? { run: { id: run, coordinator_handle: handle } } : { runId: run };
 else if (command === 'task-list') result = { tasks: [{ id: task }] };
-else if (command === 'dispatch-show') result = { dispatch: { id: dispatch, task_id: task, run_id: run } };
-else if (command === 'worker-show') result = { dispatchId: dispatch, taskId: task, runId: run };
+else if (command === 'dispatch-show') result = args.includes('--full') ? { dispatch: { id: dispatch, task_id: task, run_id: run } } : { dispatch: { id: dispatch } };
+else if (command === 'worker-show') result = args.includes('--full') ? { dispatch: { id: dispatch, task_id: task, run_id: run }, worker: { dispatchId: dispatch, taskId: task, state: 'running' }, observation: { exactWorker: true, status: 'current' } } : { dispatchId: dispatch, taskId: task, runId: run };
 else { process.stderr.write('unexpected\\n'); process.exit(1); }
 process.stdout.write(JSON.stringify({ ok: true, result }));
 `);
@@ -530,7 +562,8 @@ process.stdout.write(JSON.stringify({ ok: true, result }));
       cwd: process.cwd(),
       env: {
         ...fx.env,
-        PATH: `${bin}:${process.env.PATH ?? ''}`,
+        PATH: process.env.PATH ?? '',
+        OPK_RUNTIME_CLI_COMMAND: path.join(bin, 'orca'),
         OPK_CALL_LOG: calls,
         OPK_PRIMARY: fx.primary,
       },
@@ -541,6 +574,153 @@ process.stdout.write(JSON.stringify({ ok: true, result }));
     expect(report.ok).toBe(true);
     expect(report.runUseCount).toBe(0);
     expect(readFileSync(calls, 'utf8')).not.toContain('run-use');
+    const logged = readFileSync(calls, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as string[]);
+    expect(logged.filter((args) => args[0] === 'orchestration').every((args) => args.includes('--full') && args.at(-1) === '--json')).toBe(true);
+    expect(logged.some((args) => args[0] === 'terminal' && args.at(-1) === '--json' && !args.includes('--full'))).toBe(true);
     expect(readFileSync(pinPath(fx.env), 'utf8')).toBe(`ORCH_HANDLE=${NEW_HANDLE}\n`);
+  });
+
+  it('requests full native records and the configured Orca executable', async () => {
+    const fx = fixture();
+    const row = await publishRow(fx.file, 'task_orch', 'ctx_orch');
+    const state = world([{ id: row.taskId, dispatchId: row.bindingKey }], NEW_HANDLE);
+    const report = await attachOrchestratorSeat({
+      argv: ['attach', NEW_HANDLE],
+      env: { ...fx.env, OPK_RUNTIME_CLI_COMMAND: path.join(fx.root, 'orca-override') },
+      runNative: native(state, fx.primary),
+    });
+    expect(report.ok).toBe(true);
+    const orchestration = state.calls.filter((call) => call[0] === 'orchestration');
+    expect(orchestration.length).toBeGreaterThan(0);
+    expect(orchestration.every((call) => call.includes('--full') && call.at(-1) === '--json')).toBe(true);
+    expect(state.calls.filter((call) => call[0] === 'terminal').every((call) => !call.includes('--full'))).toBe(true);
+  });
+
+  it('stops before run-use when a competing assignment cannot be read', async () => {
+    const fx = fixture();
+    const good = await publishRow(fx.file, 'task_orch', 'ctx_orch');
+    const bad = await publishRow(fx.file, 'task_other', 'ctx_other');
+    const state = world([
+      { id: good.taskId, dispatchId: good.bindingKey },
+      { id: bad.taskId, dispatchId: bad.bindingKey },
+    ], OLD_HANDLE);
+    state.workerFailDispatch = bad.bindingKey;
+    const report = await attachOrchestratorSeat({
+      argv: ['attach', NEW_HANDLE],
+      env: fx.env,
+      runNative: native(state, fx.primary),
+    });
+    expect(report.ok).toBe(false);
+    expect(report.message).toContain('native worker evidence');
+    expect(report.message).toContain('unavailable');
+    expect(runUses(state)).toBe(0);
+  });
+
+  it('rejects a worker record that only repeats the Dispatch', async () => {
+    const fx = fixture();
+    const row = await publishRow(fx.file, 'task_orch', 'ctx_orch');
+    const state = world([{ id: row.taskId, dispatchId: row.bindingKey }], OLD_HANDLE);
+    state.workerBareDispatch = row.bindingKey;
+    const report = await attachOrchestratorSeat({
+      argv: ['attach', NEW_HANDLE],
+      env: fx.env,
+      runNative: native(state, fx.primary),
+    });
+    expect(report.message).toContain('native worker evidence');
+    expect(report.message).toContain('unreadable');
+    expect(runUses(state)).toBe(0);
+  });
+
+  it('rejects an incomplete terminal census and an unknown seat', async () => {
+    const fx = fixture();
+    const row = await publishRow(fx.file, 'task_orch', 'ctx_orch');
+    const omitted = world([{ id: row.taskId, dispatchId: row.bindingKey }], OLD_HANDLE);
+    omitted.listOmitCensus = true;
+    const omittedReport = await attachOrchestratorSeat({
+      argv: ['attach', NEW_HANDLE],
+      env: fx.env,
+      runNative: native(omitted, fx.primary),
+    });
+    expect(omittedReport.message).toContain('restore Orca terminal visibility, inspect this Run and retry');
+    expect(runUses(omitted)).toBe(0);
+    const unknown = world([{ id: row.taskId, dispatchId: row.bindingKey }], OLD_HANDLE);
+    unknown.listLiveness = 'unknown';
+    const unknownReport = await attachOrchestratorSeat({
+      argv: ['attach', NEW_HANDLE],
+      env: fx.env,
+      runNative: native(unknown, fx.primary),
+    });
+    expect(unknownReport.message).toContain('correct the handle/project/Orca runtime and retry');
+    expect(runUses(unknown)).toBe(0);
+  });
+
+  it('accepts a connected seat whose list row omits status', async () => {
+    const fx = fixture();
+    const row = await publishRow(fx.file, 'task_orch', 'ctx_orch');
+    const state = world([{ id: row.taskId, dispatchId: row.bindingKey }], NEW_HANDLE);
+    state.listLiveness = 'connected';
+    const report = await attachOrchestratorSeat({
+      argv: ['attach', NEW_HANDLE],
+      env: fx.env,
+      runNative: native(state, fx.primary),
+    });
+    expect(report.ok).toBe(true);
+    expect(runUses(state)).toBe(0);
+  });
+
+  it('refuses a workspace-pattern path that is not the selected primary root', async () => {
+    const fx = fixture();
+    const row = await publishRow(fx.file, 'task_orch', 'ctx_orch');
+    const seat = path.join(fx.root, 'orca', 'workspaces', 'orchestrator-pack', 'other-seat');
+    mkdirSync(seat, { recursive: true });
+    const state = world([{ id: row.taskId, dispatchId: row.bindingKey }], OLD_HANDLE);
+    state.showPath = seat;
+    const report = await attachOrchestratorSeat({
+      argv: ['attach', NEW_HANDLE],
+      env: fx.env,
+      runNative: native(state, fx.primary),
+    });
+    expect(report.ok).toBe(false);
+    expect(report.message).toContain('correct the handle/project/Orca runtime and retry');
+    expect(runUses(state)).toBe(0);
+    expect(existsSync(pinPath(fx.env))).toBe(false);
+  });
+
+  it('refuses a symlinked config directory before run-use or pin write', async () => {
+    const fx = fixture();
+    const row = await publishRow(fx.file, 'task_orch', 'ctx_orch');
+    const home = path.join(fx.root, 'redirect-home');
+    const realConfig = path.join(fx.root, 'real-config');
+    mkdirSync(home);
+    mkdirSync(realConfig);
+    symlinkSync(realConfig, path.join(home, '.config'));
+    const state = world([{ id: row.taskId, dispatchId: row.bindingKey }], OLD_HANDLE);
+    const report = await attachOrchestratorSeat({
+      argv: ['attach', NEW_HANDLE],
+      env: { ...fx.env, HOME: home },
+      runNative: native(state, fx.primary),
+    });
+    expect(report.pin).toBe('refused');
+    expect(report.message).toContain('pin path is a symlink');
+    expect(runUses(state)).toBe(0);
+    expect(existsSync(path.join(realConfig, 'orchestrator-fleet'))).toBe(false);
+  });
+
+  it('reports an unconfirmed run-show after run-use as an unknown rebind', async () => {
+    const fx = fixture();
+    const row = await publishRow(fx.file, 'task_orch', 'ctx_orch');
+    const state = world([{ id: row.taskId, dispatchId: row.bindingKey }], OLD_HANDLE);
+    state.readbackFail = true;
+    const report = await attachOrchestratorSeat({
+      argv: ['attach', NEW_HANDLE],
+      env: fx.env,
+      runNative: native(state, fx.primary),
+    });
+    expect(report.ok).toBe(false);
+    expect(report.runUseCount).toBe(1);
+    expect(report.partial?.runRebound).toBe('unknown');
+    expect(report.message).toContain('did not confirm the coordinator');
+    expect(report.message).toContain('inspect the exact Run and retry the restore only after resolving its coordinator');
+    expect(report.message).not.toContain('did not rebind');
   });
 });
