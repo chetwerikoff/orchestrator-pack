@@ -3,7 +3,8 @@
   "issue_number": 2856,
   "declared_paths": [
     "scripts/worktree-lifecycle/launch-copies.ts",
-    "scripts/worktree-lifecycle/operations.test.ts"
+    "scripts/worktree-lifecycle/operations.test.ts",
+    "scripts/worktree-teardown.test.ts"
   ],
   "denylist": [
     "credentials/",
@@ -13,7 +14,8 @@
   ],
   "allowed_roots": [
     "scripts/worktree-lifecycle/launch-copies.ts",
-    "scripts/worktree-lifecycle/operations.test.ts"
+    "scripts/worktree-lifecycle/operations.test.ts",
+    "scripts/worktree-teardown.test.ts"
   ],
-  "source_revision": "0e5a98b83dc12e34e78bdc8d4d3e901e6889e8a3"
+  "source_revision": "dcd057b9f61a7107d652298df9c2e01338760cac"
 }

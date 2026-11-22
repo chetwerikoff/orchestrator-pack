@@ -609,7 +609,9 @@ describe('post-merge destructive teardown', () => {
         ...inner,
         runner: (invocation: CommandInvocation) => {
           if (invocation.args.includes('check-ignore')) return result();
-          if (invocation.args.includes('ls-files') && invocation.args.includes('--error-unmatch')) return result({ ok: false, exitCode: 1 });
+          if (invocation.args.includes('ls-files') && invocation.args.includes('--cached') && invocation.args.includes('-z')) {
+            return result({ stdout: '' });
+          }
           return inner.runner(invocation);
         },
       };
