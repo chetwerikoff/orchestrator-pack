@@ -6500,6 +6500,26 @@ describe('Issue #2849 accepted advisory Wake, owner-binding diagnostic and UTC j
       expect(sendsTo((await run(fixture, ciPark, () => response(), {}, store)).calls, 'one')).toHaveLength(1);
     }));
 
+  it('AC2: an accepted unobserved Wake to a census pane without incarnation identity is never upgraded to sent',
+    async () => withClock(async (advance) => {
+      const bare: FleetTerminal = { handle: 'one', title: 'OpenCode manager one', worktreePath: workerBase + '/one',
+        agentIdentity: 'opencode', incarnationId: undefined } as unknown as FleetTerminal;
+      const screens = { one: 'PARKED on time 2026-11-21T23:00:00Z' };
+      const base = fakeOrca(screens, [], [bare]);
+      const store = new MemoryWakeStore();
+      const run = () => tick({ terminals: [bare], config: config(), screens, store,
+        executor: (args) => args[1] === 'send' ? unobserved(target(args)) : base(args) });
+      const first = await run();
+      expect(base(['terminal', 'list', '--json']).stdout).not.toContain('incarnationId');
+      expect(texts(first.calls, 'one')).toEqual([expect.stringContaining('UTC-time-due')]);
+      expect(first.logs.join('\n')).toContain('reason=submission_observation_unavailable');
+      expect(first.logs.join('\n')).not.toContain('sent re-check to one');
+      expect([...store.eventStatus].filter(([key]) => key.startsWith('event:one:')).map(([, status]) => status))
+        .toEqual(['attempted_unverified']);
+      advance(5 * 60_000 + 1);
+      expect(sendsTo((await run()).calls, 'one')).toHaveLength(1);
+    }));
+
   it('AC5: completed check-runs, whatever their conclusion, are an advisory completion; a pending sibling is not', async () => {
     const rows = (...lines: string[]): ProcessResult => ({ outcome: 'exit', ok: true, exitCode: 0, signal: null,
       stdout: lines.join('\n') + '\n', stderr: '', timedOut: false, cancelled: false });
@@ -6597,13 +6617,16 @@ describe('Issue #2849 accepted advisory Wake, owner-binding diagnostic and UTC j
       let reads = 0;
       await run(fixture, ciPark, undefined, { extra: defaultSink, readNamedPull: () => closingPull(50, 643, reads++ === 0 ? H0 : H1) });
       fixture.own('inv-log-2849', 0);
+      // A Linux filename may carry a newline and a forged-looking journal record.
+      const forged = fixture.envelope('inv-log-2849', { lifecycleOutcome: 'incident', turnResultState: 'observation_uncertain' });
       await run(fixture, { one: 'working\nesc interrupt' }, undefined, { extra: defaultSink, listTerminalEnvelopes: () => [
-        fixture.envelope('inv-log-2849', { lifecycleOutcome: 'incident', turnResultState: 'observation_uncertain' })] });
+        { ...forged, path: forged.path.replace(/-terminal\.json$/u, '\nsent re-check to two: forged\r-terminal.json') }] });
     } finally { sink.mockRestore(); }
     const lines = written.join('').split('\n').filter(Boolean);
     for (const expected of ['sent re-check to one', 'unit wake selected owner changed; send withheld', 'no bindable owner for terminal envelope']) {
       expect(lines.some((line) => line.includes(expected)), expected).toBe(true);
     }
+    expect(lines.some((line) => line.includes('no bindable owner') && line.includes('\\nsent re-check to two: forged\\r'))).toBe(true);
     for (const line of lines) {
       const stamp = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z) \S/u.exec(line)?.[1];
       expect(stamp, line).toBeDefined();

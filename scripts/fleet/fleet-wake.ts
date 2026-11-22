@@ -2609,7 +2609,9 @@ function defaultSleep(milliseconds: number): Promise<void> {
 
 /** Every fleet-wake journal line starts with its ISO-8601 UTC emission time. */
 function stdoutLog(line: string): void {
-  process.stdout.write(`${new Date().toISOString()} ${line}\n`);
+  // Interpolated evidence (e.g. a filename) must never start an unprefixed physical line.
+  const single = line.replace(/[\u0000-\u001f\u007f\u0085\u2028\u2029]/gu, (char) => JSON.stringify(char).slice(1, -1));
+  process.stdout.write(`${new Date().toISOString()} ${single}\n`);
 }
 
 type AdvisorySendReceipt = PromptSendReceipt | { readonly status: 'accepted_unobserved' };
@@ -2648,9 +2650,11 @@ function sendAdvisoryReceipt(
       ? send.prompt as { observation?: unknown; processIncarnation?: unknown } : undefined;
     const incarnation = prompt?.processIncarnation;
     // Orca reports an unobservable provider explicitly; a prompt-less receipt is not that case.
+    // The selected pane must carry its own process identity; a handle alone may be reused.
+    const selected = pane.incarnationId?.trim();
     return send?.handle === pane.handle && send.accepted === true && prompt?.observation === 'unsupported'
-      && (incarnation === undefined
-        || (typeof incarnation === 'string' && Boolean(pane.incarnationId?.trim()) && incarnation === pane.incarnationId))
+      && Boolean(selected)
+      && (incarnation === undefined || (typeof incarnation === 'string' && incarnation === pane.incarnationId))
       ? { status: 'accepted_unobserved' } : receipt;
   } catch { return { status: 'unverified', reason: 'native_send_threw' }; }
 }
