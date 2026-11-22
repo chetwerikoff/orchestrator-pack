@@ -170,6 +170,27 @@
       "ownerIssue": 2285
     },
     {
+      "id": "actions-job",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh api repos/OWNER/REPO/actions/jobs/JOB_ID",
+      "routeId": "actions-job",
+      "ownerIssue": 2851
+    },
+    {
+      "id": "commit-check-runs",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh api repos/OWNER/REPO/commits/SHA/check-runs",
+      "routeId": "commit-check-runs",
+      "ownerIssue": 2851
+    },
+    {
+      "id": "commit-statuses",
+      "ownerClass": "rest_inventory",
+      "canonical": "gh api repos/OWNER/REPO/commits/SHA/statuses",
+      "routeId": "commit-statuses",
+      "ownerIssue": 2851
+    },
+    {
       "id": "issue-view-body",
       "ownerClass": "rest_inventory",
       "canonical": "gh issue view N --json body",
@@ -264,6 +285,24 @@
       "ownerClass": "rest_direct",
       "pattern": "^gh api repos/(?:[^/\\s]+/){1,2}issues/[^/\\s]+/comments(?:\\s|$)",
       "ownerIssue": 1061
+    },
+    {
+      "id": "rest-repos-commits-check-runs",
+      "ownerClass": "rest_direct",
+      "pattern": "^gh api repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/commits/[0-9a-fA-F]{40}/check-runs$",
+      "ownerIssue": 2851
+    },
+    {
+      "id": "rest-repos-commits-statuses",
+      "ownerClass": "rest_direct",
+      "pattern": "^gh api repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/commits/[0-9a-fA-F]{40}/statuses$",
+      "ownerIssue": 2851
+    },
+    {
+      "id": "rest-repos-actions-job",
+      "ownerClass": "rest_direct",
+      "pattern": "^gh api repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/jobs/[1-9][0-9]{0,14}$",
+      "ownerIssue": 2851
     }
   ]
 }

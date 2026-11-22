@@ -1,0 +1,39 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2851,
+  "declared_paths": [
+    "docs/chatgpt-task-execution-runbook.md",
+    "docs/target_repo_setup.md",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts",
+    "scripts/gh-wrapper.test.ts",
+    "scripts/lib/gh-inventory-match.mjs",
+    "scripts/lib/gh-rest-routes.mjs",
+    "scripts/lib/graphql-quota-github-read-inventory.json",
+    "scripts/lib/target-context.test.ts",
+    "scripts/lib/target-context.ts",
+    "scripts/manager-formatter-fix.test.ts",
+    "scripts/manager-formatter-fix.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/chatgpt-task-execution-runbook.md",
+    "docs/target_repo_setup.md",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts",
+    "scripts/gh-wrapper.test.ts",
+    "scripts/lib/gh-inventory-match.mjs",
+    "scripts/lib/gh-rest-routes.mjs",
+    "scripts/lib/graphql-quota-github-read-inventory.json",
+    "scripts/lib/target-context.test.ts",
+    "scripts/lib/target-context.ts",
+    "scripts/manager-formatter-fix.test.ts",
+    "scripts/manager-formatter-fix.ts"
+  ],
+  "source_revision": "e650d2b168bc4102cedc533b7754cd9c142a675e"
+}

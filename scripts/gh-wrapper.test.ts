@@ -423,6 +423,18 @@ describe('Issue #2605 escape-safe Actions job logs', () => {
       id: 'actions-job-log', repoSlug: 'example/target', jobId: 17001,
     });
     expect(isClassifiedGhReadCommand('gh ' + job.join(' '))).toBe(true);
+    expect(classifyArgv(['api', 'repos/example/target/actions/jobs/17001']).route).toMatchObject({
+      id: 'actions-job', repoSlug: 'example/target', jobId: 17001,
+    });
+    expect(isClassifiedGhReadCommand('gh api repos/example/target/actions/jobs/17001')).toBe(true);
+    expect(classifyArgv(['api', 'repos/example/target/commits/' + 'a'.repeat(40) + '/check-runs']).route).toMatchObject({
+      id: 'commit-check-runs', repoSlug: 'example/target', headSha: 'a'.repeat(40),
+    });
+    expect(isClassifiedGhReadCommand('gh api repos/example/target/commits/' + 'a'.repeat(40) + '/check-runs')).toBe(true);
+    expect(classifyArgv(['api', 'repos/example/target/commits/' + 'a'.repeat(40) + '/statuses']).route).toMatchObject({
+      id: 'commit-statuses', repoSlug: 'example/target', headSha: 'a'.repeat(40),
+    });
+    expect(isClassifiedGhReadCommand('gh api repos/example/target/commits/' + 'a'.repeat(40) + '/statuses')).toBe(true);
     for (const argv of [
       [...job, '--allow-escape-sequences'],
       [...job, '--allow-escape-sequences=true'],
@@ -436,7 +448,6 @@ describe('Issue #2605 escape-safe Actions job logs', () => {
       ['api', job[1], '--allow-escape-sequences', '--method', 'GET'],
       [...job, '--method', 'GET'],
       ['api', 'repos/example/target/actions/jobs/not-an-id/logs'],
-      ['api', 'repos/example/target/actions/jobs/17001'],
       ['api', 'repos/example/target/issues/17001', '--allow-escape-sequences'],
     ]) {
       // Runtime non-admission never implies refusal: unmatched api uses native passthrough.
@@ -2990,11 +3001,13 @@ describe('Issue #2507 exact checks arguments and actionable non-equivalent read 
       'gh run view 36730183562 --log-failed',
       'gh issue view 228 --json body',
       'gh api repos/example/target/actions/jobs/17001/logs',
+      'gh api repos/example/target/actions/jobs/17001',
+      'gh api repos/example/target/commits/' + 'a'.repeat(40) + '/check-runs',
+      'gh api repos/example/target/commits/' + 'a'.repeat(40) + '/statuses',
     ]) expect(isClassifiedGhReadCommand(command), command).toBe(true);
     for (const command of [
       'gh api repos/example/target/issues/228',
       'gh api repos/example/target/actions/runs/36730183562/jobs',
-      'gh api repos/example/target/commits/' + 'a'.repeat(40) + '/check-runs',
       'gh api repos/example/target/commits/' + 'a'.repeat(40) + '/status',
       'gh api repos/example/target/actions/jobs/not-known/logs',
       'gh api repos/example/target/actions/jobs/17001/logs --method DELETE',

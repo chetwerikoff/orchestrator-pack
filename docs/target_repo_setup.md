@@ -84,8 +84,17 @@ green; the automation Chrome is logged into ChatGPT; and Orca is running.
    for target verification. There is no fallback to pack verification commands.
 
    `verification.formatter` is optional. It declares a non-empty ordered `fix`
-   list of shell commands using the project's locked tools and one `check` shell
-   command equal to the CI formatter check. For example, LeoPoker can declare:
+   list and exactly one of a legacy `check` string or a new ordered `checks`
+   array. Every command runs exactly as written. A command may call `make` or
+   `uv`; the executable and version come from the exact PR-head Makefile and
+   lockfile, not from the card text or a system binary. Legacy
+   `check: "make lint"` stays valid. Both fields, neither field, a blank entry,
+   or a wrong type is `card-invalid`; the next step is to correct the card and
+   retry. Do not infer commands from the project name or `verification.local`.
+   Projects without a CI formatter check (such as AppliedIn) omit `formatter`
+   and keep the original no-auto-fix route.
+
+   LeoPoker can declare the inspected lint order:
 
    ```json
    {
@@ -93,21 +102,28 @@ green; the automation Chrome is logged into ChatGPT; and Orca is running.
        "local": ["make check"],
        "formatter": {
          "fix": ["uv run --locked ruff format .", "uv run --locked ruff check --fix ."],
-         "check": "make lint"
+         "checks": ["uv run --locked ruff check .", "uv run --locked ruff format --check ."]
        }
      }
    }
    ```
 
+   Compare that example with the target's live `Makefile`, `uv.lock`, and CI
+   before adoption. There is no system-Ruff fallback, and this pack change does
+   not edit an external project card. After merge, read the card and the
+   operator-local manager preamble back, then observe one already-awake or
+   assigned manager. Until that observation, fleet-wide routing is operationally
+   unverified. Optional cleanup of superseded manual-format branches must name
+   the exact live PR or Task; do not delete a wildcard, active, or default branch.
+
    When a PR check fails and no author turn is live, run
    `node --experimental-strip-types "$PACK_ROOT/scripts/lib/Invoke-TypeScriptCli.ts" --repo-root "$PACK_ROOT" --script "$PACK_ROOT/scripts/manager-formatter-fix.ts" -- --project <projectId> --pr <number>`
-   first and follow its printed next step. It runs only these card-declared
-   commands in its own disposable detached checkout of the exact PR head, then
-   commits and pushes a nonempty passing repair to that PR branch. The caller's
-   checkout is not used for edits. Missing configuration means no automatic
-   repair; projects without a CI formatter check (such as AppliedIn) omit it.
-   A malformed declaration is `card-invalid`; commands are never inferred from
-   the project name or `verification.local`.
+   first and follow its printed next step. It diagnoses the current head and CI
+   run attempt, then runs only these card-declared commands in its own
+   disposable detached checkout of the exact PR head. A proved lint candidate
+   can publish one nonempty passing `Apply formatter` commit to that PR branch.
+   The caller's checkout is not used for edits. The command never grants Send
+   authority.
 3. **Target-mode GitHub binding.** Export the same selected project id for every local target-running pack entrypoint:
 
    ```bash
