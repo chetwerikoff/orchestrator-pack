@@ -1940,7 +1940,7 @@ async function runLaunch(
         ? [`worktree ${prepared.value.selector}${prepared.value.path ? ` (${prepared.value.path})` : ''}`] : []),
     ];
     const handoffNote = supervised.nextAction?.note && touched.length
-      ? `This launch attempt touched ${touched.join(' and ')}; before any cleanup the coordinator must confirm their current ownership and liveness through the existing native terminal and worktree reads, never stopping, closing or removing the live incumbent's Dispatch, terminal or worktree, then rerun. ${supervised.nextAction.note}`
+      ? `This losing launch attempt created ${touched.join(' and ')}; any cleanup of this attempt applies only to those, after the coordinator confirms their current ownership and liveness through the existing native terminal and worktree reads. ${supervised.nextAction.note}`
       : supervised.nextAction?.note;
     return continued(input, 'supervised_start', {
       cause: startReason,

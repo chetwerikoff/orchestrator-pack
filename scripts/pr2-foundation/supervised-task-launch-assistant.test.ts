@@ -9102,7 +9102,7 @@ describe('Issue #2865 per-launch worker executor', () => {
     ]) expect(() => parseLaunchAssistantCli([...argv, '--executor', json], profileEnv(), select)).toThrow(/--executor applies only to --work-class t1\|t2\|t3/u);
   });
 
-  it('after real placement ordering, the live-holder note names only the touched terminal and worktree and requires ownership/liveness confirmation before any cleanup', async () => {
+  it('after real placement ordering, the live-holder note limits cleanup to this attempt\'s created resources, then keeps the incumbent stop-then-rerun sequence', async () => {
     const note = 'Sequential handoff: the coordinator ... then rerun the same launch after the current holder ends.';
     const events: string[] = [];
     const base = runtimeAdapter({ onSpawn: () => { events.push('spawn'); } });
@@ -9119,9 +9119,10 @@ describe('Issue #2865 per-launch worker executor', () => {
     expect(result).toMatchObject({ outcome: 'continue', stage: 'supervised_start', observedCause: 'target_unresolved',
       evidence: { admissionDiagnostic: 'holder_live_no_replacement_authority' }, nextAction: { kind: 'reconcile_dispatch' },
       executorSelection: { provenance: 'per-launch', requested: opus, admitted: opus } });
-    expect(result.nextAction.note).toBe('This launch attempt touched terminal terminal-fresh and worktree id:repo::exact-worktree (/tmp/exact-worktree); '
-      + 'before any cleanup the coordinator must confirm their current ownership and liveness through the existing native terminal and worktree reads, '
-      + `never stopping, closing or removing the live incumbent's Dispatch, terminal or worktree, then rerun. ${note}`);
+    expect(result.nextAction.note).toBe('This losing launch attempt created terminal terminal-fresh and worktree id:repo::exact-worktree (/tmp/exact-worktree); '
+      + 'any cleanup of this attempt applies only to those, after the coordinator confirms their current ownership and liveness through the existing native terminal and worktree reads. '
+      + note);
+    expect(result.nextAction.note).not.toMatch(/never stopping|then rerun\. Sequential/u);
     expect(result.nextAction.note).not.toMatch(/term-holder|dispatch_old/u);
     expect(result.nextAction).not.toHaveProperty('command');
   });
