@@ -1,6 +1,6 @@
 import { jsonFieldsEqual, parseGhArgv } from './gh-parse-argv.mjs';
 
-/** @typedef {'pr-list-open' | 'pr-list-head' | 'pr-list-merged-closes' | 'pr-view' | 'pr-checks' | 'pr-diff-name-only' | 'issue-view-body' | 'issue-view-json' | 'repo-view-name-with-owner' | 'target-required-status-checks' | 'runtime-history-main-required-status-checks' | 'runtime-history-actions-run' | 'runtime-history-status-history' | 'run-view-log-failed' | 'actions-job-log'} InventoryRouteId */
+/** @typedef {'pr-list-open' | 'pr-list-head' | 'pr-list-merged-closes' | 'pr-view' | 'pr-checks' | 'pr-diff-name-only' | 'issue-view-body' | 'issue-view-json' | 'repo-view-name-with-owner' | 'target-required-status-checks' | 'runtime-history-main-required-status-checks' | 'runtime-history-actions-run' | 'runtime-history-status-history' | 'run-view-log-failed' | 'actions-job-log' | 'actions-job' | 'commit-check-runs'} InventoryRouteId */
 /** @typedef {{ repository: string, defaultBranch: string }} TargetAuthorization */
 /** @typedef {{ targetAuthorization?: TargetAuthorization }} InventoryMatchOptions */
 
@@ -197,6 +197,19 @@ export function matchInventoryRoute(parsed, options = {}) {
       if (Number.isSafeInteger(jobId) && jobId > 0) {
         return { id: 'actions-job-log', repoSlug: jobLog[1], jobId };
       }
+    }
+    const job = endpoint.match(/^repos\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/actions\/jobs\/(\d+)$/);
+    if (job && parsed.positionals.length === 0 && !parsed.jq && !parsed.jsonFields
+      && !parsed.repo && hasOnlyAllowedFlags(parsed, [])) {
+      const jobId = Number(job[2]);
+      if (Number.isSafeInteger(jobId) && jobId > 0) {
+        return { id: 'actions-job', repoSlug: job[1], jobId };
+      }
+    }
+    const checkRuns = endpoint.match(/^repos\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/commits\/([0-9a-fA-F]{40})\/check-runs$/);
+    if (checkRuns && parsed.positionals.length === 0 && !parsed.jq && !parsed.jsonFields
+      && !parsed.repo && hasOnlyAllowedFlags(parsed, [])) {
+      return { id: 'commit-check-runs', repoSlug: checkRuns[1], headSha: checkRuns[2].toLowerCase() };
     }
     return matchRuntimeHistoryApiRoute(parsed, options.targetAuthorization);
   }

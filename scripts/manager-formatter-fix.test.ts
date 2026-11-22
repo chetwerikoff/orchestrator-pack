@@ -6,7 +6,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { runProcessSync, type ProcessResult, type RunProcessSyncOptions } from './kernel/subprocess.ts';
 import type { TargetContext } from './lib/target-context.ts';
 import { parseGhArgv } from './lib/gh-parse-argv.mjs';
-import { matchInventoryRoute } from './lib/gh-inventory-match.mjs';
+import { classifyArgv, matchInventoryRoute } from './lib/gh-inventory-match.mjs';
+import { executeRestRoute } from './lib/gh-rest-routes.mjs';
 import { formatterFixCli, runManagerFormatterFix } from './manager-formatter-fix.ts';
 
 const roots: string[] = [];
@@ -525,6 +526,80 @@ describe('C1 routing matrix', () => {
     expect(world.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
     expect(world.remoteHead()).toBe(world.head);
     world.expectRemoved();
+  });
+
+  it('reads check-runs and job steps through inventory routes', () => {
+    const sha = 'a'.repeat(40);
+    const checksArgv = ['api', `repos/example/formatter/commits/${sha}/check-runs`];
+    expect(matchInventoryRoute(parseGhArgv(checksArgv))).toMatchObject({
+      id: 'commit-check-runs', repoSlug: 'example/formatter', headSha: sha,
+    });
+    expect(matchInventoryRoute(parseGhArgv([...checksArgv, '--paginate']))).toBeNull();
+    expect(matchInventoryRoute(parseGhArgv(['api', 'repos/example/formatter/actions/jobs/202']))).toMatchObject({
+      id: 'actions-job', repoSlug: 'example/formatter', jobId: 202,
+    });
+
+    const root = mkdtempSync(join(tmpdir(), 'opk-ci-route-'));
+    roots.push(root);
+    const calls = join(root, 'calls.txt');
+    writeFileSync(calls, '');
+    const fake = join(root, 'gh');
+    const page1 = Array.from({ length: 100 }, (_, index) => ({ id: index + 1, head_sha: sha }));
+    writeFileSync(fake, `#!/usr/bin/env node
+const fs = require('node:fs');
+const endpoint = process.argv[process.argv.indexOf('api') + 1];
+fs.appendFileSync(process.env.GH_CALLS, endpoint + '\\n');
+const sha = ${JSON.stringify(sha)};
+const page1 = ${JSON.stringify(page1)};
+const bodies = {
+  ['repos/example/formatter/commits/' + sha + '/check-runs?per_page=100&page=1']: { total_count: 101, check_runs: page1 },
+  ['repos/example/formatter/commits/' + sha + '/check-runs?per_page=100&page=2']: {
+    total_count: 101,
+    check_runs: [{ id: 101, head_sha: sha, details_url: 'https://github.com/example/formatter/actions/runs/100/job/202' }],
+  },
+  'repos/example/formatter/actions/jobs/201': { id: 201, run_id: 100, run_attempt: 4, steps: [{ name: 'lint', conclusion: 'failure' }] },
+  'repos/example/formatter/actions/jobs/202': { id: 202, run_id: 100, run_attempt: 4, steps: [{ name: 'test', conclusion: 'failure' }] },
+};
+const body = bodies[endpoint];
+if (!body) { process.stderr.write('missing ' + endpoint + '\\n'); process.exit(1); }
+process.stdout.write('HTTP/2 200\\n\\n' + JSON.stringify(body));
+`);
+    chmodSync(fake, 0o755);
+    const previous = process.env.GH_CALLS;
+    process.env.GH_CALLS = calls;
+    try {
+      const classified = classifyArgv(checksArgv);
+      const payload = executeRestRoute(classified.route!.id, {
+        realGh: fake, parsed: classified.parsed, route: classified.route, cwd: root,
+      }) as { total_count: number; check_runs: Array<{ id: number }> };
+      expect(payload.total_count).toBe(101);
+      expect(payload.check_runs).toHaveLength(101);
+      expect(payload.check_runs.at(-1)?.id).toBe(101);
+      for (const [id, name] of [[201, 'lint'], [202, 'test']] as const) {
+        const jobArgv = classifyArgv(['api', `repos/example/formatter/actions/jobs/${id}`]);
+        const job = executeRestRoute(jobArgv.route!.id, {
+          realGh: fake, parsed: jobArgv.parsed, route: jobArgv.route, cwd: root,
+        }) as { steps: Array<{ name: string }> };
+        expect(job.steps[0]?.name).toBe(name);
+      }
+    } finally {
+      if (previous === undefined) delete process.env.GH_CALLS;
+      else process.env.GH_CALLS = previous;
+    }
+    expect(readFileSync(calls, 'utf8')).toContain('page=1');
+    expect(readFileSync(calls, 'utf8')).toContain('page=2');
+
+    const incomplete = join(root, 'incomplete-gh');
+    writeFileSync(incomplete, `#!/usr/bin/env node
+const endpoint = process.argv[process.argv.indexOf('api') + 1];
+if (!endpoint.includes('page=1')) process.exit(1);
+process.stdout.write('HTTP/2 200\\n\\n' + JSON.stringify({ total_count: 2, check_runs: [{ id: 1, head_sha: ${JSON.stringify(sha)} }] }));
+`);
+    chmodSync(incomplete, 0o755);
+    const partial = classifyArgv(checksArgv);
+    expect(() => executeRestRoute(partial.route!.id, {
+      realGh: incomplete, parsed: partial.parsed, route: partial.route, cwd: root,
+    })).toThrow(/check-runs pagination incomplete/);
   });
 
   it('uses the inventory job-log route and withholds unsafe or missing lines', () => {
