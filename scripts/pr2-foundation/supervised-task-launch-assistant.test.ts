@@ -8968,6 +8968,8 @@ describe('Issue #2863 new terminal native attachment before Dispatch and before 
     ['show without orphaned', withoutOrphaned, [shown], false, 'terminal_show_orphaned_unknown'],
     ['show changed incarnation', { ...shown, incarnationId: 'pty-2' }, [shown], false, 'terminal_show_identity_mismatch'],
     ['show mismatched worktree', { ...shown, worktreePath: '/tmp/other' }, [shown], false, 'terminal_show_identity_mismatch'],
+    ['show exited', { ...shown, status: 'exited' }, [shown], false, 'terminal_show_exited'],
+    ['show disconnected', { ...shown, connected: false }, [shown], false, 'terminal_show_disconnected'],
     ['list missing', shown, [], false, 'terminal_list_missing'],
     ['list ambiguous', shown, [shown, shown], false, 'terminal_list_ambiguous'],
     ['list truncated', shown, [shown], true, 'terminal_list_unavailable'],
@@ -9055,6 +9057,28 @@ describe('Issue #2863 new terminal native attachment before Dispatch and before 
       evidence: { dispatchId: 'dispatch-1', terminalId: worker.identity.id, attachment: 'terminal_show_orphaned' },
       nextAction: { kind: 'reconcile_dispatch' }, resources: { dispatchId: 'dispatch-1', terminal: worker.identity } });
     if (result.outcome === 'continue') expect(result.nextAction.note).toContain('already started');
+  });
+
+  it.each<[string, Record<string, unknown>, string]>([
+    ['exited', { status: 'exited' }, 'terminal_show_exited'],
+    ['disconnected', { connected: false }, 'terminal_show_disconnected'],
+  ])('a terminal %s after cleanup with unchanged identity and orphaned=false is not ready', async (_name, lost, reason) => {
+    const shows = [{ ...shown, status: 'running', connected: true }, { ...shown, ...lost }];
+    const reader = async (worktree: Parameters<typeof readTerminalAttachment>[0], terminal: Parameters<typeof readTerminalAttachment>[1]) => {
+      const show = shows.shift()!;
+      return readTerminalAttachment(worktree, terminal, native(show, [shown]).execute);
+    };
+    const result = await runSupervisedTaskLaunchAssistant(launchInput(), {
+      ...deps({ readTerminalAttachment: reader }),
+      prepareWorktree: async () => ({ status: 'ok', value: prepared }),
+      captureLaunchShells: async () => [{ handle: 'creation-shell', incarnationId: 'shell-1' }],
+      cleanupLaunchShells: async () => {},
+    });
+    expect(result).toMatchObject({ outcome: 'continue', stage: 'supervised_start',
+      observedCause: 'terminal_attachment_lost_after_start',
+      evidence: { dispatchId: 'dispatch-1', terminalId: worker.identity.id, attachment: reason },
+      resources: { dispatchId: 'dispatch-1', terminal: worker.identity } });
+    expect(shows).toEqual([]);
   });
 
   it('existing-terminal recovery is unchanged and never consults the new-terminal read-back', async () => {

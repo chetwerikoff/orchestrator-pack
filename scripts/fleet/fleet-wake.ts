@@ -1451,9 +1451,10 @@ const OPERATOR_GATE_PARK_RE = /^PARKED on operator [1-9][0-9]* gate for PR [1-9]
 /**
  * Only the incumbent operator/coordinator releases an exact operator-gate park:
  * no producer event, Issue/PR fact or elapsed Reminder wakes it. Silence needs
- * the own final park on the one live native pane with the same identity, plus
- * the selected Dispatch binding wherever freshSendSafePane requires it.
- * Anything weaker keeps the existing alarm and Reminder routes.
+ * the caller's exact manager-assignment-to-pane witness (boundIssueManager or
+ * parkingManager), the own final park on the one live native pane with the same
+ * identity, plus the selected Dispatch binding wherever freshSendSafePane
+ * requires it. Anything weaker keeps the existing alarm and Reminder routes.
  */
 function silentOperatorGatePark(
   pane: FleetPaneObservation,
@@ -2269,7 +2270,9 @@ async function wakeNamedParkedProducers(
       epoch = { key: episode, since: now, started: now };
       store.writeParkedEpoch?.(pane.handle, epoch);
     }
-    if (silentOperatorGatePark(pane, options, executor, store)) continue;
+    if (OPERATOR_GATE_PARK_RE.test(pane.wait)
+      && parkingManager(pane, options, terminals, executor, tickAssignments(), workerShows)
+      && silentOperatorGatePark(pane, options, executor, store)) continue;
     const producer = parseNamedParkedProducer(pane.wait);
     let decision: ParkDecision = PENDING;
     // Re-observe this same native pane and its final PARKED line

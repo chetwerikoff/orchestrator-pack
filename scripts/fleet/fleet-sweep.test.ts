@@ -1220,6 +1220,26 @@ describe('Issue #2863 wide OpenCode idle composer is chrome, not the final or in
     expect(sweep(screen)?.state).toBe('STOPPED');
   });
 
+  it.each([
+    ['padded incoming text', '  ┃' + ' '.repeat(24) + 'User: new instructions'],
+    ['padded one-word incoming text', '  ┃' + ' '.repeat(24) + 'rebase-now'],
+    ['padded incoming text in the composer column', '  ┃' + ' '.repeat(92) + 'User: new instructions'],
+    ['a path-like row in the composer column', '  ┃' + ' '.repeat(92) + '/tmp/x:y'],
+  ])('%s directly above the composer rows is not stripped and supersedes the park', (_name, row) => {
+    const lines = frame('     ' + gate).split('\n');
+    lines.splice(lines.findIndex((line) => line.includes('~/orca/workspaces')), 0, row);
+    const screen = lines.join('\n');
+    expect(lastFleetParkedLine(screen)).not.toBe(gate);
+    expect(sweep(screen)?.ownParkObservation).toBeUndefined();
+    expect(sweep(screen)?.state).toBe('STOPPED');
+  });
+
+  it('a right column that does not name the footer worktree is not stripped', () => {
+    const screen = frame('     ' + gate).replace('~/orca/workspaces/project/leopoker-', '~/orca/workspaces/project/other-');
+    expect(lastFleetParkedLine(screen)).not.toBe(gate);
+    expect(sweep(screen)?.ownParkObservation).toBeUndefined();
+  });
+
   it('an unsent composer draft is not stripped as chrome', () => {
     const screen = frame('     ' + gate).replace('  ┃' + ' '.repeat(92) + '~/orca', '  ┃  approve merge' + ' '.repeat(77) + '~/orca');
     expect(lastFleetParkedLine(screen)).toBeUndefined();

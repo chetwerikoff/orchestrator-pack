@@ -2076,7 +2076,8 @@ export type TerminalAttachment =
 
 /**
  * The exact terminal-create handle, generation and selected worktree must be
- * shown and listed exactly once, and terminal show must report orphaned=false.
+ * shown and listed exactly once, and terminal show must report orphaned=false
+ * and neither an explicit `status: exited` nor `connected: false`.
  * The list contract does not promise `orphaned`; it is checked only when present.
  */
 export async function readTerminalAttachment(
@@ -2094,6 +2095,8 @@ export async function readTerminalAttachment(
     if (live.orphaned !== false) {
       return { status: 'unverified', reason: live.orphaned === true ? 'terminal_show_orphaned' : 'terminal_show_orphaned_unknown' };
     }
+    if (text(live.status).toLowerCase() === 'exited') return { status: 'unverified', reason: 'terminal_show_exited' };
+    if (live.connected === false) return { status: 'unverified', reason: 'terminal_show_disconnected' };
     const listed = resultRecord(envelope(await execute(['orca', 'terminal', 'list', '--worktree', worktree.selector, '--json'])));
     if (listed?.truncated !== false || !Array.isArray(listed.terminals)) return { status: 'unverified', reason: 'terminal_list_unavailable' };
     const rows = listed.terminals.filter((row): row is Record<string, unknown> => record(row) && text(row.handle) === terminal.id);

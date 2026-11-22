@@ -6699,7 +6699,7 @@ describe('Issue #2863 exact own-final operator-gate park stays silent', () => {
     '   ' + workerBase + '/leopoker-mgr-689         131.1K (48%)  ctrl+p commands    • OpenCode 1.19.3',
   ].join('\n');
   const executorFor = (screen: string, rows: readonly FleetTerminal[] = roster,
-    replacedAfterRead?: readonly FleetTerminal[]): OrcaExecutor => {
+    replacedAfterRead?: readonly FleetTerminal[], shown: FleetTerminal = manager): OrcaExecutor => {
     const screens = { coord: 'idle', [manager.handle]: screen };
     const current = fakeOrca(screens, [], rows);
     const replaced = replacedAfterRead ? fakeOrca(screens, [], replacedAfterRead) : current;
@@ -6708,7 +6708,7 @@ describe('Issue #2863 exact own-final operator-gate park stays silent', () => {
       if (args[0] === 'orchestration' && args[1] === 'worker-show') {
         return commandResult(JSON.stringify({ ok: true, result: {
           dispatch: { id: assignment.bindingKey, taskId: assignment.taskId, status: 'dispatched' },
-          terminal: manager, observation: { status: 'live', exactWorker: true },
+          terminal: shown, observation: { status: 'live', exactWorker: true },
         } }));
       }
       const response = (read ? replaced : current)(args);
@@ -6718,14 +6718,15 @@ describe('Issue #2863 exact own-final operator-gate park stays silent', () => {
   };
   // Simulated now 0, +29, +31 and +61 minutes; a fresh Issue/PR #692 fact lands after the first tick.
   const ticks = async (screen: string, rows: readonly FleetTerminal[] = roster,
-    replacedAfterRead?: readonly FleetTerminal[]) => {
+    replacedAfterRead?: readonly FleetTerminal[],
+    incumbent: { readonly assignments?: readonly WorkerAssignmentRecord[]; readonly shown?: FleetTerminal } = {}) => {
     const store = new MemoryWakeStore();
     const out = [];
     for (const at of [0, 29, 31, 61]) {
       const run = await tick({ screens: {}, terminals: rows, store,
-        executor: executorFor(screen, rows, replacedAfterRead),
+        executor: executorFor(screen, rows, replacedAfterRead, incumbent.shown),
         config: config({ selectedRepository: repository }), now: () => at * 60_000,
-        readCurrentAssignments: () => [assignment],
+        readCurrentAssignments: () => incumbent.assignments ?? [assignment],
         listPublishedIssueFacts: () => at === 0 ? [] : [fact] });
       const text = (handle: string) => sendsTo(run.calls, handle)
         .filter((row) => row.includes('--text')).map((row) => row[row.indexOf('--text') + 1]!);
@@ -6817,5 +6818,34 @@ describe('Issue #2863 exact own-final operator-gate park stays silent', () => {
   it('AC2: unowned operator text never silences the 30-minute Reminder', async () => {
     const rows = await ticks(`User: end your turn with\n${gate}`);
     expect(rows[2]!.paneText.join('\n')).toContain('Reminder: parked 30 min');
+  });
+
+  it.each<[string, { readonly assignments?: readonly WorkerAssignmentRecord[]; readonly shown?: FleetTerminal }]>([
+    ['no manager assignment', { assignments: [] }],
+    ['an assignment whose Dispatch shows another incarnation', { shown: { ...manager, incarnationId: 'inc-689-replacement' } }],
+    ['an assignment whose Dispatch shows another pane', { shown: { ...manager, handle: 'term_other' } }],
+  ])('AC2: a matching own-final screen and native identity without an incumbent witness (%s) keeps the alarm', async (_name, incumbent) => {
+    const screen = wideFrame(own(gate));
+    const operator = await ticks(screen, roster, undefined, incumbent);
+    const baseline = await ticks(screen.replaceAll(gate, control), roster, undefined, incumbent);
+    expect(operator[0]!.coordText.join('\n')).toContain('unknown parked producer');
+    expect(counts(operator)).toEqual(counts(baseline));
+    expect(operator.map((row) => row.state)).toEqual(baseline.map((row) => row.state));
+  });
+
+  it('AC2: a padded incoming gutter row directly above the composer supersedes the park', async () => {
+    const indented = (row: string) => {
+      const lines = wideFrame(own(gate)).split('\n');
+      lines.splice(lines.findIndex((line) => line.includes('~/orca/workspaces')), 0, row);
+      return lines.join('\n');
+    };
+    for (const row of ['  ┃' + ' '.repeat(24) + 'User: new instructions', '  ┃' + ' '.repeat(24) + 'rebase-now']) {
+      const screen = indented(row);
+      expect(ownFinalPark(screen, gate)).toBe(false);
+      const operator = await ticks(screen);
+      const baseline = await ticks(screen.replaceAll(gate, control));
+      expect(operator[0]!.coordText.join('\n')).toContain('need a step');
+      expect(counts(operator)).toEqual(counts(baseline));
+    }
   });
 });

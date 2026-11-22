@@ -546,16 +546,29 @@ function verifiedPrimaryBindings(
 }
 
 // OpenCode's idle composer is the final gutter block closed by its `╹▀▀▀` border. On a
-// wide pane its right column repeats the worktree path. Only rows carrying that column
-// or chrome belong to it; any left-column text above them stays an incoming message.
+// wide pane its right column wraps `<worktree path>:<branch>`, and the footer below the
+// border names the same absolute path. The block is stripped only when that column is
+// proven; any other gutter text, however indented, stays an incoming message.
 function withoutOpenCodeComposer(screen: string): string {
   const lines = screen.split(/\r?\n/u);
   let border = lines.length - 1;
   while (border >= 0 && !/^\s*╹▀{8,}\s*$/u.test(lines[border]!)) border -= 1;
-  if (border < 0 || contentLines(lines.slice(border + 1).join('\n')).length > 0) return screen;
+  const footer = lines.slice(border + 1).join('\n');
+  if (border < 0 || contentLines(footer).length > 0) return screen;
   let start = border;
-  while (start > 0 && /^\s*┃/u.test(lines[start - 1]!)
-    && (/^\s*┃(?:\s*$|\s{20,}\S)/u.test(lines[start - 1]!) || contentLines(lines[start - 1]!).length === 0)) start -= 1;
+  let indent: number | undefined;
+  const column: string[] = [];
+  while (start > 0 && /^\s*┃/u.test(lines[start - 1]!)) {
+    const right = /^(\s*┃\s{20,})(\S+)\s*$/u.exec(lines[start - 1]!);
+    if (right && (indent === undefined || right[1]!.length === indent)) {
+      indent = right[1]!.length;
+      column.unshift(right[2]!);
+    } else if (right || contentLines(lines[start - 1]!).length > 0) break;
+    start -= 1;
+  }
+  const path = /^(~?\/[^\s:]+):[^\s:]+$/u.exec(column.join(''))?.[1];
+  const suffix = path?.replace(/^~/u, '');
+  if (!suffix || !footer.split(/\s+/u).some((token) => token.startsWith('/') && token.endsWith(suffix))) return screen;
   return lines.slice(0, start).join('\n');
 }
 
