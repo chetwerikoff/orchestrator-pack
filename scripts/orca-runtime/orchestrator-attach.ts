@@ -57,7 +57,7 @@ export interface AttachReport {
   readonly primary: 'skipped' | 'bound' | 'replaced' | 'refused' | 'not-attempted';
   readonly pin: 'written' | 'unchanged' | 'refused' | 'not-attempted';
   readonly partial?: {
-    readonly runRebound: boolean;
+    readonly runRebound: boolean | 'unknown';
     readonly primary: string;
     readonly pin: string;
   };
@@ -470,7 +470,7 @@ function terminalCensus(value: unknown): { readonly rows: readonly TerminalRow[]
     const row = asRecord(entry);
     const handle = typeof row?.handle === 'string' ? row.handle : '';
     const worktreePath = row ? worktreePathOf(row) : '';
-    if (!handle || !worktreePath || handles.has(handle)) return null;
+    if (!row || !handle || !worktreePath || handles.has(handle)) return null;
     handles.add(handle);
     rows.push({ handle, worktreePath, live: rowIsLive(row) });
   }
