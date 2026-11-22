@@ -3791,13 +3791,18 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
   it.each([
     ['untrusted source actor', (f: ReturnType<typeof fixture>) => {
       f.transports.sourceProofs[1]!.comment.actorLogin = 'untrusted';
-    }],
+    }, 'scope_proof_witness', 'authorized post-terminal scope disposition COMMENT'],
     ['status-worded transport exception', (f: ReturnType<typeof fixture>) => {
       const original = f.input.fixtureGptSourceCommentTransport!;
       f.input.fixtureGptSourceCommentTransport = { ...original,
         listComments: async () => { throw new Error('untrusted required status pending HTTP 500'); } };
-    }],
-  ] as const)('incident 1722: a thrown scope-proof error (%s) reports a sanitized binding and one nextAction', async (_name, mutate) => {
+    }, 'scope_proof_witness', 'authorized post-terminal scope disposition COMMENT'],
+    ['unrelated corrected Issue prose', (f: ReturnType<typeof fixture>) => {
+      f.transports.issue.body = f.transports.issue.body.replace(
+        '## Acceptance criteria', 'Unrelated prose outside criteria.\n\n## Acceptance criteria');
+      f.input.fixtureIssueBody = f.transports.issue.body;
+    }, 'issue_body_digest', 'restore the linked Issue body'],
+  ] as const)('incident 1722: a thrown scope-proof error (%s) reports a sanitized binding and one nextAction', async (_name, mutate, binding, action) => {
     const f = fixture();
     updatePackReviewRun(f.run.id, {
       boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(f.frozenBody),
@@ -3818,9 +3823,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     });
     expect(result, JSON.stringify(result)).toMatchObject({
       amendmentAdmission: false, reason: 'amendment_unverified_body_mismatch',
-      failedBinding: 'scope_proof_witness',
-      detail: 'scope_proof_witness:operation_failed',
-      nextAction: expect.stringContaining('authorized post-terminal scope disposition COMMENT'),
+      failedBinding: binding,
+      detail: binding + ':operation_failed',
+      nextAction: expect.stringContaining(action),
     });
     expect(JSON.stringify(result)).not.toContain('untrusted');
     expect(JSON.stringify(result)).not.toContain('HTTP 500');
@@ -3944,9 +3949,13 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     },
   );
 
-  it.each(['same-head scope proof', 'clean F..T delta'] as const)(
-    'incident 1716: a late duplicate of a frozen original findings source does not veto the %s',
-    async (lane) => {
+  it.each([
+    ['same-head scope proof', 'valid'], ['clean F..T delta', 'valid'],
+    ['same-head scope proof', 'edited'], ['clean F..T delta', 'edited'],
+    ['clean F..T delta', 'malformed'],
+  ] as const)(
+    'incident 1716: a late %s duplicate (%s) of a frozen original findings source does not veto settlement',
+    async (lane, kind) => {
       const f = lane === 'clean F..T delta' ? unchangedDescendantFixture() : fixture();
       if (lane === 'clean F..T delta') {
         completeFinalCapDelta(f, HEAD, revisedBody);
@@ -3955,7 +3964,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       }
       const frozen = f.transports.sourceProofs[0]!.comment;
       const duplicate: PackGptSourceGithubComment = {
-        ...frozen, id: frozen.id + 1000, createdAt: '2026-10-08T21:30:00Z', updatedAt: '2026-10-08T21:30:00Z',
+        ...frozen, id: frozen.id + 1000, createdAt: '2026-10-08T21:30:00Z',
+        updatedAt: kind === 'edited' ? '2026-10-08T21:31:00Z' : '2026-10-08T21:30:00Z',
+        body: kind === 'malformed' ? frozen.body.split('\n', 1)[0] + '\nnot a source envelope' : frozen.body,
         url: frozen.url.replace(String(frozen.id), String(frozen.id + 1000)),
       };
       const original = f.input.fixtureGptSourceCommentTransport!;

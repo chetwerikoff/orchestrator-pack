@@ -4235,66 +4235,79 @@ function packReviewRunnerPidDead(pid: unknown): boolean {
   }
 }
 
-/**
- * The shared resolver refuses duplicate exact identities. Every same-actor
- * marker copy reaching that refusal already passed its target/edit/envelope
- * checks (any failure is reported first as a conflict). Before a complete slot
- * is persisted, the later createdAt (numeric id tie-break) is elected; after
- * freeze only the frozen receipt's comment can be selected. The elected comment
- * is re-credentialed by the unchanged resolver over the census without its
- * losing duplicates.
- */
 function frozenGptSourceCommentId(slot: PackReviewSourceSlotRecord): number | string {
   const receipt = (slot.terminalResult as { source_comment_receipt?: { commentId?: number | string } } | undefined)
     ?.source_comment_receipt;
   return receipt?.commentId ?? '';
 }
 
+/**
+ * Same-actor exact-identity duplicates over one captured census. After freeze
+ * only the frozen receipt's comment is credentialed; later copies (valid,
+ * edited or malformed) are ignored. Before freeze each copy is credentialed
+ * alone by the unchanged resolver and the latest createdAt (numeric id
+ * tie-break) among the credentialed ones is elected.
+ */
 async function resolveElectedGptSourceComment(options: {
   identity: PackGptSourceIdentity;
   transport: PackGptSourceCommentTransport;
   frozenCommentId?: number | string;
 }): Promise<PackGptSourceCommentResolution> {
-  const first = await resolvePackGptSourceComment({ identity: options.identity, transport: options.transport });
-  if (first.kind !== 'ambiguous' || first.reason !== 'source_comment_duplicate_exact_identity') return first;
   let actorLogin: string;
   let census: Awaited<ReturnType<PackGptSourceCommentTransport['listComments']>>;
   try {
     actorLogin = trim(await options.transport.resolveActorLogin());
     census = await options.transport.listComments();
   } catch {
-    return first;
+    // The unchanged resolver owns the structured actor/census failure result.
+    return resolvePackGptSourceComment({ identity: options.identity, transport: options.transport });
   }
+  const resolveOver = (comments: typeof census) => resolvePackGptSourceComment({
+    identity: options.identity,
+    transport: {
+      resolveActorLogin: async () => actorLogin,
+      listComments: async () => comments,
+      getComment: (id) => options.transport.getComment(id),
+    },
+  });
   const duplicates = census.filter((comment) => {
     const marker = parsePackGptSourceMarker(
       comment.body.replace(/\r\n?/g, '\n').split('\n', 1)[0] ?? '');
     return Boolean(marker && samePackGptSourceIdentity(marker, options.identity)
       && comment.actorLogin === actorLogin);
   });
+  const without = (kept: (typeof census)[number]) =>
+    census.filter((comment) => !duplicates.includes(comment) || comment === kept);
+  const logIgnored = (label: string, kept: (typeof census)[number]) => {
+    const ignored = duplicates.filter((comment) => comment !== kept).map((comment) => String(comment.id));
+    if (ignored.length) {
+      process.stderr.write(`[pack-review] ${label}: ${options.identity.slotId} selected=${String(kept.id)} ignored=${ignored.join(',')}\n`);
+    }
+  };
+  if (options.frozenCommentId !== undefined) {
+    const frozen = duplicates.find((comment) => String(comment.id) === String(options.frozenCommentId));
+    if (!frozen) return resolveOver(census);
+    const resolution = await resolveOver(without(frozen));
+    if (resolution.kind === 'credentialed') logIgnored('frozen source slot kept; later duplicate ignored', frozen);
+    return resolution;
+  }
+  if (duplicates.length < 2) return resolveOver(census);
   const numericId = (comment: { id: number | string }) => {
     const value = Number(comment.id);
     return Number.isSafeInteger(value) ? value : Number.NEGATIVE_INFINITY;
   };
-  const winner = options.frozenCommentId !== undefined
-    ? duplicates.find((comment) => String(comment.id) === String(options.frozenCommentId))
-    : [...duplicates].sort((a, b) => (Date.parse(b.createdAt) - Date.parse(a.createdAt))
-      || (numericId(b) - numericId(a)))[0];
-  if (!winner || duplicates.length < 2 || duplicates.some((comment) =>
-    !Number.isFinite(Date.parse(comment.createdAt)) || numericId(comment) === Number.NEGATIVE_INFINITY)) {
-    return first;
+  const credentialed: Array<{ comment: (typeof census)[number]; resolution: PackGptSourceCommentResolution }> = [];
+  for (const comment of duplicates) {
+    if (!Number.isFinite(Date.parse(comment.createdAt)) || numericId(comment) === Number.NEGATIVE_INFINITY) continue;
+    const resolution = await resolveOver(without(comment));
+    if (resolution.kind === 'credentialed') credentialed.push({ comment, resolution });
   }
-  const ignored = duplicates.filter((comment) => comment !== winner).map((comment) => String(comment.id));
-  process.stderr.write(`[pack-review] ${options.frozenCommentId !== undefined
-    ? 'frozen source slot kept; later duplicate ignored'
-    : 'duplicate source comment elected'}: ${options.identity.slotId} selected=${String(winner.id)} ignored=${ignored.join(',')}\n`);
-  return resolvePackGptSourceComment({
-    identity: options.identity,
-    transport: {
-      resolveActorLogin: () => options.transport.resolveActorLogin(),
-      listComments: async () => census.filter((comment) => !duplicates.includes(comment) || comment === winner),
-      getComment: (id) => options.transport.getComment(id),
-    },
-  });
+  const winner = credentialed.sort((a, b) =>
+    (Date.parse(b.comment.createdAt) - Date.parse(a.comment.createdAt))
+    || (numericId(b.comment) - numericId(a.comment)))[0];
+  if (!winner) return resolveOver(census);
+  logIgnored('duplicate source comment elected', winner.comment);
+  return winner.resolution;
 }
 
 async function recoverStaleGptSourceComments(options: {
@@ -4991,9 +5004,23 @@ function isOnlyDispositionScopeCorrection(
     && introduced.length === dispositionAdditions.length
     && dispositionAdditions.every((root) => introduced.includes(root));
 }
+/** Tags a same-head proof failure with the binding of the operation that failed. */
 async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRunsInput, options: {
   projectId: string; storeRoot: string; repoSlug: string;
 }, authority: PackReviewAuthorityDocument, run: PackReviewRunRecord, candidateHeadSha?: string) {
+  const stage: { binding: PackReviewAmendmentBinding } = { binding: 'immutable_terminal' };
+  try {
+    return await resolveSameHeadIssueResolutionStages(input, options, authority, run, stage, candidateHeadSha);
+  } catch (error) {
+    throw Object.assign(error instanceof Error ? error : new Error(describeError(error)),
+      { amendmentBinding: stage.binding });
+  }
+}
+
+async function resolveSameHeadIssueResolutionStages(input: ReconcileStalePackReviewRunsInput, options: {
+  projectId: string; storeRoot: string; repoSlug: string;
+}, authority: PackReviewAuthorityDocument, run: PackReviewRunRecord,
+stage: { binding: PackReviewAmendmentBinding }, candidateHeadSha?: string) {
   const cycle = authority.cycle;
   const terminal = authority.terminal;
   const round = run.reviewRound;
@@ -5030,6 +5057,7 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
       && (record.value as PackReviewTerminalV2 | undefined)?.logicalRoundOrdinal === cycle.frozenCap);
   if (immutable.length !== 1) throw new Error('canonical terminal immutable record missing or ambiguous');
 
+  stage.binding = 'scope_proof_witness';
   // Read original GitHub COMMENTs through their existing credentialing
   // transport. A stored slot/receipt or public green is not a fresh source.
   const sourceTransport = process.env.OPK_VITEST_HARNESS === '1'
@@ -5115,6 +5143,7 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
     throw new Error('terminal REVIEW submitted_at is unavailable');
   }
 
+  stage.binding = 'pr_head_lineage';
   const runner = process.env.OPK_VITEST_HARNESS === '1'
     ? input.fixtureSameHeadIssueResolutionRunner ?? runProcess : runProcess;
   const context = resolveTargetContext({ projectId: options.projectId });
@@ -5149,6 +5178,7 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
       repoSlug: options.repoSlug, sourceRepoRoot: input.sourceRepoRoot },
   })) throw new Error('current-head required CI not green');
 
+  stage.binding = 'issue_body_digest';
   const snapshot = resolveBoundIssueSnapshot({
     projectId: options.projectId, prNumber: run.prNumber, prHeadSha: run.targetSha,
     issueNumber: round.issueNumber, snapshotDigest: round.boundIssueSnapshotDigest,
@@ -5171,8 +5201,10 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
   const originalCriteria = reviewBehaviorCriteria(originalReviewedBody);
   const correctedCriteria = reviewBehaviorCriteria(revision.body);
   if (!originalCriteria || !correctedCriteria || originalCriteria !== correctedCriteria) {
+    stage.binding = 'issue_criteria';
     throw new Error('same-head corrected Issue acceptance criteria missing, invalid or changed');
   }
+  stage.binding = 'scope_proof_witness';
   const principal = trim(githubEvidenceObject(await readFinalCapGithubJson(
     input, ['api', 'user', '--jq', '.login'], runner,
   )).login);
@@ -5300,6 +5332,7 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
       || !isOnlyDispositionScopeCorrection(
         originalReviewedBody, revision.body, dispositionRoots,
       )) {
+    stage.binding = 'issue_body_digest';
     throw new Error('corrected Issue has unrelated changes beyond the exact disposition scope roots');
   }
   const reread = githubEvidenceObject(await readFinalCapGithubJson(input, [
@@ -5308,6 +5341,7 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
   if (stableJson(reread) !== stableJson(comment)) {
     throw new Error('author disposition changed during exact-comment reread');
   }
+  stage.binding = 'issue_body_digest';
   const liveIssue = githubEvidenceObject(await readFinalCapGithubJson(input, [
     'api', `repos/${options.repoSlug}/issues/${round.issueNumber}`,
   ], runner));
@@ -5316,6 +5350,7 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
         !== `https://api.github.com/repos/${options.repoSlug}`.toLowerCase()) {
     throw new Error('corrected live Issue bytes changed before settlement');
   }
+  stage.binding = 'pr_head_lineage';
   const after = await resolveCurrentPrTarget(input.sourceRepoRoot, options.repoSlug, run.prNumber, boundPrRunner);
   if (after.headSha !== target.headSha || after.baseRef !== target.baseRef
       || extractClosingIssueNumber(after.body) !== round.issueNumber) {
@@ -6081,6 +6116,7 @@ export async function maybeAdmitPackReviewBodyAmendment(
   // mismatch has no new-review admission; deassert and read back only.
   const confirmUnreviewedBodyNonSuccess = async (reason: string,
     cause?: { binding: PackReviewAmendmentBinding; detail: string }) => {
+    let operation: PackReviewAmendmentBinding = 'pr_head_lineage';
     try {
       const head = await readCheckedReviewPrHead(input, options.repoSlug, prNumber, livePr.headSha);
       if (head !== livePr.headSha
@@ -6088,6 +6124,7 @@ export async function maybeAdmitPackReviewBodyAmendment(
           || computeBoundIssueSnapshotHash(currentIssue.body) !== nextDigest) {
         return failure('amendment_mismatch_current_binding_unverified');
       }
+      operation = 'required_status';
       let observed = await readFinalCapRequiredStatus(input, options.repoSlug, livePr.headSha);
       if (observed !== 'pending' && observed !== 'error') {
         const writer = input.fixtureRequiredStatusWriter
@@ -6108,7 +6145,9 @@ export async function maybeAdmitPackReviewBodyAmendment(
       }
       return failure(reason, cause);
     } catch (error) {
-      return failure('amendment_mismatch_non_success_unverified', sanitizedAmendmentCause(error, 'required_status'));
+      return failure(operation === 'pr_head_lineage'
+        ? 'amendment_mismatch_current_binding_unverified' : 'amendment_mismatch_non_success_unverified',
+      sanitizedAmendmentCause(error, operation));
     }
   };
   const amendmentPendingRequest = (headSha: string) => ({
@@ -6159,8 +6198,10 @@ export async function maybeAdmitPackReviewBodyAmendment(
         && extractClosingIssueNumber(pr.body) === issueNumber
         && computeBoundIssueSnapshotHash(issue.body) === nextDigest;
     };
+    let operation: PackReviewAmendmentBinding = 'pr_head_lineage';
     try {
       if (!(await stillCurrent())) return failure('amendment_binding_changed_before_pending');
+      operation = 'required_status';
       if (await readFinalCapRequiredStatus(input, options.repoSlug, livePr.headSha) !== 'pending') {
         const writer = input.fixtureRequiredStatusWriter
           ?? ((request: Parameters<PackReviewRequiredStatusWriter>[0]) => publishPackReviewRequiredStatus({
@@ -6169,17 +6210,23 @@ export async function maybeAdmitPackReviewBodyAmendment(
           }));
         await writer(amendmentPendingRequest(livePr.headSha));
       }
-      if (await readFinalCapRequiredStatus(input, options.repoSlug, livePr.headSha) !== 'pending'
-          || !(await stillCurrent())) {
+      if (await readFinalCapRequiredStatus(input, options.repoSlug, livePr.headSha) !== 'pending') {
         return { ...failure('amendment_pending_status_unverified'), headSha: livePr.headSha,
           nextAction: 'from the pack root run: '
             + amendedReviewPendingRestoreCommand(options.repoSlug, prNumber) };
       }
+      operation = 'pr_head_lineage';
+      if (!(await stillCurrent())) {
+        return { ...failure('amendment_pending_status_unverified',
+          { binding: 'pr_head_lineage', detail: 'pr_head_lineage:binding_changed_after_pending' }),
+        headSha: livePr.headSha };
+      }
       return null;
     } catch (error) {
-      return { ...failure('amendment_pending_status_unverified', sanitizedAmendmentCause(error, 'required_status')),
-        headSha: livePr.headSha, nextAction: 'from the pack root run: '
-          + amendedReviewPendingRestoreCommand(options.repoSlug, prNumber) };
+      const cause = sanitizedAmendmentCause(error, operation);
+      return { ...failure('amendment_pending_status_unverified', cause), headSha: livePr.headSha,
+        ...(operation === 'required_status' ? { nextAction: 'from the pack root run: '
+          + amendedReviewPendingRestoreCommand(options.repoSlug, prNumber) } : {}) };
     }
   }
   if (!isFinalTerminal || !authority.terminal) return null;
@@ -6267,7 +6314,9 @@ export async function maybeAdmitPackReviewBodyAmendment(
         scopeProofFailure = { binding: 'scope_proof_witness', detail: 'scope_proof_witness:corrected_digest_or_publication_mismatch' };
       } catch (error) {
         // Unproved exception retains the full-body mismatch veto.
-        scopeProofFailure = sanitizedAmendmentCause(error, 'scope_proof_witness');
+        scopeProofFailure = sanitizedAmendmentCause(error,
+          (error as { amendmentBinding?: PackReviewAmendmentBinding } | undefined)?.amendmentBinding
+            ?? 'scope_proof_witness');
       }
     }
     return confirmUnreviewedBodyNonSuccess('amendment_unverified_body_mismatch', scopeProofFailure);

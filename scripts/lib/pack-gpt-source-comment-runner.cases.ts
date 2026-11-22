@@ -653,6 +653,36 @@ describe('pack runner GitHub-first GPT source authority (Issue #1435)', () => {
     } finally { stderr.mockRestore(); }
   });
 
+  it('incident 1716: before freeze an edited or malformed newer marker copy cannot block electing the latest valid duplicate', async () => {
+    const storeRoot = tempRoot();
+    process.env.OPK_VITEST_HARNESS = '1';
+    const { runId, publications } = startedStaleRun(storeRoot);
+    const first = publications.get('source-01')!;
+    const edited = { ...timedComment(first, 6003, '2026-08-17T00:09:00Z'), updatedAt: '2026-08-17T00:10:00Z' };
+    const valid = timedComment({ ...first, payload: 'NO_FINDINGS' }, 6001, '2026-08-17T00:05:00Z');
+    const malformed = timedComment(first, 6004, '2026-08-17T00:11:00Z');
+    malformed.body = valid.body.split('\n', 1)[0] + '\nnot a source envelope';
+    const comments = [
+      timedComment(first, 6000, '2026-08-17T00:00:00Z'), valid, edited, malformed,
+      timedComment(publications.get('source-02')!, 6010, '2026-08-17T00:00:00Z'),
+      timedComment(publications.get('source-03')!, 6020, '2026-08-17T00:00:00Z'),
+    ];
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const result = await reconcileStalePackReviewRuns(
+        recoveryInput(storeRoot, listedTransport(() => comments), { posts: 0 }),
+      );
+      expect(result.results, JSON.stringify(result)).toContainEqual(expect.objectContaining({ runId, recovered: true }));
+      const recovered = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
+      const slot = recovered?.reviewRound?.sourceSlots.find((entry) => entry.slotId === 'source-01');
+      expect((slot?.terminalResult as { source_comment_receipt?: { commentId?: number } })
+        .source_comment_receipt?.commentId).toBe(6001);
+      expect(recovered?.reviewVerdict).toBe('clean');
+      expect(stderr.mock.calls.map(([chunk]) => String(chunk)).join(''))
+        .toContain('duplicate source comment elected: source-01 selected=6001 ignored=6000,6003,6004');
+    } finally { stderr.mockRestore(); }
+  });
+
   it('incident 1716: after freeze the frozen receipt stands and a later duplicate is ignored and logged', async () => {
     const storeRoot = tempRoot();
     process.env.OPK_VITEST_HARNESS = '1';
