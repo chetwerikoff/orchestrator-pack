@@ -73,10 +73,20 @@ function declaredChecks(formatter: FormatterDeclaration): readonly string[] {
   return formatter.checks ?? (formatter.check ? [formatter.check] : []);
 }
 
+const SECRET_MATERIAL = /(?:ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)[A-Za-z0-9_]+|AKIA[0-9A-Z]{16}|Bearer\s+\S+|(?:token|password|secret|authorization)\s*[:=]\s*\S+/giu;
+
+function sanitizeDiagnosticText(text: string): string | null {
+  const stripped = text
+    .replace(/\u001B\[[0-?]*[ -/]*[@-~]/gu, '')
+    .replace(/\u001B\][\s\S]*?(?:\u0007|\u001B\\)/gu, '')
+    .replace(/\u001B[@-Z\\-_]/gu, '');
+  if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/u.test(stripped) || /\r(?!\n)/u.test(stripped)) return null;
+  const scrubbed = stripped.replace(SECRET_MATERIAL, '[redacted]').trim();
+  return scrubbed || null;
+}
+
 function clip(text: string): string {
-  const clean = text.replace(/\0/g, '').trim();
-  if (!clean) return '(no decoded error lines)';
-  return clean.length > 2000 ? clean.slice(-2000) : clean;
+  return text.length > 2000 ? text.slice(-2000) : text;
 }
 
 function jobIdFromUrl(url: string | null | undefined): number | null {
@@ -87,9 +97,36 @@ function jobIdFromUrl(url: string | null | undefined): number | null {
 }
 
 function stepKind(name: string): 'lint' | 'substantive' | 'other' {
-  if (SUBSTANTIVE_STEP.test(name)) return 'substantive';
-  if (LINT_STEP.test(name)) return 'lint';
+  const substantive = SUBSTANTIVE_STEP.test(name);
+  const lint = LINT_STEP.test(name);
+  if (substantive && lint) return 'other';
+  if (substantive) return 'substantive';
+  if (lint) return 'lint';
   return 'other';
+}
+
+function selectedAttemptJobs(jobs: readonly JobPayload[]): JobPayload[] {
+  const byRun = new Map<number, JobPayload[]>();
+  for (const job of jobs) {
+    const runId = job.run_id ?? job.id ?? 0;
+    const group = byRun.get(runId) ?? [];
+    group.push(job);
+    byRun.set(runId, group);
+  }
+  const selected: JobPayload[] = [];
+  for (const group of byRun.values()) {
+    const attempts = group.map((job) => job.run_attempt).filter((attempt): attempt is number => Number.isInteger(attempt));
+    const latestAttempt = attempts.length > 0 ? Math.max(...attempts) : null;
+    const seen = new Set<number>();
+    for (const job of group) {
+      if (latestAttempt !== null && job.run_attempt !== latestAttempt) continue;
+      const id = job.id ?? 0;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      selected.push(job);
+    }
+  }
+  return selected;
 }
 
 function toolMissing(result: ProcessResult, output: string): boolean {
@@ -379,18 +416,15 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
       }
       jobs.push(job);
     }
-    const latest = new Map<number, JobPayload>();
-    for (const job of jobs) {
-      const runId = job.run_id ?? job.id ?? 0;
-      const previous = latest.get(runId);
-      if (!previous || (job.run_attempt ?? 0) >= (previous.run_attempt ?? 0)) latest.set(runId, job);
-    }
-    const steps = [...latest.values()].flatMap((job) => job.steps ?? []);
-    const attempt = [...latest.values()].reduce<number | null>((max, job) => {
+    const selected = selectedAttemptJobs(jobs);
+    const selectedIds = new Set(selected.map((job) => job.id).filter((id): id is number => Number.isInteger(id)));
+    const steps = selected.flatMap((job) => job.steps ?? []);
+    let attempt: number | null = null;
+    for (const job of selected) {
       const value = job.run_attempt;
-      if (!Number.isInteger(value)) return max;
-      return max === null || value! > max ? value! : max;
-    }, null);
+      if (typeof value !== 'number' || !Number.isInteger(value)) continue;
+      if (attempt === null || value > attempt) attempt = value;
+    }
     if (jobIds.length > 0 && steps.length === 0) {
       return { kind: 'hold', reason: `CI job steps for ${sha} are unavailable` };
     }
@@ -410,23 +444,36 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
       else if (unknown && kind !== 'lint') skippedDownstream = true;
     }
     const texts: string[] = [];
+    const consider = (text: string | null | undefined) => {
+      if (!text) return;
+      const safe = sanitizeDiagnosticText(text);
+      if (safe) texts.push(safe);
+    };
     for (const run of runs) {
-      if (run.output?.text) texts.push(run.output.text);
-      if (run.output?.summary) texts.push(run.output.summary);
+      const id = jobIdFromUrl(run.details_url ?? run.html_url);
+      if (id !== null && !selectedIds.has(id)) continue;
+      consider(run.output?.text);
+      consider(run.output?.summary);
     }
-    for (const id of jobIds) {
+    for (const id of selectedIds) {
       const logs = execute(context.packRoot, ghBin, [
-        'api', `repos/${context.repository}/actions/jobs/${id}/logs`, '--allow-escape-sequences',
+        'api', `repos/${context.repository}/actions/jobs/${id}/logs`,
       ]);
-      if (logs.ok && !logs.stdout.includes('\0')) texts.push(logs.stdout);
+      if (logs.ok) consider(logs.stdout);
     }
-    const errors = clip(texts.join('\n'));
+    const errors = texts.join('\n').trim();
     if (substantiveFailed.length > 0) {
+      if (!errors) {
+        return {
+          kind: 'hold',
+          reason: `proved substantive step ${substantiveFailed.join(', ')} on ${sha} but sanitized CI logs and check output are unavailable; read the Actions job log for that step in the GitHub UI`,
+        };
+      }
       const lintNote = lintFailed.length > 0 ? ` lint steps also failed: ${lintFailed.join(', ')};` : '';
       return {
         kind: 'gpt',
         attempt,
-        errors: `substantive steps failed: ${substantiveFailed.join(', ')};${lintNote} errors: ${errors}`,
+        errors: `substantive steps failed: ${substantiveFailed.join(', ')};${lintNote} errors: ${clip(errors)}`,
       };
     }
     if (unknownFailed.length > 0 || (lintFailed.length === 0 && jobIds.length === 0)) {
@@ -444,39 +491,48 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
   }
 
   function readAncestry(sha: string): Ancestry {
-    const listed = git(context.primaryRoot, ['rev-list', '--first-parent', '--parents', sha]);
+    const listed = git(context.primaryRoot, [
+      '--no-pager', 'log', '--first-parent', '--format=%H%x1e%P%x1e%T%x1e%s', sha,
+    ]);
     if (!listed.ok) return { kind: 'blocked', reason: 'first-parent ancestry is missing' };
-    const rows = listed.stdout.trim().split(/\r?\n/u).filter(Boolean).map((line) => line.trim().split(/\s+/u));
+    const rows: Array<{ commit: string; parents: string[]; tree: string; subject: string }> = [];
+    for (const line of listed.stdout.split(/\n/u)) {
+      if (!line) continue;
+      const [commit, parentField, tree, ...subjectParts] = line.split('\u001e');
+      if (!commit || parentField === undefined || !tree || subjectParts.length === 0
+        || !/^[0-9a-f]{40}$/u.test(commit) || !/^[0-9a-f]{40}$/u.test(tree)) {
+        return { kind: 'blocked', reason: 'first-parent ancestry is missing' };
+      }
+      const parents = parentField ? parentField.split(' ') : [];
+      if (parents.some((parent) => !/^[0-9a-f]{40}$/u.test(parent))) {
+        return { kind: 'blocked', reason: 'first-parent ancestry is missing' };
+      }
+      rows.push({ commit, parents, tree, subject: subjectParts.join('\u001e') });
+    }
+    if (rows.length === 0 || rows[0]?.commit !== sha) {
+      return { kind: 'blocked', reason: 'first-parent ancestry is missing' };
+    }
     let formatterAt = -1;
-    const subjectOf = (commit: string): string => requiredGit(context.primaryRoot, ['log', '-1', '--format=%s', commit]);
     for (let index = 0; index < rows.length; index += 1) {
-      if (subjectOf(rows[index]![0]!) === 'Apply formatter') {
+      if (rows[index]!.subject === 'Apply formatter') {
         formatterAt = index;
         break;
       }
     }
     if (formatterAt === -1) return { kind: 'first' };
     for (let index = 0; index <= formatterAt; index += 1) {
-      if ((rows[index]?.slice(1).length ?? 0) !== 1) {
-        return { kind: 'blocked', reason: 'first-parent line is ambiguous' };
-      }
+      if (rows[index]!.parents.length !== 1) return { kind: 'blocked', reason: 'first-parent line is ambiguous' };
     }
     if (formatterAt === 0) return { kind: 'blocked', reason: 'current head is an Apply formatter commit' };
     let changed = false;
     for (let index = 0; index < formatterAt; index += 1) {
       const row = rows[index]!;
-      const commit = row[0]!;
-      const parent = row[1]!;
-      if (subjectOf(commit) === 'Apply formatter') continue;
-      let tree = '';
-      let parentTree = '';
-      try {
-        tree = requiredGit(context.primaryRoot, ['rev-parse', `${commit}^{tree}`]);
-        parentTree = requiredGit(context.primaryRoot, ['rev-parse', `${parent}^{tree}`]);
-      } catch {
+      if (row.subject === 'Apply formatter') continue;
+      const parent = rows[index + 1];
+      if (!parent || parent.commit !== row.parents[0]) {
         return { kind: 'blocked', reason: 'first-parent ancestry is missing' };
       }
-      if (tree !== parentTree) changed = true;
+      if (row.tree !== parent.tree) changed = true;
     }
     if (!changed) return { kind: 'blocked', reason: 'no tracked-content change after the formatter repair' };
     return { kind: 'rearmed' };

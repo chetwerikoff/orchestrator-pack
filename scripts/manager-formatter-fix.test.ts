@@ -5,6 +5,8 @@ import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runProcessSync, type ProcessResult, type RunProcessSyncOptions } from './kernel/subprocess.ts';
 import type { TargetContext } from './lib/target-context.ts';
+import { parseGhArgv } from './lib/gh-parse-argv.mjs';
+import { matchInventoryRoute } from './lib/gh-inventory-match.mjs';
 import { formatterFixCli, runManagerFormatterFix } from './manager-formatter-fix.ts';
 
 const roots: string[] = [];
@@ -19,13 +21,32 @@ const fix = node(`require("node:fs").writeFileSync("source.ts", ${JSON.stringify
 const check = node(`process.exit(require("node:fs").readFileSync("source.ts", "utf8") === ${JSON.stringify(formatted)} ? 0 : 1)`);
 const ghPath = (packRoot: string) => join(packRoot, 'scripts', 'gh');
 
+interface CiStep {
+  name: string;
+  status: string;
+  conclusion: string | null;
+  number: number;
+}
+
+interface CiJob {
+  id: number;
+  runId: number;
+  runAttempt: number;
+  steps: CiStep[];
+  logs: string;
+  name?: string;
+}
+
 interface CiState {
   headSha: string;
   status: string;
   conclusion: string | null;
-  steps: Array<{ name: string; status: string; conclusion: string | null; number: number }>;
+  steps: CiStep[];
   logs: string;
   totalCount?: number;
+  jobs?: CiJob[];
+  omitCheckOutput?: boolean;
+  logResult?: 'fail';
 }
 
 function lintSteps() {
@@ -72,28 +93,43 @@ function fixture() {
     run: (options: RunProcessSyncOptions) => {
       calls.push(options);
       beforeRun?.(options);
-      if (options.command === 'git' && options.args?.[0] === 'rev-list' && failRevList) {
+      if (options.command === 'git' && options.args?.includes('--first-parent') && failRevList) {
         const failed = run({ command: process.execPath, args: ['-e', 'process.exit(1)'], inheritParentEnv: true });
         return { ...failed, stderr: 'bad ancestry' };
       }
       if (options.command === ghPath(context.packRoot)) {
         const endpoint = String(options.args?.[1] ?? '');
+        const jobs = ci.jobs ?? [{
+          id: 200, runId: 100, runAttempt: 4, steps: ci.steps, logs: ci.logs, name: 'CI / checks',
+        }];
+        const jobMatch = /^repos\/example\/formatter\/actions\/jobs\/(\d+)$/u.exec(endpoint);
+        const logMatch = /^repos\/example\/formatter\/actions\/jobs\/(\d+)\/logs$/u.exec(endpoint);
         let stdout = '';
         if (endpoint === 'repos/example/formatter/pulls/42') stdout = JSON.stringify(pull);
         else if (endpoint === `repos/example/formatter/commits/${pull.head.sha}/check-runs`) {
-          const runs = [{
-            id: 1, name: 'CI / checks', status: ci.status, conclusion: ci.conclusion, head_sha: ci.headSha,
-            details_url: 'https://github.com/example/formatter/actions/runs/100/job/200',
-            output: { title: 'lint', summary: ci.logs, text: ci.logs },
-          }];
+          const runs = jobs.map((job, index) => ({
+            id: index + 1, name: job.name ?? 'CI / checks', status: ci.status, conclusion: ci.conclusion,
+            head_sha: ci.headSha,
+            details_url: `https://github.com/example/formatter/actions/runs/${job.runId}/job/${job.id}`,
+            output: ci.omitCheckOutput ? { title: 'lint' } : { title: 'lint', summary: job.logs, text: job.logs },
+          }));
           stdout = JSON.stringify({ total_count: ci.totalCount ?? runs.length, check_runs: runs });
-        } else if (endpoint === 'repos/example/formatter/actions/jobs/200') {
+        } else if (jobMatch) {
+          const job = jobs.find((candidate) => candidate.id === Number(jobMatch[1]));
+          if (!job) throw new Error(`unexpected gh endpoint ${endpoint}`);
           stdout = JSON.stringify({
-            id: 200, run_id: 100, run_attempt: 4, status: 'completed', conclusion: 'failure',
-            name: 'CI / checks', head_sha: ci.headSha, steps: ci.steps,
+            id: job.id, run_id: job.runId, run_attempt: job.runAttempt, status: 'completed', conclusion: 'failure',
+            name: job.name ?? 'CI / checks', head_sha: ci.headSha, steps: job.steps,
           });
-        } else if (endpoint === 'repos/example/formatter/actions/jobs/200/logs') stdout = ci.logs;
-        else throw new Error(`unexpected gh endpoint ${endpoint}`);
+        } else if (logMatch) {
+          const job = jobs.find((candidate) => candidate.id === Number(logMatch[1]));
+          if (!job) throw new Error(`unexpected gh endpoint ${endpoint}`);
+          if (ci.logResult === 'fail') {
+            const failed = run({ command: process.execPath, args: ['-e', 'process.exit(1)'], inheritParentEnv: true });
+            return { ...failed, stderr: 'log unavailable' };
+          }
+          stdout = job.logs;
+        } else throw new Error(`unexpected gh endpoint ${endpoint}`);
         return { ...blank(), stdout };
       }
       const result = run(options);
@@ -195,6 +231,10 @@ describe('manager formatter fix', () => {
       'repos/example/formatter/actions/jobs/200',
       'repos/example/formatter/actions/jobs/200/logs',
     ]);
+    expect(world.calls.filter((call) => call.command === ghPath(world.context.packRoot)).every((call) => call.args?.length === 2)).toBe(true);
+    expect(world.calls.filter((call) => call.command === 'git' && call.args?.includes('--first-parent'))).toHaveLength(1);
+    expect(world.calls.some((call) => call.args?.[0] === 'rev-list')).toBe(false);
+
     world.expectRemoved();
   });
 
@@ -424,6 +464,118 @@ describe('C1 routing matrix', () => {
     expect(shCommands(world)).toEqual([]);
     expect(world.remoteHead()).toBe(world.head);
     world.expectRemoved();
+  });
+
+  it.each(['lint job then test job', 'test job then lint job'] as const)('keeps every sibling job of the latest run attempt (%s)', (order) => {
+    const world = fixture();
+    const lintJob = {
+      id: 201, runId: 100, runAttempt: 4, logs: 'source.ts:1:1 format error\n',
+      steps: [{ name: 'lint', status: 'completed', conclusion: 'failure', number: 1 }],
+    };
+    const testJob = {
+      id: 202, runId: 100, runAttempt: 4, logs: 'test failed: expected true\n',
+      steps: [{ name: 'test', status: 'completed', conclusion: 'failure', number: 1 }],
+    };
+    const olderLint = {
+      id: 199, runId: 100, runAttempt: 3, logs: 'old format error\n',
+      steps: [{ name: 'lint', status: 'completed', conclusion: 'failure', number: 1 }],
+    };
+    world.ci.jobs = order === 'lint job then test job'
+      ? [lintJob, testJob, olderLint]
+      : [testJob, lintJob, olderLint];
+    const result = runManagerFormatterFix(world.context, 42, world.deps);
+    expect(result.outcome).toBe('gpt');
+    expect(result.message).toContain('test failed: expected true');
+    expect(result.message).not.toContain('old format error');
+    expect(world.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+    expect(world.remoteHead()).toBe(world.head);
+    const logCalls = world.calls.filter((call) => String(call.args?.[1] ?? '').endsWith('/logs'));
+    const ids = order === 'lint job then test job' ? [201, 202] : [202, 201];
+    expect(logCalls.map((call) => call.args)).toEqual(ids.map((id) => ['api', `repos/example/formatter/actions/jobs/${id}/logs`]));
+    world.expectRemoved();
+  });
+
+  it('drops an older substantive attempt when the latest attempt is lint-only', () => {
+    const world = fixture();
+    world.ci.jobs = [
+      {
+        id: 202, runId: 100, runAttempt: 4, logs: 'source.ts:1:1 format error\n',
+        steps: [{ name: 'lint', status: 'completed', conclusion: 'failure', number: 1 }],
+      },
+      {
+        id: 201, runId: 100, runAttempt: 3, logs: 'test failed: expected true\n',
+        steps: [{ name: 'test', status: 'completed', conclusion: 'failure', number: 1 }],
+      },
+    ];
+    const result = runManagerFormatterFix(world.context, 42, world.deps);
+    expect(result.outcome).toBe('published');
+    expect(result.message).not.toContain('GPT');
+    expect(result.message).not.toContain('test failed');
+    expect(world.remoteHead()).not.toBe(world.head);
+  });
+
+  it('does not treat a composite lint and test step as a proved substantive failure', () => {
+    const world = fixture();
+    world.ci.steps = [{ name: 'Run lint, typecheck and tests', status: 'completed', conclusion: 'failure', number: 1 }];
+    world.ci.logs = 'ruff failed\n';
+    const result = runManagerFormatterFix(world.context, 42, world.deps);
+    expect(result.outcome).toBe('refused');
+    expect(result.message).toContain('unclassifiable failing step Run lint, typecheck and tests');
+    expect(result.message).not.toContain('GPT fixer');
+    expect(world.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+    expect(world.remoteHead()).toBe(world.head);
+    world.expectRemoved();
+  });
+
+  it('uses the inventory job-log route and withholds unsafe or missing lines', () => {
+    const bare = parseGhArgv(['api', 'repos/example/formatter/actions/jobs/200/logs']);
+    expect(matchInventoryRoute(bare)).toMatchObject({ id: 'actions-job-log', jobId: 200, repoSlug: 'example/formatter' });
+    const flagged = parseGhArgv(['api', 'repos/example/formatter/actions/jobs/200/logs', '--allow-escape-sequences']);
+    expect(matchInventoryRoute(flagged)).toBeNull();
+
+    const escaped = fixture();
+    escaped.ci.steps = [{ name: 'typecheck', status: 'completed', conclusion: 'failure', number: 1 }];
+    escaped.ci.logs = 'typecheck expected number\u001b[31m\n';
+    escaped.ci.omitCheckOutput = true;
+    const escapedResult = runManagerFormatterFix(escaped.context, 42, escaped.deps);
+    expect(escapedResult.outcome).toBe('gpt');
+    expect(escapedResult.message).toContain('typecheck expected number');
+    expect(escapedResult.message).not.toContain('\u001b');
+    expect(escaped.calls.filter((call) => String(call.args?.[1] ?? '').endsWith('/logs')).every((call) => call.args?.length === 2)).toBe(true);
+
+    const unsafe = fixture();
+    unsafe.ci.steps = [{ name: 'typecheck', status: 'completed', conclusion: 'failure', number: 1 }];
+    unsafe.ci.logs = 'typecheck \u001b';
+    unsafe.ci.omitCheckOutput = true;
+    const unsafeResult = runManagerFormatterFix(unsafe.context, 42, unsafe.deps);
+    expect(unsafeResult.outcome).toBe('refused');
+    expect(unsafeResult.message).toContain('sanitized CI logs and check output are unavailable');
+    expect(unsafeResult.message).toContain('GitHub UI');
+    expect(unsafeResult.message).not.toContain('GPT fixer');
+    expect(unsafeResult.message).not.toContain('\u001b');
+    expect(unsafe.remoteHead()).toBe(unsafe.head);
+
+    const missing = fixture();
+    missing.ci.steps = [{ name: 'test', status: 'completed', conclusion: 'failure', number: 1 }];
+    missing.ci.logs = '';
+    missing.ci.omitCheckOutput = true;
+    missing.ci.logResult = 'fail';
+    const missingResult = runManagerFormatterFix(missing.context, 42, missing.deps);
+    expect(missingResult.outcome).toBe('refused');
+    expect(missingResult.message).toContain('sanitized CI logs and check output are unavailable');
+    expect(missingResult.message).not.toContain('GPT fixer');
+    expect(missing.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+
+    const secret = fixture();
+    secret.ci.steps = [{ name: 'typecheck', status: 'completed', conclusion: 'failure', number: 1 }];
+    secret.ci.logs = 'typecheck failed\ntoken=supersecretvalue ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\n';
+    const secretResult = runManagerFormatterFix(secret.context, 42, secret.deps);
+    expect(secretResult.outcome).toBe('gpt');
+    expect(secretResult.message).toContain('typecheck failed');
+    expect(secretResult.message).toContain('[redacted]');
+    expect(secretResult.message).not.toContain('supersecretvalue');
+    expect(secretResult.message).not.toContain('ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789');
+    expect(secret.remoteHead()).toBe(secret.head);
   });
 
   it('gives a mixed lint and test failure to GPT and does not publish', () => {
