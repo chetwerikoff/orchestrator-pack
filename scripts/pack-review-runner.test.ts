@@ -2317,6 +2317,41 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
       .toBe(f.run.id);
   });
 
+  it.each([
+    ['pending write rejected', 'amendment_admission_unverified', 'required_status', 'exact-head pack-review status'],
+    ['criteria removed', 'amendment_behavior_criteria_missing_or_invalid', 'issue_criteria', 'reviewed Issue behavior criteria'],
+    ['Issue read throws a source/HTTP-worded error', 'amendment_live_issue_unavailable', 'issue_body_digest', 'restore the linked Issue body'],
+  ] as const)('incident 1721: amendment failure (%s) names its failed binding and one legal nextAction',
+    async (mode, reason, failedBinding, nextAction) => {
+      const B0 = '<!-- source-revision: r01 -->\n```complexity-tier\ntier: T2\n```\n## Acceptance criteria\n- original\n';
+      const B1 = mode === 'criteria removed' ? B0.replace('## Acceptance criteria\n- original\n', 'No criteria here\n')
+        : B0.replace('- original', '- amended');
+      const f = fixture('codex', B0, true);
+      let status = 'success';
+      const request = {
+        ...f.request(B1), fixtureCurrentPrHeadSha: f.reviewed,
+        fixtureRequiredStatusWriter: async (value: { state: string }) => {
+          if (mode === 'pending write rejected') throw new Error('raw-transport-secret-1721 HTTP 422 pending rejected');
+          status = value.state;
+        },
+        fixtureRequiredStatusReader: async () => status,
+      };
+      if (mode === 'Issue read throws a source/HTTP-worded error') {
+        Object.defineProperty(request, 'fixtureIssueBody', {
+          get: () => { throw new Error('raw-transport-secret-1721 source unavailable HTTP 502 status'); },
+        });
+      }
+      const refused = await maybeAdmitPackReviewBodyAmendment(request,
+        { projectId: f.projectId, storeRoot: f.storeRoot, repoSlug: f.repository });
+      expect(refused, JSON.stringify(refused)).toMatchObject({
+        amendmentAdmission: false, reason, failedBinding,
+        nextAction: expect.stringContaining(nextAction),
+      });
+      expect(typeof refused?.nextAction).toBe('string');
+      expect(JSON.stringify(refused)).not.toContain('raw-transport-secret-1721');
+    },
+  );
+
 
   it('Issue #2659: B1 terminal cannot publish success if B2 arrives after native invocation', async () => {
     const B0 = '<!-- source-revision: r01 -->\n```complexity-tier\ntier: T2\n```\n## Acceptance criteria\n- original behavior\n';
@@ -3011,6 +3046,8 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     issueBody: string,
     fromSha: string = f.authority.terminal!.targetSha,
     outstanding?: unknown[],
+    verdict: 'clean' | 'findings' = 'clean',
+    delivered = true,
   ) {
     // Only delta tests need authenticated stored original H1 review evidence.
     // Preserve the legacy same-head scope disposition fixtures unchanged.
@@ -3083,8 +3120,10 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       finalCapDelta: deltaIdentity, reviewRound: plannedRound,
     });
     expect(delta.created, JSON.stringify(delta)).toBe(true);
-    const sourceSlots = oldRound.sourceSlots.map((slot) => {
+    const { sourceSlotId: _slot, ...deltaFinding } = (original.findings[0] ?? {}) as Record<string, unknown>;
+    const sourceSlots = oldRound.sourceSlots.map((slot, index) => {
       const invocationId = `28350000-0000-4000-8000-${String(slot.ordinal).padStart(12, '0')}`;
+      const findings = verdict === 'findings' && index === 0 ? [deltaFinding] : [];
       const commentIdentity = {
         repository: f.input.repoSlug, prNumber, headSha: toSha,
         runId: delta.run.id, slotId: slot.slotId, invocationId,
@@ -3092,8 +3131,9 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       const sourceBody = formatPackGptSourceCommentEnvelope(commentIdentity, 'NO_FINDINGS');
       return {
         slotId: slot.slotId, ordinal: slot.ordinal, lifecycle: 'terminal' as const,
-        invocationId, attemptOrdinal: 1, terminalClass: 'complete_clean',
-        payload: { verdict: 'clean', findingCount: 0, findings: [] },
+        invocationId, attemptOrdinal: 1,
+        terminalClass: findings.length > 0 ? 'complete_findings' : 'complete_clean',
+        payload: { verdict: findings.length > 0 ? 'findings' : 'clean', findingCount: findings.length, findings },
         terminalResult: {
           schema: 'turn-result/v1', state: 'ok', scope: 'none', send_count: 1,
           cause: 'github_source_comment_credentialed', invocation_id: invocationId,
@@ -3113,35 +3153,39 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     }, f.options);
     const deltaReviewId = 28360000 + (toSha === fromSha ? 0 : 1);
     const deltaReviewUrl = `https://github.com/${f.input.repoSlug}/pull/${prNumber}#pullrequestreview-${deltaReviewId}`;
+    const deltaFindings = verdict === 'findings'
+      ? [{ ...deltaFinding, sourceSlotId: sourceSlots[0]!.slotId }] : [];
     setPackReviewRunTerminal(delta.run.id, 'up_to_date', {
-      reviewVerdict: 'clean', findingCount: 0, findings: [],
-      githubReviewId: deltaReviewId, githubReviewUrl: deltaReviewUrl,
-      githubReviewEvent: 'COMMENT',
-      githubReviewReconciliation: {
-        schemaVersion: 1, event: 'COMMENT', phase: 'complete',
-        actorLogin: 'chetwerikoff',
-        commentBody: `## Pack review — no findings\n\nRun: \`${delta.run.id}\`\nHead: \`${toSha}\`\n`,
-        commentReviewId: deltaReviewId, commentReviewUrl: deltaReviewUrl,
-        pendingDismissalReviewIds: [], dismissedReviewIds: [],
-        preparedAtUtc: '2026-10-14T01:00:00Z', updatedAtUtc: '2026-10-14T01:00:00Z',
-      },
+      reviewVerdict: verdict, findingCount: deltaFindings.length, findings: deltaFindings,
+      ...(delivered ? {
+        githubReviewId: deltaReviewId, githubReviewUrl: deltaReviewUrl,
+        githubReviewEvent: 'COMMENT' as const,
+        githubReviewReconciliation: {
+          schemaVersion: 1 as const, event: 'COMMENT' as const, phase: 'complete' as const,
+          actorLogin: 'chetwerikoff',
+          commentBody: `## Pack review — no findings\n\nRun: \`${delta.run.id}\`\nHead: \`${toSha}\`\n`,
+          commentReviewId: deltaReviewId, commentReviewUrl: deltaReviewUrl,
+          pendingDismissalReviewIds: [], dismissedReviewIds: [],
+          preparedAtUtc: '2026-10-14T01:00:00Z', updatedAtUtc: '2026-10-14T01:00:00Z',
+        },
+      } : {}),
       journalOutcome: {
         state: 'persisted', recordedAtUtc: new Date().toISOString(),
         reason: 'ordinary-delta-source-census', idempotencyKey: 'verdict:' + delta.run.id + ':' + toSha,
         attempts: 1,
       },
-      deliveryOutcomes: {
+      deliveryOutcomes: delivered ? {
         githubComment: {
           state: 'succeeded', recordedAtUtc: new Date().toISOString(),
           reason: 'comment_posted', idempotencyKey: 'github-comment:' + delta.run.id,
         },
-      },
+      } : {},
     }, f.options);
     const reloaded = getPackReviewRun(delta.run.id, f.options)!;
     expect(reloaded.finalCapDelta).toEqual(deltaIdentity);
-    expect(reloaded.reviewVerdict).toBe('clean');
+    expect(reloaded.reviewVerdict).toBe(verdict);
     expect(reloaded.reviewRound?.sourceSlots.map((slot) => slot.terminalClass))
-      .toEqual(sourceSlots.map(() => 'complete_clean'));
+      .toEqual(sourceSlots.map((slot) => slot.terminalClass));
     expect(reloaded.automaticBudgetDisposition).toBe('non_consuming_explicit');
     expect(readPackReviewAuthority(prNumber, f.options)?.cycle?.consumedRoundOrdinals).toEqual([1, 2]);
     return reloaded;
@@ -3744,6 +3788,50 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(f.statuses.some((request) => request.state === 'success')).toBe(false);
   });
 
+  it.each([
+    ['untrusted source actor', (f: ReturnType<typeof fixture>) => {
+      f.transports.sourceProofs[1]!.comment.actorLogin = 'untrusted';
+    }, 'scope_proof_witness', 'authorized post-terminal scope disposition COMMENT'],
+    ['status-worded transport exception', (f: ReturnType<typeof fixture>) => {
+      const original = f.input.fixtureGptSourceCommentTransport!;
+      f.input.fixtureGptSourceCommentTransport = { ...original,
+        listComments: async () => { throw new Error('untrusted required status pending HTTP 500'); } };
+    }, 'scope_proof_witness', 'authorized post-terminal scope disposition COMMENT'],
+    ['unrelated corrected Issue prose', (f: ReturnType<typeof fixture>) => {
+      f.transports.issue.body = f.transports.issue.body.replace(
+        '## Acceptance criteria', 'Unrelated prose outside criteria.\n\n## Acceptance criteria');
+      f.input.fixtureIssueBody = f.transports.issue.body;
+    }, 'issue_body_digest', 'restore the linked Issue body'],
+  ] as const)('incident 1722: a thrown scope-proof error (%s) reports a sanitized binding and one nextAction', async (_name, mutate, binding, action) => {
+    const f = fixture();
+    updatePackReviewRun(f.run.id, {
+      boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(f.frozenBody),
+      journalOutcome: {
+        state: 'persisted', recordedAtUtc: '2026-10-08T20:46:00Z', reason: 'original-authenticated-review',
+        idempotencyKey: 'verdict:' + f.run.id + ':' + f.authority.terminal!.targetSha, attempts: 1,
+      },
+      deliveryOutcomes: {
+        githubComment: {
+          state: 'succeeded', recordedAtUtc: '2026-10-08T20:46:00Z', reason: 'comment_posted',
+          idempotencyKey: 'github-comment:' + f.run.id + ':' + f.authority.terminal!.targetSha,
+        },
+      },
+    }, f.options);
+    mutate(f);
+    const result = await maybeAdmitPackReviewBodyAmendment(f.input, {
+      projectId: 'orchestrator-pack', storeRoot: f.options.storeRoot, repoSlug: f.input.repoSlug,
+    });
+    expect(result, JSON.stringify(result)).toMatchObject({
+      amendmentAdmission: false, reason: 'amendment_unverified_body_mismatch',
+      failedBinding: binding,
+      detail: binding + ':operation_failed',
+      nextAction: expect.stringContaining(action),
+    });
+    expect(JSON.stringify(result)).not.toContain('untrusted');
+    expect(JSON.stringify(result)).not.toContain('HTTP 500');
+    expect(f.statuses.some((request) => request.state === 'success')).toBe(false);
+  });
+
   it.each(['missing', 'duplicate'] as const)(
     'Issue #2748: %s Acceptance criteria refuses an otherwise authorized same-head scope disposition',
     async (mode) => {
@@ -3821,32 +3909,170 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(f.read).not.toHaveBeenCalled();
   });
 
-  it.each(['required CI', 'selected PR base'] as const)(
-    'Issue #2835: refuses final-cap success when %s drifts at status publication',
-    async (kind) => {
+  it('Issue #2835: refuses final-cap success when the selected PR base drifts at status publication', async () => {
+    const f = unchangedDescendantFixture();
+    completeFinalCapDelta(f, HEAD, revisedBody);
+    f.input.fixtureCurrentPrHeadSha = HEAD;
+    f.input.fixtureReviewCompareStatus = 'ahead';
+    let reads = 0;
+    f.input.fixtureRequiredStatusReader = async () => {
+      if (++reads === 1) f.input.fixtureRequiredCiBaseAfterGate = 'other-base';
+      return undefined;
+    };
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results).toContainEqual(expect.objectContaining({
+      settled: false, reason: 'status_not_published',
+    }));
+    expect(f.statuses.some((status) => status.state === 'success')).toBe(false);
+    expect(readPackReviewAuthority(prNumber, f.options)?.publication?.status).not.toBe('succeeded');
+  });
+
+  it.each(['FAILURE', 'PENDING'] as const)(
+    'incident 1705: a clean ordinary F..T delta settles with pre-delta required CI %s and no extra round or Order C',
+    async (ciState) => {
       const f = unchangedDescendantFixture();
       completeFinalCapDelta(f, HEAD, revisedBody);
       f.input.fixtureCurrentPrHeadSha = HEAD;
       f.input.fixtureReviewCompareStatus = 'ahead';
-      let reads = 0;
-      f.input.fixtureRequiredStatusReader = async () => {
-        if (++reads === 1) {
-          if (kind === 'required CI') {
-            f.input.fixtureRequiredCiChecks = [{ name: 'CI', state: 'FAILURE' }];
-          } else {
-            f.input.fixtureRequiredCiBaseAfterGate = 'other-base';
-          }
-        }
-        return undefined;
-      };
+      f.input.fixtureRequiredCiChecks = [{ name: 'CI', state: ciState }];
       const result = await reconcileStalePackReviewRuns(f.input);
-      expect(result.results).toContainEqual(expect.objectContaining({
-        settled: false, reason: 'status_not_published',
+      expect(result.results, JSON.stringify(result)).toContainEqual(expect.objectContaining({
+        headSha: HEAD, settled: true, statusPublished: true, publicationHeadSha: HEAD,
+        reason: 'final_cap_descendant_settled',
       }));
-      expect(f.statuses.some((status) => status.state === 'success')).toBe(false);
-      expect(readPackReviewAuthority(prNumber, f.options)?.publication?.status).not.toBe('succeeded');
+      expect(listPackReviewRuns(f.options)).toHaveLength(2);
+      const authority = readPackReviewAuthority(prNumber, f.options);
+      expect(authority?.cycle).toMatchObject({ state: 'closed', reviewStageComplete: true, consumedRoundOrdinals: [1, 2] });
+      expect(authority?.cycle?.settlementKind).toBeUndefined();
+      expect(f.statuses).toEqual([expect.objectContaining({ state: 'success', context: 'orchestrator-pack/pack-review' })]);
+      expect(f.input.fixtureRequiredCiChecks).toEqual([{ name: 'CI', state: ciState }]);
     },
   );
+
+  it.each([
+    ['same-head scope proof', 'valid'], ['clean F..T delta', 'valid'],
+    ['same-head scope proof', 'edited'], ['clean F..T delta', 'edited'],
+    ['clean F..T delta', 'malformed'],
+  ] as const)(
+    'incident 1716: a late %s duplicate (%s) of a frozen original findings source does not veto settlement',
+    async (lane, kind) => {
+      const f = lane === 'clean F..T delta' ? unchangedDescendantFixture() : fixture();
+      if (lane === 'clean F..T delta') {
+        completeFinalCapDelta(f, HEAD, revisedBody);
+        f.input.fixtureCurrentPrHeadSha = HEAD;
+        f.input.fixtureReviewCompareStatus = 'ahead';
+      }
+      const frozen = f.transports.sourceProofs[0]!.comment;
+      const duplicate: PackGptSourceGithubComment = {
+        ...frozen, id: frozen.id + 1000, createdAt: '2026-10-08T21:30:00Z',
+        updatedAt: kind === 'edited' ? '2026-10-08T21:31:00Z' : '2026-10-08T21:30:00Z',
+        body: kind === 'malformed' ? frozen.body.split('\n', 1)[0] + '\nnot a source envelope' : frozen.body,
+        url: frozen.url.replace(String(frozen.id), String(frozen.id + 1000)),
+      };
+      const original = f.input.fixtureGptSourceCommentTransport!;
+      f.input.fixtureGptSourceCommentTransport = {
+        resolveActorLogin: () => original.resolveActorLogin(),
+        listComments: async () => [...await original.listComments(), duplicate],
+        getComment: async (id) => id === duplicate.id ? duplicate : original.getComment(id),
+      };
+      const before = getPackReviewRun(f.run.id, f.options);
+      const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      try {
+        const result = await reconcileStalePackReviewRuns(f.input);
+        expect(result.results, JSON.stringify(result)).toContainEqual(expect.objectContaining({
+          settled: true,
+          reason: lane === 'clean F..T delta'
+            ? 'final_cap_descendant_settled' : 'final_cap_same_head_issue_resolution_settled',
+        }));
+        expect(stderr.mock.calls.map(([chunk]) => String(chunk)).join(''))
+          .toContain(`frozen source slot kept; later duplicate ignored: source-01 selected=${frozen.id} ignored=${duplicate.id}`);
+      } finally { stderr.mockRestore(); }
+      expect(f.statuses).toContainEqual(expect.objectContaining({ state: 'success' }));
+      const after = getPackReviewRun(f.run.id, f.options);
+      expect(after?.reviewRound).toEqual(before?.reviewRound);
+      expect(after?.findings).toEqual(before?.findings);
+    },
+  );
+
+  it('incident 1733: required CI regressing after a clean delta still publishes exact-T success with read-back', async () => {
+    const f = unchangedDescendantFixture();
+    completeFinalCapDelta(f, HEAD, revisedBody);
+    f.input.fixtureCurrentPrHeadSha = HEAD;
+    f.input.fixtureReviewCompareStatus = 'ahead';
+    const statusesByHead = new Map<string, string>();
+    let reads = 0;
+    f.input.fixtureRequiredStatusReader = async (headSha: string) => {
+      if (++reads === 1) f.input.fixtureRequiredCiChecks = [{ name: 'CI', state: 'FAILURE' }];
+      return statusesByHead.get(headSha);
+    };
+    f.input.fixtureRequiredStatusWriter = async (request) => {
+      f.statuses.push(request);
+      statusesByHead.set(HEAD, request.state);
+    };
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results, JSON.stringify(result)).toContainEqual(expect.objectContaining({
+      settled: true, statusPublished: true, publicationHeadSha: HEAD,
+      reason: 'final_cap_descendant_settled',
+    }));
+    // Only the pack-review context is written; independent required CI stays red.
+    expect(f.statuses).toEqual([expect.objectContaining({ state: 'success', context: 'orchestrator-pack/pack-review' })]);
+    expect(statusesByHead.get(HEAD)).toBe('success');
+    expect(f.input.fixtureRequiredCiChecks).toEqual([{ name: 'CI', state: 'FAILURE' }]);
+    expect(readPackReviewAuthority(prNumber, f.options)?.publication?.status).toBe('succeeded');
+  });
+
+  it('incident 1733: a findings delta never publishes success even with green required CI', async () => {
+    const f = unchangedDescendantFixture();
+    completeFinalCapDelta(f, HEAD, revisedBody, undefined, undefined, 'findings');
+    f.input.fixtureCurrentPrHeadSha = HEAD;
+    f.input.fixtureReviewCompareStatus = 'ahead';
+    f.input.fixtureRequiredCiChecks = [{ name: 'CI', state: 'SUCCESS' }];
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results.some((entry) => entry.settled === true), JSON.stringify(result)).toBe(false);
+    expect(result.results.some((entry) => typeof entry.nextAction === 'string')).toBe(true);
+    expect(result.results).toContainEqual(expect.objectContaining({
+      settled: false, reason: 'final_cap_delta_exact_result_reused', findingsHandoff: expect.any(Object),
+    }));
+    expect(f.statuses.some((status) => status.state === 'success')).toBe(false);
+  });
+
+  it('incident 1732: a published final-cap delta COMMENT is not labelled supplemental advisory', async () => {
+    const f = unchangedDescendantFixture();
+    completeFinalCapDelta(f, HEAD, revisedBody, undefined, undefined, 'clean', false);
+    const reviews: GithubReviewSummary[] = [f.transports.review];
+    const posted: string[] = [];
+    f.input.fixtureGithubReviewTransport = {
+      resolveActorLogin: async () => 'chetwerikoff',
+      listReviews: async () => [...reviews],
+      postReview: async ({ body, commitId }) => {
+        const id = 28370001 + posted.length;
+        const url = `https://github.com/${repository}/pull/${prNumber}#pullrequestreview-${id}`;
+        posted.push(body);
+        reviews.push({ id, state: 'COMMENTED', userLogin: 'chetwerikoff',
+          submittedAt: new Date().toISOString(), commitId, body, url });
+        return { id, url };
+      },
+      dismissReview: async () => { throw new Error('offline review dismissal forbidden'); },
+    };
+    const actual = await vi.importActual<typeof import('./kernel/subprocess.ts')>('./kernel/subprocess.ts');
+    vi.mocked(runProcess).mockImplementation(async (request) => {
+      const args = request.args ?? [];
+      return request.command === 'git' && args[0] === 'merge-base' && args[1] === '--is-ancestor'
+          && args[2] === reviewedHead && args[3] === HEAD
+        ? { ok: true, outcome: 'exit', exitCode: 0, signal: null, stdout: '', stderr: '',
+            timedOut: false, cancelled: false, durationMs: 1 }
+        : actual.runProcess(request);
+    });
+    try {
+      await startPackReview({ ...f.input, headSha: HEAD, fixtureCurrentPrHeadSha: HEAD,
+        fixtureReviewCompareStatus: 'ahead', claimMode: 'acquire',
+        fixtureRepoSlug: repository, fixturePostReviewHeadSha: HEAD,
+        fixturePostReviewPrBody: 'Closes #' + issueNumber });
+    } finally { vi.mocked(runProcess).mockImplementation(actual.runProcess); }
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).toContain(`Mode: required final-cap delta review \`${reviewedHead}..${HEAD}\``);
+    expect(posted[0]).not.toContain('supplemental advisory');
+  });
 
   it('Issue #2451: head moving during final-cap success cannot produce a settled receipt', async () => {
     const f = fixture();
@@ -6480,7 +6706,7 @@ describe('Issue #2607 first-round findings: exact-head CLI and COMMENT resume', 
       dismissReview: async () => undefined,
     };
     return {
-      transport, posts: () => posts,
+      transport, posts: () => posts, bodies: () => reviews.map((review) => review.body),
       expose: () => { visible = true; },
       permitPost: () => { permitPost = true; },
     };
@@ -6599,6 +6825,9 @@ describe('Issue #2607 first-round findings: exact-head CLI and COMMENT resume', 
       }
       expect(final.result).not.toHaveProperty('publicationVerified');
       expect(review.posts()).toBe(1);
+      // Incident 1732: a true manual supplemental keeps its advisory label.
+      expect(review.bodies().at(-1)).toContain(
+        'Mode: supplemental advisory review (does not change required pack-review status).');
       expect(source.sent()).toBeGreaterThan(0);
       expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot: f.storeRoot })).toHaveLength(2);
       const advisory = getPackReviewRun(String(final.result.runId), {
