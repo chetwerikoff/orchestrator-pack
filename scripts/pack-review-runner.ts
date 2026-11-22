@@ -70,8 +70,11 @@ import {
   packReviewFindingsSatisfiedByStrictDescendant,
   readPackReviewAuthority,
   recordPackReviewPublication,
+  settleAtCapPackReviewFindingByArchitectDefer,
   settleLogicalPackReviewFindingsByStrictDescendant,
   settleLogicalPackReviewFindingsByRewrittenHead,
+  soleBlockingQualityFindingCode,
+  type PackReviewArchitectAdjudicationRow,
   selectPackReviewEvidence,
   selectPackReviewGptSourceCardinality,
   reconcilePackReviewTier,
@@ -3927,6 +3930,49 @@ function provenFirstAttemptZeroSendCensus(
  * This classifies the round; actual retry authority still requires exact
  * source-comment and pre-send evidence (and older history's zero-send proof).
  */
+// Issue #2870: the latest existing `adjudicateArchitectFinding` journal row
+// for this PR, head and finding code (`finding_id === code`), when it is a
+// DEFER. A later BLOCK for the same finding wins. Gate/marker rows never match.
+function readArchitectDeferAdjudication(
+  prNumber: number, headSha: string, code: string,
+): PackReviewArchitectAdjudicationRow | null {
+  const stateRoot = resolve(String(process.env.ORCHESTRATOR_PACK_STATE_ROOT
+    ?? join(process.env.HOME ?? '.', '.local/state/orchestrator-pack')));
+  const journal = join(stateRoot, 'merge-triage', 'verdict-journal.jsonl');
+  if (!existsSync(journal)) return null;
+  const rows = readFileSync(journal, 'utf8').split(/\r?\n/).filter((line) => line.trim() !== '');
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    let row: Record<string, unknown>;
+    try { row = JSON.parse(rows[index]!) as Record<string, unknown>; } catch { continue; }
+    if (row.reason !== 'architect_adjudication'
+        || Number(row.pr_number) !== prNumber
+        || String(row.head_sha ?? '').trim().toLowerCase() !== headSha.toLowerCase()
+        || row.finding_id !== code) continue;
+    return row.verdict === 'DEFER' ? row as unknown as PackReviewArchitectAdjudicationRow : null;
+  }
+  return null;
+}
+
+function architectDeferNextAction(prNumber: number, headSha: string, code: string | undefined): string {
+  return code
+    ? 'to rebut the sole blocking finding ' + code + ' on PR #' + prNumber + ' head ' + headSha
+      + ', the architect/operator records docs/merge-triage-gate.mjs adjudicateArchitectFinding DEFER for a pending item whose finding id is that code'
+      + ' (when no pending item exists and a worker appeal is authorized, file one with fileWorkerAppeal for a fresh token; never replay a resolved item),'
+      + ' then rerun scoped reconcile --immediate; otherwise fix the finding on a strict descendant'
+    : 'the at-cap findings are not one blocking quality code; fix them on a strict descendant or obtain an explicit architect/operator decision';
+}
+
+// Issue #2870: a terminal failed GPT run without an aggregate verdict is
+// history whatever its published source count. Its source comments stay on
+// the PR; only a live owner or a valid verdict blocks a fresh same-head run.
+function isTerminalFailedNoVerdictGptHistory(run: PackReviewRunRecord): boolean {
+  // A published aggregate GitHub REVIEW is a verdict, not absent judgment.
+  return run.status === 'failed'
+    && run.reviewRound?.reviewer === 'gpt'
+    && !hasPersistedPackReviewVerdict(run)
+    && (run.githubReviewId === undefined || run.githubReviewId === '');
+}
+
 function hasFailedRateLimitSource(run: PackReviewRunRecord): boolean {
   if (run.status !== 'failed' || !run.reviewRound) return false;
   const slots = run.reviewRound.sourceSlots;
@@ -7027,6 +7073,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
     && authority.cycle.reviewStageComplete === true
     && authority.terminal?.reviewVerdict === 'findings'
     && (authority.cycle.settlementKind === 'same_head_issue_resolution'
+      || (authority.triage?.source === 'architect' && authority.triage.verdict === 'DEFER')
       || authority.currentHeadSha !== authority.terminal.targetSha);
   if (!logicalFinalFindings && !completedFinalFindings && authority.cycle.state !== 'at_cap_continuation_required') return null;
 
@@ -7586,6 +7633,42 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
   if (logicalAccounting) {
     const reviewedHeadSha = priorRun.targetSha;
     if (authority.currentHeadSha === reviewedHeadSha) {
+      // Issue #2870: an existing architect DEFER adjudication for this PR,
+      // head and the sole blocking quality finding code closes the cycle.
+      const deferCode = soleBlockingQualityFindingCode(priorRun.findings);
+      const deferRow = deferCode
+        ? readArchitectDeferAdjudication(prNumber, reviewedHeadSha, deferCode) : null;
+      const deferSettled = completedFinalFindings
+        && authority.triage?.source === 'architect' && authority.triage.verdict === 'DEFER';
+      if (deferRow && (deferSettled || authority.cycle?.state === 'at_cap_open_findings')) {
+        const findingSnapshotDigest = sha256Bytes(stableJson(priorRun.findings));
+        try {
+          if (!deferSettled) {
+            authority = settleAtCapPackReviewFindingByArchitectDefer({
+              prNumber, expectedTransitionSeq: authority.transitionSeq, reviewedHeadSha,
+              terminalRunId: priorRun.id, findings: priorRun.findings, findingSnapshotDigest,
+              adjudication: deferRow, committedAtUtc: new Date().toISOString(),
+              options: { storeRoot: options.storeRoot },
+            });
+          } else if (authority.triage?.findingSnapshotDigest !== findingSnapshotDigest) {
+            throw new Error('settled architect DEFER no longer matches the original findings');
+          }
+        } catch (error) {
+          return { prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true, settled: false,
+            reason: 'architect_defer_settlement_invalid', detail: describeError(error),
+            nextAction: architectDeferNextAction(prNumber, reviewedHeadSha, deferCode) };
+        }
+        return await publishFinalCapStatus(
+          'review_stage_complete: architect DEFER adjudication',
+          findingSnapshotDigest,
+          'final_cap_architect_defer_settled',
+        );
+      }
+      if (deferSettled) {
+        return { prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true, settled: false,
+          reason: 'architect_defer_adjudication_missing',
+          nextAction: architectDeferNextAction(prNumber, reviewedHeadSha, deferCode) };
+      }
       try {
         const proof = await resolveSameHeadIssueResolution(input, options, authority, priorRun);
         // The proof read and state transition are separate operations. Confirm
@@ -7625,7 +7708,9 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       } catch (error) {
         return { prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true, settled: false,
           reason: 'same_head_resolution_unproven', detail: describeError(error),
-          nextAction: 'verify the original exact-run sources, canonical terminal REVIEW ID/timestamp, frozen Issue digest, corrected REST Issue scope, and one authorized post-terminal disposition COMMENT; recheck current-head CI and rerun scoped exact-head reconcile. Only a real code fix belongs on a strict descendant' };
+          nextAction: 'verify the original exact-run sources, canonical terminal REVIEW ID/timestamp, frozen Issue digest, corrected REST Issue scope, and one authorized post-terminal disposition COMMENT; recheck current-head CI and rerun scoped exact-head reconcile. Only a real code fix belongs on a strict descendant',
+          architectDeferRoute: architectDeferNextAction(prNumber, reviewedHeadSha,
+            soleBlockingQualityFindingCode(priorRun.findings)) };
       }
     }
     // Rechecked original Issue, source/REVIEW and current-head CI above.
@@ -9077,13 +9162,21 @@ export async function reconcileStalePackReviewRuns(
           : rateLimitOriginalRecoveryAction(current);
       }
     }
+    // Issue #2870: once its status is reconciled, a terminal failed run with
+    // no aggregate verdict is history; the next step is a fresh same-head
+    // review run, never another reconcile of the same run.
+    const reconciledHistory = getPackReviewRun(run.id, { projectId, storeRoot }) ?? run;
+    const freshReviewAction = (!needsStaleStatus || outcome.state === 'succeeded')
+      && isTerminalFailedNoVerdictGptHistory(reconciledHistory)
+      ? rateLimitFreshReviewNextAction(reconciledHistory, projectId) : undefined;
     results.push({
       runId: run.id,
       terminalized,
       statusReconciled: needsStaleStatus && outcome.state === 'succeeded',
       reason: needsStaleStatus ? outcome.reason : 'status_already_reconciled',
       ...(zeroJudgmentStaleStatus && (terminalized || run.status === 'failed')
-        ? { nextAction: rateLimitAction ?? scopedReconcileAction(run.prNumber) } : {}),
+        ? { nextAction: freshReviewAction ?? rateLimitAction ?? scopedReconcileAction(run.prNumber) } : {}),
+      ...(freshReviewAction && !zeroJudgmentStaleStatus ? { nextAction: freshReviewAction } : {}),
       ...(failedPartialStaleStatus && needsStaleStatus && outcome.state !== 'succeeded' ? {
         nextAction: scopedReconcileAction(run.prNumber),
       } : {}),
@@ -10675,6 +10768,11 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         nextAction: logicalAccounting
           ? 'advance the PR to a proven strict descendant of the reviewed findings head, then rerun scoped reconcile --immediate'
           : 'fix the final findings, then run scoped reconcile --immediate',
+        ...(logicalAccounting && authority.cycle.state === 'at_cap_open_findings' && authority.terminal?.runId ? {
+          architectDeferRoute: architectDeferNextAction(target.prNumber, target.headSha,
+            soleBlockingQualityFindingCode(getPackReviewRun(authority.terminal.runId,
+              { projectId, storeRoot })?.findings ?? [])),
+        } : {}),
         prNumber: target.prNumber,
         headSha: target.headSha,
         cycleId: authority.cycle.cycleId,
@@ -10778,7 +10876,10 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
       && candidate.targetSha.toLowerCase() === target.headSha.toLowerCase()
       && candidate.reviewRound?.reviewer === 'gpt'
       && !hasPersistedPackReviewVerdict(candidate)
+      && !isTerminalFailedNoVerdictGptHistory(candidate)
     ));
+    let terminalFailedGptHistory: PackReviewRunRecord[] = [];
+    let freshAfterTerminalFailedHistory: PackReviewRunRecord | null = null;
     const incumbentFrozenTierMatches = (candidate: PackReviewRunRecord): boolean => {
       const cycle = authority.cycle;
       const historicalRound = candidate.reviewRound;
@@ -10879,7 +10980,15 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         && candidate.targetSha.toLowerCase() === target.headSha.toLowerCase()
         && candidate.reviewRound?.reviewer === 'gpt'
         && !hasPersistedPackReviewVerdict(candidate)
+        && !isTerminalFailedNoVerdictGptHistory(candidate)
         && !storedCandidates.some((matching) => matching.id === candidate.id)
+      ));
+      terminalFailedGptHistory = allRecords.filter((candidate) => (
+        candidate.projectId === projectId
+        && candidate.prNumber === target.prNumber
+        && candidate.targetSha.toLowerCase() === target.headSha.toLowerCase()
+        && candidate.logicalRoundOrdinal === roundOrdinal
+        && isTerminalFailedNoVerdictGptHistory(candidate)
       ));
       if (otherSameHead) {
         return rejectIncumbent(otherSameHead, 'gpt_incumbent_identity_mismatch',
@@ -11058,6 +11167,29 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
             slot.slotId === slotId && slot.lifecycle === 'invocation_started')));
         gptRound = priorSameRound.reviewRound;
         }
+      } else if (terminalFailedGptHistory.length > 0) {
+        // Issue #2870: terminal failed/no-verdict runs are history only. The
+        // authorized sender starts a fresh same-head run with a new run ID;
+        // the failed invocation is never resent and its sources stay on the PR.
+        const historical = terminalFailedGptHistory[0]!;
+        const verdictHistory = allRecords.find((candidate) =>
+          candidate.prNumber === target.prNumber
+          && candidate.targetSha.toLowerCase() === target.headSha.toLowerCase()
+          && candidate.reviewCycleId === authority.cycle!.cycleId
+          && candidate.logicalRoundOrdinal === roundOrdinal
+          && candidate.automaticBudgetDisposition !== 'non_consuming_explicit'
+          && candidate.reviewRound?.reviewer === 'gpt'
+          && hasPersistedPackReviewVerdict(candidate));
+        if (verdictHistory) {
+          return rejectIncumbent(verdictHistory, 'gpt_incumbent_ambiguous_run',
+            'consume the existing verdict-bearing same-round run; do not restart the review');
+        }
+        if (!ownsStartClaim()) {
+          return rejectIncumbent(historical, 'gpt_incumbent_claim_not_owned',
+            'acquire the exact current PR/head start claim before a fresh review run');
+        }
+        allowSameRoundReplacement = true;
+        freshAfterTerminalFailedHistory = historical;
       }
     }
 
@@ -11415,6 +11547,16 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         || latestAuthority.terminal) {
         return rejectIncumbent(original, 'gpt_rate_limit_fresh_authority_changed',
           're-read the original run, GitHub source comments, current PR head and claim before any new review');
+      }
+    }
+    if (freshAfterTerminalFailedHistory) {
+      // Re-check under the held claim: a live owner that appeared meanwhile
+      // still blocks; the terminal failed history itself never does.
+      const headNow = await readProjectionHead();
+      if (!ownsStartClaim() || headNow !== target.headSha.toLowerCase()
+        || incumbentCandidates(listPackReviewRunRecordsRaw({ projectId, storeRoot })).length > 0) {
+        return rejectIncumbent(freshAfterTerminalFailedHistory, 'gpt_incumbent_authority_changed',
+          'observe the exact PR head, current claim and any live same-head owner before a fresh review run');
       }
     }
     let created: ReturnType<typeof createPackReviewRun>;
