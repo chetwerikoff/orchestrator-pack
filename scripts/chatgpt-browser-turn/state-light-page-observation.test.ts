@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import './too-many-requests-capture.test-cases.ts';
@@ -17,7 +18,7 @@ import {
   RENDERED_STOP_BUTTON_SELECTOR,
   matchesStopButtonSelector,
 } from './product-page-selectors.ts';
-import { __testComposerMutation, __testSendDelivery, __testWaitForExistingGeneration, atomicSnapshotSignature, keyedHarvestCandidate, revalidateKeyedHarvest } from './state-light-turn-base.ts';
+import { __testComposerMutation, __testSendDelivery, __testWaitForExistingGeneration, atomicSnapshotSignature, keyedHarvestCandidate, PendingLocatorCountTimeoutError, preSendC4ReloadDecision, revalidateKeyedHarvest } from './state-light-turn-base.ts';
 import {
   buildObservationHeartbeat,
   classifyBrowserGptPageTurnStatus,
@@ -3085,5 +3086,146 @@ describe('Issue #2750 parseBoundIssueSelector', () => {
   ])('rejects the malformed selector %j with input_invalid', async (value) => {
     const { parseBoundIssueSelector } = await import('./state-light-turn-base.ts');
     expect(() => parseBoundIssueSelector(value)).toThrow('input_invalid:bound_issue_selector_invalid');
+  });
+});
+
+describe('Issue #2854 pre-Send C4 zero-dispatch recovery decision', () => {
+  const c4Fixture = (name: string) => JSON.parse(readFileSync(
+    new URL(`./fixtures/state-light-c4/${name}`, import.meta.url), 'utf8',
+  )) as Record<string, any>;
+  const eligible = (overrides: Partial<Parameters<typeof preSendC4ReloadDecision>[0]> = {}) => ({
+    error: new PendingLocatorCountTimeoutError(Promise.resolve(1)),
+    readSettled: true,
+    dispatchBoundaryEntered: false,
+    remedialNavigationUsed: false,
+    pageLost: false,
+    pageIsOriginalOwned: true,
+    identityMatched: true,
+    pageIdle: true,
+    nowMs: 1_000,
+    lastSafeReloadMs: 2_000,
+    ...overrides,
+  });
+
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('keeps the incumbent locator_count cause while retaining the same pending read handle', async () => {
+    vi.useFakeTimers();
+    let resolveRead!: (value: number) => void;
+    const read = new Promise<number>((resolve) => { resolveRead = resolve; });
+    const locator = { count: vi.fn(() => read) };
+    const pending = __testSendDelivery.locatorCount(locator, Date.now() + 1_000).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const error = await pending;
+    expect(error).toBeInstanceOf(PendingLocatorCountTimeoutError);
+    expect((error as Error).message).toBe('browser_operation_timeout:locator_count');
+    expect((error as PendingLocatorCountTimeoutError).settled).toBe(false);
+    expect(locator.count).toHaveBeenCalledTimes(1);
+    resolveRead(0);
+    await (error as PendingLocatorCountTimeoutError).settlement;
+    expect((error as PendingLocatorCountTimeoutError).settled).toBe(true);
+  });
+
+  it('leaves non-timeout locator failures and the zero-budget timeout unchanged', async () => {
+    expect(await __testSendDelivery.locatorCount({ count: async () => { throw new Error('boom'); } })).toBe(0);
+    await expect(__testSendDelivery.locatorCount({ count: async () => 1 }, Date.now() - 1))
+      .rejects.not.toBeInstanceOf(PendingLocatorCountTimeoutError);
+  });
+
+  it('treats a still-pending underlying read as non-quiescent and a late settlement as positive', async () => {
+    let clock = 10_000;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    try {
+      let settleOnWait = false;
+      let resolveRead!: (value: number) => void;
+      const page = {
+        __fakeBrowserGptPage: true,
+        waitForTimeout: vi.fn(async (ms: number) => {
+          clock += ms;
+          if (settleOnWait) resolveRead(0);
+        }),
+      };
+      const never = new PendingLocatorCountTimeoutError(new Promise(() => undefined));
+      expect(await __testSendDelivery.pendingLocatorReadSettledBefore(page, never, clock + 60_000)).toBe(false);
+      expect(clock).toBe(15_000);
+
+      const late = new PendingLocatorCountTimeoutError(new Promise<number>((resolve) => { resolveRead = resolve; }));
+      settleOnWait = true;
+      expect(await __testSendDelivery.pendingLocatorReadSettledBefore(page, late, clock + 60_000)).toBe(true);
+
+      const afterCutoff = new PendingLocatorCountTimeoutError(new Promise(() => undefined));
+      expect(await __testSendDelivery.pendingLocatorReadSettledBefore(page, afterCutoff, clock)).toBe(false);
+      expect(await __testSendDelivery.pendingLocatorReadSettledBefore(page, new Error('Target closed'), clock + 1))
+        .toBe(false);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('admits one reload only for a settled, zero-dispatch, owned, idle and in-budget failure', () => {
+    expect(preSendC4ReloadDecision(eligible())).toEqual({ reload: true });
+    expect(preSendC4ReloadDecision(eligible({ error: new Error('browser_operation_timeout:locator_count') })))
+      .toEqual({ reload: false, refusal: 'cause_not_reloadable' });
+    for (const [overrides, refusal] of [
+      [{ error: new Error('Target closed') }, 'cause_not_reloadable'],
+      [{ dispatchBoundaryEntered: true }, 'dispatch_possible'],
+      [{ readSettled: false }, 'locator_read_pending'],
+      [{ remedialNavigationUsed: true }, 'remedial_navigation_used'],
+      [{ pageLost: true }, 'page_lost'],
+      [{ pageIsOriginalOwned: false }, 'page_not_owned'],
+      [{ identityMatched: false }, 'destination_mismatch'],
+      // Stop, generation, Continue, an incomplete last turn or unreadable evidence all leave pageIdle false.
+      [{ pageIdle: false }, 'busy_or_unknown'],
+      [{ nowMs: 2_000 }, 'budget_exhausted'],
+    ] as const) {
+      expect(preSendC4ReloadDecision(eligible(overrides)), refusal).toEqual({ reload: false, refusal });
+    }
+  });
+
+  it('an uncertain dispatch outranks every other signal, including a settled read', () => {
+    expect(preSendC4ReloadDecision(eligible({ dispatchBoundaryEntered: true, remedialNavigationUsed: true })))
+      .toEqual({ reload: false, refusal: 'dispatch_possible' });
+  });
+
+  it('replays the five recorded causes with explicitly synthetic page state', () => {
+    const fixture = c4Fixture('causes.json');
+    const ids = fixture.cases.map((entry: any) => entry.id);
+    expect(ids).toEqual(expect.arrayContaining([
+      'baseline_transcript_incomplete', 'owned_conversation_render_mismatch_at_deadline', 'target_closed',
+      'locator_count_unresolved', 'locator_count_late_settled', 'fresh_send_button_never_enabled',
+    ]));
+    for (const entry of fixture.cases) {
+      expect(entry.dom_provenance, entry.id).toBe('unobserved');
+      expect(entry.replay.provenance, entry.id).toBe('synthetic');
+      expect(entry.recorded.send_count, entry.id).toBe(0);
+      const error = entry.replay.error === 'pending_locator_count'
+        ? new PendingLocatorCountTimeoutError(entry.replay.read_settled ? Promise.resolve(0) : new Promise(() => undefined))
+        : entry.replay.error ? new Error(entry.replay.error) : undefined;
+      const decision = preSendC4ReloadDecision(eligible({
+        error, readSettled: entry.replay.read_settled, pageLost: entry.replay.page_lost,
+      }));
+      expect(decision, entry.id).toEqual(entry.expected.reload
+        ? { reload: true } : { reload: false, refusal: entry.expected.refusal });
+    }
+  });
+
+  it('keeps the recorded census to metadata and marks unavailable Page state unobserved', () => {
+    const census = c4Fixture('census.json');
+    expect(census.provenance).toBe('recorded');
+    expect(census.reported_aggregate.ui_contract_mismatch + census.reported_aggregate.driver_error)
+      .toBe(census.reported_aggregate.total);
+    expect(census.reported_aggregate.individually_identified).toBe(false);
+    expect(census.live_cdp.authorized_exact_owned_pages_inspected).toBe(0);
+    const lines = census.defect_log_lines.map((entry: any) => entry.line);
+    expect(lines).toEqual([1708, 1730, 1741, 1743, 1744]);
+    for (const record of census.defect_log_lines.flatMap((entry: any) => entry.records)) {
+      expect(record.send_count).toBe(0);
+      expect(record).not.toHaveProperty('prompt');
+      expect(record).not.toHaveProperty('dom');
+    }
+    const renderMismatch = census.defect_log_lines.flatMap((entry: any) => entry.records)
+      .filter((record: any) => record.cause === 'owned_conversation_render_mismatch');
+    expect(renderMismatch.length).toBeGreaterThan(0);
+    for (const record of renderMismatch) expect(record.elapsed_ms).toBeGreaterThanOrEqual(1_800_000);
   });
 });
