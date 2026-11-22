@@ -604,6 +604,25 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
       statusWitness = witnesses;
       return witnesses;
     };
+    const classicStatusHold = (label: string): { readonly kind: 'hold'; readonly reason: string } | 'success' | 'absent' | 'unavailable' => {
+      const witnesses = statusWitnesses();
+      if (witnesses === null) return 'unavailable';
+      const witness = witnesses.get(norm(label));
+      if (witness === undefined) return 'absent';
+      if (witness === 'ambiguous') {
+        return {
+          kind: 'hold',
+          reason: `required-check relevance is unproved on ${sha}: required status ${label} state is unproved; re-read commit status ${label} and the current CI`,
+        };
+      }
+      if (witness.state !== 'success') {
+        return {
+          kind: 'hold',
+          reason: `required-check relevance is unproved on ${sha}: required status ${label} is ${witness.state}; re-read commit status ${label} and the current CI`,
+        };
+      }
+      return 'success';
+    };
     const selectLatest = (candidates: readonly CheckRun[]): CheckRun[] | 'uncertain' | 'pending' => {
       const parsed = candidates.map((run) => ({ run, runId: runIdFromUrl(run.details_url ?? run.html_url) }));
       if (parsed.some((item) => item.runId === null)) return 'uncertain';
@@ -682,27 +701,18 @@ export function runManagerFormatterFix(context: TargetContext, pr: number, deps:
           continue;
         }
       }
-      if (matched.length === 0) {
-        if (check.kind === 'context') {
-          const witnesses = statusWitnesses();
-          if (witnesses === null) {
-            return { kind: 'hold', reason: `required-check relevance is unproved on ${sha}: commit statuses are unavailable` };
-          }
-          const witness = witnesses.get(norm(check.label));
-          if (witness === 'ambiguous') {
-            return {
-              kind: 'hold',
-              reason: `required-check relevance is unproved on ${sha}: required status ${check.label} state is unproved; re-read commit status ${check.label} and the current CI`,
-            };
-          }
-          if (witness && witness.state !== 'success') {
-            return {
-              kind: 'hold',
-              reason: `required-check relevance is unproved on ${sha}: required status ${check.label} is ${witness.state}; re-read commit status ${check.label} and the current CI`,
-            };
-          }
-          if (witness?.state === 'success') continue;
+      if (check.kind === 'context') {
+        const classic = classicStatusHold(check.label);
+        if (classic === 'unavailable') {
+          return { kind: 'hold', reason: `required-check relevance is unproved on ${sha}: commit statuses are unavailable` };
         }
+        if (typeof classic === 'object') return classic;
+        if (matched.length === 0) {
+          if (classic === 'success') continue;
+          missing.push(check.label);
+          continue;
+        }
+      } else if (matched.length === 0) {
         missing.push(check.label);
         continue;
       }

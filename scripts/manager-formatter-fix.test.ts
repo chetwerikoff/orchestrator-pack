@@ -270,6 +270,7 @@ describe('manager formatter fix', () => {
       'repos/example/formatter/pulls/42',
       `repos/example/formatter/commits/${world.head}/check-runs`,
       'repos/example/formatter/branches/main/protection/required_status_checks',
+      `repos/example/formatter/commits/${world.head}/statuses`,
       'repos/example/formatter/actions/jobs/200',
       'repos/example/formatter/actions/jobs/200/logs',
     ]);
@@ -989,6 +990,64 @@ process.stdout.write('HTTP/2 200\\n\\n' + JSON.stringify({ total_count: 2, check
       expect(world.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
       expect(world.remoteHead()).toBe(world.head);
     }
+  });
+
+  it('does not publish when a same-name classic status is unresolved beside a required check-run', () => {
+    for (const state of ['pending', 'failure'] as const) {
+      const world = fixture();
+      world.ci.statuses = [{ context: 'CI / checks', state }];
+      const result = runManagerFormatterFix(world.context, 42, world.deps);
+      expect(result.outcome).toBe('refused');
+      expect(result.message).toContain(`required status CI / checks is ${state}`);
+      expect(world.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+      expect(world.remoteHead()).toBe(world.head);
+    }
+    const succeeded = fixture();
+    succeeded.ci.statuses = [{ context: 'CI / checks', state: 'success' }];
+    const published = runManagerFormatterFix(succeeded.context, 42, succeeded.deps);
+    expect(published.outcome).toBe('published');
+    expect(succeeded.remoteHead()).not.toBe(succeeded.head);
+
+    for (const state of ['pending', 'failure'] as const) {
+      const world = fixture();
+      world.ci.requiredContexts = ['CI / checks', 'typecheck'];
+      world.ci.jobs = [
+        {
+          id: 200, runId: 100, runAttempt: 4, name: 'CI / checks', conclusion: 'failure',
+          logs: 'source.ts:1:1 format error\n',
+          steps: [{ name: 'lint', status: 'completed', conclusion: 'failure', number: 1 }],
+        },
+        {
+          id: 210, runId: 101, runAttempt: 1, name: 'typecheck', conclusion: 'success',
+          logs: 'types ok\n',
+          steps: [{ name: 'typecheck', status: 'completed', conclusion: 'success', number: 1 }],
+        },
+      ];
+      world.ci.statuses = [{ context: 'typecheck', state }];
+      const result = runManagerFormatterFix(world.context, 42, world.deps);
+      expect(result.outcome).toBe('refused');
+      expect(result.message).toContain(`required status typecheck is ${state}`);
+      expect(world.calls.some((call) => call.args?.[0] === 'commit' || call.args?.[0] === 'push')).toBe(false);
+      expect(world.remoteHead()).toBe(world.head);
+    }
+    const clear = fixture();
+    clear.ci.requiredContexts = ['CI / checks', 'typecheck'];
+    clear.ci.jobs = [
+      {
+        id: 200, runId: 100, runAttempt: 4, name: 'CI / checks', conclusion: 'failure',
+        logs: 'source.ts:1:1 format error\n',
+        steps: [{ name: 'lint', status: 'completed', conclusion: 'failure', number: 1 }],
+      },
+      {
+        id: 210, runId: 101, runAttempt: 1, name: 'typecheck', conclusion: 'success',
+        logs: 'types ok\n',
+        steps: [{ name: 'typecheck', status: 'completed', conclusion: 'success', number: 1 }],
+      },
+    ];
+    clear.ci.statuses = [{ context: 'typecheck', state: 'success' }];
+    const clearResult = runManagerFormatterFix(clear.context, 42, clear.deps);
+    expect(clearResult.outcome).toBe('published');
+    expect(clear.remoteHead()).not.toBe(clear.head);
   });
 
   it('does not let another app failure replace the required app check', () => {
