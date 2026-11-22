@@ -1318,6 +1318,7 @@ async function wakeAssignedIssueManagers(
   for (const issue of numbered) {
     const bound = boundIssueManager(repository, options.config.projectId, issue, observations, terminals, executor, assignments);
     if (!bound || bareShellHandles.has(bound.pane.handle)) continue;
+    if (silentOperatorGatePark(bound.pane, options, executor, store)) continue;
     let facts: readonly PublishedIssueFact[];
     try { facts = (options.listPublishedIssueFacts ?? ((repo, number, names) =>
       publishedIssueFacts(repo, number, names, options)))(repository, issue, pulls); }
@@ -1443,6 +1444,33 @@ function witnessedOwnPark(pane: FleetPaneObservation, executor: OrcaExecutor): b
   if (pane.ownParkObservation) return true;
   try { return ownFinalPark(readFleetScreen(pane.handle, executor), pane.wait); }
   catch { return false; }
+}
+
+const OPERATOR_GATE_PARK_RE = /^PARKED on operator [1-9][0-9]* gate for PR [1-9][0-9]*$/u;
+
+/**
+ * Only the incumbent operator/coordinator releases an exact operator-gate park:
+ * no producer event, Issue/PR fact or elapsed Reminder wakes it. Silence needs
+ * the own final park on the one live native pane with the same identity, plus
+ * the selected Dispatch binding wherever freshSendSafePane requires it.
+ * Anything weaker keeps the existing alarm and Reminder routes.
+ */
+function silentOperatorGatePark(
+  pane: FleetPaneObservation,
+  options: FleetAlarmTickOptions,
+  executor: OrcaExecutor,
+  store: FleetWakeStateStore,
+): boolean {
+  if (pane.state !== 'PARKED' || !pane.wait || !pane.incarnationId || !OPERATOR_GATE_PARK_RE.test(pane.wait)) return false;
+  try {
+    const census = listFleetTerminals(executor);
+    const current = census.filter((row) => row.handle === pane.handle);
+    if (current.length !== 1 || terminalsIdentity(current[0]!) !== terminalsIdentity(pane)
+      || current[0]!.title !== pane.title || current[0]!.agentIdentity !== pane.agentIdentity
+      || current[0]!.status?.toLowerCase() === 'exited') return false;
+    return freshSendSafePane(pane, census, options, executor, store)
+      && ownFinalPark(readFleetScreen(pane.handle, executor), pane.wait);
+  } catch { return false; }
 }
 
 /**
@@ -2241,6 +2269,7 @@ async function wakeNamedParkedProducers(
       epoch = { key: episode, since: now, started: now };
       store.writeParkedEpoch?.(pane.handle, epoch);
     }
+    if (silentOperatorGatePark(pane, options, executor, store)) continue;
     const producer = parseNamedParkedProducer(pane.wait);
     let decision: ParkDecision = PENDING;
     // Re-observe this same native pane and its final PARKED line

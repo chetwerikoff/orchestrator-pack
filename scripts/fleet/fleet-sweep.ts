@@ -545,13 +545,26 @@ function verifiedPrimaryBindings(
   return verified;
 }
 
+// OpenCode's idle composer is the final gutter block closed by its `╹▀▀▀` border. On a
+// wide pane its right column repeats the worktree path. Only rows carrying that column
+// or chrome belong to it; any left-column text above them stays an incoming message.
+function withoutOpenCodeComposer(screen: string): string {
+  const lines = screen.split(/\r?\n/u);
+  const border = lines.findLastIndex((line) => /^\s*╹▀{8,}\s*$/u.test(line));
+  if (border < 0 || contentLines(lines.slice(border + 1).join('\n')).length > 0) return screen;
+  let start = border;
+  while (start > 0 && /^\s*┃/u.test(lines[start - 1]!)
+    && (/^\s*┃(?:\s*$|\s{20,}\S)/u.test(lines[start - 1]!) || contentLines(lines[start - 1]!).length === 0)) start -= 1;
+  return lines.slice(0, start).join('\n');
+}
+
 // Only the final own response is an outcome. A park quoted in a tool result, instruction,
 // table or older response does not authorize waiting. Wrapped outcome lines are joined.
 export function ownPaneOutcome(screen: string): { wait?: string; acknowledgment: boolean } {
   const toolLine = /^(?:Tool:|\$|#\s*Running\b|[→⚙]\s|Click to expand\b|[\[{]|"[^"]+"\s*:|```|===|handle:|source:|(?:[┌└├]\s*)?(?:Bash|Shell|Read|Write|Edit|Grep|Glob)\b|(?:orca|gh|git|node|npm|mise|python|curl|bash|sh)\s)/iu;
   // Raw OpenCode gutters render both incoming messages and own tools. Only a
   // non-tool block advances the incoming boundary; subsequent tool blocks stay own work.
-  const rawLines = screen.split(/\r?\n/u);
+  const rawLines = withoutOpenCodeComposer(screen).split(/\r?\n/u);
   let incoming = -1;
   let toolBlock = false;
   for (let index = 0; index < rawLines.length;) {
@@ -642,7 +655,7 @@ function liveTaskBinding(terminal: FleetTerminal, projectId: string, executor: O
 }
 /** The final non-empty content line, not a Task/receipt, is park authority. */
 export function lastFleetParkedLine(screen: string): string | undefined {
-  const final = contentLines(screen).at(-1);
+  const final = contentLines(withoutOpenCodeComposer(screen)).at(-1);
   const last = final?.text.trim() ?? '';
   // A running spinner before PARKED is an executing command, not the agent's final own response.
   return !final?.running && (/^PARKED on\s+\S.+$/u.test(last) || /^PARKED on\s+\S$/u.test(last))
@@ -929,7 +942,7 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
       ...(permissionCleared ? { permissionCleared: true } : {}),
       ...(wait ? { wait } : {}),
       ...(wait && outcome.wait === wait && state === 'PARKED'
-        ? { ownParkObservation: nonChromeLines(screen).at(-1) ?? outcome.wait } : {}),
+        ? { ownParkObservation: nonChromeLines(withoutOpenCodeComposer(screen)).at(-1) ?? outcome.wait } : {}),
       ...(binding ? { taskBinding: binding } : {}),
       lines: permission || lineCount === 0 ? [] : nonChromeLines(screen).slice(-lineCount),
     }];

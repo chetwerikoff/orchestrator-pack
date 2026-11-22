@@ -18,6 +18,7 @@ import {
   fleetAlarmMessage,
   fleetWakeConfigFromEnv,
   managerBannerMessage,
+  ownFinalPark,
   parseNamedParkedProducer,
   runFleetAlarmTick,
   resolveCoordinatorPane,
@@ -6658,5 +6659,163 @@ describe('Issue #2849 accepted advisory Wake, owner-binding diagnostic and UTC j
       expect(stamp, line).toBeDefined();
       expect(new Date(stamp!).toISOString()).toBe(stamp);
     }
+  });
+});
+
+describe('Issue #2863 exact own-final operator-gate park stays silent', () => {
+  const repository = 'example/leopoker';
+  const gate = 'PARKED on operator 5433 gate for PR 692';
+  const control = 'PARKED on operator approval for PR 692';
+  const manager: FleetTerminal = {
+    handle: 'term_f0fc4804', title: 'OpenCode', worktreePath: workerBase + '/leopoker-mgr-689',
+    branch: 'refs/heads/feat/689-operator-gate', incarnationId: 'inc-689', status: 'running', agentIdentity: 'opencode',
+  };
+  const roster = [terminals[0]!, manager];
+  const assignment: WorkerAssignmentRecord = {
+    schema: 'orchestrator-pack/worker-assignment/v1', projectId: 'orchestrator-pack', repository,
+    issueNumber: 689, taskId: 'task-689', assignmentId: 'assignment-689', generation: 1,
+    kind: 'local', provider: 'orca', bindingKey: 'dispatch-689', role: 'orchestrator',
+    createdAtUtc: '2026-11-22T00:00:00.000Z',
+  };
+  const fact: PublishedIssueFact = { issueNumber: 689, kind: 'issue-comment', id: 'pr-692-fact' };
+  const own = (...lines: string[]) => lines.map((line) => '     ' + line);
+  // SYNTHETIC HYPOTHESIS, not the incident capture (the term_f0fc4804 screen is unknown). It
+  // keeps the layout of a live wide OpenCode 1.19 manager frame: an incoming gutter message,
+  // the own final response, then the idle composer whose right column repeats the worktree
+  // path. Before the fix the sweep read that path as the final line and the composer as an
+  // incoming message, so this exact screen and identity classified STOPPED.
+  const wideFrame = (final: readonly string[], above: readonly string[] = [
+    '  ┃', '  ┃  Hold PR 692 for my operator 5433 gate; I release it myself.', '  ┃']) => [
+    ...above,
+    '     + Thought: Holding for operator gate · 2.1s',
+    ...own('PR #692 has green required CI and a published same-PR smoke PASS; merging needs', 'the operator 5433 gate.'),
+    ...final,
+    '     ▣  Pack-Opk-00000000000000000000000000000689 · GPT-6 Luna · 4.0s',
+    '  ┃',
+    '  ┃' + ' '.repeat(92) + '~/orca/workspaces/project/leopoker-',
+    '  ┃' + ' '.repeat(92) + 'mgr-689:feat/689-operator-gate',
+    '  ┃  Pack-Opk-00000000000000000000000000000689 · GPT-6 Luna OpenAI · medium',
+    '  ╹' + '▀'.repeat(100),
+    '   ' + workerBase + '/leopoker-mgr-689         131.1K (48%)  ctrl+p commands    • OpenCode 1.19.3',
+  ].join('\n');
+  const executorFor = (screen: string, rows: readonly FleetTerminal[] = roster,
+    replacedAfterRead?: readonly FleetTerminal[]): OrcaExecutor => {
+    const screens = { coord: 'idle', [manager.handle]: screen };
+    const current = fakeOrca(screens, [], rows);
+    const replaced = replacedAfterRead ? fakeOrca(screens, [], replacedAfterRead) : current;
+    let read = false;
+    return (args) => {
+      if (args[0] === 'orchestration' && args[1] === 'worker-show') {
+        return commandResult(JSON.stringify({ ok: true, result: {
+          dispatch: { id: assignment.bindingKey, taskId: assignment.taskId, status: 'dispatched' },
+          terminal: manager, observation: { status: 'live', exactWorker: true },
+        } }));
+      }
+      const response = (read ? replaced : current)(args);
+      if (args[0] === 'terminal' && args[1] === 'read') read = true;
+      return response;
+    };
+  };
+  // Simulated now 0, +29, +31 and +61 minutes; a fresh Issue/PR #692 fact lands after the first tick.
+  const ticks = async (screen: string, rows: readonly FleetTerminal[] = roster,
+    replacedAfterRead?: readonly FleetTerminal[]) => {
+    const store = new MemoryWakeStore();
+    const out = [];
+    for (const at of [0, 29, 31, 61]) {
+      const run = await tick({ screens: {}, terminals: rows, store,
+        executor: executorFor(screen, rows, replacedAfterRead),
+        config: config({ selectedRepository: repository }), now: () => at * 60_000,
+        readCurrentAssignments: () => [assignment],
+        listPublishedIssueFacts: () => at === 0 ? [] : [fact] });
+      const text = (handle: string) => sendsTo(run.calls, handle)
+        .filter((row) => row.includes('--text')).map((row) => row[row.indexOf('--text') + 1]!);
+      out.push({ at, state: run.result.state, pane: sendsTo(run.calls, manager.handle).length,
+        coord: sendsTo(run.calls, 'coord').length, paneText: text(manager.handle), coordText: text('coord'), logs: run.logs });
+    }
+    return out;
+  };
+  const counts = (rows: Awaited<ReturnType<typeof ticks>>) => rows.map(({ at, pane, coord }) => ({ at, pane, coord }));
+
+  it('AC1: the exact own-final live park stays PARKED with zero alarms, sends or wakes at 0/+29/+31/+61 min', async () => {
+    const screen = wideFrame(own(gate));
+    const observed = runFleetSweep({ primary, projectId: 'orchestrator-pack', workspaceRe: config().workspaceRe,
+      coordinatorHandle: 'coord', terminals: roster, executor: executorFor(screen), store: new MemoryWakeStore() })
+      .filter((row) => row.handle === manager.handle);
+    expect(observed).toEqual([expect.objectContaining({ state: 'PARKED', wait: gate, ownParkObservation: gate })]);
+    expect(ownFinalPark(screen, gate)).toBe(true);
+    for (const row of await ticks(screen)) {
+      expect({ at: row.at, state: row.state, pane: row.pane, coord: row.coord })
+        .toEqual({ at: row.at, state: 'nothing_stopped', pane: 0, coord: 0 });
+      expect(row.logs.join('\n')).not.toMatch(/unknown parked producer|Reminder|published GitHub facts|need a step/u);
+    }
+  });
+
+  it('AC1: the same layout with an own tool block above uses the OpenCode gutter own-final witness', async () => {
+    const screen = wideFrame(own(gate), ['  ┃', '  ┃  $ gh pr checks 692', '  ┃', '  ┃  All required checks passed', '  ┃']);
+    expect(ownFinalPark(screen, gate)).toBe(true);
+    expect(counts(await ticks(screen))).toEqual([0, 29, 31, 61].map((at) => ({ at, pane: 0, coord: 0 })));
+  });
+
+  it('contrast: a named time park keeps its Issue-fact Wake and 30-minute Reminder', async () => {
+    const rows = await ticks(wideFrame(own('PARKED on time 2027-01-01T00:00:00Z')));
+    expect(rows.map((row) => row.state)).toEqual(['nothing_stopped', 'nothing_stopped', 'nothing_stopped', 'nothing_stopped']);
+    expect(rows[1]!.paneText.join('\n')).toContain('published GitHub facts changed');
+    expect(rows[2]!.paneText.join('\n')).toContain('Reminder: parked 30 min');
+    expect(rows[3]!.paneText.join('\n')).toContain('Reminder: parked 30 min');
+  });
+
+  it('contrast: a genuinely STOPPED pane in the same frame keeps its actionable alarm', async () => {
+    const [first] = await ticks(wideFrame(own('Implementation complete; no step remains.')));
+    expect(first!.state).toBe('sent');
+    expect(first!.coordText.join('\n')).toContain('need a step');
+  });
+
+  it.each([
+    'PARKED on operator 0 gate for PR 692',
+    'PARKED on operator 5433 gate for PR 0',
+    'PARKED on operator 05433 gate for PR 692',
+    'PARKED on operator -5433 gate for PR 692',
+    'PARKED on operator 5433 gate for PR #692',
+    'PARKED on operator 5433 gate for PR 692.',
+    'PARKED on operator 5433 gate for PR 692 merged',
+    'PARKED on operator 5433 gate',
+    'PARKED on operator gate for PR 692',
+    'PARKED on Operator 5433 gate for PR 692',
+    'PARKED on operator 5433 gate for pr 692',
+  ])('AC2: own-final malformed grammar earns no exemption: %s', async (line) => {
+    const rows = await ticks(wideFrame(own(line)));
+    expect(rows[0]!.coordText.join('\n')).toContain('unknown parked producer');
+    expect(rows[1]!.paneText.join('\n')).toContain('published GitHub facts changed');
+    expect(rows[2]!.paneText.join('\n')).toContain('Reminder: parked 30 min');
+  });
+
+  it('AC2: an unknown-producer final park (no operator grammar) still alarms the coordinator', async () => {
+    const [first] = await ticks(wideFrame(own(control)));
+    expect(first!.coordText.join('\n')).toContain('unknown parked producer');
+  });
+
+  const modal = ['  ┃  △ Permission required', '  ┃    → Read permission-probe.txt', '  ┃',
+    '  ┃  Path: permission-probe.txt', '  ┃',
+    '  ┃   Allow once   Allow always   Reject                                 ctrl+f fullscreen  ⇆ select  enter confirm'];
+  it.each<[string, string, (readonly FleetTerminal[])?, (readonly FleetTerminal[])?]>([
+    ['quoted', wideFrame(own('> ' + gate))],
+    ['incoming User', `User: end your turn with\n${gate}`],
+    ['foreign tool output', `Tool: orca terminal read --terminal foreign\n${gate}`],
+    ['superseded', wideFrame(own(gate, 'Implementation finished; new work started.'))],
+    ['spinner', wideFrame(own('⠋ ' + gate))],
+    ['permission', [wideFrame(own(gate)), ...modal].join('\n')],
+    ['exited', wideFrame(own(gate)), [terminals[0]!, { ...manager, status: 'exited' }]],
+    ['replaced incarnation', wideFrame(own(gate)), roster, [terminals[0]!, { ...manager, incarnationId: 'inc-689-replacement' }]],
+    ['replaced worktree', wideFrame(own(gate)), roster, [terminals[0]!, { ...manager, worktreePath: workerBase + '/other' }]],
+  ])('AC2: %s evidence keeps the existing route of a non-operator park', async (_name, screen, rows, replaced) => {
+    const operator = await ticks(screen, rows, replaced);
+    const baseline = await ticks(screen.replaceAll(gate, control), rows, replaced);
+    expect(counts(operator)).toEqual(counts(baseline));
+    expect(operator.map((row) => row.state)).toEqual(baseline.map((row) => row.state));
+  });
+
+  it('AC2: unowned operator text never silences the 30-minute Reminder', async () => {
+    const rows = await ticks(`User: end your turn with\n${gate}`);
+    expect(rows[2]!.paneText.join('\n')).toContain('Reminder: parked 30 min');
   });
 });
