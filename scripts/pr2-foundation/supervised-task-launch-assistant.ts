@@ -1072,6 +1072,21 @@ export async function runSupervisedTaskLaunchAssistant(
   input: LaunchInput,
   deps: LaunchDependencies,
 ): Promise<LaunchResult> {
+  const selection: { resolved: boolean; admitted?: ExecutorSelectionTuple } = { resolved: false };
+  const result = await runLaunch(input, deps, selection);
+  if (!selection.resolved || !EXECUTOR_OVERRIDE_CLASSES.includes(input.workClass)) return result;
+  return { ...result, executorSelection: {
+    provenance: input.executor ? 'per-launch' : 'stored-profile',
+    ...(input.executor ? { requested: input.executor } : {}),
+    ...(selection.admitted ? { admitted: selection.admitted } : {}),
+  } };
+}
+
+async function runLaunch(
+  input: LaunchInput,
+  deps: LaunchDependencies,
+  selection: { resolved: boolean; admitted?: ExecutorSelectionTuple },
+): Promise<LaunchResult> {
   const startedAtMs = deps.now();
   const timings: StageTiming[] = [];
   let resources = initialResources(input);
@@ -1107,12 +1122,6 @@ export async function runSupervisedTaskLaunchAssistant(
         note: `Remove --executor and rerun the --work-class ${input.workClass} launch; a per-launch executor applies only to t1|t2|t3` },
     }, resources, startedAtMs, timings, deps.now);
   }
-  const executorSelection = (admitted?: ExecutorSelectionTuple): { executorSelection?: ExecutorSelection } =>
-    EXECUTOR_OVERRIDE_CLASSES.includes(input.workClass) ? { executorSelection: {
-      provenance: input.executor ? 'per-launch' : 'stored-profile',
-      ...(input.executor ? { requested: input.executor } : {}),
-      ...(admitted ? { admitted } : {}),
-    } } : {};
 
   // The reuse route is an explicit native placement, never a title/path/Issue
   // inference. The existing supervised-start producer remains the only writer.
@@ -1159,10 +1168,10 @@ export async function runSupervisedTaskLaunchAssistant(
     ? 'exact_terminal_worktree' : input.startMode;
   const profileEdge = await checkpoint('executor_profile', timings, deps.now, () =>
     deps.resolveProfile(input.workClass, input.env ?? process.env, selectedMode));
-  if (profileEdge.status !== 'ok') {
-    return { ...continued(input, 'executor_profile', profileEdge, resources, startedAtMs, timings, deps.now), ...executorSelection() };
-  }
+  selection.resolved = true;
+  if (profileEdge.status !== 'ok') return continued(input, 'executor_profile', profileEdge, resources, startedAtMs, timings, deps.now);
   let profile = profileEdge.value;
+  if (profile.selection) selection.admitted = profile.selection;
   if (profile.route !== 'exact_terminal_worktree'
     && (input.worktreeSelector || input.worktreeName)) {
     return continued(input, 'executor_profile', {
@@ -1925,7 +1934,19 @@ export async function runSupervisedTaskLaunchAssistant(
         : ['--terminal', quote(terminal!.identity.id), '--worktree', quote(prepared.value.selector)]),
       '--retry-request', quote(requestId),
     ].join(' ') : undefined;
-    return { ...continued(input, 'supervised_start', {
+    const createdTerminals = [
+      ...(!providerMode && !input.existingTerminal && terminal ? [terminal.identity.id] : []),
+      ...creationTerminals.map((shell) => shell.handle),
+    ];
+    const createdWorktree = prepared.value.setupWitness === 'same_invocation_complete' ? prepared.value : null;
+    const createdCleanup = [
+      ...(createdTerminals.length ? [`close only this attempt's terminal${createdTerminals.length > 1 ? 's' : ''} ${createdTerminals.join(', ')} with the existing terminal-close operation`] : []),
+      ...(createdWorktree ? [`remove only this attempt's worktree ${createdWorktree.selector}${createdWorktree.path ? ` (${createdWorktree.path})` : ''} with the existing worktree-remove operation`] : []),
+    ];
+    const handoffNote = supervised.nextAction?.note && createdCleanup.length
+      ? `This launch attempt already created resources; before the rerun the coordinator must ${createdCleanup.join(' and ')}, never stopping, closing or removing the live incumbent's Dispatch, terminal or worktree. ${supervised.nextAction.note}`
+      : supervised.nextAction?.note;
+    return continued(input, 'supervised_start', {
       cause: startReason,
       actor: 'provider',
       evidence: {
@@ -1954,12 +1975,12 @@ export async function runSupervisedTaskLaunchAssistant(
         kind: 'retry_supervised_start', requestId, command: retry,
       } : {
         kind: 'reconcile_dispatch',
-        note: supervised.nextAction?.note ?? 'inspect the exact Task/Dispatch with dispatch-show and worker-show and the selected assignment store read-only; establish the missing native witness before any repair. A completed or retired predecessor requires a separately authorized new Task and fresh named worktree, optionally at a verified unique Issue-closing PR head; preserve the old checkout. An external terminal cannot be stopped by worker-release; never repeat a failed start blindly',
+        note: handoffNote ?? 'inspect the exact Task/Dispatch with dispatch-show and worker-show and the selected assignment store read-only; establish the missing native witness before any repair. A completed or retired predecessor requires a separately authorized new Task and fresh named worktree, optionally at a verified unique Issue-closing PR head; preserve the old checkout. An external terminal cannot be stopped by worker-release; never repeat a failed start blindly',
       },
     }, {
       ...resources,
       ...(safeDispatchId ? { dispatchId: safeDispatchId } : {}),
-    }, startedAtMs, timings, deps.now), ...executorSelection(profile.selection) };
+    }, startedAtMs, timings, deps.now);
   }
 
   const dispatchId = text(supervised.receipt?.dispatchId);
@@ -2022,7 +2043,6 @@ export async function runSupervisedTaskLaunchAssistant(
     workClass: input.workClass,
     resources: readyResources,
     supervisedStart: { ok: true, reason: 'ready_and_assignment_bound', assignmentBound: true },
-    ...executorSelection(profile.selection),
     startedAtMs,
     finishedAtMs,
     elapsedMs: Math.max(0, finishedAtMs - startedAtMs),

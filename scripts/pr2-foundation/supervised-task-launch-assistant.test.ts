@@ -9102,16 +9102,28 @@ describe('Issue #2865 per-launch worker executor', () => {
     ]) expect(() => parseLaunchAssistantCli([...argv, '--executor', json], profileEnv(), select)).toThrow(/--executor applies only to --work-class t1\|t2\|t3/u);
   });
 
-  it('propagates the live-holder sequential handoff note as plain text, never as a command', async () => {
+  it('after real placement ordering, the live-holder note names only this attempt\'s terminal and worktree before the rerun', async () => {
     const note = 'Sequential handoff: the coordinator ... then rerun the same launch after the current holder ends.';
-    const result = await runSupervisedTaskLaunchAssistant(launchInput('t2'), deps({ supervised: {
-      ok: false, reason: 'target_unresolved', errorMessage: 'holder_live_no_replacement_authority',
-      admissionEvidence: { assignmentTaskId: 'task_old', assignmentDispatchId: 'dispatch_old', missingWitness: 'holder_live_no_replacement_authority' },
-      nextAction: { note },
-    } }));
+    const events: string[] = [];
+    const base = runtimeAdapter({ onSpawn: () => { events.push('spawn'); } });
+    const adapter: RuntimeAdapter = { ...base, stopWorker: (...args: Parameters<RuntimeAdapter['stopWorker']>) => { events.push('stop'); return base.stopWorker(...args); } };
+    const result = await runSupervisedTaskLaunchAssistant({ ...launchInput('t2'), executor: opus }, {
+      ...deps({ adapter, onWorktree: () => { events.push('worktree'); }, onSupervised: () => { events.push('supervised-start'); }, supervised: {
+        ok: false, reason: 'target_unresolved', errorMessage: 'holder_live_no_replacement_authority',
+        admissionEvidence: { assignmentTaskId: 'task_old', assignmentDispatchId: 'dispatch_old', terminalHandle: 'term-holder', missingWitness: 'holder_live_no_replacement_authority' },
+        nextAction: { note },
+      } }),
+      resolveProfile: (workClass, env, startMode) => resolveExecutorProfile(workClass, { ...env, ...executorOverrideEnv(workClass, opus) }, startMode),
+    });
+    expect(events).toEqual(['worktree', 'spawn', 'supervised-start']);
     expect(result).toMatchObject({ outcome: 'continue', stage: 'supervised_start', observedCause: 'target_unresolved',
-      evidence: { admissionDiagnostic: 'holder_live_no_replacement_authority' }, nextAction: { kind: 'reconcile_dispatch', note },
-      executorSelection: { provenance: 'stored-profile', admitted: { agent: 'cursor-agent', model: 'model', effort: 'medium' } } });
+      evidence: { admissionDiagnostic: 'holder_live_no_replacement_authority' }, nextAction: { kind: 'reconcile_dispatch' },
+      executorSelection: { provenance: 'per-launch', requested: opus, admitted: opus } });
+    expect(result.nextAction.note).toBe('This launch attempt already created resources; before the rerun the coordinator must '
+      + "close only this attempt's terminal terminal-fresh with the existing terminal-close operation and "
+      + "remove only this attempt's worktree id:repo::exact-worktree (/tmp/exact-worktree) with the existing worktree-remove operation, "
+      + `never stopping, closing or removing the live incumbent's Dispatch, terminal or worktree. ${note}`);
+    expect(result.nextAction.note).not.toMatch(/term-holder|dispatch_old/u);
     expect(result.nextAction).not.toHaveProperty('command');
   });
 });

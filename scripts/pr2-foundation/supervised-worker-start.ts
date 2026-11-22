@@ -113,7 +113,7 @@ export interface SupervisedWorkerStartResult {
 function sequentialHandoffNote(evidence: Readonly<Record<string, string>>): string {
   const terminal = evidence.terminalHandle ? `named holder terminal ${evidence.terminalHandle}` : 'named holder terminal';
   return `Sequential handoff: the coordinator that owns the live current holder (Task ${evidence.assignmentTaskId}) may end that holder's Dispatch ${evidence.assignmentDispatchId} with the existing worker-stop operation, or close its ${terminal} with the existing terminal-close operation, then rerun the same launch after the current holder ends. `
-    + 'This refusal stopped, closed and started nothing; a different Task or Issue number is not replacement authority.';
+    + 'The worker-start refusal itself stopped, closed and started nothing; a different Task or Issue number is not replacement authority.';
 }
 
 async function unresolvedHolderEvidence(
