@@ -1318,6 +1318,7 @@ async function wakeAssignedIssueManagers(
   for (const issue of numbered) {
     const bound = boundIssueManager(repository, options.config.projectId, issue, observations, terminals, executor, assignments);
     if (!bound || bareShellHandles.has(bound.pane.handle)) continue;
+    if (silentOperatorGatePark(bound.pane, options, executor, store)) continue;
     let facts: readonly PublishedIssueFact[];
     try { facts = (options.listPublishedIssueFacts ?? ((repo, number, names) =>
       publishedIssueFacts(repo, number, names, options)))(repository, issue, pulls); }
@@ -1445,6 +1446,35 @@ function witnessedOwnPark(pane: FleetPaneObservation, executor: OrcaExecutor): b
   catch { return false; }
 }
 
+const OPERATOR_GATE_PARK_RE = /^PARKED on operator [1-9][0-9]* gate for PR [1-9][0-9]*$/u;
+
+/**
+ * Only the incumbent operator/coordinator releases an exact operator-gate park:
+ * no producer event, Issue/PR fact or elapsed Reminder wakes it. Silence needs
+ * the caller's exact assignment-to-pane witness (boundIssueManager, or
+ * parkingManager over manager and worker assignments), the own final park on
+ * the one live native pane with the same identity, plus the selected Dispatch
+ * binding wherever freshSendSafePane requires it. Anything weaker keeps the
+ * existing alarm and Reminder routes.
+ */
+function silentOperatorGatePark(
+  pane: FleetPaneObservation,
+  options: FleetAlarmTickOptions,
+  executor: OrcaExecutor,
+  store: FleetWakeStateStore,
+): boolean {
+  if (pane.state !== 'PARKED' || !pane.wait || !pane.incarnationId || !OPERATOR_GATE_PARK_RE.test(pane.wait)) return false;
+  try {
+    const census = listFleetTerminals(executor);
+    const current = census.filter((row) => row.handle === pane.handle);
+    if (current.length !== 1 || terminalsIdentity(current[0]!) !== terminalsIdentity(pane)
+      || current[0]!.title !== pane.title || current[0]!.agentIdentity !== pane.agentIdentity
+      || current[0]!.status?.toLowerCase() === 'exited') return false;
+    return freshSendSafePane(pane, census, options, executor, store)
+      && ownFinalPark(readFleetScreen(pane.handle, executor), pane.wait);
+  } catch { return false; }
+}
+
 /**
  * Recipient authority for a direct named-park correction or completion: one
  * positively own final park plus exactly one selected-project manager
@@ -1458,6 +1488,7 @@ function parkingManager(
   executor: OrcaExecutor,
   assignments: readonly WorkerAssignmentRecord[] | null,
   cache?: WorkerShowCache,
+  roles: readonly WorkerAssignmentRecord['role'][] = ['orchestrator'],
 ): ParkingManager | undefined {
   const repository = namedRepository(options.config);
   // A raw last-line PARKED from a tool result or quotation is never recipient
@@ -1465,7 +1496,7 @@ function parkingManager(
   if (!repository || !assignments || pane.state !== 'PARKED' || !pane.wait
     || !pane.incarnationId || !witnessedOwnPark(pane, executor)) return undefined;
   const candidates = assignments.filter((row) => row.projectId === options.config.projectId
-    && row.repository.toLowerCase() === repository.toLowerCase() && row.role === 'orchestrator'
+    && row.repository.toLowerCase() === repository.toLowerCase() && row.role && roles.includes(row.role)
     && row.kind === 'local' && row.provider === 'orca'
     && row.taskId && row.bindingKey && row.assignmentId
     && Number.isSafeInteger(row.generation) && row.generation > 0);
@@ -2241,6 +2272,9 @@ async function wakeNamedParkedProducers(
       epoch = { key: episode, since: now, started: now };
       store.writeParkedEpoch?.(pane.handle, epoch);
     }
+    if (OPERATOR_GATE_PARK_RE.test(pane.wait)
+      && parkingManager(pane, options, terminals, executor, tickAssignments(), workerShows, ['orchestrator', 'worker'])
+      && silentOperatorGatePark(pane, options, executor, store)) continue;
     const producer = parseNamedParkedProducer(pane.wait);
     let decision: ParkDecision = PENDING;
     // Re-observe this same native pane and its final PARKED line

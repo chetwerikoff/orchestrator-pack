@@ -37,6 +37,7 @@ import {
   runOpenCodePrimaryProbe,
   runExistingOpenCodeResume,
   runSupervisedTaskLaunchAssistant,
+  readTerminalAttachment,
   observeQuiescentRestoreCensus,
   LAUNCH_STARTUP_OBSERVATION_WINDOW_MS,
   CANONICAL_MERGE_LAUNCH_COMMAND,
@@ -46,6 +47,7 @@ import {
   type LaunchDependencies,
   type LaunchInput,
   type OpenCodeResumeDependencies,
+  type TerminalAttachment,
 } from './supervised-task-launch-assistant.ts';
 import {
   buildExecutorCommand,
@@ -653,6 +655,7 @@ function deps(input: {
   onSupervised?: () => void;
   currentAssignment?: WorkerAssignment | null;
   proveTerminalGone?: LaunchDependencies['proveTerminalGone'];
+  readTerminalAttachment?: LaunchDependencies['readTerminalAttachment'];
   clock?: number[];
 } = {}): LaunchDependencies {
   const dispatch = [...(input.dispatch ?? [{ kind: 'absent' }, { kind: 'absent' }])];
@@ -683,6 +686,7 @@ function deps(input: {
       id: 'repo::exact-worktree', selector: 'id:repo::exact-worktree', path: '/tmp/exact-worktree', setupWitness: 'same_invocation_complete',
     } }; },
     finalizeProfile: async (profile) => ({ status: 'ok', value: profile }),
+    readTerminalAttachment: input.readTerminalAttachment ?? (async () => ({ status: 'attached' })),
     runSupervisedStart: async (start) => { input.onSupervised?.(); return input.supervised ?? readyStart(String(start.orcaArgs[1])); },
   };
 }
@@ -4339,7 +4343,7 @@ The words Firefighter universal appear here only as prose.`;
       expect(fixture.calls.filter((call) => call.argv[2] === 'create').map((call) => call.argv)).toEqual(
         providerTopLevel ? [] : [[
           'orca', 'worktree', 'create', '--repo', 'id:6f030d40', '--name', 'wt',
-          '--issue', '1479', '--setup', 'run', '--json',
+          '--issue', '1479', '--setup', 'run', '--activate', '--json',
         ]],
       );
     }
@@ -4578,7 +4582,7 @@ The words Firefighter universal appear here only as prose.`;
     });
     expect(fixture.calls[4]?.argv).toEqual([
       'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'wt',
-      '--issue', '1479', '--setup', 'run', '--json',
+      '--issue', '1479', '--setup', 'run', '--activate', '--json',
     ]);
   });
 
@@ -4603,7 +4607,7 @@ The words Firefighter universal appear here only as prose.`;
     expect(result).toMatchObject({ status: 'ok', value: { setupWitness: 'same_invocation_complete' } });
     expect(fixture.calls[4]?.argv).toEqual([
       'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'wt',
-      '--base-branch', 'main', '--no-parent', '--setup', 'run', '--json',
+      '--base-branch', 'main', '--no-parent', '--setup', 'run', '--activate', '--json',
     ]);
     expect(fixture.calls[5]?.argv).toEqual([
       'orca', 'terminal', 'wait', '--terminal', 'setup-term', '--for', 'exit', '--timeout-ms', '120000', '--json',
@@ -4988,7 +4992,7 @@ The words Firefighter universal appear here only as prose.`;
     expect(calls.filter((argv) => argv[2] === 'prune')).toEqual([]);
     expect(calls[4]).toEqual([
       'orca', 'worktree', 'create', '--repo', 'id:orca-repo-1', '--name', 'manager-2024',
-      '--base-branch', 'origin/main', '--issue', '2024', '--setup', 'run', '--json',
+      '--base-branch', 'origin/main', '--issue', '2024', '--setup', 'run', '--activate', '--json',
     ]);
   });
 
@@ -8925,4 +8929,163 @@ describe('Issue #2841 preserved guards', () => {
     expect(gitTry(world.primary, 'config', '--get', 'extensions.worktreeConfig').out.trim()).toBe('true');
     expect(restoreManagerPushGuardForClaude(world.manager)).toMatchObject({ ok: true });
   }));
+});
+
+describe('Issue #2863 new terminal native attachment before Dispatch and before ready', () => {
+  const prepared = { id: 'repo::exact-worktree', selector: 'id:repo::exact-worktree', path: '/tmp/exact-worktree',
+    setupWitness: 'same_invocation_complete' as const };
+  const shown: Record<string, unknown> = { handle: worker.identity.id, incarnationId: worker.identity.generation,
+    worktreeId: prepared.id, worktreePath: prepared.path, orphaned: false, tabId: 'tab-1', leafId: 'leaf-1' };
+  const native = (show: Record<string, unknown> | null, rows: readonly Record<string, unknown>[], truncated = false) => {
+    const calls: string[][] = [];
+    const execute = async (args: readonly string[]) => {
+      calls.push([...args]);
+      if (args[2] === 'show') return show ? { ok: true, stdout: okEnvelope({ terminal: show }), stderr: '' }
+        : { ok: false, stdout: '', stderr: 'terminal_not_found' };
+      if (args[2] === 'list') return { ok: true, stdout: okEnvelope({ terminals: rows, totalCount: rows.length, truncated }), stderr: '' };
+      return { ok: false, stdout: '', stderr: 'unexpected command' };
+    };
+    return { calls, execute };
+  };
+
+  it('reads back the exact spawned handle with terminal show, then the selected worktree list', async () => {
+    const { calls, execute } = native(shown, [{ ...shown, title: 'opk-t2-task-1' }]);
+    await expect(readTerminalAttachment(prepared, worker.identity, execute))
+      .resolves.toEqual({ status: 'attached', tabId: 'tab-1', leafId: 'leaf-1' });
+    expect(calls).toEqual([
+      ['orca', 'terminal', 'show', '--terminal', worker.identity.id, '--json'],
+      ['orca', 'terminal', 'list', '--worktree', prepared.selector, '--json'],
+    ]);
+    const { orphaned: _notPromised, ...listRow } = shown;
+    await expect(readTerminalAttachment(prepared, worker.identity, native(shown, [listRow]).execute))
+      .resolves.toMatchObject({ status: 'attached' });
+  });
+
+  const { orphaned: _absent, ...withoutOrphaned } = shown;
+  it.each<[string, Record<string, unknown> | null, readonly Record<string, unknown>[], boolean, string]>([
+    ['show missing', null, [shown], false, 'terminal_show_missing'],
+    ['show orphaned', { ...shown, orphaned: true }, [shown], false, 'terminal_show_orphaned'],
+    ['show without orphaned', withoutOrphaned, [shown], false, 'terminal_show_orphaned_unknown'],
+    ['show changed incarnation', { ...shown, incarnationId: 'pty-2' }, [shown], false, 'terminal_show_identity_mismatch'],
+    ['show mismatched worktree', { ...shown, worktreePath: '/tmp/other' }, [shown], false, 'terminal_show_identity_mismatch'],
+    ['show exited', { ...shown, status: 'exited' }, [shown], false, 'terminal_show_exited'],
+    ['show disconnected', { ...shown, connected: false }, [shown], false, 'terminal_show_disconnected'],
+    ['list missing', shown, [], false, 'terminal_list_missing'],
+    ['list ambiguous', shown, [shown, shown], false, 'terminal_list_ambiguous'],
+    ['list truncated', shown, [shown], true, 'terminal_list_unavailable'],
+    ['list orphaned', shown, [{ ...shown, orphaned: true }], false, 'terminal_list_orphaned'],
+    ['list changed incarnation', shown, [{ ...shown, incarnationId: 'pty-2' }], false, 'terminal_list_identity_mismatch'],
+    ['list mismatched worktree', shown, [{ ...shown, worktreeId: 'repo::other' }], false, 'terminal_list_identity_mismatch'],
+  ])('refuses %s', async (_name, show, rows, truncated, reason) => {
+    await expect(readTerminalAttachment(prepared, worker.identity, native(show, rows, truncated).execute))
+      .resolves.toEqual({ status: 'unverified', reason });
+  });
+
+  it('refuses a prepared worktree without exact identity before any native read', async () => {
+    const { calls, execute } = native(shown, [shown]);
+    await expect(readTerminalAttachment({ ...prepared, id: undefined }, worker.identity, execute))
+      .resolves.toEqual({ status: 'unverified', reason: 'worktree_identity_missing' });
+    expect(calls).toEqual([]);
+  });
+
+  const launches = [
+    ['fresh worker worktree', 't2', 'same_invocation_complete'],
+    ['reused manager worktree', 'manager', 'proven_reuse'],
+  ] as const;
+
+  it.each(launches)('%s: verifies the spawned handle before supervised start and again after cleanup', async (_name, workClass, setupWitness) => {
+    const order: string[] = [];
+    const reads: unknown[] = [];
+    const base = deps({ adapter: runtimeAdapter({ onSpawn: () => order.push('spawn') }),
+      onSupervised: () => order.push('start'),
+      readTerminalAttachment: async (worktree, terminal) => {
+        order.push('attach');
+        reads.push([worktree.id, worktree.selector, worktree.path, terminal]);
+        return { status: 'attached' };
+      } });
+    const result = await runSupervisedTaskLaunchAssistant(launchInput(workClass), { ...base,
+      prepareWorktree: async () => { order.push('worktree'); return { status: 'ok', value: { ...prepared, setupWitness } }; },
+      captureLaunchShells: async () => [{ handle: 'creation-shell', incarnationId: 'shell-1' }],
+      cleanupLaunchShells: async () => { order.push('cleanup'); },
+    });
+    expect(result.outcome, JSON.stringify(result)).toBe('ready');
+    expect(order).toEqual(['worktree', 'spawn', 'attach', 'start',
+      ...(setupWitness === 'same_invocation_complete' ? ['cleanup'] : []), 'attach']);
+    expect(reads).toEqual([0, 1].map(() => [prepared.id, prepared.selector, prepared.path, worker.identity]));
+  });
+
+  it.each(launches.flatMap(([name, workClass, setupWitness]) => [
+    'terminal_show_orphaned', 'terminal_show_missing', 'terminal_list_ambiguous',
+    'terminal_show_identity_mismatch', 'terminal_list_identity_mismatch',
+  ].map((reason) => [name, workClass, setupWitness, reason] as const)))(
+    '%s: %s refuses before Dispatch and preserves the created Task, worktree and terminal', async (_name, workClass, setupWitness, reason) => {
+      const spawn = vi.fn();
+      const start = vi.fn();
+      const worktree = vi.fn();
+      const cleanup = vi.fn();
+      const result = await runSupervisedTaskLaunchAssistant(launchInput(workClass), {
+        ...deps({ adapter: runtimeAdapter({ onSpawn: spawn }), onSupervised: start,
+          readTerminalAttachment: async () => ({ status: 'unverified', reason }) }),
+        prepareWorktree: async () => { worktree(); return { status: 'ok', value: { ...prepared, setupWitness } }; },
+        cleanupLaunchShells: async () => { cleanup(); },
+      });
+      expect(result).toMatchObject({ outcome: 'continue', stage: 'dispatch_admission_final',
+        observedCause: 'terminal_attachment_unverified',
+        evidence: { attachment: reason, terminalId: worker.identity.id, terminalGeneration: worker.identity.generation },
+        nextAction: { kind: 'remediate_terminal' }, resources: { terminal: worker.identity } });
+      if (result.outcome !== 'continue') return;
+      expect(result.resources.dispatchId).toBeUndefined();
+      expect(result.nextAction.note).toContain('No Dispatch was started');
+      expect(result.nextAction.note).toContain('do not close it or create another terminal or worktree');
+      expect(start).not.toHaveBeenCalled();
+      expect(cleanup).not.toHaveBeenCalled();
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(worktree).toHaveBeenCalledTimes(1);
+    });
+
+  it('a post-cleanup attachment loss reports the started Dispatch instead of ready', async () => {
+    const start = vi.fn();
+    const answers: TerminalAttachment[] = [{ status: 'attached' }, { status: 'unverified', reason: 'terminal_show_orphaned' }];
+    const result = await runSupervisedTaskLaunchAssistant(launchInput(), {
+      ...deps({ onSupervised: start, readTerminalAttachment: async () => answers.shift()! }),
+      captureLaunchShells: async () => [{ handle: 'creation-shell', incarnationId: 'shell-1' }],
+      cleanupLaunchShells: async () => {},
+    });
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ outcome: 'continue', stage: 'supervised_start',
+      observedCause: 'terminal_attachment_lost_after_start',
+      evidence: { dispatchId: 'dispatch-1', terminalId: worker.identity.id, attachment: 'terminal_show_orphaned' },
+      nextAction: { kind: 'reconcile_dispatch' }, resources: { dispatchId: 'dispatch-1', terminal: worker.identity } });
+    if (result.outcome === 'continue') expect(result.nextAction.note).toContain('already started');
+  });
+
+  it.each<[string, Record<string, unknown>, string]>([
+    ['exited', { status: 'exited' }, 'terminal_show_exited'],
+    ['disconnected', { connected: false }, 'terminal_show_disconnected'],
+  ])('a terminal %s after cleanup with unchanged identity and orphaned=false is not ready', async (_name, lost, reason) => {
+    const shows = [{ ...shown, status: 'running', connected: true }, { ...shown, ...lost }];
+    const reader = async (worktree: Parameters<typeof readTerminalAttachment>[0], terminal: Parameters<typeof readTerminalAttachment>[1]) => {
+      const show = shows.shift()!;
+      return readTerminalAttachment(worktree, terminal, native(show, [shown]).execute);
+    };
+    const result = await runSupervisedTaskLaunchAssistant(launchInput(), {
+      ...deps({ readTerminalAttachment: reader }),
+      prepareWorktree: async () => ({ status: 'ok', value: prepared }),
+      captureLaunchShells: async () => [{ handle: 'creation-shell', incarnationId: 'shell-1' }],
+      cleanupLaunchShells: async () => {},
+    });
+    expect(result).toMatchObject({ outcome: 'continue', stage: 'supervised_start',
+      observedCause: 'terminal_attachment_lost_after_start',
+      evidence: { dispatchId: 'dispatch-1', terminalId: worker.identity.id, attachment: reason },
+      resources: { dispatchId: 'dispatch-1', terminal: worker.identity } });
+    expect(shows).toEqual([]);
+  });
+
+  it('existing-terminal recovery is unchanged and never consults the new-terminal read-back', async () => {
+    const attach = vi.fn(async () => ({ status: 'unverified', reason: 'terminal_show_orphaned' }) as const);
+    const result = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), existingTerminal: worker.identity.id },
+      deps({ readTerminalAttachment: attach }));
+    expect(result).toMatchObject({ outcome: 'continue', observedCause: 'existing_terminal_project_unverified' });
+    expect(attach).not.toHaveBeenCalled();
+  });
 });

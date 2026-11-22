@@ -545,13 +545,40 @@ function verifiedPrimaryBindings(
   return verified;
 }
 
+// OpenCode's idle composer is the final gutter block closed by its `╹▀▀▀` border. On a
+// wide pane its right column wraps `<worktree path>:<branch>`, and the footer below the
+// border names the same absolute path. The block is stripped only when that column is
+// proven; any other gutter text, however indented, stays an incoming message.
+function withoutOpenCodeComposer(screen: string): string {
+  const lines = screen.split(/\r?\n/u);
+  let border = lines.length - 1;
+  while (border >= 0 && !/^\s*╹▀{8,}\s*$/u.test(lines[border]!)) border -= 1;
+  const footer = lines.slice(border + 1).join('\n');
+  if (border < 0 || contentLines(footer).length > 0) return screen;
+  let start = border;
+  let indent: number | undefined;
+  const column: string[] = [];
+  while (start > 0 && /^\s*┃/u.test(lines[start - 1]!)) {
+    const right = /^(\s*┃\s{20,})(\S+)\s*$/u.exec(lines[start - 1]!);
+    if (right && (indent === undefined || right[1]!.length === indent)) {
+      indent = right[1]!.length;
+      column.unshift(right[2]!);
+    } else if (right || contentLines(lines[start - 1]!).length > 0) break;
+    start -= 1;
+  }
+  const path = /^(~?\/[^\s:]+):[^\s:]+$/u.exec(column.join(''))?.[1];
+  const suffix = path?.replace(/^~/u, '');
+  if (!suffix || !footer.split(/\s+/u).some((token) => token.startsWith('/') && token.endsWith(suffix))) return screen;
+  return lines.slice(0, start).join('\n');
+}
+
 // Only the final own response is an outcome. A park quoted in a tool result, instruction,
 // table or older response does not authorize waiting. Wrapped outcome lines are joined.
 export function ownPaneOutcome(screen: string): { wait?: string; acknowledgment: boolean } {
   const toolLine = /^(?:Tool:|\$|#\s*Running\b|[→⚙]\s|Click to expand\b|[\[{]|"[^"]+"\s*:|```|===|handle:|source:|(?:[┌└├]\s*)?(?:Bash|Shell|Read|Write|Edit|Grep|Glob)\b|(?:orca|gh|git|node|npm|mise|python|curl|bash|sh)\s)/iu;
   // Raw OpenCode gutters render both incoming messages and own tools. Only a
   // non-tool block advances the incoming boundary; subsequent tool blocks stay own work.
-  const rawLines = screen.split(/\r?\n/u);
+  const rawLines = withoutOpenCodeComposer(screen).split(/\r?\n/u);
   let incoming = -1;
   let toolBlock = false;
   for (let index = 0; index < rawLines.length;) {
@@ -642,7 +669,7 @@ function liveTaskBinding(terminal: FleetTerminal, projectId: string, executor: O
 }
 /** The final non-empty content line, not a Task/receipt, is park authority. */
 export function lastFleetParkedLine(screen: string): string | undefined {
-  const final = contentLines(screen).at(-1);
+  const final = contentLines(withoutOpenCodeComposer(screen)).at(-1);
   const last = final?.text.trim() ?? '';
   // A running spinner before PARKED is an executing command, not the agent's final own response.
   return !final?.running && (/^PARKED on\s+\S.+$/u.test(last) || /^PARKED on\s+\S$/u.test(last))
@@ -929,7 +956,7 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
       ...(permissionCleared ? { permissionCleared: true } : {}),
       ...(wait ? { wait } : {}),
       ...(wait && outcome.wait === wait && state === 'PARKED'
-        ? { ownParkObservation: nonChromeLines(screen).at(-1) ?? outcome.wait } : {}),
+        ? { ownParkObservation: nonChromeLines(withoutOpenCodeComposer(screen)).at(-1) ?? outcome.wait } : {}),
       ...(binding ? { taskBinding: binding } : {}),
       lines: permission || lineCount === 0 ? [] : nonChromeLines(screen).slice(-lineCount),
     }];
