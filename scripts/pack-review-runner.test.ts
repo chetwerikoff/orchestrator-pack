@@ -7729,33 +7729,47 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     ['contradictory source reconciliation', (slot: PackReviewGptRoundRecord['sourceSlots'][number]) => ({
       ...slot, terminalResult: { ...(slot.terminalResult as Record<string, unknown>), source_comment_reconciliation: 'conflict' },
     })],
-  ] as const)('never starts an unsafe new run when original has %s', async (_name, mutate) => {
+  ] as const)('starts a fresh run ID after terminal failed history with %s', async (_name, mutate) => {
+    // Issue #2870: a failed no-verdict GPT run is history whatever its source
+    // evidence. It is never resumed, resent or mutated; a new run ID starts.
     const f = fixture({ mutate });
     const reconciled = await f.reconcile();
     const nextAction = String(reconciled.results.find(
       (row) => row.runId === f.original.id && typeof row.nextAction === 'string',
     )?.nextAction);
-    expect(nextAction).not.toContain(exactCommand);
-    expect(nextAction).toContain('observe the original GPT turn');
-    const next = await f.start();
-    expect(next.result.created).not.toBe(true);
-    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+    expect(nextAction).toContain(exactCommand);
+    expect(nextAction).toContain('start the fresh review run now:');
+    expect(nextAction).not.toContain('observe the original GPT turn');
     expect(f.freshStarts).toEqual([]);
-    expect(f.statusWrites).not.toContain('success');
+    const next = await f.start();
+    expect(next.result, JSON.stringify(next.result)).toMatchObject({ created: true, reused: false });
+    expect(String(next.result.runId)).not.toBe(f.original.id);
+    expect(listPackReviewRuns(f.options)).toHaveLength(2);
+    // Only the fresh run's slots launch; the failed invocation is never resent.
+    expect(f.freshStarts).toEqual(['source-01', 'source-02']);
+    expect(getPackReviewRun(f.original.id, f.options)).toMatchObject({
+      status: 'failed', reviewRound: { roundOrdinal: 1 },
+    });
+    expect(getPackReviewRun(f.original.id, f.options)?.reviewVerdict).toBeUndefined();
     expect(getPackReviewRun(f.original.id, f.options)?.reviewRound?.sourceSlots)
       .toEqual(f.originalSlots);
   });
 
   it.each(['duplicate', 'unavailable-actor', 'unavailable-census'] as const)(
-    'preserves the original failed run on %s original comment census', async (commentMode) => {
+    'starts a fresh run ID after terminal failed history with %s original comment census', async (commentMode) => {
       const f = fixture({ commentMode });
-      const reconcile = await f.reconcile();
-      expect(String(reconcile.results.find((item) => item.runId === f.original.id && typeof item.nextAction === 'string')?.nextAction))
-        .not.toContain(exactCommand);
-      const next = await f.start();
-      expect(next.result.created).not.toBe(true);
+      // A failed census cannot reconcile the status, so reconcile may keep its
+      // evidence-restoration action; the start path no longer depends on it.
+      await f.reconcile();
       expect(f.freshStarts).toEqual([]);
-      expect(listPackReviewRuns(f.options)).toHaveLength(1);
+      const next = await f.start();
+      expect(next.result, JSON.stringify(next.result)).toMatchObject({ created: true, reused: false });
+      expect(String(next.result.runId)).not.toBe(f.original.id);
+      expect(listPackReviewRuns(f.options)).toHaveLength(2);
+      expect(getPackReviewRun(f.original.id, f.options)).toMatchObject({
+        status: 'failed', reviewRound: { roundOrdinal: 1 },
+      });
+      expect(getPackReviewRun(f.original.id, f.options)?.reviewVerdict).toBeUndefined();
     },
   );
 
@@ -7803,7 +7817,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     },
   );
 
-  it('accepts original numeric zero-send observation but rejects a later contradictory observation', async () => {
+  it('returns the fresh-run command for an original numeric zero-send observation and ignores a later contradictory observation', async () => {
     const f = fixture();
     const invocationId = f.originalSlots[0]!.invocationId!;
     mkdirSync(join(profileDirs(f.profileKey).root, 'observations'), { recursive: true });
@@ -7828,14 +7842,20 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     const action = contradicted.results.find(
       (item) => item.runId === f.original.id && typeof item.nextAction === 'string',
     )?.nextAction;
-    expect(String(action)).not.toContain(exactCommand);
-    const denied = await f.start();
-    expect(denied.result.created).not.toBe(true);
-    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+    // Issue #2870: the failed run is history, so a later observation neither
+    // blocks nor changes the fresh-review command; a new run ID starts.
+    expect(String(action)).toContain(exactCommand);
+    const started = await f.start();
+    expect(started.result, JSON.stringify(started.result)).toMatchObject({ created: true, reused: false });
+    expect(String(started.result.runId)).not.toBe(f.original.id);
+    expect(listPackReviewRuns(f.options)).toHaveLength(2);
+    expect(getPackReviewRun(f.original.id, f.options)).toMatchObject({ status: 'failed' });
+    expect(getPackReviewRun(f.original.id, f.options)?.reviewRound?.sourceSlots)
+      .toEqual(f.originalSlots);
   });
 
 
-  it('rejects a source comment under the last original invocation even if the deciding sources were rate-limited', async () => {
+  it('keeps a published source comment under the last original invocation untouched while a fresh run ID starts', async () => {
     const f = fixture();
     const last = f.originalSlots[2]!;
     f.publish({ identity: {
@@ -7844,21 +7864,22 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     } });
     const posted = f.comments[0]!;
     expect(posted.body).toContain(`slot=${last.slotId} invocation=${last.invocationId}`);
-    // A comment contradicting the persisted zero-send rate_limit terminal
-    // cannot become a safe 1/3 source merely by reconciliation hydration.
-    // Repeating reconcile must not launder that original 0/3 into a retry.
+    // Issue #2870: the failed original is history. Repeating reconcile never
+    // resends or rewrites the published comment and launches nothing.
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const reconciled = await f.reconcile();
-      expect(reconciled.results.filter((row) => row.runId === f.original.id)
-        .every((row) => !String(row.nextAction ?? '').includes(exactCommand))).toBe(true);
+      await f.reconcile();
       expect(f.comments).toEqual([posted]);
       expect(f.freshStarts).toEqual([]);
     }
     const next = await f.start();
-    expect(next.result.created).not.toBe(true);
-    expect(f.freshStarts).toEqual([]);
-    expect(f.comments).toEqual([posted]);
-    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+    expect(next.result, JSON.stringify(next.result)).toMatchObject({ created: true, reused: false });
+    expect(String(next.result.runId)).not.toBe(f.original.id);
+    // Only the fresh run's slots launch; the old invocation is never resent.
+    expect(f.freshStarts).toEqual(['source-01', 'source-02']);
+    expect(f.comments[0]).toEqual(posted);
+    expect(listPackReviewRuns(f.options)).toHaveLength(2);
+    expect(getPackReviewRun(f.original.id, f.options)).toMatchObject({ status: 'failed' });
+    expect(getPackReviewRun(f.original.id, f.options)?.reviewVerdict).toBeUndefined();
   });
 
   it('does not override a concurrently active claim for this exact PR/head', async () => {
@@ -7884,13 +7905,19 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     expect(listPackReviewRuns(f.options)).toHaveLength(1);
   });
 
-  it('refuses exceptional same-head admission with a mismatched cycle', async () => {
+  it('starts a fresh run ID after terminal failed history even with a mismatched cycle', async () => {
     const f = fixture({ reviewCycleId: 'different-cycle-2629' });
     expect(getPackReviewRun(f.original.id, f.options)?.reviewCycleId).toBe('different-cycle-2629');
     const next = await f.start();
-    expect(next.result.created).not.toBe(true);
-    expect(f.freshStarts).toEqual([]);
-    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+    expect(next.result, JSON.stringify(next.result)).toMatchObject({ created: true, reused: false });
+    expect(String(next.result.runId)).not.toBe(f.original.id);
+    expect(f.freshStarts).toEqual(['source-01', 'source-02']);
+    expect(listPackReviewRuns(f.options)).toHaveLength(2);
+    expect(getPackReviewRun(f.original.id, f.options)).toMatchObject({
+      status: 'failed', reviewCycleId: 'different-cycle-2629',
+    });
+    expect(getPackReviewRun(f.original.id, f.options)?.reviewRound?.sourceSlots)
+      .toEqual(f.originalSlots);
   });
 
   it('refuses another review after a schema-valid completed verdict and settled authority', async () => {
@@ -7928,7 +7955,7 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     ['safe repeated 429, source admission gate first', false, 'admission'],
     ['safe repeated 429, dead-runner stale gate first', false, 'stale'],
     ['unsafe older attempted send', true, 'admission'],
-  ] as const)('admits R1 -> R2 -> R3 only with %s history', async (_case, unsafeOlder, firstGate) => {
+  ] as const)('starts R3 as a fresh run ID after terminal failed R1/R2 history with %s', async (_case, unsafeOlder, firstGate) => {
     const f = fixture({ historicalClaim: true });
     const claimBytes = readFileSync(f.historicalClaimPath!, 'utf8');
     const zeroSendAttempts: Record<string, Array<{ stdout: string; exitCode: number }>> = {};
@@ -8033,23 +8060,18 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     const oldSlots = getPackReviewRun(f.original.id, f.options)!.reviewRound!.sourceSlots;
     const r2Slots = getPackReviewRun(r2Id, f.options)!.reviewRound!.sourceSlots;
     const r3 = await f.start();
-    if (unsafeOlder) {
-      expect(r3.result).toMatchObject({ created: false, runnerReason: 'gpt_rate_limit_history_unsafe' });
-      expect(f.reviews).toHaveLength(0);
-      expect(listPackReviewRuns(f.options)).toHaveLength(2);
-      expect(f.freshStarts).toHaveLength(2);
-    } else {
-      expect(r3.result, JSON.stringify(r3.result)).toMatchObject({
-        created: true, reused: false, headSha: HEAD, publicationVerified: true,
-      });
-      expect(String(r3.result.runId)).not.toBe(r2Id);
-      expect(String(r3.result.runId)).not.toBe(f.original.id);
-      expect(listPackReviewRuns(f.options)).toHaveLength(3);
-      expect(f.reviews).toHaveLength(1);
-      expect(f.freshStarts).toHaveLength(4);
-      expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })
-        ?.cycle?.consumedRoundOrdinals).toEqual([1]);
-    }
+    // Issue #2870: older attempted-send evidence no longer blocks; both
+    // failed runs are history and R3 is a fresh run ID.
+    expect(r3.result, JSON.stringify(r3.result)).toMatchObject({
+      created: true, reused: false, headSha: HEAD, publicationVerified: true,
+    });
+    expect(String(r3.result.runId)).not.toBe(r2Id);
+    expect(String(r3.result.runId)).not.toBe(f.original.id);
+    expect(listPackReviewRuns(f.options)).toHaveLength(3);
+    expect(f.reviews).toHaveLength(1);
+    expect(f.freshStarts).toHaveLength(4);
+    expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })
+      ?.cycle?.consumedRoundOrdinals).toEqual([1]);
     expect(getPackReviewRun(f.original.id, f.options)).toMatchObject({
       status: 'failed', reviewRound: { sourceSlots: oldSlots },
     });
@@ -8060,22 +8082,22 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
   });
 
   it.each([
-    ['first zero-send attempt', 1, 'none', true],
-    ['persisted source-01 with an optional undefined mapped field', 1, 'optional_undefined_finding', true],
-    ['two consecutive zero-send attempts', 2, 'none', true],
-    ['three consecutive zero-send attempts', 3, 'none', true],
-    ['historical attempted send', 2, 'historical_send_attempted', false],
-    ['historical positive send count', 2, 'historical_send_count', false],
-    ['historical possible delivery witness', 2, 'historical_owned_marker', false],
-    ['historical dispatching phase', 2, 'historical_dispatching', false],
-    ['historical changed profile key', 2, 'historical_rotated_profile', false],
-    ['historical credentialed comment', 2, 'historical_posted_comment', false],
-    ['historical non-rate-limit terminal', 2, 'historical_other_class', false],
-    ['missing historical observation', 2, 'historical_observation_absent', false],
-    ['current attempted send', 2, 'current_send_attempted', false],
-    ['current possible delivery', 2, 'current_possible_delivery', false],
-    ['missing current pre-send observation', 2, 'current_observation_absent', false],
-  ] as const)('retries only missing sources from newer 1/3 after %s', async (_case, attemptCount, violation, shouldRetry) => {
+    ['first zero-send attempt', 1, 'none'],
+    ['persisted source-01 with an optional undefined mapped field', 1, 'optional_undefined_finding'],
+    ['two consecutive zero-send attempts', 2, 'none'],
+    ['three consecutive zero-send attempts', 3, 'none'],
+    ['historical attempted send', 2, 'historical_send_attempted'],
+    ['historical positive send count', 2, 'historical_send_count'],
+    ['historical possible delivery witness', 2, 'historical_owned_marker'],
+    ['historical dispatching phase', 2, 'historical_dispatching'],
+    ['historical changed profile key', 2, 'historical_rotated_profile'],
+    ['historical credentialed comment', 2, 'historical_posted_comment'],
+    ['historical non-rate-limit terminal', 2, 'historical_other_class'],
+    ['missing historical observation', 2, 'historical_observation_absent'],
+    ['current attempted send', 2, 'current_send_attempted'],
+    ['current possible delivery', 2, 'current_possible_delivery'],
+    ['missing current pre-send observation', 2, 'current_observation_absent'],
+  ] as const)('starts a fresh run ID after terminal failed 1/3 history with %s', async (_case, attemptCount, violation) => {
     const f = fixture();
     const oldSlots = getPackReviewRun(f.original.id, f.options)!.reviewRound!.sourceSlots;
     const replacement = createPackReviewRun({
@@ -8233,19 +8255,9 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     });
 
     const reconciled = await f.reconcile({ immediate: true });
-    const retry = reconciled.results.find((row) =>
-      row.runId === newer.id && typeof row.nextAction === 'string'
-      && row.nextAction.includes(exactCommand));
-    if (shouldRetry) {
-      expect(retry).toMatchObject({
-        terminalized: false, statusReconciled: false,
-        nextAction: 'retry only the missing sources in the original run now: ' + exactCommand,
-      });
-    } else {
-      expect(retry).toBeUndefined();
-    }
-    // Reconciliation only provides the executable same-run action. It must
-    // not resend source-01 or rewrite either original source census.
+    // Issue #2870: a terminal failed no-verdict run is history whatever its
+    // published source count; reconcile never offers a same-run retry.
+    expect(reconciled.results.some((row) => row.runId === newer.id && row.terminalized)).toBe(false);
     expect(f.freshStarts).toEqual([]);
     expect(f.comments).toEqual(commentsBefore);
     expect(getPackReviewRun(newer.id, f.options)?.reviewRound?.sourceSlots[0])
@@ -8254,38 +8266,29 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
       .toEqual(oldSlots);
 
     const result = await f.start();
-    if (!shouldRetry) {
-      expect(result.result).toMatchObject({
-        created: false, runnerReason: 'gpt_rate_limit_partial_sources_unverified',
-      });
-      expect(f.freshStarts).toEqual([]);
-      expect(f.comments).toEqual(commentsBefore);
-      expect(f.reviews).toHaveLength(0);
-      expect(getPackReviewRun(newer.id, f.options)?.reviewRound?.sourceSlots[0])
-        .toEqual(savedPartial);
-      expect(listPackReviewRuns(f.options)).toHaveLength(2);
-      return;
-    }
     expect(result.result, JSON.stringify(result.result)).toMatchObject({
-      created: true, reused: false, runId: newer.id,
-      headSha: HEAD, publicationVerified: true,
+      created: true, reused: false, headSha: HEAD, publicationVerified: true,
     });
-    expect(f.freshStarts).toEqual(['source-02', 'source-03']);
-    expect(f.comments).toHaveLength(3);
+    // A new run ID, never the 1/3 run: only its own slots launch and the
+    // published source-01 comment of the failed run is not resent or rewritten.
+    expect(String(result.result.runId)).not.toBe(newer.id);
+    expect(String(result.result.runId)).not.toBe(f.original.id);
+    expect(f.freshStarts).toEqual(['source-01', 'source-02']);
     expect(f.comments[0]).toEqual(postedSourceOne);
     expect(f.comments.filter((comment) => comment.body.includes(sourceOneId))).toHaveLength(1);
+    expect(f.comments).toHaveLength(commentsBefore.length + 2);
+    expect(f.reviews).toHaveLength(1);
+    expect(listPackReviewRuns(f.options)).toHaveLength(3);
+    expect(getPackReviewRun(newer.id, f.options)).toMatchObject({ status: 'failed' });
+    expect(getPackReviewRun(newer.id, f.options)?.reviewVerdict).toBeUndefined();
     expect(getPackReviewRun(newer.id, f.options)?.reviewRound?.sourceSlots[0])
       .toEqual(savedPartial);
-    expect(f.reviews).toHaveLength(1);
-    expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })
-      ?.cycle?.consumedRoundOrdinals).toEqual([1]);
-    expect(listPackReviewRuns(f.options)).toHaveLength(2);
     expect(getPackReviewRun(f.original.id, f.options)?.reviewRound?.sourceSlots)
       .toEqual(oldSlots);
     expect(getPackReviewRun(f.original.id, f.options)?.reviewVerdict).toBeUndefined();
   });
 
-  it('keeps the existing recovery path on unrelated non-rate-limit terminal failures', async () => {
+  it('treats unrelated non-rate-limit terminal failures as history and starts a fresh run ID', async () => {
     const f = fixture({ mutate: (slot) => ({
       ...slot,
       terminalClass: 'driver_error:connect_over_cdp_failed',
@@ -8295,20 +8298,17 @@ describe('Issue #2629 zero-dispatch rate-limit terminal recovery', () => {
     }) });
     const result = await f.reconcile();
     const action = result.results.find((item) => item.runId === f.original.id && typeof item.nextAction === 'string')?.nextAction;
-    expect(action).toBe(
-      `node --experimental-strip-types scripts/pack-review-runner.ts reconcile --source-repo-root ${JSON.stringify(process.cwd())} --repo-slug ${repository} --pr-number ${prNumber}`,
-    );
-    const incumbent = await f.start();
-    expect(incumbent.result).toMatchObject({
-      created: false, reused: true, runnerReason: 'gpt_incumbent_owner_not_dead',
-      runId: f.original.id,
-    });
-    expect(incumbent.result.nextAction).toBe(
-      `node --experimental-strip-types scripts/pack-review-runner.ts list --project-id ${projectId}`,
-    );
-    expect(String(incumbent.result.detail)).toContain('observe the original runner PID and stale grace');
-    expect(f.freshStarts).toEqual([]);
-    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+    // Issue #2870: failed no-verdict history, whatever the terminal class.
+    expect(String(action)).toContain(exactCommand);
+    expect(String(action)).not.toContain('scripts/pack-review-runner.ts reconcile');
+    const next = await f.start();
+    expect(next.result, JSON.stringify(next.result)).toMatchObject({ created: true, reused: false });
+    expect(String(next.result.runId)).not.toBe(f.original.id);
+    expect(f.freshStarts).toEqual(['source-01', 'source-02']);
+    expect(listPackReviewRuns(f.options)).toHaveLength(2);
+    expect(getPackReviewRun(f.original.id, f.options)).toMatchObject({ status: 'failed' });
+    expect(getPackReviewRun(f.original.id, f.options)?.reviewRound?.sourceSlots)
+      .toEqual(f.originalSlots);
   });
 });
 

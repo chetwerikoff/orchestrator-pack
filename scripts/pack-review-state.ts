@@ -1549,7 +1549,7 @@ export function settleAtCapPackReviewFindingByArchitectDefer(input: {
     throw new PackReviewAuthorityError('findings_settlement_invalid',
       'architect DEFER adjudication does not match the PR, reviewed head and finding code');
   }
-  if (input.findingSnapshotDigest !== `sha256:${sha256(stableJson(input.findings))}`) {
+  if (input.findingSnapshotDigest !== sha256(stableJson(input.findings))) {
     throw new PackReviewAuthorityError('findings_settlement_invalid', 'finding snapshot digest mismatch');
   }
   return commitPackReviewAuthorityTransition({
@@ -1578,7 +1578,7 @@ export function settleAtCapPackReviewFindingByArchitectDefer(input: {
         .filter((entry) => entry.digest === terminalDigest);
       const value = immutable.length === 1 ? immutable[0]!.value as PackReviewTerminalV2 | undefined : undefined;
       if (!value || value.runId !== input.terminalRunId
-          || value.findingsDigest !== `sha256:${sha256(JSON.stringify(input.findings))}`) {
+          || value.findingsDigest !== sha256(JSON.stringify(input.findings))) {
         throw new PackReviewAuthorityError('findings_settlement_invalid',
           'immutable terminal findings digest does not match the original findings');
       }

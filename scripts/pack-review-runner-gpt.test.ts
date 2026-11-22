@@ -4784,23 +4784,26 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
     },
   );
 
-  it('returns a parsable same-PR reconcile action, never retry/reset', async () => {
+  it('returns the fresh-review command for a terminalized 0/3 run, never a same-run reconcile loop', async () => {
+    // Issue #2870: a terminal failed no-verdict GPT run is history; the next
+    // step is a fresh same-head review run, not another reconcile of this run.
     const f = seedOrphan();
     f.expire();
     const output = await reconcileStalePackReviewRuns(f.input);
     const terminal = output.results.find((row) => row.runId === f.runId && row.terminalized === true)!;
     const action = String(terminal.nextAction);
-    expect(action).toContain('node --experimental-strip-types scripts/pack-review-runner.ts reconcile');
+    expect(action).toMatch(/^(start the fresh review run now: |after the shared account cooldown expires at )/);
+    expect(action).toContain('pack-gpt-review');
+    expect(action).toContain('--project ' + projectId);
     expect(action).toContain('--pr-number 2469');
+    expect(action).not.toContain('scripts/pack-review-runner.ts reconcile');
     expect(action).not.toMatch(/(?:\s)(?:retry|reset)(?:\s|$)/);
-    const cliArgs = action.split(' ').slice(4);
-    // The CLI string quotes its actual repository root for shell safety.
-    cliArgs[1] = JSON.parse(cliArgs[1]!);
-    const args = parseArgs(cliArgs);
-    expect(args).toMatchObject({ sourceRepoRoot: repoRoot, repoSlug, prNumber });
+    const again = await reconcileStalePackReviewRuns(f.input);
+    const repeated = again.results.find((row) => row.runId === f.runId && typeof row.nextAction === 'string');
+    expect(String(repeated?.nextAction)).not.toContain('scripts/pack-review-runner.ts reconcile');
   });
 
-  it('does not turn zero-judgment failure into permission to send without observation', async () => {
+  it('starts a fresh run ID after zero-judgment failed history even when the old attempt is unobservable', async () => {
     const f = seedOrphan();
     f.expire();
     await reconcileStalePackReviewRuns(f.input);
@@ -4809,6 +4812,7 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
     process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
     delete process.env.PACK_GPT_BROWSER_CHAT_URL;
     const invocations: string[] = [];
+    const failedBefore = getPackReviewRun(f.runId, f.options)!;
     const result = await startPackReview({
       ...f.options,
       sourceRepoRoot: repoRoot, prNumber, headSha: HEAD_A,
@@ -4822,17 +4826,25 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
         state: 'observation_unavailable' as const, replacementEligible: false,
       }),
       fixtureAfterGptInvocationBound: async ({ slotId }) => { invocations.push(slotId); },
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: successfulCleanReviewPayload('inv-source-01') }],
+        'source-02': [{ stdout: successfulCleanReviewPayload('inv-source-02') }],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
+      },
       fixtureRequiredStatusWriter: async () => {},
     });
-    expect(result).toMatchObject({
-      ok: false, created: false, runId: f.runId,
-      reason: 'observation_unavailable', replacementEligible: false,
-    });
-    expect(invocations).toEqual([]);
-    expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals).toEqual([]);
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, created: true });
+    expect(result.reason).not.toBe('observation_unavailable');
+    expect(String(result.runId)).not.toBe(f.runId);
+    // Only the fresh run launches; the failed run is never resumed or resent.
+    expect(invocations.length).toBeGreaterThan(0);
+    const failedAfter = getPackReviewRun(f.runId, f.options)!;
+    expect(failedAfter).toMatchObject({ status: 'failed', failureReason: failure });
+    expect(failedAfter.reviewVerdict).toBeUndefined();
+    expect(failedAfter.reviewRound?.sourceSlots).toEqual(failedBefore.reviewRound?.sourceSlots);
   });
 
-  it('can consume ordinal 1 once only after independent existing same-head eligibility', async () => {
+  it('consumes ordinal 1 once through a fresh run ID after terminal failed 0/3 history', async () => {
     const f = seedOrphan();
     f.expire();
     await reconcileStalePackReviewRuns(f.input);
@@ -4850,12 +4862,6 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
       fixtureCurrentPrHeadSha: HEAD_A, fixturePostReviewHeadSha: HEAD_A,
       fixtureIssueTitle: "Independent linked Issue", fixtureIssueBody: issueBody,
       fixtureIssueNumber: prNumber,
-      fixtureGptAttemptObserver: async () => ({
-        state: 'replacement_eligible' as const, replacementEligible: true,
-        slotId: 'source-01',
-        replacementEligibleSlotIds: ['source-01'],
-        initialLaunchSlotIds: ['source-02', 'source-03'],
-      }),
       fixtureAfterGptInvocationBound: async ({ slotId }) => { launched.push(slotId); },
       fixtureReviewBySourceSlot: {
         'source-01': [{ stdout: successfulCleanReviewPayload('inv-source-01') }],
@@ -4864,11 +4870,13 @@ describe('Issue #2469 proven 0/3 orphan terminal/status repair', () => {
       },
       fixtureRequiredStatusWriter: async () => {},
     });
-    expect(result, JSON.stringify(result)).toMatchObject({
-      ok: true, runId: f.runId,
-    });
-    expect(launched).toEqual(['source-01', 'source-02', 'source-03']);
-    expect(getPackReviewRun(f.runId, f.options)?.reviewVerdict).toBe('clean');
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, created: true });
+    const freshId = String(result.runId);
+    expect(freshId).not.toBe(f.runId);
+    expect(launched.length).toBeGreaterThan(0);
+    expect(getPackReviewRun(f.runId, f.options)).toMatchObject({ status: 'failed', failureReason: failure });
+    expect(getPackReviewRun(f.runId, f.options)?.reviewVerdict).toBeUndefined();
+    expect(getPackReviewRun(freshId, f.options)?.reviewVerdict).toBe('clean');
     expect(readPackReviewAuthority(prNumber, { storeRoot: f.options.storeRoot })?.cycle?.consumedRoundOrdinals)
       .toEqual([1]);
   });
@@ -7168,6 +7176,28 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       sourceTransport, addSource02Comment, comments, makeComment };
   }
 
+  // Issue #2870: start a fresh same-head run after terminal failed history.
+  // Source comments are published under the fresh run identity, and the
+  // production 30 s admission pacing is bypassed (synthetic clock is frozen).
+  function startFresh(
+    f: Awaited<ReturnType<typeof seedDeadIncumbent>>,
+    extra: Partial<Parameters<typeof startPackReview>[0]> = {},
+  ) {
+    return startPackReview({
+      ...f.input, claimMode: 'acquire', fixtureGptAdmissionReadObservation: undefined,
+      fixtureBeforeGptSourceCommentCensus: ({ identity }) => {
+        const id = 2870100 + f.comments.length;
+        f.comments.push({
+          id, body: formatPackGptSourceCommentEnvelope(identity, 'NO_FINDINGS'),
+          actorLogin: 'browser-gpt-bot', createdAt: restartAt, updatedAt: restartAt,
+          url: `https://github.com/${repository}/pull/${prNumber}#issuecomment-${id}`,
+          issueUrl: `https://api.github.com/repos/${repository}/issues/${prNumber}`,
+        });
+      },
+      ...extra,
+    });
+  }
+
   it.each(['unstarted', 'hybrid'] as const)(
     'Issue #2692: public resume rotates %s prelaunch slots atomically without losing source-01 findings',
     async (mode) => {
@@ -7327,7 +7357,7 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
       .toEqual([1]);
   });
 
-  it('Issue #2635: harvests late original-invocation comment after terminal 900 s partial coverage', async () => {
+  it('Issue #2635/#2870: leaves a late original-invocation comment on terminal 900 s partial history and starts a fresh run ID', async () => {
     const f = await seedDeadIncumbent({ source02Comment: false, orphanedPair: true });
     const terminalRound = structuredClone(getPackReviewRun(f.runId, f.options)!.reviewRound!);
     for (const slot of terminalRound.sourceSlots.slice(1)) {
@@ -7352,27 +7382,30 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     expect(before.reviewRound!.sourceSlots.slice(1).map((slot) => slot.terminalClass))
       .toEqual(['possible_delivery/missing_result', 'possible_delivery/missing_result']);
 
-    const result = await startPackReview({
-      ...f.input, claimMode: 'acquire',
-      fixtureGptAttemptObserver: async () => ({
-        state: 'reply_recovery_required' as const, replacementEligible: false,
-      }),
-    });
+    // Issue #2870: the terminal failed 1/3 run is history. A late original
+    // comment is never harvested into it and its missing sources are never
+    // retried; a fresh same-head run ID starts instead.
+    const beforeSlots = structuredClone(before.reviewRound!.sourceSlots);
+    const commentsBefore = [...f.comments];
+    const result = await startFresh(f);
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, created: true });
     expect(result.reason).not.toBe('gpt_incumbent_owner_not_dead');
-    const recovered = getPackReviewRun(f.runId, f.options)!;
-    expect(recovered.reviewRound!.sourceSlots[1]).toMatchObject({
-      lifecycle: 'terminal', terminalClass: 'complete_clean',
-      invocationId: originalSource02, attemptOrdinal: 2,
-      terminalResult: { source_comment_authority: 'credentialed_github' },
-    });
-    expect(recovered.reviewRound!.sourceSlots[1]?.attemptHistory).toBeUndefined();
-    expect(recovered.reviewRound!.sourceSlots[2]).toMatchObject({
-      lifecycle: 'terminal', terminalClass: 'possible_delivery/missing_result',
-      invocationId: originalSource03, attemptOrdinal: 2,
-      terminalResult: { kind: 'missing_terminal_result', noResend: true },
-    });
-    expect(f.launches).toEqual([]);
-    expect(listPackReviewRuns(f.options)).toHaveLength(1);
+    expect(result.runId).not.toBe(f.runId);
+    const after = getPackReviewRun(f.runId, f.options)!;
+    expect(after).toMatchObject({ status: 'failed', failureReason: 'gpt_sources_incomplete_after_grace:1/3' });
+    expect(after.reviewVerdict).toBeUndefined();
+    // The failed run is never resumed or retried. (Start-time reconcile may
+    // still hydrate an already-published credentialed comment into a slot of
+    // the failed run; it stays failed with no verdict and nothing is resent.)
+    expect(after.reviewRound!.sourceSlots[0]).toEqual(beforeSlots[0]);
+    expect(after.reviewRound!.sourceSlots[2]).toEqual(beforeSlots[2]);
+    expect(f.comments.slice(0, commentsBefore.length)).toEqual(commentsBefore);
+    expect(f.launches.map((launch) => launch.invocationId))
+      .not.toEqual(expect.arrayContaining([originalSource02]));
+    expect(f.launches.map((launch) => launch.invocationId))
+      .not.toEqual(expect.arrayContaining([originalSource03]));
+    const fresh = listPackReviewRuns(f.options).filter((run) => run.id !== f.runId);
+    expect(fresh.length).toBeGreaterThan(0);
   });
 
   it('hydrates the original credentialed source-02 and admits only source-03 after real predecessor pacing', async () => {
@@ -7874,6 +7907,142 @@ describe('Issue #2532 dead partial GPT incumbent through public start', () => {
     expect(f.launches).toEqual([]);
     expect(f.statusStates).not.toContain('success');
     expect(listPackReviewRuns(f.options)).toHaveLength(1);
+  });
+
+  describe('Issue #2870 terminal failed no-verdict history', () => {
+    const zeroFailure = 'gpt_source_non_complete:after_grace_zero_usable:0/3';
+    const partialFailure = 'gpt_sources_incomplete_after_grace:1/3';
+
+    // Failed 0/N: the seeded run is rewritten on disk so every source slot is
+    // planned again and no source comment exists (terminal slot evidence
+    // cannot be overwritten through the incumbent store API).
+    async function seedFailedZero() {
+      const f = await seedDeadIncumbent({ source02Comment: false });
+      const recordPath = path.join(f.options.storeRoot, 'runs', `${f.runId}.json`);
+      const record = JSON.parse(readFileSync(recordPath, 'utf8')) as PackReviewRunRecord;
+      record.reviewRound!.sourceSlots = record.reviewRound!.sourceSlots.map(({ slotId, ordinal }) => ({
+        slotId, ordinal, lifecycle: 'planned' as const,
+      }));
+      record.status = 'failed';
+      record.latestRunStatus = 'failed';
+      record.failureReason = zeroFailure;
+      record.completedAtUtc = restartAt;
+      writeFileSync(recordPath, JSON.stringify(record));
+      f.comments.length = 0;
+      return f;
+    }
+
+    // Failed 1/N: source-01 is published and credentialed; the rest is missing.
+    async function seedFailedPartial() {
+      const f = await seedDeadIncumbent({ source02Comment: false });
+      updatePackReviewRun(f.runId, {
+        status: 'failed', latestRunStatus: 'failed',
+        failureReason: partialFailure, completedAtUtc: restartAt, runnerPid: oldPid,
+      }, f.options);
+      return f;
+    }
+
+    const oldInvocations = [originalSource01, originalSource02, originalSource03];
+
+    it('(a) failed 0/N: start creates a new run ID and leaves the old run unchanged', async () => {
+      const f = await seedFailedZero();
+      const before = structuredClone(getPackReviewRun(f.runId, f.options)!);
+      const result = await startFresh(f);
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true, created: true });
+      expect(String(result.runId)).not.toBe(f.runId);
+      expect(listPackReviewRuns(f.options)).toHaveLength(2);
+      const after = getPackReviewRun(f.runId, f.options)!;
+      expect(after).toMatchObject({ status: 'failed', failureReason: zeroFailure });
+      expect(after.reviewVerdict).toBeUndefined();
+      expect(after.reviewRound).toEqual(before.reviewRound);
+      expect(f.launches.length).toBeGreaterThan(0);
+      for (const launch of f.launches) expect(oldInvocations).not.toContain(launch.invocationId);
+      expect(getPackReviewRun(String(result.runId), f.options)?.reviewVerdict).toBe('clean');
+    });
+
+    it('(b) failed 1/N with a published source-01 comment: new run ID, old run and comment unchanged', async () => {
+      const f = await seedFailedPartial();
+      const publishedSource01 = structuredClone(f.comments[0]!);
+      const before = structuredClone(getPackReviewRun(f.runId, f.options)!);
+      expect(before.reviewRound!.sourceSlots[0]).toMatchObject({ terminalClass: 'complete_clean' });
+      const result = await startFresh(f);
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true, created: true });
+      expect(String(result.runId)).not.toBe(f.runId);
+      expect(listPackReviewRuns(f.options)).toHaveLength(2);
+      const after = getPackReviewRun(f.runId, f.options)!;
+      expect(after).toMatchObject({ status: 'failed', failureReason: partialFailure });
+      expect(after.reviewVerdict).toBeUndefined();
+      expect(after.reviewRound!.sourceSlots[0]).toEqual(before.reviewRound!.sourceSlots[0]);
+      expect(f.comments[0]).toEqual(publishedSource01);
+      // Neither the old source-01 nor the missing sources are retried on the old run.
+      for (const launch of f.launches) expect(oldInvocations).not.toContain(launch.invocationId);
+      expect(getPackReviewRun(String(result.runId), f.options)?.reviewVerdict).toBe('clean');
+    });
+
+    it('(c) an active run with a live non-stale owner still blocks and no new run is created', async () => {
+      const f = await seedDeadIncumbent({ source02Comment: false });
+      updatePackReviewRun(f.runId, { runnerPid: process.pid }, f.options);
+      const result = await startFresh(f);
+      expect(result.created).not.toBe(true);
+      expect(result.ok).not.toBe(true);
+      expect(result.runnerReason ?? result.reason).toBe('gpt_incumbent_owner_not_dead');
+      expect(listPackReviewRuns(f.options)).toHaveLength(1);
+      expect(f.launches).toEqual([]);
+      expect(getPackReviewRun(f.runId, f.options)).toMatchObject({ status: 'preparing' });
+    });
+
+    it('(d) a persisted valid verdict on the same round blocks another fresh run', async () => {
+      const f = await seedFailedPartial();
+      const first = await startFresh(f);
+      expect(first, JSON.stringify(first)).toMatchObject({ ok: true, created: true });
+      expect(getPackReviewRun(String(first.runId), f.options)?.reviewVerdict).toBe('clean');
+      const launchesAfterFirst = f.launches.length;
+      const second = await startFresh(f);
+      expect(second.created).not.toBe(true);
+      expect(listPackReviewRuns(f.options)).toHaveLength(2);
+      expect(f.launches).toHaveLength(launchesAfterFirst);
+      expect(getPackReviewRun(f.runId, f.options)).toMatchObject({ status: 'failed' });
+    });
+
+    it('(e) a failed run for a different head SHA is not history for the head being started', async () => {
+      const f = await seedFailedPartial();
+      const before = structuredClone(getPackReviewRun(f.runId, f.options)!);
+      const result = await startFresh(f, {
+        headSha: HEAD_B, fixtureCurrentPrHeadSha: HEAD_B, fixturePostReviewHeadSha: HEAD_B,
+      });
+      // The HEAD_A failed run is never reused, resumed or treated as the
+      // fresh-round predecessor of HEAD_B; any run this start creates is HEAD_B's.
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true, created: true, headSha: HEAD_B });
+      expect(result.runId).not.toBe(f.runId);
+      for (const run of listPackReviewRuns(f.options)) {
+        if (run.id !== f.runId) expect(run.targetSha).toBe(HEAD_B);
+      }
+      for (const launch of f.launches) expect(oldInvocations).not.toContain(launch.invocationId);
+      const after = getPackReviewRun(f.runId, f.options)!;
+      expect(after).toMatchObject({ status: 'failed', targetSha: HEAD_A, failureReason: partialFailure });
+      expect(after.reviewRound).toEqual(before.reviewRound);
+    });
+
+    it('(f) reconcile of a failed 0/N run returns the fresh-review command, never a reconcile loop', async () => {
+      const f = await seedFailedZero();
+      const reconcileInput: Parameters<typeof reconcileStalePackReviewRuns>[0] = {
+        ...f.options, prNumber, sourceRepoRoot: repoRoot, repoSlug: repository,
+        fixtureCurrentPrHeadSha: HEAD_A,
+        fixtureGptSourceCommentTransport: f.sourceTransport,
+        fixtureRequiredStatusWriter: async () => {},
+      };
+      for (const attempt of [1, 2]) {
+        const output = await reconcileStalePackReviewRuns(reconcileInput);
+        const row = output.results.find((item) => item.runId === f.runId && typeof item.nextAction === 'string');
+        expect(row, 'attempt ' + attempt + ' ' + JSON.stringify(output.results)).toBeDefined();
+        const action = String(row!.nextAction);
+        expect(action).toContain('pack-gpt-review');
+        expect(action).not.toContain('pack-review-runner.ts reconcile');
+        expect(action).toMatch(/^(start the fresh review run now: |after the shared account cooldown expires at )/);
+        if (attempt === 2) expect(row!.reason).toBe('status_already_reconciled');
+      }
+      expect(getPackReviewRun(f.runId, f.options)).toMatchObject({ status: 'failed', failureReason: zeroFailure });
+    });
   });
 });
 

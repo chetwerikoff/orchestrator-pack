@@ -25,6 +25,9 @@ import {
   recordPackReviewPublication,
   reopenPackReviewAuthorityForExplicitExtraReview,
   retainPersistedOpenCycle,
+  listPackReviewImmutableRecords,
+  settleAtCapPackReviewFindingByArchitectDefer,
+  soleBlockingQualityFindingCode,
   selectPackReviewGptSourceCardinality,
   sha256,
   stableJson,
@@ -1788,5 +1791,188 @@ describe('Issue #2659 shared run-store and authority lock regression', () => {
     expect(updatePackReviewRun(run.id, { status: 'running' }, storeOptions).status).toBe('running');
     expect(readPackReviewAuthority(prNumber, config)?.transitionSeq).toBe(authority.transitionSeq);
     expect(getPackReviewRun(run.id, storeOptions)?.status).toBe('running');
+  });
+});
+
+describe('Issue #2870 architect DEFER at-cap settlement', () => {
+  const qualityFinding = {
+    code: 'quality-sole', type: 'quality', severity: 'blocking', message: 'sole blocking quality issue',
+  };
+  const nonBlocking = {
+    code: 'nit-1', type: 'quality', severity: 'non-blocking', message: 'minor nit',
+  };
+  const defaultFindings = [qualityFinding, nonBlocking];
+
+  function atCapFixture(prNumber: number, findings: readonly unknown[] = defaultFindings, headChar = '7') {
+    const storeOptions = options();
+    const head = sha(headChar);
+    const runId = `issue-2870-run-${prNumber}`;
+    let state = initializePackReviewAuthority({
+      prNumber,
+      headSha: head,
+      tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
+      options: storeOptions,
+    });
+    state = commitPackReviewTerminal({
+      prNumber,
+      expectedTransitionSeq: state.transitionSeq,
+      terminal: {
+        ...findingsTerminal(runId, head),
+        findingCount: findings.length,
+        findingsDigest: sha256(JSON.stringify(findings)),
+        logicalRoundOrdinal: 1,
+      },
+      status: 'changes_requested',
+      findingCount: findings.length,
+      options: storeOptions,
+    });
+    expect(state.cycle?.state).toBe('at_cap_open_findings');
+    const row = (overrides: Record<string, unknown> = {}) => ({
+      event: 'merge_triage_verdict',
+      finding_id: 'quality-sole',
+      pr_number: prNumber,
+      head_sha: head,
+      verdict: 'DEFER',
+      reason: 'architect_adjudication',
+      actor: 'architect',
+      ...overrides,
+    });
+    const settle = (overrides: Record<string, unknown> = {}) => settleAtCapPackReviewFindingByArchitectDefer({
+      prNumber,
+      expectedTransitionSeq: readPackReviewAuthority(prNumber, storeOptions)!.transitionSeq,
+      reviewedHeadSha: head,
+      terminalRunId: runId,
+      findings,
+      findingSnapshotDigest: sha256(stableJson(findings)),
+      adjudication: row(),
+      committedAtUtc: '2026-11-22T00:00:00.000Z',
+      options: storeOptions,
+      ...overrides,
+    } as Parameters<typeof settleAtCapPackReviewFindingByArchitectDefer>[0]);
+    return { storeOptions, head, runId, state, row, settle };
+  }
+
+  function expectRefused(prNumber: number, fixture: ReturnType<typeof atCapFixture>, action: () => unknown, code = /findings_settlement_/) {
+    const seq = readPackReviewAuthority(prNumber, fixture.storeOptions)!.transitionSeq;
+    expect(action).toThrow(code);
+    expect(action).toThrow(PackReviewAuthorityError);
+    const after = readPackReviewAuthority(prNumber, fixture.storeOptions)!;
+    expect(after.transitionSeq).toBe(seq);
+    expect(after.cycle?.state).toBe('at_cap_open_findings');
+    expect(after.cycle?.reviewStageComplete).not.toBe(true);
+  }
+
+  it('closes the at-cap cycle for a sole blocking quality finding and keeps the terminal and cap as history', () => {
+    const fixture = atCapFixture(28701);
+    const before = fixture.state;
+    const frozenCap = before.cycle!.frozenCap;
+    const terminalBefore = { ...before.terminal! };
+    const settled = fixture.settle();
+    expect(settled.cycle).toMatchObject({ state: 'closed', reviewStageComplete: true, frozenCap });
+    expect(settled.terminal).toMatchObject({
+      reviewVerdict: 'findings',
+      digest: terminalBefore.digest,
+      runId: terminalBefore.runId,
+    });
+    expect(settled.cycle?.settlementKind).toBeUndefined();
+    expect(settled.triage).toMatchObject({
+      verdict: 'DEFER',
+      source: 'architect',
+      committedAtUtc: '2026-11-22T00:00:00.000Z',
+    });
+    expect(readPackReviewAuthority(28701, fixture.storeOptions)?.cycle?.state).toBe('closed');
+  });
+
+  it('binds three distinct digests, each against its own field', () => {
+    const fixture = atCapFixture(28702);
+    const settled = fixture.settle();
+    const stableDigest = sha256(stableJson(defaultFindings));
+    const jsonDigest = sha256(JSON.stringify(defaultFindings));
+    expect(settled.triage?.findingSnapshotDigest).toBe(stableDigest);
+    const records = listPackReviewImmutableRecords('terminal', fixture.storeOptions)
+      .filter((entry) => (entry.value as { runId?: string }).runId === fixture.runId);
+    expect(records).toHaveLength(1);
+    const record = records[0]!;
+    expect((record.value as { findingsDigest: string }).findingsDigest).toBe(jsonDigest);
+    expect(settled.terminal?.digest).toBe(record.digest);
+    expect(record.digest).toBe(sha256(readFileSync(record.path)));
+    // The three digests are distinct values bound to distinct fields.
+    expect(stableDigest).not.toBe(jsonDigest);
+    expect(settled.terminal?.digest).not.toBe((record.value as { findingsDigest: string }).findingsDigest);
+  });
+
+  it('refuses a wrong pr_number, wrong head_sha, or finding_id that differs from the code', () => {
+    const f1 = atCapFixture(28703);
+    expectRefused(28703, f1, () => f1.settle({ adjudication: f1.row({ pr_number: 99999 }) }));
+    const f2 = atCapFixture(28704);
+    expectRefused(28704, f2, () => f2.settle({ adjudication: f2.row({ head_sha: sha('9') }) }));
+    const f3 = atCapFixture(28705);
+    expectRefused(28705, f3, () => f3.settle({ adjudication: f3.row({ finding_id: 'other-code' }) }));
+  });
+
+  it('refuses rows whose reason is not architect_adjudication or verdict is not DEFER', () => {
+    const f1 = atCapFixture(28706);
+    expectRefused(28706, f1, () => f1.settle({ adjudication: f1.row({ reason: 'marker_match' }) }));
+    const f2 = atCapFixture(28707);
+    expectRefused(28707, f2, () => f2.settle({ adjudication: f2.row({ verdict: 'BLOCK' }) }));
+  });
+
+  it('refuses two distinct blocking codes and non-quality sole blocking findings', () => {
+    const two = [qualityFinding, { ...qualityFinding, code: 'quality-second' }];
+    const f1 = atCapFixture(28708, two);
+    expectRefused(28708, f1, () => f1.settle());
+    expect(soleBlockingQualityFindingCode(two)).toBeUndefined();
+    for (const [index, type] of ['scope', 'security'].entries()) {
+      const findings = [{ ...qualityFinding, type }, nonBlocking];
+      const pr = 28709 + index;
+      const f = atCapFixture(pr, findings);
+      expectRefused(pr, f, () => f.settle());
+      expect(soleBlockingQualityFindingCode(findings)).toBeUndefined();
+    }
+    expect(soleBlockingQualityFindingCode(defaultFindings)).toBe('quality-sole');
+    expect(soleBlockingQualityFindingCode([nonBlocking])).toBeUndefined();
+  });
+
+  it('refuses findings that do not match the immutable terminal or a wrong snapshot digest', () => {
+    const f1 = atCapFixture(28711);
+    const tampered = [{ ...qualityFinding, message: 'different message' }, nonBlocking];
+    expectRefused(28711, f1, () => f1.settle({
+      findings: tampered,
+      findingSnapshotDigest: sha256(stableJson(tampered)),
+    }));
+    const f2 = atCapFixture(28712);
+    expectRefused(28712, f2, () => f2.settle({ findingSnapshotDigest: '0'.repeat(64) }));
+  });
+
+  it('refuses when the authority current head moved to another head', () => {
+    const f = atCapFixture(28713);
+    const moved = observePackReviewHead({
+      prNumber: 28713,
+      expectedTransitionSeq: f.state.transitionSeq,
+      headSha: sha('8'),
+      options: f.storeOptions,
+    });
+    expect(moved.cycle?.state).toBe('at_cap_continuation_required');
+    expect(() => f.settle()).toThrow(PackReviewAuthorityError);
+    expect(readPackReviewAuthority(28713, f.storeOptions)?.cycle?.state).toBe('at_cap_continuation_required');
+    expect(readPackReviewAuthority(28713, f.storeOptions)?.cycle?.reviewStageComplete).not.toBe(true);
+  });
+
+  it('bare commitPackReviewTriage architect DEFER does not close the at-cap logical cycle', () => {
+    const f = atCapFixture(28714);
+    const state = commitPackReviewTriage({
+      prNumber: 28714,
+      expectedTransitionSeq: f.state.transitionSeq,
+      triage: {
+        verdict: 'DEFER',
+        source: 'architect',
+        findingSnapshotDigest: sha256(stableJson(defaultFindings)),
+        committedAtUtc: '2026-11-22T00:00:00.000Z',
+      },
+      options: f.storeOptions,
+    });
+    expect(state.cycle?.state).toBe('at_cap_open_findings');
+    expect(state.cycle?.reviewStageComplete).not.toBe(true);
   });
 });

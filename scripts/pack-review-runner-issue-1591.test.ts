@@ -3,6 +3,7 @@
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -17,12 +18,15 @@ import {
   startPackReview,
 } from './pack-review-runner.ts';
 import {
+  PACK_REVIEW_LOGICAL_CAP_MAP_VERSION,
   commitPackReviewTerminal,
   commitPackReviewTriage,
   initializePackReviewAuthority,
   observePackReviewHead,
   readPackReviewAuthority,
   selectPackReviewEvidence,
+  sha256,
+  stableJson,
   stagePackReviewImmutableRecord,
 } from './pack-review-state.ts';
 import {
@@ -1343,6 +1347,150 @@ describe('Issue #2451 same-run late error versus recovered verdict', () => {
         noJudgmentWorkerNotification: { state: 'escalated' } },
     });
     expect(getPackReviewRun(created.id, options)?.reviewRound?.settledSourceCount).toBe(3);
+  });
+});
+
+describe('Issue #2870 architect DEFER same-head at-cap reconcile', () => {
+  const FINDINGS = [
+    { code: 'quality-sole', type: 'quality', severity: 'blocking', title: 'sole blocking quality finding' },
+    { code: 'nit-1', type: 'quality', severity: 'non-blocking', title: 'minor nit' },
+  ];
+
+  function seedSameHeadAtCap(storeRoot: string) {
+    const opts = { storeRoot, now: new Date('2026-11-22T00:00:00.000Z') };
+    let authority = initializePackReviewAuthority({
+      prNumber: 2870, headSha: HEAD_A, tier: 'T2',
+      capMapVersion: PACK_REVIEW_LOGICAL_CAP_MAP_VERSION, options: opts,
+    });
+    const run = createPackReviewRun({
+      projectId: PROJECT, storeRoot, prNumber: 2870, headSha: HEAD_A,
+      trustedPackRoot: repoRoot, sourceRepoRoot: repoRoot, canonicalRepository: REPO,
+      reviewCycleId: authority.cycle!.cycleId,
+    }).run;
+    setPackReviewRunTerminal(run.id, 'changes_requested', {
+      reviewVerdict: 'findings', findingCount: FINDINGS.length, findings: FINDINGS,
+    }, { projectId: PROJECT, storeRoot });
+    const stored = getPackReviewRun(run.id, { projectId: PROJECT, storeRoot })!;
+    authority = commitPackReviewTerminal({
+      prNumber: 2870, expectedTransitionSeq: authority.transitionSeq,
+      terminal: {
+        schemaVersion: 1, terminalContractVersion: 2, terminalSource: 'normal',
+        runId: run.id, targetSha: HEAD_A, reviewVerdict: 'findings',
+        findingCount: FINDINGS.length,
+        // The runner's terminalV2FromPayload writes a bare hex digest (merge-triage-evidence sha256Bytes).
+        findingsDigest: sha256(JSON.stringify(stored.findings)),
+        logicalRoundOrdinal: 1,
+      },
+      status: 'changes_requested', findingCount: FINDINGS.length, options: opts,
+    });
+    expect(authority.cycle?.state).toBe('at_cap_open_findings');
+    return { opts, run, authority };
+  }
+
+  function writeJournal(stateRoot: string, rows: Array<Record<string, unknown>>): void {
+    const dir = join(stateRoot, 'merge-triage');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'verdict-journal.jsonl'),
+      rows.map((row) => JSON.stringify(row)).join('\n') + '\n', 'utf8');
+  }
+
+  const row = (overrides: Record<string, unknown> = {}) => ({
+    event: 'merge_triage_verdict',
+    finding_id: 'quality-sole',
+    fingerprint: 'fp-2870',
+    pr_number: 2870,
+    head_sha: HEAD_A,
+    verdict: 'DEFER',
+    reason: 'architect_adjudication',
+    actor: 'architect',
+    ...overrides,
+  });
+
+  async function reconcile(storeRoot: string, statuses: Array<Record<string, unknown>>) {
+    return reconcileStalePackReviewRuns({
+      repoSlug: REPO, sourceRepoRoot: repoRoot, projectId: PROJECT, storeRoot,
+      prNumber: 2870, immediate: true,
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixtureRequiredStatusWriter: async (request) => { statuses.push(request as Record<string, unknown>); },
+      fixtureRequiredStatusReader: async () => (statuses.some((s) => s.state === 'success') ? 'success' : 'pending'),
+      fixtureIssueTitle: '[T2] Issue 2870 fixture', fixtureIssueBody: issueBody('T2'),
+      fixtureIssueNumber: 2870,
+    } as Parameters<typeof reconcileStalePackReviewRuns>[0]);
+  }
+
+  it('closes a same-head at-cap cycle from an existing architect DEFER journal row and publishes status', async () => {
+    const storeRoot = tempRoot('opk-2870-defer-');
+    harness(storeRoot);
+    const stateRoot = tempRoot('opk-2870-state-');
+    process.env.ORCHESTRATOR_PACK_STATE_ROOT = stateRoot;
+    const seeded = seedSameHeadAtCap(storeRoot);
+    writeJournal(stateRoot, [row()]);
+    const statuses: Array<Record<string, unknown>> = [];
+    const result = await reconcile(storeRoot, statuses);
+    expect(result.results, JSON.stringify(result)).toContainEqual(expect.objectContaining({
+      finalCapSettlement: true, settled: true, reason: 'final_cap_architect_defer_settled',
+    }));
+    expect(statuses.filter((s) => s.state === 'success')).toHaveLength(1);
+    const after = readPackReviewAuthority(2870, seeded.opts);
+    expect(after?.cycle).toMatchObject({ state: 'closed', reviewStageComplete: true });
+    expect(after?.terminal).toMatchObject({ runId: seeded.run.id, reviewVerdict: 'findings' });
+    expect(after?.triage).toMatchObject({ verdict: 'DEFER', source: 'architect' });
+    expect(after?.triage?.findingSnapshotDigest).toBe(sha256(stableJson(
+      getPackReviewRun(seeded.run.id, { projectId: PROJECT, storeRoot })!.findings)));
+  });
+
+  it('a later BLOCK row for the same finding, a wrong head, or a gate marker row does not settle', async () => {
+    for (const rows of [
+      [row(), row({ verdict: 'BLOCK' })],
+      [row({ head_sha: HEAD_B })],
+      [row({ reason: 'marker_match' })],
+    ]) {
+      const storeRoot = tempRoot('opk-2870-nodefer-');
+      harness(storeRoot);
+      const stateRoot = tempRoot('opk-2870-state-');
+      process.env.ORCHESTRATOR_PACK_STATE_ROOT = stateRoot;
+      const seeded = seedSameHeadAtCap(storeRoot);
+      writeJournal(stateRoot, rows);
+      const statuses: Array<Record<string, unknown>> = [];
+      const result = await reconcile(storeRoot, statuses);
+      expect(result.results.some((entry) => entry.reason === 'final_cap_architect_defer_settled')).toBe(false);
+      expect(statuses.some((s) => s.state === 'success')).toBe(false);
+      const after = readPackReviewAuthority(2870, seeded.opts);
+      expect(after?.cycle?.state).toBe('at_cap_open_findings');
+      expect(after?.cycle?.reviewStageComplete).not.toBe(true);
+    }
+  });
+
+  it('without a journal row the same-head cycle stays unsettled and the refusal names the DEFER route', async () => {
+    const storeRoot = tempRoot('opk-2870-norow-');
+    harness(storeRoot);
+    process.env.ORCHESTRATOR_PACK_STATE_ROOT = tempRoot('opk-2870-state-');
+    const seeded = seedSameHeadAtCap(storeRoot);
+    const statuses: Array<Record<string, unknown>> = [];
+    const result = await reconcile(storeRoot, statuses);
+    expect(result.results, JSON.stringify(result)).toContainEqual(expect.objectContaining({
+      finalCapSettlement: true, settled: false,
+      architectDeferRoute: expect.stringContaining('fileWorkerAppeal'),
+    }));
+    const refusal = result.results.find((entry) => typeof entry.architectDeferRoute === 'string')!;
+    expect(refusal.architectDeferRoute).toContain('adjudicateArchitectFinding');
+    expect(statuses.some((s) => s.state === 'success')).toBe(false);
+    expect(readPackReviewAuthority(2870, seeded.opts)?.cycle?.state).toBe('at_cap_open_findings');
+  });
+});
+
+describe('Issue #2870 AC4 GPT review prompt unverified-by-reviewer caveat', () => {
+  const squash = (text: string) => text.replace(/\s+/g, ' ');
+  const prompt = () => squash(readFileSync(join(repoRoot, 'prompts', 'gpt_pack_review_prompt.md'), 'utf8'));
+
+  it('states an unverified-by-reviewer criterion alone must not block NO_FINDINGS', () => {
+    expect(prompt()).toContain(squash('Such a criterion alone must not block `NO_FINDINGS`'));
+    expect(prompt()).toContain('classify it as `unverified-by-reviewer`');
+  });
+
+  it('does not treat an unverified-by-reviewer criterion after complete reads as an unread-source case', () => {
+    expect(prompt()).toContain(squash(
+      'An `unverified-by-reviewer`\ncriterion after complete required reads is not an unread-source case.'));
   });
 });
 
