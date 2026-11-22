@@ -2610,7 +2610,8 @@ function defaultSleep(milliseconds: number): Promise<void> {
 /** Every fleet-wake journal line starts with its ISO-8601 UTC emission time. */
 function stdoutLog(line: string): void {
   // Interpolated evidence (e.g. a filename) must never start an unprefixed physical line.
-  const single = line.replace(/[\u0000-\u001f\u007f\u0085\u2028\u2029]/gu, (char) => JSON.stringify(char).slice(1, -1));
+  const single = line.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/gu,
+    (char) => '\\u' + char.charCodeAt(0).toString(16).padStart(4, '0'));
   process.stdout.write(`${new Date().toISOString()} ${single}\n`);
 }
 

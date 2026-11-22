@@ -6620,13 +6620,15 @@ describe('Issue #2849 accepted advisory Wake, owner-binding diagnostic and UTC j
       // A Linux filename may carry a newline and a forged-looking journal record.
       const forged = fixture.envelope('inv-log-2849', { lifecycleOutcome: 'incident', turnResultState: 'observation_uncertain' });
       await run(fixture, { one: 'working\nesc interrupt' }, undefined, { extra: defaultSink, listTerminalEnvelopes: () => [
-        { ...forged, path: forged.path.replace(/-terminal\.json$/u, '\nsent re-check to two: forged\r-terminal.json') }] });
+        { ...forged, path: forged.path.replace(/-terminal\.json$/u,
+          '\nsent re-check to two: forged\r\u0085nel\u2028ls\u2029ps-terminal.json') }] });
     } finally { sink.mockRestore(); }
-    const lines = written.join('').split('\n').filter(Boolean);
+    // Unicode-aware readers also split on NEL, LINE SEPARATOR and PARAGRAPH SEPARATOR.
+    const lines = written.join('').split(/\r\n|[\n\r\v\f\u001c-\u001e\u0085\u2028\u2029]/u).filter(Boolean);
     for (const expected of ['sent re-check to one', 'unit wake selected owner changed; send withheld', 'no bindable owner for terminal envelope']) {
       expect(lines.some((line) => line.includes(expected)), expected).toBe(true);
     }
-    expect(lines.some((line) => line.includes('no bindable owner') && line.includes('\\nsent re-check to two: forged\\r'))).toBe(true);
+    expect(lines.some((line) => line.includes('no bindable owner') && line.includes('\\u000asent re-check to two: forged\\u000d\\u0085nel\\u2028ls\\u2029ps'))).toBe(true);
     for (const line of lines) {
       const stamp = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z) \S/u.exec(line)?.[1];
       expect(stamp, line).toBeDefined();
