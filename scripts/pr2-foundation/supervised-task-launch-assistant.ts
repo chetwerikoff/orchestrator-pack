@@ -91,6 +91,19 @@ export interface NextAction {
   readonly note?: string;
 }
 
+export interface ExecutorSelectionTuple {
+  readonly agent: string;
+  readonly model: string;
+  readonly effort: string;
+}
+
+/** Launcher/native-spawn input only; never a remotely observed provider-internal model. */
+export interface ExecutorSelection {
+  readonly provenance: 'per-launch' | 'stored-profile';
+  readonly requested?: ExecutorSelectionTuple;
+  readonly admitted?: ExecutorSelectionTuple;
+}
+
 export interface ContinueResult {
   readonly schema: typeof LAUNCH_ASSISTANT_SCHEMA;
   readonly outcome: 'continue';
@@ -101,6 +114,7 @@ export interface ContinueResult {
   readonly responsibleActor: LaunchActor;
   readonly evidence: Readonly<Record<string, unknown>>;
   readonly nextAction: NextAction;
+  readonly executorSelection?: ExecutorSelection;
   readonly startedAtMs: number;
   readonly finishedAtMs: number;
   readonly elapsedMs: number;
@@ -126,6 +140,7 @@ export interface ReadyResult {
     readonly reason: 'ready_and_assignment_bound';
     readonly assignmentBound: true;
   };
+  readonly executorSelection?: ExecutorSelection;
   readonly startedAtMs: number;
   readonly finishedAtMs: number;
   readonly elapsedMs: number;
@@ -171,6 +186,8 @@ export interface ExecutorProfile {
   /** Required profile-pinned absolute OpenCode binary, shared by all probes and spawn. */
   readonly executable?: string;
   readonly providerArgs?: readonly string[];
+  /** Exact task-surface agent/model/effort tuple the resolver admitted. */
+  readonly selection?: ExecutorSelectionTuple;
   readonly names: readonly [string, string, string];
 }
 
@@ -293,6 +310,8 @@ export interface LaunchInput {
   readonly baseBranch?: string;
   readonly defaultBranch?: string;
   readonly env?: Readonly<NodeJS.ProcessEnv>;
+  /** One-shot t1|t2|t3 executor, applied after the stored-profile overlay; never persisted. */
+  readonly executor?: ExecutorSelectionTuple;
   readonly cwd?: string;
   readonly startMode?: WorkerStartMode;
 }
@@ -347,6 +366,8 @@ export interface LaunchDependencies {
   readonly prepareWorktree: (input: WorktreePreparationRequest) => Promise<EdgeResult<PreparedWorktree>>;
   readonly captureLaunchShells?: (worktree: PreparedWorktree) => Promise<readonly CreationTerminal[]>;
   readonly cleanupLaunchShells?: (worktree: PreparedWorktree, unitTerminalId: string) => Promise<void>;
+  /** Native show/list read-back of a newly created terminal on its selected worktree. */
+  readonly readTerminalAttachment: (worktree: PreparedWorktree, terminal: RuntimeWorkerIdentity) => Promise<TerminalAttachment>;
   /** Non-Claude manager push guard; a resolved Claude-family manager is the local route. */
   readonly installManagerPushGuard?: (input: ManagerPushGuardRequest) => Promise<EdgeResult<true>> | EdgeResult<true>;
   /** Restore recorded B5 hooks only on an existing Claude-family manager worktree. */
@@ -581,6 +602,33 @@ function supportedStartMode(value: WorkerStartMode | undefined): value is Execut
   return value === undefined || value === 'provider_new_top_level' || value === 'exact_terminal_worktree';
 }
 
+const EXECUTOR_OVERRIDE_CLASSES: readonly LaunchWorkClass[] = ['t1', 't2', 't3'];
+const EXECUTOR_OVERRIDE_KEYS = ['agent', 'model', 'effort'] as const;
+
+export function parseExecutorOverride(raw: string): ExecutorSelectionTuple {
+  let decoded: unknown;
+  try { decoded = JSON.parse(raw); }
+  catch { throw new Error('--executor must be valid JSON'); }
+  if (!record(decoded)) throw new Error('--executor must be a JSON object');
+  const keys = Object.keys(decoded);
+  if (keys.length !== EXECUTOR_OVERRIDE_KEYS.length || !EXECUTOR_OVERRIDE_KEYS.every((key) => keys.includes(key))) {
+    throw new Error('--executor requires exactly the members agent, model and effort');
+  }
+  const [agent, model, effort] = EXECUTOR_OVERRIDE_KEYS.map((key) => decoded[key]);
+  if (![agent, model, effort].every((value) => typeof value === 'string' && value.trim())) {
+    throw new Error('--executor agent, model and effort must be non-empty strings');
+  }
+  return { agent: text(agent), model: text(model), effort: text(effort) };
+}
+
+/** Replaces exactly the selected worker class profile variables; empty without an override. */
+export function executorOverrideEnv(workClass: LaunchWorkClass, executor?: ExecutorSelectionTuple): Record<string, string> {
+  if (!executor) return {};
+  if (!EXECUTOR_OVERRIDE_CLASSES.includes(workClass)) throw new Error('--executor applies only to --work-class t1|t2|t3');
+  const [agent, model, effort] = profileNamesForTask(workClass);
+  return { [agent]: executor.agent, [model]: executor.model, [effort]: executor.effort };
+}
+
 function profileResolutionEdge(
   workClass: LaunchWorkClass,
   env: Readonly<NodeJS.ProcessEnv>,
@@ -634,6 +682,7 @@ function admittedProfile(
       ...(invocation.inlineConfigJson ? { inlineConfigJson: invocation.inlineConfigJson } : {}),
       ...(semantic.family === 'opencode' && semantic.opencodeExecutable ? { executable: semantic.opencodeExecutable } : {}),
       ...(provider ? { providerArgs: provider.argv } : {}),
+      selection: { agent: EXECUTOR_FAMILY_DESCRIPTORS[semantic.family].taskAgentToken, model: semantic.model, effort: semantic.effort },
       names: semantic.names,
     },
     evidence: { executorFamily: semantic.family, route, profileVariables: semantic.names },
@@ -1025,6 +1074,21 @@ export async function runSupervisedTaskLaunchAssistant(
   input: LaunchInput,
   deps: LaunchDependencies,
 ): Promise<LaunchResult> {
+  const selection: { resolved: boolean; admitted?: ExecutorSelectionTuple } = { resolved: false };
+  const result = await runLaunch(input, deps, selection);
+  if (!selection.resolved || !EXECUTOR_OVERRIDE_CLASSES.includes(input.workClass)) return result;
+  return { ...result, executorSelection: {
+    provenance: input.executor ? 'per-launch' : 'stored-profile',
+    ...(input.executor ? { requested: input.executor } : {}),
+    ...(selection.admitted ? { admitted: selection.admitted } : {}),
+  } };
+}
+
+async function runLaunch(
+  input: LaunchInput,
+  deps: LaunchDependencies,
+  selection: { resolved: boolean; admitted?: ExecutorSelectionTuple },
+): Promise<LaunchResult> {
   const startedAtMs = deps.now();
   const timings: StageTiming[] = [];
   let resources = initialResources(input);
@@ -1051,6 +1115,13 @@ export async function runSupervisedTaskLaunchAssistant(
       cause: 'delegated_integration_merge_only', actor: 'orchestrator', evidence: {},
       nextAction: { kind: 'repair_executor_profile',
         note: `Remove --delegated-integration and rerun the existing --work-class ${input.workClass} launch` },
+    }, resources, startedAtMs, timings, deps.now);
+  }
+  if (input.executor !== undefined && !EXECUTOR_OVERRIDE_CLASSES.includes(input.workClass)) {
+    return continued(input, 'executor_profile', {
+      cause: 'executor_override_work_class_invalid', actor: 'operator', evidence: {},
+      nextAction: { kind: 'repair_executor_profile',
+        note: `Remove --executor and rerun the --work-class ${input.workClass} launch; a per-launch executor applies only to t1|t2|t3` },
     }, resources, startedAtMs, timings, deps.now);
   }
 
@@ -1099,8 +1170,10 @@ export async function runSupervisedTaskLaunchAssistant(
     ? 'exact_terminal_worktree' : input.startMode;
   const profileEdge = await checkpoint('executor_profile', timings, deps.now, () =>
     deps.resolveProfile(input.workClass, input.env ?? process.env, selectedMode));
+  selection.resolved = true;
   if (profileEdge.status !== 'ok') return continued(input, 'executor_profile', profileEdge, resources, startedAtMs, timings, deps.now);
   let profile = profileEdge.value;
+  if (profile.selection) selection.admitted = profile.selection;
   if (profile.route !== 'exact_terminal_worktree'
     && (input.worktreeSelector || input.worktreeName)) {
     return continued(input, 'executor_profile', {
@@ -1783,6 +1856,24 @@ export async function runSupervisedTaskLaunchAssistant(
           note: 'Reobserve the original Task-owned direct Claude command and exact generation before retry; do not start an ambiguous recovered process' },
       }, resources, startedAtMs, timings, deps.now);
   }
+  // A live PTY, title, activation or navigation is not attachment: an orphaned
+  // background handle is invisible to the operator, so it never gets a Dispatch.
+  if (!providerMode && !input.existingTerminal && terminal) {
+    const attachment = await deps.readTerminalAttachment(prepared.value, terminal.identity);
+    if (attachment.status !== 'attached') return continued(input, 'dispatch_admission_final', {
+      cause: 'terminal_attachment_unverified', actor: 'orchestrator',
+      evidence: { taskId, terminalId: terminal.identity.id, terminalGeneration: terminal.identity.generation,
+        worktreeSelector: prepared.value.selector, attachment: attachment.reason },
+      nextAction: { kind: 'remediate_terminal',
+        ...(input.prNumber ? { command: mergeSameTaskCommand(input, taskId, resources.repository) } : {}),
+        note: `No Dispatch was started. Preserve Task ${taskId}, worktree ${prepared.value.selector} and terminal ${terminal.identity.id}; do not close it or create another terminal or worktree. `
+          + `Reveal the worktree in the Orca app until orca terminal show --terminal ${quote(terminal.identity.id)} --json reports orphaned=false and the worktree terminal list shows it once, then `
+          + (input.prNumber
+            ? 'rerun the returned --task launch command for this same Task and terminal; never rerun --pr. '
+            : 'rerun the same command with unchanged arguments: #2107 reuses this exact Task-owned terminal. ')
+          + 'If Orca cannot attach it, report that Orca limitation to the operator' },
+    }, resources, startedAtMs, timings, deps.now);
+  }
   // Covers late non-native final guards, hook restoration and every native read:
   // no post-deadline authorization to invoke supervised start.
   if (expired()) return continued(input, 'dispatch_admission_final', deadlineEdge(), resources, startedAtMs, timings, deps.now);
@@ -1863,6 +1954,14 @@ export async function runSupervisedTaskLaunchAssistant(
         : ['--terminal', quote(terminal!.identity.id), '--worktree', quote(prepared.value.selector)]),
       '--retry-request', quote(requestId),
     ].join(' ') : undefined;
+    const touched = [
+      ...(!providerMode && !input.existingTerminal && terminal ? [`terminal ${terminal.identity.id}`] : []),
+      ...(prepared.value.setupWitness === 'same_invocation_complete'
+        ? [`worktree ${prepared.value.selector}${prepared.value.path ? ` (${prepared.value.path})` : ''}`] : []),
+    ];
+    const handoffNote = supervised.nextAction?.note && touched.length
+      ? `This losing launch attempt created ${touched.join(' and ')}; any cleanup of this attempt applies only to those, after the coordinator confirms their current ownership and liveness through the existing native terminal and worktree reads. ${supervised.nextAction.note}`
+      : supervised.nextAction?.note;
     return continued(input, 'supervised_start', {
       cause: startReason,
       actor: 'provider',
@@ -1892,7 +1991,7 @@ export async function runSupervisedTaskLaunchAssistant(
         kind: 'retry_supervised_start', requestId, command: retry,
       } : {
         kind: 'reconcile_dispatch',
-        note: 'inspect the exact Task/Dispatch with dispatch-show and worker-show and the selected assignment store read-only; establish the missing native witness before any repair. A completed or retired predecessor requires a separately authorized new Task and fresh named worktree, optionally at a verified unique Issue-closing PR head; preserve the old checkout. An external terminal cannot be stopped by worker-release; never repeat a failed start blindly',
+        note: handoffNote ?? 'inspect the exact Task/Dispatch with dispatch-show and worker-show and the selected assignment store read-only; establish the missing native witness before any repair. A completed or retired predecessor requires a separately authorized new Task and fresh named worktree, optionally at a verified unique Issue-closing PR head; preserve the old checkout. An external terminal cannot be stopped by worker-release; never repeat a failed start blindly',
       },
     }, {
       ...resources,
@@ -1944,6 +2043,16 @@ export async function runSupervisedTaskLaunchAssistant(
   if (creationTerminals.length && deps.cleanupLaunchShells) {
     try { await deps.cleanupLaunchShells({ ...prepared.value, creationTerminals }, resources.terminal?.id ?? resources.providerAgentTerminalId ?? ''); }
     catch (error) { console.warn('[launch-shell-cleanup]', error instanceof Error ? error.message : String(error)); }
+  }
+  if (!providerMode && !input.existingTerminal && terminal) {
+    const attachment = await deps.readTerminalAttachment(prepared.value, terminal.identity);
+    if (attachment.status !== 'attached') return continued(input, 'supervised_start', {
+      cause: 'terminal_attachment_lost_after_start', actor: 'orchestrator',
+      evidence: { taskId, dispatchId, terminalId: terminal.identity.id, terminalGeneration: terminal.identity.generation,
+        attachment: attachment.reason },
+      nextAction: { kind: 'reconcile_dispatch',
+        note: `Dispatch ${dispatchId} already started on terminal ${terminal.identity.id}, but it is not ready: the terminal lost its visible attachment after launch-shell cleanup. Do not respawn, restart or close it; read the Dispatch back with orca orchestration worker-show --dispatch ${quote(dispatchId)} --json and reveal the worktree until terminal show reports orphaned=false` },
+    }, resources, startedAtMs, timings, deps.now);
   }
   const readyResources: ReadyResult['resources'] = {
     ...resources,
@@ -2038,6 +2147,47 @@ export async function cleanupLaunchShells(
       if (!closed.ok || !envelope(closed)?.ok) console.warn(`[launch-shell-cleanup] close failed: ${terminal.handle}`);
     } catch { console.warn(`[launch-shell-cleanup] close failed: ${terminal.handle}`); }
   }
+}
+
+export type TerminalAttachment =
+  | { readonly status: 'attached'; readonly tabId?: string; readonly leafId?: string }
+  | { readonly status: 'unverified'; readonly reason: string };
+
+/**
+ * The exact terminal-create handle, generation and selected worktree must be
+ * shown and listed exactly once, and terminal show must report orphaned=false
+ * and neither an explicit `status: exited` nor `connected: false`.
+ * The list contract does not promise `orphaned`; it is checked only when present.
+ */
+export async function readTerminalAttachment(
+  worktree: PreparedWorktree, terminal: RuntimeWorkerIdentity, execute: ChildExecutor,
+): Promise<TerminalAttachment> {
+  if (!worktree.id || !worktree.path) return { status: 'unverified', reason: 'worktree_identity_missing' };
+  const exact = (row: Record<string, unknown>) => text(row.handle) === terminal.id
+    && (text(row.incarnationId) || text(row.ptyId)) === terminal.generation
+    && text(row.worktreeId) === worktree.id && text(row.worktreePath) === worktree.path;
+  try {
+    const shown = resultRecord(envelope(await execute(['orca', 'terminal', 'show', '--terminal', terminal.id, '--json'])));
+    const live = shown && record(shown.terminal) ? shown.terminal : null;
+    if (!live) return { status: 'unverified', reason: 'terminal_show_missing' };
+    if (!exact(live)) return { status: 'unverified', reason: 'terminal_show_identity_mismatch' };
+    if (live.orphaned !== false) {
+      return { status: 'unverified', reason: live.orphaned === true ? 'terminal_show_orphaned' : 'terminal_show_orphaned_unknown' };
+    }
+    if (text(live.status).toLowerCase() === 'exited') return { status: 'unverified', reason: 'terminal_show_exited' };
+    if (live.connected === false) return { status: 'unverified', reason: 'terminal_show_disconnected' };
+    const listed = resultRecord(envelope(await execute(['orca', 'terminal', 'list', '--worktree', worktree.selector, '--json'])));
+    if (listed?.truncated !== false || !Array.isArray(listed.terminals)) return { status: 'unverified', reason: 'terminal_list_unavailable' };
+    const rows = listed.terminals.filter((row): row is Record<string, unknown> => record(row) && text(row.handle) === terminal.id);
+    if (rows.length !== 1) return { status: 'unverified', reason: rows.length ? 'terminal_list_ambiguous' : 'terminal_list_missing' };
+    if (!exact(rows[0]!)) return { status: 'unverified', reason: 'terminal_list_identity_mismatch' };
+    if (Object.hasOwn(rows[0]!, 'orphaned') && rows[0]!.orphaned !== false) return { status: 'unverified', reason: 'terminal_list_orphaned' };
+    return {
+      status: 'attached',
+      ...(text(live.tabId) ? { tabId: text(live.tabId) } : {}),
+      ...(text(live.leafId) ? { leafId: text(live.leafId) } : {}),
+    };
+  } catch { return { status: 'unverified', reason: 'terminal_readback_unavailable' }; }
 }
 
 async function child(
@@ -3113,7 +3263,7 @@ export async function prepareWorktreeWithOrca(
     'orca', 'worktree', 'create', '--repo', `id:${repositoryId}`, '--name', request.worktreeName!,
     ...(request.baseBranch ? ['--base-branch', request.baseBranch] : []),
     ...(request.issueNumber ? ['--issue', String(request.issueNumber)] : ['--no-parent']),
-    '--setup', 'run', '--json',
+    '--setup', 'run', '--activate', '--json',
   ], 120_000)));
   const worktree = created && record(created.worktree) ? created.worktree : null;
   const id = text(worktree?.id);
@@ -3232,7 +3382,8 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
   if (input.projectId && inheritedEnv.OPK_PROJECT_ID?.trim()
     && inheritedEnv.OPK_PROJECT_ID.trim() !== input.projectId) throw new Error('project_selector_mismatch');
   const routedEnv = input.workClass === 'merge' ? withMergeExecutorProfileDefaults(inheritedEnv) : inheritedEnv;
-  const env: NodeJS.ProcessEnv = { ...routedEnv, ...(input.projectId ? { OPK_PROJECT_ID: input.projectId } : {}) };
+  const executorEnv = executorOverrideEnv(input.workClass, input.executor);
+  const env: NodeJS.ProcessEnv = { ...routedEnv, ...executorEnv, ...(input.projectId ? { OPK_PROJECT_ID: input.projectId } : {}) };
   const target = resolveTargetContext({ projectId: input.projectId, env });
   const adapter = await selectRuntimeAdapter({ env: { ...env } }, { cwd, transport: { env: { ...env } } });
   return {
@@ -3242,7 +3393,9 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       (args, timeoutMs) => child(args, cwd, env, timeoutMs)),
     cleanupLaunchShells: (worktree, unitTerminalId) => cleanupLaunchShells(worktree, unitTerminalId,
       (args, timeoutMs) => child(args, cwd, env, timeoutMs)),
-    runSupervisedStart: (start) => runSupervisedWorkerStart({ ...start, env: { ...env, ...(start.env ?? {}), OPK_PROJECT_ID: target.projectId } }),
+    readTerminalAttachment: (worktree, terminal) => readTerminalAttachment(worktree, terminal,
+      (args, timeoutMs) => child(args, cwd, env, timeoutMs)),
+    runSupervisedStart: (start) => runSupervisedWorkerStart({ ...start, env: { ...env, ...(start.env ?? {}), ...executorEnv, OPK_PROJECT_ID: target.projectId } }),
     commandPreflight: () => {
       if (Number(process.versions.node.split('.')[0]) !== SUPPORTED_NODE_MAJOR) return {
         status: 'continue', cause: 'unsupported_node_major', actor: 'operator', evidence: { requiredMajor: SUPPORTED_NODE_MAJOR },
@@ -3599,6 +3752,7 @@ const LAUNCH_CLI_OPTIONS = new Set([
   '--existing-terminal',
   '--base-branch',
   '--start-mode',
+  '--executor',
 ]);
 
 function launchCliOptions(argv: readonly string[]): ReadonlyMap<string, string> {
@@ -3622,6 +3776,11 @@ export function parseLaunchAssistantCli(
   const options = launchCliOptions(argv);
   const workClass = (options.get('--work-class') ?? '').trim();
   if (!LAUNCH_WORK_CLASSES.includes(workClass as LaunchWorkClass)) throw new Error('--work-class must be exactly manager|t1|t2|t3|merge');
+  const executorRaw = options.get('--executor');
+  const executor = executorRaw === undefined ? undefined : parseExecutorOverride(executorRaw);
+  if (executor && !EXECUTOR_OVERRIDE_CLASSES.includes(workClass as LaunchWorkClass)) {
+    throw new Error('--executor applies only to --work-class t1|t2|t3; manager and merge keep their pinned executor routes');
+  }
   const target = resolveTarget({ projectId: (options.get('--project') ?? '').trim(), env });
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(target.projectId)) throw new Error('project_selection_invalid');
   if (env.OPK_PROJECT_ID?.trim() && env.OPK_PROJECT_ID.trim() !== target.projectId) {
@@ -3732,6 +3891,7 @@ export function parseLaunchAssistantCli(
     repository,
     projectId: target.projectId,
     env: { ...env, OPK_PROJECT_ID: target.projectId },
+    ...(executor ? { executor } : {}),
     primaryRoot: target.primaryRoot,
     ...(prNumber !== undefined ? { prNumber, packRoot: target.packRoot } : {}),
     ...(mergeInstruction !== undefined ? { mergeInstruction } : {}),

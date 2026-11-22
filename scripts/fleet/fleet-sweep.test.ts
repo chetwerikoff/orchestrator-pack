@@ -1182,3 +1182,71 @@ describe('Issue #2749 B9-5/B9-6: observed idle and primary Dispatch-only selecti
       store: new MemoryPollingStore() })).toEqual([]);
   });
 });
+
+describe('Issue #2863 wide OpenCode idle composer is chrome, not the final or incoming line', () => {
+  const gate = 'PARKED on operator 5433 gate for PR 692';
+  const composer = [
+    '     ▣  Pack-Opk-00000000000000000000000000000689 · GPT-6 Luna · 4.0s',
+    '  ┃',
+    '  ┃' + ' '.repeat(92) + '~/orca/workspaces/project/leopoker-',
+    '  ┃' + ' '.repeat(92) + 'mgr-689:feat/689-operator-gate',
+    '  ┃  Pack-Opk-00000000000000000000000000000689 · GPT-6 Luna OpenAI · medium',
+    '  ╹' + '▀'.repeat(100),
+    '   /home/user/orca/workspaces/project/leopoker-mgr-689         131.1K (48%)  ctrl+p commands    • OpenCode 1.19.3',
+  ];
+  // Synthetic hypothesis in the layout of a live wide OpenCode frame; baseline: STOPPED.
+  const frame = (...body: string[]) => [
+    '  ┃', '  ┃  Hold PR 692 for my operator 5433 gate; I release it myself.', '  ┃',
+    '     + Thought: Holding for operator gate · 2.1s', ...body, ...composer,
+  ].join('\n');
+  const native: FleetTerminal = { handle: 'term_f0fc4804', title: 'OpenCode', worktreePath: workerPath,
+    incarnationId: 'inc-689', branch: 'refs/heads/feat/689', status: 'running', agentIdentity: 'opencode' };
+  const sweep = (screen: string) => runFleetSweep({ primary, terminals: [native], store: new MemoryPollingStore(),
+    executor: fakeExecutor([native], { [native.handle]: screen }) })[0];
+
+  it('keeps the own final park of a wide pane PARKED with its exact own observation', () => {
+    const screen = frame('     PR #692 is green; merging needs the operator 5433 gate.', '     ' + gate);
+    expect(lastFleetParkedLine(screen)).toBe(gate);
+    expect(classifyFleetPane(screen, native.handle, new MemoryPollingStore())).toBe('PARKED');
+    expect(sweep(screen)).toMatchObject({ state: 'PARKED', wait: gate, ownParkObservation: gate });
+  });
+
+  it('a gutter message directly above the composer rows stays incoming and supersedes the park', () => {
+    const lines = frame('     ' + gate).split('\n');
+    const at = lines.findIndex((line) => line.includes('~/orca/workspaces'));
+    lines.splice(at, 0, '  ┃  New instruction: rebase PR 692 now.');
+    const screen = lines.join('\n');
+    expect(sweep(screen)?.ownParkObservation).toBeUndefined();
+    expect(sweep(screen)?.state).toBe('STOPPED');
+  });
+
+  it.each([
+    ['padded incoming text', '  ┃' + ' '.repeat(24) + 'User: new instructions'],
+    ['padded one-word incoming text', '  ┃' + ' '.repeat(24) + 'rebase-now'],
+    ['padded incoming text in the composer column', '  ┃' + ' '.repeat(92) + 'User: new instructions'],
+    ['a path-like row in the composer column', '  ┃' + ' '.repeat(92) + '/tmp/x:y'],
+  ])('%s directly above the composer rows is not stripped and supersedes the park', (_name, row) => {
+    const lines = frame('     ' + gate).split('\n');
+    lines.splice(lines.findIndex((line) => line.includes('~/orca/workspaces')), 0, row);
+    const screen = lines.join('\n');
+    expect(lastFleetParkedLine(screen)).not.toBe(gate);
+    expect(sweep(screen)?.ownParkObservation).toBeUndefined();
+    expect(sweep(screen)?.state).toBe('STOPPED');
+  });
+
+  it('a right column that does not name the footer worktree is not stripped', () => {
+    const screen = frame('     ' + gate).replace('~/orca/workspaces/project/leopoker-', '~/orca/workspaces/project/other-');
+    expect(lastFleetParkedLine(screen)).not.toBe(gate);
+    expect(sweep(screen)?.ownParkObservation).toBeUndefined();
+  });
+
+  it('an unsent composer draft is not stripped as chrome', () => {
+    const screen = frame('     ' + gate).replace('  ┃' + ' '.repeat(92) + '~/orca', '  ┃  approve merge' + ' '.repeat(77) + '~/orca');
+    expect(lastFleetParkedLine(screen)).toBeUndefined();
+    expect(sweep(screen)?.ownParkObservation).toBeUndefined();
+  });
+
+  it('a genuinely stopped wide pane stays STOPPED', () => {
+    expect(sweep(frame('     Implementation complete; no step remains.'))?.state).toBe('STOPPED');
+  });
+});
