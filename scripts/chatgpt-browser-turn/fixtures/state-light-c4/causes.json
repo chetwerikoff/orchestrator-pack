@@ -1,0 +1,49 @@
+{
+  "schema": "state-light-c4-cause-fixtures/v1",
+  "issue": 2854,
+  "note": "Cause/state/timing metadata is recorded from accessible terminal envelopes (see census.json). No historical DOM exists for any of them, so every replay parameter is synthetic.",
+  "cases": [
+    {
+      "id": "baseline_transcript_incomplete",
+      "recorded": { "invocation": "invocation-686-test2-01", "state": "ui_contract_mismatch", "cause": "baseline_transcript_incomplete", "send_count": 0, "elapsed_ms": 31084 },
+      "dom_provenance": "unobserved",
+      "replay": { "provenance": "synthetic", "terminal": "returned", "error": null, "read_settled": false, "page_lost": false },
+      "expected": { "reload": false, "refusal": "cause_not_reloadable" }
+    },
+    {
+      "id": "owned_conversation_render_mismatch_at_deadline",
+      "recorded": { "invocation": "invocation-675-13", "state": "ui_contract_mismatch", "cause": "owned_conversation_render_mismatch", "send_count": 0, "elapsed_ms": 1800319 },
+      "dom_provenance": "unobserved",
+      "replay": { "provenance": "synthetic", "terminal": "returned", "error": null, "read_settled": false, "page_lost": false, "deadline_exhausted": true },
+      "expected": { "reload": false, "refusal": "cause_not_reloadable" }
+    },
+    {
+      "id": "target_closed",
+      "recorded": { "invocation": "99e3bbf8-8c60-43ab-a4c6-549e16e5aae2", "state": "driver_error", "cause": "Target closed", "send_count": 0, "elapsed_ms": 33230 },
+      "dom_provenance": "unobserved",
+      "replay": { "provenance": "synthetic", "terminal": "thrown", "error": "Target closed", "read_settled": false, "page_lost": true },
+      "expected": { "reload": false, "refusal": "cause_not_reloadable" }
+    },
+    {
+      "id": "locator_count_unresolved",
+      "recorded": { "invocation": "294b2716-9df9-4159-be95-2e082ddd3aee", "state": "driver_error", "cause": "browser_operation_timeout:locator_count", "send_count": 0, "elapsed_ms": 20771 },
+      "dom_provenance": "unobserved",
+      "replay": { "provenance": "synthetic", "terminal": "thrown", "error": "pending_locator_count", "read_settled": false, "page_lost": false },
+      "expected": { "reload": false, "refusal": "locator_read_pending" }
+    },
+    {
+      "id": "locator_count_late_settled",
+      "recorded": { "invocation": "294b2716-9df9-4159-be95-2e082ddd3aee", "state": "driver_error", "cause": "browser_operation_timeout:locator_count", "send_count": 0, "elapsed_ms": 20771 },
+      "dom_provenance": "unobserved",
+      "replay": { "provenance": "synthetic", "terminal": "thrown", "error": "pending_locator_count", "read_settled": true, "page_lost": false },
+      "expected": { "reload": true }
+    },
+    {
+      "id": "fresh_send_button_never_enabled",
+      "recorded": { "invocation": "inv-task_e6d88a8388e3-l1-arch1411", "state": "send_failed", "cause": "fresh_send_button_never_enabled", "send_count": 0, "elapsed_ms": 70790 },
+      "dom_provenance": "unobserved",
+      "replay": { "provenance": "synthetic", "terminal": "returned", "error": null, "read_settled": false, "page_lost": false },
+      "expected": { "reload": false, "refusal": "cause_not_reloadable" }
+    }
+  ]
+}

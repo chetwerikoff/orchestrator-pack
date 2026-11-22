@@ -1242,7 +1242,8 @@ describe('state-light fresh conversation collision recovery', () => {
     const turn = makeLoserPage(prompt, 'OK');
     const startedAt = mocks.nowMs;
     turn.sendButton.isEnabled.mockImplementation(async () => mocks.nowMs >= startedAt + 40_000);
-    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'delayed-send-2541.txt'), '90000');
+    // A 90 s budget leaves no safe dispatch time after 40 s once the post-Send reserves are kept.
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'delayed-send-2541.txt'), '180000');
     expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
     expect(mocks.nowMs).toBeGreaterThanOrEqual(startedAt + 40_000);
     expect(turn.getSends()).toBe(1);
@@ -1276,7 +1277,8 @@ describe('state-light fresh conversation collision recovery', () => {
       const turn = makeLoserPage(prompt, 'UNREACHED');
       turn.sendButton.isEnabled.mockResolvedValue(false);
       const started = mocks.nowMs;
-      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2682-negative.txt'));
+      // 137 s puts the last safe dispatch time exactly at the end of the fourth 15 s window.
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2682-negative.txt'), '137000');
       expect(outcome.result).toMatchObject({
         state: 'send_failed', cause: 'fresh_send_button_never_enabled', send_count: 0,
       });
@@ -1595,6 +1597,91 @@ describe('state-light fresh conversation collision recovery', () => {
     });
   });
 
+  describe('Issue #2854 ordinary fresh readiness after the first 60 s window', () => {
+    const noSiblingEvidence = () => ({ nonresponsive: [], responsive: [], disappearedOrChanged: [], unknown: [] });
+    beforeEach(() => {
+      vi.mocked(probeCdpSiblingEvaluations).mockReset();
+      vi.mocked(probeCdpSiblingEvaluations).mockResolvedValue(noSiblingEvidence());
+    });
+
+    it('sends once when a healthy owned composer hydrates after 60 s but before its safe cutoff', async () => {
+      const prompt = '2854-LATE-HEALTHY-SEND';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'LATE-OK');
+      const startedAt = mocks.nowMs;
+      turn.sendButton.isEnabled.mockImplementation(async () => mocks.nowMs >= startedAt + 120_000);
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2854-late-healthy.txt'), '900000');
+      expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+      expect(mocks.nowMs - startedAt).toBeGreaterThanOrEqual(120_000);
+      expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
+      expect(turn.getSends()).toBe(1);
+      // The #2682 read-only entry diagnostic still runs once at the end of the first window.
+      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(1);
+      expect(turn.page.goto).toHaveBeenCalledTimes(1);
+    });
+
+    it('never clicks a Send that stays disabled through the dynamic cutoff', async () => {
+      const prompt = '2854-NEVER-ENABLED';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      turn.sendButton.isEnabled.mockResolvedValue(false);
+      const startedAt = mocks.nowMs;
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2854-never.txt'), '900000');
+      expect(outcome.result).toMatchObject({
+        state: 'send_failed', cause: 'fresh_send_button_never_enabled', send_count: 0,
+      });
+      expect(outcome.result.send_attempted).not.toBe(true);
+      expect(mocks.nowMs - startedAt).toBeGreaterThan(65_000);
+      expect(mocks.nowMs - startedAt).toBeLessThanOrEqual(600_000 + 5_000);
+      expect(turn.sendButton.click).not.toHaveBeenCalled();
+      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(1);
+      expect(deriveDelivery({ ...outcome.result, resolved_send_count: outcome.result.send_count }, false))
+        .toBe('not-sent');
+    });
+
+    it('ends the first readiness window at the safe cutoff when the budget is short', async () => {
+      const prompt = '2854-SHORT-BUDGET';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      turn.sendButton.isEnabled.mockResolvedValue(false);
+      const startedAt = mocks.nowMs;
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2854-short.txt'), '90000');
+      expect(outcome.result).toMatchObject({ state: 'send_failed', cause: 'fresh_send_button_never_enabled' });
+      // 90 s minus the unbound-return, observation, read and terminal reserves leaves about 13 s.
+      expect(mocks.nowMs - startedAt).toBeLessThan(20_000);
+      expect(turn.sendButton.click).not.toHaveBeenCalled();
+    });
+
+    it('never clicks a Send enabled inside the first 60 s window but after the safe cutoff', async () => {
+      const prompt = '2854-ENABLED-AFTER-SAFE-CUTOFF';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      const startedAt = mocks.nowMs;
+      turn.sendButton.isEnabled.mockImplementation(async () => mocks.nowMs >= startedAt + 30_000);
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2854-after-safe-cutoff.txt'), '90000');
+      expect(outcome.result).toMatchObject({
+        state: 'send_failed', cause: 'fresh_send_button_never_enabled', send_count: 0,
+      });
+      expect(outcome.result.send_attempted).not.toBe(true);
+      expect(turn.sendButton.click).not.toHaveBeenCalled();
+      expect(turn.getSends()).toBe(0);
+    });
+
+    it('three independent ordinary fresh turns on separate Pages each send exactly once', async () => {
+      for (const lane of ['L1', 'L2', 'L1s']) {
+        const prompt = `2854-PARALLEL-${lane}`;
+        mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+        const turn = makeLoserPage(prompt, `OK-${lane}`);
+        const startedAt = mocks.nowMs;
+        turn.sendButton.isEnabled.mockImplementation(async () => mocks.nowMs >= startedAt + 75_000);
+        const outcome = await runNewChatTurn(turn.page, join(stateDir, `2854-${lane}.txt`), '900000');
+        expect(outcome.result, lane).toMatchObject({ state: 'ok', send_count: 1 });
+        expect(turn.sendButton.click, lane).toHaveBeenCalledTimes(1);
+        expect(turn.getSends(), lane).toBe(1);
+      }
+    });
+  });
+
   it('closes a proven owned, never-clicked draft only after 60s of disabled Send (#2487)', async () => {
     const prompt = 'PROMPT-FRESH-NEVER-ENABLED';
     const invocationId = randomUUID();
@@ -1811,7 +1898,8 @@ describe('state-light fresh conversation collision recovery', () => {
       if (mocks.nowMs >= 70_000) repurposed = true;
       return observed;
     });
-    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'cleanup-tab-replaced.txt'));
+    // 137 s puts the last safe dispatch time exactly at the end of the fourth 15 s window.
+    const outcome = await runNewChatTurn(turn.page, join(stateDir, 'cleanup-tab-replaced.txt'), '137000');
     expect(outcome.result).toMatchObject({
       state: 'send_failed', cause: 'fresh_send_button_never_enabled', send_count: 0,
     });
@@ -2547,6 +2635,106 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
     expect(solo.page.goto).toHaveBeenCalledTimes(2);
     expect(solo.getSends()).toBe(1);
+  });
+
+  describe('Issue #2854 fresh account reload and blank-surface reopen share one remedy', () => {
+    const inFreshPreparation = (): boolean => /prepareStateLightFreshConversation|openBlankProjectChatSurface/u
+      .test(String(new Error().stack));
+    const accountWallOnSecondStatusRead = (page: any) => {
+      const fault = installAccountLoadError(page);
+      let statusReads = 0;
+      mocks.productStatusText.mockImplementation(async (): Promise<any> => {
+        statusReads++;
+        if (statusReads === 2) {
+          fault.showError();
+          const heading = "We couldn't load your account";
+          return {
+            text: heading, composer: false,
+            parts: [{ selector: uiAdapter.ACCOUNT_LOAD_ERROR_HEADING_SELECTOR, text: heading }],
+          };
+        }
+        return { text: '', composer: true };
+      });
+      return fault;
+    };
+
+    it('reopens the blank surface once when no other remedy was used', async () => {
+      const prompt = '2854-FRESH-REOPEN-ONLY';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const solo = makeLoserPage(prompt, 'REOPEN-OK');
+      solo.composer.count.mockImplementation(async () => solo.page.goto.mock.calls.length >= 2 ? 1 : 0);
+      const outcome = await runNewChatTurn(solo.page, join(stateDir, '2854-fresh-reopen.txt'), '300000');
+      expect(solo.page.goto).toHaveBeenCalledTimes(2);
+      expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    });
+
+    it('an account-wall reload leaves no blank-surface reopen goto', async () => {
+      const prompt = '2854-FRESH-ACCOUNT-THEN-REOPEN';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const solo = makeLoserPage(prompt, 'UNREACHED');
+      solo.composer.count.mockImplementation(async () => solo.page.goto.mock.calls.length >= 2 ? 1 : 0);
+      const fault = accountWallOnSecondStatusRead(solo.page);
+      const outcome = await withActualProductWallClassifier(() =>
+        runNewChatTurn(solo.page, join(stateDir, '2854-fresh-account-reopen.txt'), '300000'));
+      expect(fault.reload).toHaveBeenCalledTimes(1);
+      expect(solo.page.goto).toHaveBeenCalledTimes(1);
+      expect(outcome.result.send_count).toBe(0);
+      expect(outcome.result.send_attempted).not.toBe(true);
+      expect(solo.sendButton.click).not.toHaveBeenCalled();
+    });
+
+    it('a remedial fresh-preparation goto leaves no account-wall reload', async () => {
+      const prompt = '2854-FRESH-PREP-GOTO-THEN-ACCOUNT';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const solo = makeLoserPage(prompt, 'UNREACHED');
+      const fault = installAccountLoadError(solo.page);
+      // Preparation cannot read the landed URL, so it navigates to the blank surface once more.
+      const readUrl = solo.page.url;
+      solo.page.url = vi.fn(() => {
+        if (solo.page.goto.mock.calls.length < 2 && inFreshPreparation()) throw new Error('synthetic unreadable URL');
+        return readUrl();
+      });
+      mocks.productStatusText.mockImplementation(async (): Promise<any> => {
+        if (solo.page.goto.mock.calls.length < 2) return { text: '', composer: true };
+        fault.showError();
+        const heading = "We couldn't load your account";
+        return {
+          text: heading, composer: false,
+          parts: [{ selector: uiAdapter.ACCOUNT_LOAD_ERROR_HEADING_SELECTOR, text: heading }],
+        };
+      });
+      const outcome = await withActualProductWallClassifier(() =>
+        runNewChatTurn(solo.page, join(stateDir, '2854-fresh-prep-account.txt'), '300000'));
+      expect(solo.page.goto).toHaveBeenCalledTimes(2);
+      expect(fault.reload).not.toHaveBeenCalled();
+      expect(outcome.result).toMatchObject({ state: 'recovery_required', cause: 'account_load_error', send_count: 0 });
+      expect(solo.sendButton.click).not.toHaveBeenCalled();
+    });
+
+    it('an account-wall reload leaves no remedial fresh-preparation goto', async () => {
+      const prompt = '2854-FRESH-ACCOUNT-THEN-PREP-GOTO';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const solo = makeLoserPage(prompt, 'UNREACHED');
+      const fault = installAccountLoadError(solo.page);
+      // The wall appears when preparation starts; after the reload preparation cannot read the URL,
+      // which would need another goto.
+      const readUrl = solo.page.url;
+      let shown = false;
+      solo.page.url = vi.fn(() => {
+        if (inFreshPreparation()) {
+          if (!shown) { shown = true; fault.showError(); }
+          if (fault.reload.mock.calls.length > 0) throw new Error('synthetic unreadable URL');
+        }
+        return readUrl();
+      });
+      const outcome = await withActualProductWallClassifier(() =>
+        runNewChatTurn(solo.page, join(stateDir, '2854-fresh-account-prep.txt'), '300000'));
+      expect(fault.reload).toHaveBeenCalledTimes(1);
+      expect(solo.page.goto).toHaveBeenCalledTimes(1);
+      expect(outcome.result.send_count).toBe(0);
+      expect(outcome.result.send_attempted).not.toBe(true);
+      expect(solo.sendButton.click).not.toHaveBeenCalled();
+    });
   });
 
   it('classifies two observed network-changed navigation errors without attempting Send', async () => {
@@ -5036,7 +5224,8 @@ describe('state-light fresh conversation collision recovery', () => {
     const sites = [
       ['state-light-session.ts', 0],
       ['state-light-fresh-conversation.ts', 1],
-      ['state-light-turn-base.ts', 3],
+      // Includes the pre-Send account-wall reload and the #2854 one-shot C4 reload (both DCL).
+      ['state-light-turn-base.ts', 4],
     ] as const;
     for (const [file, expectedPostSendDcl] of sites) {
       const source = readFileSync(
@@ -5571,6 +5760,185 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(fault.reload).toHaveBeenCalledTimes(1);
     expect(existing.getSends()).toBe(1);
     expect(existing.page.close).not.toHaveBeenCalled();
+  });
+
+  describe('Issue #2854 existing-chat pre-Send C4 recovery', () => {
+    // The Stop read inside the existing-generation watch hangs once; Playwright's wrapper times out
+    // while the underlying read stays pending until the fixture settles it (or never).
+    function existingC4Turn(name: string, opts: {
+      settle: boolean; closeOnSettle?: boolean; busyAfterSettle?: 'generation' | 'continue';
+    }) {
+      const existing = makeLoserPage('PROMPT', 'C4-RECOVERED-OK', undefined, true);
+      const originalUrl = existing.page.url;
+      existing.page.url = vi.fn(() => originalUrl() === PROJECT_URL ? SHARED_CONV : originalUrl());
+      let resolveHung: ((value: number) => void) | undefined;
+      let hungReads = 0;
+      let settled = false;
+      let closed = false;
+      const baseLocator = existing.page.locator;
+      existing.page.locator = vi.fn((selector: string) => {
+        if (selector.includes(STOP_BUTTON_TESTID) && hungReads === 0
+          && String(new Error().stack).includes('waitForExistingGeneration')) {
+          hungReads++;
+          return scalarLocator({ count: vi.fn(() => new Promise<number>((resolve) => { resolveHung = resolve; })) });
+        }
+        const located = baseLocator(selector);
+        if (opts.busyAfterSettle && settled && selector === MESSAGE_NODE_SELECTOR
+          && typeof located.evaluateAll === 'function') {
+          const evaluateAll = located.evaluateAll;
+          located.evaluateAll = vi.fn(async (...args: unknown[]) => {
+            const observed = await evaluateAll(...args);
+            return {
+              ...observed,
+              pageTurnEvidence: {
+                ...observed.pageTurnEvidence,
+                ...(opts.busyAfterSettle === 'generation'
+                  ? { generationInProgress: true } : { continueGeneratingVisible: true }),
+              },
+            };
+          });
+        }
+        return located;
+      });
+      const baseWait = existing.page.waitForTimeout;
+      existing.page.waitForTimeout = vi.fn(async (ms: number) => {
+        if (opts.settle && resolveHung) {
+          resolveHung(0);
+          resolveHung = undefined;
+          settled = true;
+          if (opts.closeOnSettle) closed = true;
+        }
+        return baseWait(ms);
+      });
+      existing.page.isClosed = vi.fn(() => closed);
+      existing.page.reload = vi.fn(async () => undefined);
+      const harness = enqueueBrowserForTurn(mocks, existing.page);
+      Object.assign(harness.context, { pages: vi.fn(() => [existing.page]) });
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT'));
+      const output = join(stateDir, name);
+      const run = () => runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+        ...STATE_LIGHT_TURN_BASE_ARGV, '--invocation-id', randomUUID(),
+        '--output', output, '--chat-url', SHARED_CONV, '--timeout-ms', '900000', '--poll-ms', '1',
+      ]);
+      return { existing, run, output, hungReads: () => hungReads };
+    }
+    const expectNoDispatch = (result: Record<string, any>, existing: ReturnType<typeof makeLoserPage>) => {
+      expect(result.send_count).toBe(0);
+      expect(result.send_attempted).not.toBe(true);
+      expect(existing.sendButton.click).not.toHaveBeenCalled();
+      expect(existing.composer.press).not.toHaveBeenCalled();
+      expect(existing.getSends()).toBe(0);
+      expect(deriveDelivery({ ...result, resolved_send_count: result.send_count } as any, false)).toBe('not-sent');
+    };
+
+    it('reloads the same owned Page once after the same read settles, then sends exactly once', async () => {
+      const turn = existingC4Turn('2854-c4-settled.txt', { settle: true });
+      const { result } = await turn.run();
+      expect(turn.hungReads()).toBe(1);
+      expect(result).toMatchObject({ state: 'ok', send_count: 1 });
+      expect(turn.existing.page.reload).toHaveBeenCalledTimes(1);
+      expect(turn.existing.page.reload).toHaveBeenCalledWith({ waitUntil: 'domcontentloaded', timeout: expect.any(Number) });
+      expect(turn.existing.page.goto).not.toHaveBeenCalled();
+      // One Playwright Send call, one witnessed submission; no C4 click/Enter retry.
+      expect(turn.existing.sendButton.click).toHaveBeenCalledTimes(1);
+      expect(turn.existing.getSends()).toBe(1);
+      expect(result.incidents).toContain('pre_send_c4_recovery');
+      expect(readFileSync(turn.output, 'utf8')).toBe('C4-RECOVERED-OK');
+      expect(turn.existing.page.close).not.toHaveBeenCalled();
+    }, 30_000);
+
+    it('keeps an unresolved underlying read as the original non-reloadable cause', async () => {
+      const turn = existingC4Turn('2854-c4-pending.txt', { settle: false });
+      const { result } = await turn.run();
+      expect(result).toMatchObject({ cause: 'browser_operation_timeout:locator_count' });
+      expect(turn.existing.page.reload).not.toHaveBeenCalled();
+      expect(turn.existing.page.goto).not.toHaveBeenCalled();
+      expect(result.incidents).toContain('pre_send_c4_recovery');
+      expectNoDispatch(result, turn.existing);
+    }, 30_000);
+
+    it('never reloads or replaces a Page that closed while the read settled', async () => {
+      const turn = existingC4Turn('2854-c4-closed.txt', { settle: true, closeOnSettle: true });
+      const { result } = await turn.run();
+      expect(turn.existing.page.reload).not.toHaveBeenCalled();
+      expect(turn.existing.page.goto).not.toHaveBeenCalled();
+      expectNoDispatch(result, turn.existing);
+    }, 30_000);
+
+    it('account-wall reload first leaves no C4 reload (one shared remedy)', async () => {
+      const turn = existingC4Turn('2854-account-then-c4.txt', { settle: true });
+      const fault = installAccountLoadError(turn.existing.page);
+      mocks.productStatusText.mockImplementationOnce(async (): Promise<any> => {
+        fault.showError();
+        const heading = "We couldn't load your account";
+        return {
+          text: heading, composer: false,
+          parts: [{ selector: uiAdapter.ACCOUNT_LOAD_ERROR_HEADING_SELECTOR, text: heading }],
+        };
+      });
+      const { result } = await withActualProductWallClassifier(() => turn.run());
+      expect(fault.reload).toHaveBeenCalledTimes(1);
+      expect(turn.existing.page.goto).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ cause: 'browser_operation_timeout:locator_count' });
+      expectNoDispatch(result, turn.existing);
+    }, 30_000);
+
+    it('C4 reload first leaves no account-wall reload (one shared remedy)', async () => {
+      const turn = existingC4Turn('2854-c4-then-account.txt', { settle: true });
+      const fault = installAccountLoadError(turn.existing.page, { persistent: true, errorUrl: SHARED_CONV });
+      const reload = vi.fn(async () => { fault.showError(); });
+      turn.existing.page.reload = reload;
+      const { result } = await turn.run();
+      expect(reload).toHaveBeenCalledTimes(1);
+      expect(turn.existing.page.goto).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ state: 'recovery_required', cause: 'account_load_error' });
+      expectNoDispatch(result, turn.existing);
+    }, 30_000);
+
+    it('an existing-chat reopen goto first leaves no C4 reload (goto debits the same remedy)', async () => {
+      const turn = existingC4Turn('2854-reopen-then-c4.txt', { settle: true });
+      turn.existing.composer.count.mockImplementation(async () =>
+        turn.existing.page.goto.mock.calls.length > 0 ? 1 : 0);
+      const { result } = await turn.run();
+      expect(turn.existing.page.goto).toHaveBeenCalledTimes(1);
+      expect(turn.existing.page.reload).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ cause: 'browser_operation_timeout:locator_count' });
+      expectNoDispatch(result, turn.existing);
+    }, 30_000);
+
+    it.each(['generation', 'continue'] as const)(
+      'refuses the C4 reload when Stop is absent but %s evidence is still positive',
+      async (busy) => {
+        const turn = existingC4Turn(`2854-c4-busy-${busy}.txt`, { settle: true, busyAfterSettle: busy });
+        const { result } = await turn.run();
+        expect(turn.hungReads()).toBe(1);
+        expect(turn.existing.page.reload).not.toHaveBeenCalled();
+        expect(turn.existing.page.goto).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ cause: 'browser_operation_timeout:locator_count' });
+        expect(result.incidents).toContain('pre_send_c4_recovery');
+        expectNoDispatch(result, turn.existing);
+      },
+      30_000,
+    );
+
+    it('an existing-chat account-wall reload leaves no composer reopen goto (one shared remedy)', async () => {
+      const turn = existingC4Turn('2854-account-then-reopen.txt', { settle: true });
+      turn.existing.composer.count.mockImplementation(async () =>
+        turn.existing.page.goto.mock.calls.length > 0 ? 1 : 0);
+      const fault = installAccountLoadError(turn.existing.page);
+      mocks.productStatusText.mockImplementationOnce(async (): Promise<any> => {
+        fault.showError();
+        const heading = "We couldn't load your account";
+        return {
+          text: heading, composer: false,
+          parts: [{ selector: uiAdapter.ACCOUNT_LOAD_ERROR_HEADING_SELECTOR, text: heading }],
+        };
+      });
+      const { result } = await withActualProductWallClassifier(() => turn.run());
+      expect(fault.reload).toHaveBeenCalledTimes(1);
+      expect(turn.existing.page.goto).not.toHaveBeenCalled();
+      expectNoDispatch(result, turn.existing);
+    }, 30_000);
   });
 
   it('preserves possibly-delivered state after a recovered zero-witness fresh dispatch stays unbound', async () => {
