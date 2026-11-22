@@ -4007,7 +4007,8 @@ async function recoverablePostedRateLimitSlots(input: {
     });
     let resolution: PackGptSourceCommentResolution;
     try {
-      resolution = await resolvePackGptSourceComment({ identity, transport });
+      resolution = await resolveElectedGptSourceComment({ identity, transport,
+        ...(complete ? { frozenCommentId: frozenGptSourceCommentId(slot) } : {}) });
     } catch {
       return null;
     }
@@ -4243,6 +4244,12 @@ function packReviewRunnerPidDead(pid: unknown): boolean {
  * is re-credentialed by the unchanged resolver over the census without its
  * losing duplicates.
  */
+function frozenGptSourceCommentId(slot: PackReviewSourceSlotRecord): number | string {
+  const receipt = (slot.terminalResult as { source_comment_receipt?: { commentId?: number | string } } | undefined)
+    ?.source_comment_receipt;
+  return receipt?.commentId ?? '';
+}
+
 async function resolveElectedGptSourceComment(options: {
   identity: PackGptSourceIdentity;
   transport: PackGptSourceCommentTransport;
@@ -5041,7 +5048,8 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
       repoSlug: options.repoSlug, prNumber: run.prNumber, headSha: run.targetSha,
       runId: run.id, slotId: slot.slotId, invocationId,
     });
-    const observed = await resolvePackGptSourceComment({ identity, transport: sourceTransport });
+    const observed = await resolveElectedGptSourceComment({ identity, transport: sourceTransport,
+      frozenCommentId: frozenGptSourceCommentId(slot) });
     const recorded = slot.terminalResult && typeof slot.terminalResult === 'object'
       && !Array.isArray(slot.terminalResult)
       ? (slot.terminalResult as Record<string, unknown>).source_comment_receipt : null;
@@ -5595,7 +5603,8 @@ async function verifyOriginalGithubSourcesAndReview(
       repoSlug, prNumber: run.prNumber, headSha: run.targetSha,
       runId: run.id, slotId: slot.slotId, invocationId: trim(slot.invocationId),
     });
-    const observed = await resolvePackGptSourceComment({ identity, transport: sourceTransport! });
+    const observed = await resolveElectedGptSourceComment({ identity, transport: sourceTransport!,
+      frozenCommentId: frozenGptSourceCommentId(slot) });
     const terminal = slot.terminalResult && typeof slot.terminalResult === 'object'
       && !Array.isArray(slot.terminalResult)
       ? slot.terminalResult as Record<string, unknown> : null;
@@ -5994,24 +6003,15 @@ const AMENDMENT_REASON_BINDING: Record<string, PackReviewAmendmentBinding> = {
   amendment_admission_unverified: 'required_status',
 };
 
-/** Classifies a thrown amendment-proof error without echoing its text. */
+/**
+ * The failing operation (catch site) owns the binding; exception text is
+ * untrusted and is neither echoed nor used to reclassify the failure.
+ */
 function sanitizedAmendmentCause(
-  error: unknown,
-  fallback: PackReviewAmendmentBinding,
+  _error: unknown,
+  binding: PackReviewAmendmentBinding,
 ): { binding: PackReviewAmendmentBinding; detail: string } {
-  const text = describeError(error);
-  const rules: Array<[RegExp, PackReviewAmendmentBinding, string]> = [
-    [/criteria/i, 'issue_criteria', 'criteria_unverified'],
-    [/immutable|terminal|\bREVIEW\b/, 'immutable_terminal', 'terminal_or_review_unverified'],
-    [/\bhead\b|descendant|PR (identity|repository|number)|repository identity/i, 'pr_head_lineage', 'head_or_pr_unverified'],
-    [/snapshot|digest|Issue (body|bytes)|corrected (live )?Issue/i, 'issue_body_digest', 'issue_body_unverified'],
-    [/required CI/i, 'scope_proof_witness', 'current_head_ci_unverified'],
-    [/source|COMMENT|disposition|scope|actor/i, 'scope_proof_witness', 'scope_witness_unverified'],
-    [/status|pending|HTTP/i, 'required_status', 'status_unverified'],
-  ];
-  const match = rules.find(([pattern]) => pattern.test(text));
-  const binding = match?.[1] ?? fallback;
-  return { binding, detail: binding + ':' + (match?.[2] ?? 'unclassified') };
+  return { binding, detail: binding + ':operation_failed' };
 }
 
 export async function maybeAdmitPackReviewBodyAmendment(
@@ -6308,6 +6308,7 @@ export async function maybeAdmitPackReviewBodyAmendment(
       && extractClosingIssueNumber(pr.body) === issueNumber
       && computeBoundIssueSnapshotHash(issue.body) === nextDigest;
   };
+  let operation: PackReviewAmendmentBinding = 'pr_head_lineage';
   try {
     if (!(await stillCurrent())) return failure('amendment_binding_changed_before_pending');
     const writer = input.fixtureRequiredStatusWriter ?? ((request: Parameters<PackReviewRequiredStatusWriter>[0]) =>
@@ -6315,11 +6316,15 @@ export async function maybeAdmitPackReviewBodyAmendment(
         repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
         headSha: livePr.headSha, request,
       }));
+    operation = 'required_status';
     await writer(amendmentPendingRequest(livePr.headSha));
-    if (await readFinalCapRequiredStatus(input, options.repoSlug, livePr.headSha) !== 'pending'
-        || !(await stillCurrent())) {
-      return failure('amendment_pending_status_unverified');
+    let pendingVerified = await readFinalCapRequiredStatus(input, options.repoSlug, livePr.headSha) === 'pending';
+    if (pendingVerified) {
+      operation = 'pr_head_lineage';
+      pendingVerified = await stillCurrent();
     }
+    if (!pendingVerified) return failure('amendment_pending_status_unverified');
+    operation = 'immutable_terminal';
     let beforeAdmission = authority;
     if (livePr.headSha !== authority.currentHeadSha) {
       beforeAdmission = observePackReviewHead({
@@ -6335,6 +6340,7 @@ export async function maybeAdmitPackReviewBodyAmendment(
       amendedBodyDigest: nextDigest,
       options: { storeRoot: options.storeRoot },
     });
+    operation = 'required_status';
     const observed = await readFinalCapRequiredStatus(input, options.repoSlug, livePr.headSha);
     if (observed !== 'pending' || admitted.cycle?.amendmentOrigin?.amendedBodyDigest !== nextDigest) {
       return failure('amendment_post_commit_pending_unverified');
@@ -6347,7 +6353,7 @@ export async function maybeAdmitPackReviewBodyAmendment(
       requiredStatusState: 'pending', settled: false,
     };
   } catch (error) {
-    return failure('amendment_admission_unverified', sanitizedAmendmentCause(error, 'required_status'));
+    return failure('amendment_admission_unverified', sanitizedAmendmentCause(error, operation));
   }
 }
 

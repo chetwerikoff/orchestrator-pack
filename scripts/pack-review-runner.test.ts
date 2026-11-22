@@ -2320,6 +2320,7 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
   it.each([
     ['pending write rejected', 'amendment_admission_unverified', 'required_status', 'exact-head pack-review status'],
     ['criteria removed', 'amendment_behavior_criteria_missing_or_invalid', 'issue_criteria', 'reviewed Issue behavior criteria'],
+    ['Issue read throws a source/HTTP-worded error', 'amendment_live_issue_unavailable', 'issue_body_digest', 'restore the linked Issue body'],
   ] as const)('incident 1721: amendment failure (%s) names its failed binding and one legal nextAction',
     async (mode, reason, failedBinding, nextAction) => {
       const B0 = '<!-- source-revision: r01 -->\n```complexity-tier\ntier: T2\n```\n## Acceptance criteria\n- original\n';
@@ -2327,14 +2328,21 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
         : B0.replace('- original', '- amended');
       const f = fixture('codex', B0, true);
       let status = 'success';
-      const refused = await maybeAdmitPackReviewBodyAmendment({
+      const request = {
         ...f.request(B1), fixtureCurrentPrHeadSha: f.reviewed,
-        fixtureRequiredStatusWriter: async (request: { state: string }) => {
+        fixtureRequiredStatusWriter: async (value: { state: string }) => {
           if (mode === 'pending write rejected') throw new Error('raw-transport-secret-1721 HTTP 422 pending rejected');
-          status = request.state;
+          status = value.state;
         },
         fixtureRequiredStatusReader: async () => status,
-      }, { projectId: f.projectId, storeRoot: f.storeRoot, repoSlug: f.repository });
+      };
+      if (mode === 'Issue read throws a source/HTTP-worded error') {
+        Object.defineProperty(request, 'fixtureIssueBody', {
+          get: () => { throw new Error('raw-transport-secret-1721 source unavailable HTTP 502 status'); },
+        });
+      }
+      const refused = await maybeAdmitPackReviewBodyAmendment(request,
+        { projectId: f.projectId, storeRoot: f.storeRoot, repoSlug: f.repository });
       expect(refused, JSON.stringify(refused)).toMatchObject({
         amendmentAdmission: false, reason, failedBinding,
         nextAction: expect.stringContaining(nextAction),
@@ -3780,7 +3788,16 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(f.statuses.some((request) => request.state === 'success')).toBe(false);
   });
 
-  it('incident 1722: a thrown scope-proof error reports a sanitized binding and one nextAction', async () => {
+  it.each([
+    ['untrusted source actor', (f: ReturnType<typeof fixture>) => {
+      f.transports.sourceProofs[1]!.comment.actorLogin = 'untrusted';
+    }],
+    ['status-worded transport exception', (f: ReturnType<typeof fixture>) => {
+      const original = f.input.fixtureGptSourceCommentTransport!;
+      f.input.fixtureGptSourceCommentTransport = { ...original,
+        listComments: async () => { throw new Error('untrusted required status pending HTTP 500'); } };
+    }],
+  ] as const)('incident 1722: a thrown scope-proof error (%s) reports a sanitized binding and one nextAction', async (_name, mutate) => {
     const f = fixture();
     updatePackReviewRun(f.run.id, {
       boundIssueSnapshotDigest: computeBoundIssueSnapshotHash(f.frozenBody),
@@ -3795,17 +3812,18 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
         },
       },
     }, f.options);
-    f.transports.sourceProofs[1]!.comment.actorLogin = 'untrusted';
+    mutate(f);
     const result = await maybeAdmitPackReviewBodyAmendment(f.input, {
       projectId: 'orchestrator-pack', storeRoot: f.options.storeRoot, repoSlug: f.input.repoSlug,
     });
     expect(result, JSON.stringify(result)).toMatchObject({
       amendmentAdmission: false, reason: 'amendment_unverified_body_mismatch',
       failedBinding: 'scope_proof_witness',
-      detail: expect.stringMatching(/^scope_proof_witness:[a-z_]+$/),
+      detail: 'scope_proof_witness:operation_failed',
       nextAction: expect.stringContaining('authorized post-terminal scope disposition COMMENT'),
     });
     expect(JSON.stringify(result)).not.toContain('untrusted');
+    expect(JSON.stringify(result)).not.toContain('HTTP 500');
     expect(f.statuses.some((request) => request.state === 'success')).toBe(false);
   });
 
@@ -3923,6 +3941,45 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       expect(authority?.cycle?.settlementKind).toBeUndefined();
       expect(f.statuses).toEqual([expect.objectContaining({ state: 'success', context: 'orchestrator-pack/pack-review' })]);
       expect(f.input.fixtureRequiredCiChecks).toEqual([{ name: 'CI', state: ciState }]);
+    },
+  );
+
+  it.each(['same-head scope proof', 'clean F..T delta'] as const)(
+    'incident 1716: a late duplicate of a frozen original findings source does not veto the %s',
+    async (lane) => {
+      const f = lane === 'clean F..T delta' ? unchangedDescendantFixture() : fixture();
+      if (lane === 'clean F..T delta') {
+        completeFinalCapDelta(f, HEAD, revisedBody);
+        f.input.fixtureCurrentPrHeadSha = HEAD;
+        f.input.fixtureReviewCompareStatus = 'ahead';
+      }
+      const frozen = f.transports.sourceProofs[0]!.comment;
+      const duplicate: PackGptSourceGithubComment = {
+        ...frozen, id: frozen.id + 1000, createdAt: '2026-10-08T21:30:00Z', updatedAt: '2026-10-08T21:30:00Z',
+        url: frozen.url.replace(String(frozen.id), String(frozen.id + 1000)),
+      };
+      const original = f.input.fixtureGptSourceCommentTransport!;
+      f.input.fixtureGptSourceCommentTransport = {
+        resolveActorLogin: () => original.resolveActorLogin(),
+        listComments: async () => [...await original.listComments(), duplicate],
+        getComment: async (id) => id === duplicate.id ? duplicate : original.getComment(id),
+      };
+      const before = getPackReviewRun(f.run.id, f.options);
+      const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      try {
+        const result = await reconcileStalePackReviewRuns(f.input);
+        expect(result.results, JSON.stringify(result)).toContainEqual(expect.objectContaining({
+          settled: true,
+          reason: lane === 'clean F..T delta'
+            ? 'final_cap_descendant_settled' : 'final_cap_same_head_issue_resolution_settled',
+        }));
+        expect(stderr.mock.calls.map(([chunk]) => String(chunk)).join(''))
+          .toContain(`frozen source slot kept; later duplicate ignored: source-01 selected=${frozen.id} ignored=${duplicate.id}`);
+      } finally { stderr.mockRestore(); }
+      expect(f.statuses).toContainEqual(expect.objectContaining({ state: 'success' }));
+      const after = getPackReviewRun(f.run.id, f.options);
+      expect(after?.reviewRound).toEqual(before?.reviewRound);
+      expect(after?.findings).toEqual(before?.findings);
     },
   );
 
