@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync, rmSync } from 'node:fs';
+import { lstatSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -51,19 +51,24 @@ export interface GitResult {
 
 export type GitRunner = (args: readonly string[]) => GitResult;
 
-function regularFile(path: string): boolean {
+type PathInspection = 'absent' | 'regular-file' | 'nonregular' | 'error';
+
+/** Proven ENOENT is absence. Any other lstat result is present or uncertain. */
+function inspectPath(path: string): PathInspection {
   try {
     const stat = lstatSync(path);
-    return stat.isFile() && !stat.isSymbolicLink();
-  } catch {
-    return false;
+    if (stat.isFile() && !stat.isSymbolicLink()) return 'regular-file';
+    return 'nonregular';
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'error';
   }
 }
 
 /**
  * Remove launch copies in `worktree` that are byte-identical to the same file in `primaryRoot`.
  * Missing primary counterparts are preserved except exact known setup-generated .env shapes.
- * Differing, unreadable, tracked or non-ignored copies are always preserved.
+ * Differing, unreadable, tracked, non-ignored, or nonregular copies are always preserved.
+ * A failed tracked listing is unverified and is never treated as untracked.
  */
 export function removeIdenticalLaunchCopies(
   worktree: string,
@@ -74,25 +79,32 @@ export function removeIdenticalLaunchCopies(
   const preserved: { path: string; reason: LaunchCopyPreserveReason }[] = [];
   for (const relative of LAUNCH_COPY_PATHS) {
     const copy = join(worktree, relative);
-    if (!existsSync(copy) && !regularFile(copy)) continue;
-    const original = join(primaryRoot, relative);
-    if (!regularFile(copy)) {
+    const copyInspection = inspectPath(copy);
+    if (copyInspection === 'absent') continue;
+    if (copyInspection !== 'regular-file') {
       preserved.push({ path: relative, reason: 'unverified' });
       continue;
     }
     // Verify ignored/untracked status before either removal path.
+    // Only a successful empty cached listing proves the path is untracked.
     const ignored = git(['-C', worktree, 'check-ignore', '-q', '--', relative]);
-    const tracked = git(['-C', worktree, 'ls-files', '--error-unmatch', '--', relative]);
-    if (!ignored.ok || tracked.ok) {
+    const tracked = git(['-C', worktree, 'ls-files', '--cached', '-z', '--', relative]);
+    if (!ignored.ok) {
       preserved.push({ path: relative, reason: 'not_ignored' });
       continue;
     }
-    const generated = relative === '.env' && !existsSync(original) && isGeneratedEnvironment(copy);
-    if (!existsSync(original) && !generated) {
+    if (!tracked.ok || tracked.stdout.length !== 0) {
+      preserved.push({ path: relative, reason: tracked.ok ? 'not_ignored' : 'unverified' });
+      continue;
+    }
+    const original = join(primaryRoot, relative);
+    const primaryInspection = inspectPath(original);
+    const generated = relative === '.env' && primaryInspection === 'absent' && isGeneratedEnvironment(copy);
+    if (primaryInspection === 'absent' && !generated) {
       preserved.push({ path: relative, reason: 'primary_copy_missing' });
       continue;
     }
-    if (!generated && !regularFile(original)) {
+    if (!generated && primaryInspection !== 'regular-file') {
       preserved.push({ path: relative, reason: 'unverified' });
       continue;
     }
