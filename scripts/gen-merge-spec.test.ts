@@ -405,4 +405,39 @@ describe('Issue #2829 merge train contract (static locks, no train execution)', 
     );
     expect(train).not.toMatch(/\/home\/|~\/|\.orchestrator-pack\//);
   });
+
+  it('admits one A-ready member and one C-ready member when the C member has a waiver line', () => {
+    lock(
+      'A train member may be A-ready or C-ready',
+      'waiver: <PR-number> <waiver line text>',
+      'one line of at most 140 characters',
+      'source=orchestrator-issued-task-spec',
+      'order C wording',
+      'accepted in place of a pack-review success',
+      'An A-ready member is unchanged',
+    );
+    const waiverLine = 'мерж 302 без ревью';
+    expect(waiverLine.length).toBeLessThanOrEqual(140);
+    expect(waiverLine).not.toMatch(/[\r\n\u2028\u2029]/u);
+    const mixed = [
+      'смерж 302',
+      'merge-train:',
+      `member: 301 ${'a'.repeat(40)}`,
+      `member: 302 ${'b'.repeat(40)}`,
+      `waiver: 302 ${waiverLine}`,
+      'train-head-update: fast-forward-last-original-head-to-tested-train-head',
+    ].join('\n');
+    const out = renderMergeSpec({ ...caseB, pr: 302, issue: 402, head: 'b'.repeat(40), mergeInstruction: mixed });
+    const operative = out.split('## Operative Task instruction')[1]!.split('## Current target')[0]!;
+    expect(operative).toContain(`member: 301 ${'a'.repeat(40)}`);
+    expect(operative).toContain(`waiver: 302 ${waiverLine}`);
+    expect(operative).toContain('train-head-update: fast-forward-last-original-head-to-tested-train-head');
+  });
+
+  it('refuses a C-ready member whose pack-review is not success when the stanza has no waiver line', () => {
+    lock(
+      'A stanza without a waiver line for a member whose pack-review is not success refuses train admission (fallback)',
+    );
+    expect(flat).not.toContain('under standing order A');
+  });
 });

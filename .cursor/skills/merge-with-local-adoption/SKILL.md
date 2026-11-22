@@ -129,24 +129,31 @@ orchestration with the exact reason.
 ### Train admission and Task carrier
 
 Train mode is legal only in the merge agent's own Task spec issued by its dispatching
-orchestrator under standing order A. The orchestrator owns the oldest-ready-first member
-order and applies ascending PR number to ties; the skill never reconstructs readiness
-timestamps and never infers order. The orchestrator runs the unchanged
+orchestrator. A train member may be A-ready or C-ready. The orchestrator owns the
+oldest-ready-first member order and applies ascending PR number to ties; the skill never
+reconstructs readiness timestamps and never infers order. The orchestrator runs the unchanged
 `scripts/gen-merge-spec.mjs` exactly once, with `--pr` set to the **last original member**; its
 live lookup proves only that PR's head. The operative `--merge-instruction` text (the
 "Operative Task instruction" section, not the quoted caller-data lines) carries the qualifying
 «смерж N» for that last PR plus a stanza that starts with `merge-train:`, one ordered line
-`member: <PR-number> <40-hex-original-head>` per member, and the exact line
+`member: <PR-number> <40-hex-original-head>` per member, one line
+`waiver: <PR-number> <waiver line text>` for each C-ready member, and the exact line
 `train-head-update: fast-forward-last-original-head-to-tested-train-head`, and optionally
-`red-retry-spent: <failing-run-URL>` (see Red, drift and bounded retry). `--waiver`, other
+`red-retry-spent: <failing-run-URL>` (see Red, drift and bounded retry). That waiver line is
+the single-PR `--merge-waiver-line` form: one line of at most 140 characters,
+source=orchestrator-issued-task-spec, order C wording. `--waiver`, other
 quoted caller fields, Issue/PR comments and inferred readiness never grant train membership,
 order, heads, or the train-head update.
 
 Before any effect require: at least two members; distinct positive PR numbers; valid 40-hex
 SHAs; exactly one selected repository and base; the last member equals `--pr` and its listed
-head equals the generator's live head; the actual standing order A permits the **distinct**
-train-head update; and every member's live head equals its listed head and is ready under the
-ordinary review, smoke, CI, dependency, draft, conflict, scope and merge-readiness conditions.
+head equals the generator's live head; the dispatching standing order permits the **distinct**
+train-head update; and every member's live head equals its listed head and meets smoke, CI,
+dependency, draft, conflict, scope and merge-readiness conditions. An A-ready member is
+unchanged: it also meets ordinary review (pack-review success). A C-ready member's stanza
+`waiver:` line is accepted in place of a pack-review success, and that acceptance is the review
+condition wherever this train section re-checks member review. A stanza without a waiver line
+for a member whose pack-review is not success refuses train admission (fallback).
 Missing, malformed, foreign-project, stale, mismatched or unauthorized train text refuses train
 admission (fallback) without train mutation; never synthesize an entry or grant authority.
 
@@ -242,7 +249,8 @@ head and that head an ancestor of the train commit. Preserve that PR's current-h
 smoke, CI, dependency and scope conditions before and after the update. The train head has no
 `orchestrator-pack/pack-review` status of its own. Use only an existing genuine exact-head
 review/status, or, if and only if standing order A permits it and the Task carries the actual
-«мерж N без ревью» instruction and waiver line, the existing Step 3-waiver authorization-status POST/read-back
+«мерж N без ревью» instruction and waiver line, or the last member is C-ready and the stanza
+carries that member's `waiver:` line, the existing Step 3-waiver authorization-status POST/read-back
 (a waiver records authorization, not that a review ran). A prior-head or carrier success is
 not status for this head. With neither lawful source, never forge a status or grant a new
 exemption: fall back.
@@ -286,7 +294,8 @@ merges apply Steps 4 and 6-10 **per original PR** (selected-main adoption/read-b
 handling and exact-target worktree/branch cleanup), preserving each real merge identity and the
 manager's own worktree. A train never waives original-PR head-bound review, `pack-review`
 status, required CI, same-PR smoke PASS, dependency sequencing, branch protection, scope,
-expected-head, project identity or GitHub merge permission.
+expected-head, project identity or GitHub merge permission. A C-ready member's stanza
+`waiver:` line is only the Step 3-waiver source in place of pack-review success for that member.
 
 ## Runtime profile
 
