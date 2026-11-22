@@ -1934,17 +1934,13 @@ async function runLaunch(
         : ['--terminal', quote(terminal!.identity.id), '--worktree', quote(prepared.value.selector)]),
       '--retry-request', quote(requestId),
     ].join(' ') : undefined;
-    const createdTerminals = [
-      ...(!providerMode && !input.existingTerminal && terminal ? [terminal.identity.id] : []),
-      ...creationTerminals.map((shell) => shell.handle),
+    const touched = [
+      ...(!providerMode && !input.existingTerminal && terminal ? [`terminal ${terminal.identity.id}`] : []),
+      ...(prepared.value.setupWitness === 'same_invocation_complete'
+        ? [`worktree ${prepared.value.selector}${prepared.value.path ? ` (${prepared.value.path})` : ''}`] : []),
     ];
-    const createdWorktree = prepared.value.setupWitness === 'same_invocation_complete' ? prepared.value : null;
-    const createdCleanup = [
-      ...(createdTerminals.length ? [`close only this attempt's terminal${createdTerminals.length > 1 ? 's' : ''} ${createdTerminals.join(', ')} with the existing terminal-close operation`] : []),
-      ...(createdWorktree ? [`remove only this attempt's worktree ${createdWorktree.selector}${createdWorktree.path ? ` (${createdWorktree.path})` : ''} with the existing worktree-remove operation`] : []),
-    ];
-    const handoffNote = supervised.nextAction?.note && createdCleanup.length
-      ? `This launch attempt already created resources; before the rerun the coordinator must ${createdCleanup.join(' and ')}, never stopping, closing or removing the live incumbent's Dispatch, terminal or worktree. ${supervised.nextAction.note}`
+    const handoffNote = supervised.nextAction?.note && touched.length
+      ? `This launch attempt touched ${touched.join(' and ')}; before any cleanup the coordinator must confirm their current ownership and liveness through the existing native terminal and worktree reads, never stopping, closing or removing the live incumbent's Dispatch, terminal or worktree, then rerun. ${supervised.nextAction.note}`
       : supervised.nextAction?.note;
     return continued(input, 'supervised_start', {
       cause: startReason,
