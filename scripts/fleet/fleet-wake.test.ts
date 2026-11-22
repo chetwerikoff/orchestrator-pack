@@ -6751,6 +6751,18 @@ describe('Issue #2863 exact own-final operator-gate park stays silent', () => {
     }
   });
 
+  it('AC1: a Task-owned worker pane with its exact live Dispatch stays silent at 0/+29/+31/+61 min', async () => {
+    const worker = { ...assignment, role: 'worker' as const };
+    const screen = wideFrame(own(gate));
+    for (const row of await ticks(screen, roster, undefined, { assignments: [worker] })) {
+      expect({ at: row.at, state: row.state, pane: row.pane, coord: row.coord })
+        .toEqual({ at: row.at, state: 'nothing_stopped', pane: 0, coord: 0 });
+      expect(row.logs.join('\n')).not.toMatch(/unknown parked producer|Reminder|published GitHub facts|need a step/u);
+    }
+    const baseline = await ticks(screen.replaceAll(gate, control), roster, undefined, { assignments: [worker] });
+    expect(baseline[0]!.coordText.join('\n')).toContain('unknown parked producer');
+  });
+
   it('AC1: the same layout with an own tool block above uses the OpenCode gutter own-final witness', async () => {
     const screen = wideFrame(own(gate), ['  ┃', '  ┃  $ gh pr checks 692', '  ┃', '  ┃  All required checks passed', '  ┃']);
     expect(ownFinalPark(screen, gate)).toBe(true);
@@ -6824,6 +6836,10 @@ describe('Issue #2863 exact own-final operator-gate park stays silent', () => {
     ['no manager assignment', { assignments: [] }],
     ['an assignment whose Dispatch shows another incarnation', { shown: { ...manager, incarnationId: 'inc-689-replacement' } }],
     ['an assignment whose Dispatch shows another pane', { shown: { ...manager, handle: 'term_other' } }],
+    ['a worker assignment whose Dispatch shows another incarnation',
+      { assignments: [{ ...assignment, role: 'worker' }], shown: { ...manager, incarnationId: 'inc-689-replacement' } }],
+    ['a worker assignment rebound to another pane',
+      { assignments: [{ ...assignment, role: 'worker' }], shown: { ...manager, handle: 'term_other' } }],
   ])('AC2: a matching own-final screen and native identity without an incumbent witness (%s) keeps the alarm', async (_name, incumbent) => {
     const screen = wideFrame(own(gate));
     const operator = await ticks(screen, roster, undefined, incumbent);

@@ -1451,10 +1451,11 @@ const OPERATOR_GATE_PARK_RE = /^PARKED on operator [1-9][0-9]* gate for PR [1-9]
 /**
  * Only the incumbent operator/coordinator releases an exact operator-gate park:
  * no producer event, Issue/PR fact or elapsed Reminder wakes it. Silence needs
- * the caller's exact manager-assignment-to-pane witness (boundIssueManager or
- * parkingManager), the own final park on the one live native pane with the same
- * identity, plus the selected Dispatch binding wherever freshSendSafePane
- * requires it. Anything weaker keeps the existing alarm and Reminder routes.
+ * the caller's exact assignment-to-pane witness (boundIssueManager, or
+ * parkingManager over manager and worker assignments), the own final park on
+ * the one live native pane with the same identity, plus the selected Dispatch
+ * binding wherever freshSendSafePane requires it. Anything weaker keeps the
+ * existing alarm and Reminder routes.
  */
 function silentOperatorGatePark(
   pane: FleetPaneObservation,
@@ -1487,6 +1488,7 @@ function parkingManager(
   executor: OrcaExecutor,
   assignments: readonly WorkerAssignmentRecord[] | null,
   cache?: WorkerShowCache,
+  roles: readonly WorkerAssignmentRecord['role'][] = ['orchestrator'],
 ): ParkingManager | undefined {
   const repository = namedRepository(options.config);
   // A raw last-line PARKED from a tool result or quotation is never recipient
@@ -1494,7 +1496,7 @@ function parkingManager(
   if (!repository || !assignments || pane.state !== 'PARKED' || !pane.wait
     || !pane.incarnationId || !witnessedOwnPark(pane, executor)) return undefined;
   const candidates = assignments.filter((row) => row.projectId === options.config.projectId
-    && row.repository.toLowerCase() === repository.toLowerCase() && row.role === 'orchestrator'
+    && row.repository.toLowerCase() === repository.toLowerCase() && row.role && roles.includes(row.role)
     && row.kind === 'local' && row.provider === 'orca'
     && row.taskId && row.bindingKey && row.assignmentId
     && Number.isSafeInteger(row.generation) && row.generation > 0);
@@ -2271,7 +2273,7 @@ async function wakeNamedParkedProducers(
       store.writeParkedEpoch?.(pane.handle, epoch);
     }
     if (OPERATOR_GATE_PARK_RE.test(pane.wait)
-      && parkingManager(pane, options, terminals, executor, tickAssignments(), workerShows)
+      && parkingManager(pane, options, terminals, executor, tickAssignments(), workerShows, ['orchestrator', 'worker'])
       && silentOperatorGatePark(pane, options, executor, store)) continue;
     const producer = parseNamedParkedProducer(pane.wait);
     let decision: ParkDecision = PENDING;
