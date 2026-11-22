@@ -3,12 +3,12 @@
 import {
   chmodSync,
   existsSync,
-  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { mkdirSync as makeDirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -1389,7 +1389,7 @@ describe('Issue #2870 architect DEFER same-head at-cap reconcile', () => {
 
   function writeJournal(stateRoot: string, rows: Array<Record<string, unknown>>): void {
     const dir = join(stateRoot, 'merge-triage');
-    mkdirSync(dir, { recursive: true });
+    makeDirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'verdict-journal.jsonl'),
       rows.map((row) => JSON.stringify(row)).join('\n') + '\n', 'utf8');
   }
