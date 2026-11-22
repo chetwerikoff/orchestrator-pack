@@ -3101,7 +3101,7 @@ describe('Issue #2854 pre-Send C4 zero-dispatch recovery decision', () => {
     pageLost: false,
     pageIsOriginalOwned: true,
     identityMatched: true,
-    stopVisible: false as boolean | null,
+    pageIdle: true,
     nowMs: 1_000,
     lastSafeReloadMs: 2_000,
     ...overrides,
@@ -3174,8 +3174,8 @@ describe('Issue #2854 pre-Send C4 zero-dispatch recovery decision', () => {
       [{ pageLost: true }, 'page_lost'],
       [{ pageIsOriginalOwned: false }, 'page_not_owned'],
       [{ identityMatched: false }, 'destination_mismatch'],
-      [{ stopVisible: true }, 'busy_or_unknown'],
-      [{ stopVisible: null }, 'busy_or_unknown'],
+      // Stop, generation, Continue, an incomplete last turn or unreadable evidence all leave pageIdle false.
+      [{ pageIdle: false }, 'busy_or_unknown'],
       [{ nowMs: 2_000 }, 'budget_exhausted'],
     ] as const) {
       expect(preSendC4ReloadDecision(eligible(overrides)), refusal).toEqual({ reload: false, refusal });

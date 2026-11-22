@@ -4901,10 +4901,11 @@ describe('Issue #2854 ordinary fresh last-safe dispatch cutoff', () => {
   const DISPATCH_OBSERVATION_MS = 30_000;
   const TERMINAL_PROBE_MS = 5_000;
 
-  it('is never earlier than the incumbent first window and keeps every post-Send reserve', () => {
+  it('keeps every post-Send reserve, even inside the incumbent first 60 s window', () => {
     const start = 100_000;
-    // Short budget: the incumbent first 60 s window still applies.
-    expect(__testSendDelivery.freshLastSafeDispatchMs(start, start + 90_000)).toBe(start + 60_000);
+    // Short budget: the safe cutoff falls inside the first window instead of being floored at 60 s.
+    expect(__testSendDelivery.freshLastSafeDispatchMs(start, start + 90_000))
+      .toBe(start + 90_000 - DISPATCH_OBSERVATION_MS - READ_RESERVE_MS - TERMINAL_PROBE_MS);
     // Long budget: dispatch stays before freshUnboundReturnByMs minus observation, reads and terminal probe.
     const unbound = start + 300_000;
     expect(__testSendDelivery.freshLastSafeDispatchMs(start, unbound))
