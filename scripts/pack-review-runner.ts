@@ -172,7 +172,11 @@ import {
   type PackGptSourceCommentResolution,
   type PackGptSourceCommentTransport,
 } from './lib/pack-gpt-source-comment.ts';
-import type { PackGptSourceIdentity } from './lib/pack-gpt-source-comment-contract.ts';
+import {
+  parsePackGptSourceMarker,
+  samePackGptSourceIdentity,
+  type PackGptSourceIdentity,
+} from './lib/pack-gpt-source-comment-contract.ts';
 import { configuredProfileKey } from './chatgpt-browser-turn/storage-common.ts';
 import { CHAT_BINDING_WORKTREE_ENV, chatBindingWorktree } from './chatgpt-browser-turn/chat-bindings.ts';
 import {
@@ -2006,9 +2010,11 @@ function formatGithubReviewBody(run: PackReviewRunRecord, payload: ReviewPayload
     '',
     `Run: \`${run.id}\``,
     `Head: \`${run.targetSha}\``,
-    ...(run.automaticBudgetDisposition === 'non_consuming_explicit'
-      ? ['Mode: supplemental advisory review (does not change required pack-review status).']
-      : []),
+    ...(run.finalCapDelta
+      ? [`Mode: required final-cap delta review \`${run.finalCapDelta.fromSha}..${run.finalCapDelta.toSha}\` (part of the required pack-review stage).`]
+      : run.automaticBudgetDisposition === 'non_consuming_explicit'
+        ? ['Mode: supplemental advisory review (does not change required pack-review status).']
+        : []),
     `Selected reviewer: \`${run.resolvedReviewer ?? 'unrecorded'}\``,
     `Selection source: \`${run.resolvedReviewerSource ?? 'unrecorded'}\``,
     `Verdict reviewer: \`${run.executedReviewer ?? 'unrecorded'}\``,
@@ -3697,7 +3703,7 @@ async function runGptSourceBatch(options: {
           });
         }
         resolution = sourceTransport
-          ? await resolvePackGptSourceComment({ identity, transport: sourceTransport })
+          ? await resolveElectedGptSourceComment({ identity, transport: sourceTransport })
           : harnessSourceResolution(identity, invocation.result.stdout, browserTerminal);
       } catch (error) {
         resolution = { kind: 'conflict', reason: `source_comment_head_or_census_failed:${describeError(error)}` };
@@ -4001,7 +4007,8 @@ async function recoverablePostedRateLimitSlots(input: {
     });
     let resolution: PackGptSourceCommentResolution;
     try {
-      resolution = await resolvePackGptSourceComment({ identity, transport });
+      resolution = await resolveElectedGptSourceComment({ identity, transport,
+        ...(complete ? { frozenCommentId: frozenGptSourceCommentId(slot) } : {}) });
     } catch {
       return null;
     }
@@ -4217,6 +4224,92 @@ function rateLimitOriginalRecoveryAction(run: PackReviewRunRecord): string {
     + '); resolve absent or conflicting first-attempt send evidence before any new run; do not resend';
 }
 
+function packReviewRunnerPidDead(pid: unknown): boolean {
+  const value = Number(pid);
+  if (!Number.isInteger(value) || value <= 0 || value === process.pid) return false;
+  try {
+    process.kill(value, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException | undefined)?.code === 'ESRCH';
+  }
+}
+
+function frozenGptSourceCommentId(slot: PackReviewSourceSlotRecord): number | string {
+  const receipt = (slot.terminalResult as { source_comment_receipt?: { commentId?: number | string } } | undefined)
+    ?.source_comment_receipt;
+  return receipt?.commentId ?? '';
+}
+
+/**
+ * Same-actor exact-identity duplicates over one captured census. After freeze
+ * only the frozen receipt's comment is credentialed; later copies (valid,
+ * edited or malformed) are ignored. Before freeze each copy is credentialed
+ * alone by the unchanged resolver and the latest createdAt (numeric id
+ * tie-break) among the credentialed ones is elected.
+ */
+async function resolveElectedGptSourceComment(options: {
+  identity: PackGptSourceIdentity;
+  transport: PackGptSourceCommentTransport;
+  frozenCommentId?: number | string;
+}): Promise<PackGptSourceCommentResolution> {
+  let actorLogin: string;
+  let census: Awaited<ReturnType<PackGptSourceCommentTransport['listComments']>>;
+  try {
+    actorLogin = trim(await options.transport.resolveActorLogin());
+    census = await options.transport.listComments();
+  } catch {
+    // The unchanged resolver owns the structured actor/census failure result.
+    return resolvePackGptSourceComment({ identity: options.identity, transport: options.transport });
+  }
+  const resolveOver = (comments: typeof census) => resolvePackGptSourceComment({
+    identity: options.identity,
+    transport: {
+      resolveActorLogin: async () => actorLogin,
+      listComments: async () => comments,
+      getComment: (id) => options.transport.getComment(id),
+    },
+  });
+  const duplicates = census.filter((comment) => {
+    const marker = parsePackGptSourceMarker(
+      comment.body.replace(/\r\n?/g, '\n').split('\n', 1)[0] ?? '');
+    return Boolean(marker && samePackGptSourceIdentity(marker, options.identity)
+      && comment.actorLogin === actorLogin);
+  });
+  const without = (kept: (typeof census)[number]) =>
+    census.filter((comment) => !duplicates.includes(comment) || comment === kept);
+  const logIgnored = (label: string, kept: (typeof census)[number]) => {
+    const ignored = duplicates.filter((comment) => comment !== kept).map((comment) => String(comment.id));
+    if (ignored.length) {
+      process.stderr.write(`[pack-review] ${label}: ${options.identity.slotId} selected=${String(kept.id)} ignored=${ignored.join(',')}\n`);
+    }
+  };
+  if (options.frozenCommentId !== undefined) {
+    const frozen = duplicates.find((comment) => String(comment.id) === String(options.frozenCommentId));
+    if (!frozen) return resolveOver(census);
+    const resolution = await resolveOver(without(frozen));
+    if (resolution.kind === 'credentialed') logIgnored('frozen source slot kept; later duplicate ignored', frozen);
+    return resolution;
+  }
+  if (duplicates.length < 2) return resolveOver(census);
+  const numericId = (comment: { id: number | string }) => {
+    const value = Number(comment.id);
+    return Number.isSafeInteger(value) ? value : Number.NEGATIVE_INFINITY;
+  };
+  const credentialed: Array<{ comment: (typeof census)[number]; resolution: PackGptSourceCommentResolution }> = [];
+  for (const comment of duplicates) {
+    if (!Number.isFinite(Date.parse(comment.createdAt)) || numericId(comment) === Number.NEGATIVE_INFINITY) continue;
+    const resolution = await resolveOver(without(comment));
+    if (resolution.kind === 'credentialed') credentialed.push({ comment, resolution });
+  }
+  const winner = credentialed.sort((a, b) =>
+    (Date.parse(b.comment.createdAt) - Date.parse(a.comment.createdAt))
+    || (numericId(b.comment) - numericId(a.comment)))[0];
+  if (!winner) return resolveOver(census);
+  logIgnored('duplicate source comment elected', winner.comment);
+  return winner.resolution;
+}
+
 async function recoverStaleGptSourceComments(options: {
   run: PackReviewRunRecord;
   input: ReconcileStalePackReviewRunsInput;
@@ -4317,7 +4410,12 @@ async function recoverStaleGptSourceComments(options: {
       });
       let resolution: PackGptSourceCommentResolution;
       try {
-        resolution = await resolvePackGptSourceComment({ identity, transport });
+        const frozenReceipt = complete
+          ? (currentSlot.terminalResult as { source_comment_receipt?: { commentId?: number | string } } | undefined)
+            ?.source_comment_receipt
+          : undefined;
+        resolution = await resolveElectedGptSourceComment({ identity, transport,
+          ...(complete ? { frozenCommentId: frozenReceipt?.commentId ?? '' } : {}) });
       } catch (error) {
         const detail = `${currentSlot.slotId}:${describeError(error)}`;
         unresolved.push(detail);
@@ -4906,9 +5004,23 @@ function isOnlyDispositionScopeCorrection(
     && introduced.length === dispositionAdditions.length
     && dispositionAdditions.every((root) => introduced.includes(root));
 }
+/** Tags a same-head proof failure with the binding of the operation that failed. */
 async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRunsInput, options: {
   projectId: string; storeRoot: string; repoSlug: string;
 }, authority: PackReviewAuthorityDocument, run: PackReviewRunRecord, candidateHeadSha?: string) {
+  const stage: { binding: PackReviewAmendmentBinding } = { binding: 'immutable_terminal' };
+  try {
+    return await resolveSameHeadIssueResolutionStages(input, options, authority, run, stage, candidateHeadSha);
+  } catch (error) {
+    throw Object.assign(error instanceof Error ? error : new Error(describeError(error)),
+      { amendmentBinding: stage.binding });
+  }
+}
+
+async function resolveSameHeadIssueResolutionStages(input: ReconcileStalePackReviewRunsInput, options: {
+  projectId: string; storeRoot: string; repoSlug: string;
+}, authority: PackReviewAuthorityDocument, run: PackReviewRunRecord,
+stage: { binding: PackReviewAmendmentBinding }, candidateHeadSha?: string) {
   const cycle = authority.cycle;
   const terminal = authority.terminal;
   const round = run.reviewRound;
@@ -4945,6 +5057,7 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
       && (record.value as PackReviewTerminalV2 | undefined)?.logicalRoundOrdinal === cycle.frozenCap);
   if (immutable.length !== 1) throw new Error('canonical terminal immutable record missing or ambiguous');
 
+  stage.binding = 'scope_proof_witness';
   // Read original GitHub COMMENTs through their existing credentialing
   // transport. A stored slot/receipt or public green is not a fresh source.
   const sourceTransport = process.env.OPK_VITEST_HARNESS === '1'
@@ -4963,7 +5076,8 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
       repoSlug: options.repoSlug, prNumber: run.prNumber, headSha: run.targetSha,
       runId: run.id, slotId: slot.slotId, invocationId,
     });
-    const observed = await resolvePackGptSourceComment({ identity, transport: sourceTransport });
+    const observed = await resolveElectedGptSourceComment({ identity, transport: sourceTransport,
+      frozenCommentId: frozenGptSourceCommentId(slot) });
     const recorded = slot.terminalResult && typeof slot.terminalResult === 'object'
       && !Array.isArray(slot.terminalResult)
       ? (slot.terminalResult as Record<string, unknown>).source_comment_receipt : null;
@@ -5029,6 +5143,7 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
     throw new Error('terminal REVIEW submitted_at is unavailable');
   }
 
+  stage.binding = 'pr_head_lineage';
   const runner = process.env.OPK_VITEST_HARNESS === '1'
     ? input.fixtureSameHeadIssueResolutionRunner ?? runProcess : runProcess;
   const context = resolveTargetContext({ projectId: options.projectId });
@@ -5063,6 +5178,7 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
       repoSlug: options.repoSlug, sourceRepoRoot: input.sourceRepoRoot },
   })) throw new Error('current-head required CI not green');
 
+  stage.binding = 'issue_body_digest';
   const snapshot = resolveBoundIssueSnapshot({
     projectId: options.projectId, prNumber: run.prNumber, prHeadSha: run.targetSha,
     issueNumber: round.issueNumber, snapshotDigest: round.boundIssueSnapshotDigest,
@@ -5085,8 +5201,10 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
   const originalCriteria = reviewBehaviorCriteria(originalReviewedBody);
   const correctedCriteria = reviewBehaviorCriteria(revision.body);
   if (!originalCriteria || !correctedCriteria || originalCriteria !== correctedCriteria) {
+    stage.binding = 'issue_criteria';
     throw new Error('same-head corrected Issue acceptance criteria missing, invalid or changed');
   }
+  stage.binding = 'scope_proof_witness';
   const principal = trim(githubEvidenceObject(await readFinalCapGithubJson(
     input, ['api', 'user', '--jq', '.login'], runner,
   )).login);
@@ -5214,6 +5332,7 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
       || !isOnlyDispositionScopeCorrection(
         originalReviewedBody, revision.body, dispositionRoots,
       )) {
+    stage.binding = 'issue_body_digest';
     throw new Error('corrected Issue has unrelated changes beyond the exact disposition scope roots');
   }
   const reread = githubEvidenceObject(await readFinalCapGithubJson(input, [
@@ -5222,6 +5341,7 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
   if (stableJson(reread) !== stableJson(comment)) {
     throw new Error('author disposition changed during exact-comment reread');
   }
+  stage.binding = 'issue_body_digest';
   const liveIssue = githubEvidenceObject(await readFinalCapGithubJson(input, [
     'api', `repos/${options.repoSlug}/issues/${round.issueNumber}`,
   ], runner));
@@ -5230,6 +5350,7 @@ async function resolveSameHeadIssueResolution(input: ReconcileStalePackReviewRun
         !== `https://api.github.com/repos/${options.repoSlug}`.toLowerCase()) {
     throw new Error('corrected live Issue bytes changed before settlement');
   }
+  stage.binding = 'pr_head_lineage';
   const after = await resolveCurrentPrTarget(input.sourceRepoRoot, options.repoSlug, run.prNumber, boundPrRunner);
   if (after.headSha !== target.headSha || after.baseRef !== target.baseRef
       || extractClosingIssueNumber(after.body) !== round.issueNumber) {
@@ -5517,7 +5638,8 @@ async function verifyOriginalGithubSourcesAndReview(
       repoSlug, prNumber: run.prNumber, headSha: run.targetSha,
       runId: run.id, slotId: slot.slotId, invocationId: trim(slot.invocationId),
     });
-    const observed = await resolvePackGptSourceComment({ identity, transport: sourceTransport! });
+    const observed = await resolveElectedGptSourceComment({ identity, transport: sourceTransport!,
+      frozenCommentId: frozenGptSourceCommentId(slot) });
     const terminal = slot.terminalResult && typeof slot.terminalResult === 'object'
       && !Array.isArray(slot.terminalResult)
       ? slot.terminalResult as Record<string, unknown> : null;
@@ -5886,6 +6008,47 @@ function amendedReviewPendingRestoreCommand(repoSlug: string, prNumber: number):
  * before B2 can be admitted. A failed public pending read-back never starts a
  * reviewer, even if the local authority still says stage complete.
  */
+type PackReviewAmendmentBinding = 'issue_criteria' | 'issue_body_digest' | 'immutable_terminal'
+  | 'pr_head_lineage' | 'scope_proof_witness' | 'required_status';
+
+const AMENDMENT_BINDING_NEXT_ACTION: Record<PackReviewAmendmentBinding, string> = {
+  issue_criteria: 'restore the reviewed Issue behavior criteria (or publish one genuine behavior amendment), then rerun scoped reconcile; do not reset the cycle or send a new review',
+  issue_body_digest: 'restore the linked Issue body to the reviewed immutable bytes or publish one authorized scope-only disposition, then rerun scoped reconcile; do not reset the cycle or send a new review',
+  immutable_terminal: 'reconcile the original exact-head terminal and its immutable record, then rerun scoped reconcile; do not reset the cycle or send a new review',
+  pr_head_lineage: 'observe the open PR head and its closing Issue (a strict descendant of the reviewed head), then rerun scoped reconcile; do not reset the cycle or send a new review',
+  scope_proof_witness: 'restore the original credentialed sources, canonical terminal REVIEW and one authorized post-terminal scope disposition COMMENT, then rerun scoped reconcile; do not send a new review',
+  required_status: 'repair and read back the exact-head pack-review status, then rerun scoped reconcile; do not reset the cycle or send a new review',
+};
+
+const AMENDMENT_REASON_BINDING: Record<string, PackReviewAmendmentBinding> = {
+  amendment_closing_issue_unverified: 'pr_head_lineage',
+  amendment_live_issue_unavailable: 'issue_body_digest',
+  amendment_mismatch_current_binding_unverified: 'pr_head_lineage',
+  amendment_mismatch_non_success_unverified: 'required_status',
+  amendment_prior_round_not_terminal: 'issue_body_digest',
+  amendment_head_not_descendant: 'pr_head_lineage',
+  amendment_binding_changed_before_pending: 'pr_head_lineage',
+  amendment_pending_status_unverified: 'required_status',
+  amendment_digest_replayed: 'issue_body_digest',
+  amendment_behavior_criteria_missing_or_invalid: 'issue_criteria',
+  amendment_unverified_body_mismatch: 'issue_body_digest',
+  amendment_tier_invalid: 'issue_criteria',
+  amendment_immutable_terminal_unverified: 'immutable_terminal',
+  amendment_post_commit_pending_unverified: 'required_status',
+  amendment_admission_unverified: 'required_status',
+};
+
+/**
+ * The failing operation (catch site) owns the binding; exception text is
+ * untrusted and is neither echoed nor used to reclassify the failure.
+ */
+function sanitizedAmendmentCause(
+  _error: unknown,
+  binding: PackReviewAmendmentBinding,
+): { binding: PackReviewAmendmentBinding; detail: string } {
+  return { binding, detail: binding + ':operation_failed' };
+}
+
 export async function maybeAdmitPackReviewBodyAmendment(
   input: ReconcileStalePackReviewRunsInput,
   options: { projectId: string; storeRoot: string; repoSlug: string },
@@ -5903,12 +6066,16 @@ export async function maybeAdmitPackReviewBodyAmendment(
       || (authority.terminal?.reviewVerdict === 'clean'
         && cycle.reviewStageComplete === true));
   if (!isFinalTerminal && !cycle.amendmentOrigin) return null;
-  const failure = (reason: string, detail?: string) => ({
-    prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
-    settled: false, amendmentAdmission: false, reason,
-    ...(detail ? { detail } : {}),
-    nextAction: 'reconcile the original exact-head terminal, live closing Issue and current required status; do not reset the cycle or send a new review',
-  });
+  const failure = (reason: string,
+    cause?: { binding: PackReviewAmendmentBinding; detail: string }) => {
+    const failedBinding = cause?.binding ?? AMENDMENT_REASON_BINDING[reason] ?? 'immutable_terminal';
+    return {
+      prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true,
+      settled: false, amendmentAdmission: false, reason, failedBinding,
+      ...(cause ? { detail: cause.detail } : {}),
+      nextAction: AMENDMENT_BINDING_NEXT_ACTION[failedBinding],
+    };
+  };
   let livePr: { body: string; headSha: string };
   try {
     if (process.env.OPK_VITEST_HARNESS === '1') {
@@ -5941,13 +6108,15 @@ export async function maybeAdmitPackReviewBodyAmendment(
       currentIssue = await resolveCurrentIssueFields(input.sourceRepoRoot, options.repoSlug, issueNumber);
     }
   } catch (error) {
-    return failure('amendment_live_issue_unavailable', describeError(error));
+    return failure('amendment_live_issue_unavailable', sanitizedAmendmentCause(error, 'issue_body_digest'));
   }
   const nextDigest = computeBoundIssueSnapshotHash(currentIssue.body);
   // A full-body mismatch observed on this exact PR head must never leave a
   // prior success as the runner's asserted current authority. A non-behavior
   // mismatch has no new-review admission; deassert and read back only.
-  const confirmUnreviewedBodyNonSuccess = async (reason: string) => {
+  const confirmUnreviewedBodyNonSuccess = async (reason: string,
+    cause?: { binding: PackReviewAmendmentBinding; detail: string }) => {
+    let operation: PackReviewAmendmentBinding = 'pr_head_lineage';
     try {
       const head = await readCheckedReviewPrHead(input, options.repoSlug, prNumber, livePr.headSha);
       if (head !== livePr.headSha
@@ -5955,6 +6124,7 @@ export async function maybeAdmitPackReviewBodyAmendment(
           || computeBoundIssueSnapshotHash(currentIssue.body) !== nextDigest) {
         return failure('amendment_mismatch_current_binding_unverified');
       }
+      operation = 'required_status';
       let observed = await readFinalCapRequiredStatus(input, options.repoSlug, livePr.headSha);
       if (observed !== 'pending' && observed !== 'error') {
         const writer = input.fixtureRequiredStatusWriter
@@ -5973,9 +6143,11 @@ export async function maybeAdmitPackReviewBodyAmendment(
       if (observed !== 'pending' && observed !== 'error') {
         return failure('amendment_mismatch_non_success_unverified');
       }
-      return failure(reason);
+      return failure(reason, cause);
     } catch (error) {
-      return failure('amendment_mismatch_non_success_unverified', describeError(error));
+      return failure(operation === 'pr_head_lineage'
+        ? 'amendment_mismatch_current_binding_unverified' : 'amendment_mismatch_non_success_unverified',
+      sanitizedAmendmentCause(error, operation));
     }
   };
   const amendmentPendingRequest = (headSha: string) => ({
@@ -6026,8 +6198,10 @@ export async function maybeAdmitPackReviewBodyAmendment(
         && extractClosingIssueNumber(pr.body) === issueNumber
         && computeBoundIssueSnapshotHash(issue.body) === nextDigest;
     };
+    let operation: PackReviewAmendmentBinding = 'pr_head_lineage';
     try {
       if (!(await stillCurrent())) return failure('amendment_binding_changed_before_pending');
+      operation = 'required_status';
       if (await readFinalCapRequiredStatus(input, options.repoSlug, livePr.headSha) !== 'pending') {
         const writer = input.fixtureRequiredStatusWriter
           ?? ((request: Parameters<PackReviewRequiredStatusWriter>[0]) => publishPackReviewRequiredStatus({
@@ -6036,17 +6210,23 @@ export async function maybeAdmitPackReviewBodyAmendment(
           }));
         await writer(amendmentPendingRequest(livePr.headSha));
       }
-      if (await readFinalCapRequiredStatus(input, options.repoSlug, livePr.headSha) !== 'pending'
-          || !(await stillCurrent())) {
+      if (await readFinalCapRequiredStatus(input, options.repoSlug, livePr.headSha) !== 'pending') {
         return { ...failure('amendment_pending_status_unverified'), headSha: livePr.headSha,
           nextAction: 'from the pack root run: '
             + amendedReviewPendingRestoreCommand(options.repoSlug, prNumber) };
       }
+      operation = 'pr_head_lineage';
+      if (!(await stillCurrent())) {
+        return { ...failure('amendment_pending_status_unverified',
+          { binding: 'pr_head_lineage', detail: 'pr_head_lineage:binding_changed_after_pending' }),
+        headSha: livePr.headSha };
+      }
       return null;
     } catch (error) {
-      return { ...failure('amendment_pending_status_unverified', describeError(error)),
-        headSha: livePr.headSha, nextAction: 'from the pack root run: '
-          + amendedReviewPendingRestoreCommand(options.repoSlug, prNumber) };
+      const cause = sanitizedAmendmentCause(error, operation);
+      return { ...failure('amendment_pending_status_unverified', cause), headSha: livePr.headSha,
+        ...(operation === 'required_status' ? { nextAction: 'from the pack root run: '
+          + amendedReviewPendingRestoreCommand(options.repoSlug, prNumber) } : {}) };
     }
   }
   if (!isFinalTerminal || !authority.terminal) return null;
@@ -6115,6 +6295,7 @@ export async function maybeAdmitPackReviewBodyAmendment(
     // Only a genuine behavior-criteria change admits a new review. A full
     // mismatch elsewhere must still deassert success, except for the separately
     // proven authorized scope-only correction on the reviewed head or a fix descendant.
+    let scopeProofFailure: { binding: PackReviewAmendmentBinding; detail: string } | undefined;
     if (terminal.reviewVerdict === 'findings' && priorRun.reviewRound) {
       // The only criteria-equal body exception is an independently verified,
       // authorized #2428 post-terminal Issue-only scope correction. It is not
@@ -6130,13 +6311,19 @@ export async function maybeAdmitPackReviewBodyAmendment(
                 && authority.publication.publicationDigest === proof.publicationDigest))) {
           return null; // The existing final-cap owner commits/reads status.
         }
-      } catch { /* Unproved exception retains the full-body mismatch veto. */ }
+        scopeProofFailure = { binding: 'scope_proof_witness', detail: 'scope_proof_witness:corrected_digest_or_publication_mismatch' };
+      } catch (error) {
+        // Unproved exception retains the full-body mismatch veto.
+        scopeProofFailure = sanitizedAmendmentCause(error,
+          (error as { amendmentBinding?: PackReviewAmendmentBinding } | undefined)?.amendmentBinding
+            ?? 'scope_proof_witness');
+      }
     }
-    return confirmUnreviewedBodyNonSuccess('amendment_unverified_body_mismatch');
+    return confirmUnreviewedBodyNonSuccess('amendment_unverified_body_mismatch', scopeProofFailure);
   }
   let liveTier: PackReviewTier;
   try { liveTier = parseAuthoritativeTier(currentIssue.body, currentIssue.title); }
-  catch (error) { return failure('amendment_tier_invalid', describeError(error)); }
+  catch { return failure('amendment_tier_invalid', { binding: 'issue_criteria', detail: 'issue_criteria:tier_invalid' }); }
   if (liveTier !== cycle.frozenTier) return null; // Existing upward-tier reconciliation owns that distinct case.
   const originalImmutable = listPackReviewImmutableRecords('terminal', { storeRoot: options.storeRoot })
     .filter((entry) => entry.digest === terminal.digest
@@ -6170,6 +6357,7 @@ export async function maybeAdmitPackReviewBodyAmendment(
       && extractClosingIssueNumber(pr.body) === issueNumber
       && computeBoundIssueSnapshotHash(issue.body) === nextDigest;
   };
+  let operation: PackReviewAmendmentBinding = 'pr_head_lineage';
   try {
     if (!(await stillCurrent())) return failure('amendment_binding_changed_before_pending');
     const writer = input.fixtureRequiredStatusWriter ?? ((request: Parameters<PackReviewRequiredStatusWriter>[0]) =>
@@ -6177,11 +6365,15 @@ export async function maybeAdmitPackReviewBodyAmendment(
         repoRoot: input.sourceRepoRoot, repoSlug: options.repoSlug,
         headSha: livePr.headSha, request,
       }));
+    operation = 'required_status';
     await writer(amendmentPendingRequest(livePr.headSha));
-    if (await readFinalCapRequiredStatus(input, options.repoSlug, livePr.headSha) !== 'pending'
-        || !(await stillCurrent())) {
-      return failure('amendment_pending_status_unverified');
+    let pendingVerified = await readFinalCapRequiredStatus(input, options.repoSlug, livePr.headSha) === 'pending';
+    if (pendingVerified) {
+      operation = 'pr_head_lineage';
+      pendingVerified = await stillCurrent();
     }
+    if (!pendingVerified) return failure('amendment_pending_status_unverified');
+    operation = 'immutable_terminal';
     let beforeAdmission = authority;
     if (livePr.headSha !== authority.currentHeadSha) {
       beforeAdmission = observePackReviewHead({
@@ -6197,6 +6389,7 @@ export async function maybeAdmitPackReviewBodyAmendment(
       amendedBodyDigest: nextDigest,
       options: { storeRoot: options.storeRoot },
     });
+    operation = 'required_status';
     const observed = await readFinalCapRequiredStatus(input, options.repoSlug, livePr.headSha);
     if (observed !== 'pending' || admitted.cycle?.amendmentOrigin?.amendedBodyDigest !== nextDigest) {
       return failure('amendment_post_commit_pending_unverified');
@@ -6209,7 +6402,7 @@ export async function maybeAdmitPackReviewBodyAmendment(
       requiredStatusState: 'pending', settled: false,
     };
   } catch (error) {
-    return failure('amendment_admission_unverified', describeError(error));
+    return failure('amendment_admission_unverified', sanitizedAmendmentCause(error, operation));
   }
 }
 
@@ -7142,6 +7335,9 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
   }
 
   let verifiedFinalCiSelectors: TargetContext['requiredCi'];
+  // Required CI is an independent current-head context. It gates the
+  // rebased-C and zero-call lanes, never the ordinary F..T delta status.
+  let finalCapCurrentHeadCiGreen: boolean | undefined;
   let selectedBaseTipBeforeDelta: string | undefined;
   // The production card is mandatory; legacy offline fixtures without a card
   // still exercise the original no-transport reconciliation path.
@@ -7177,12 +7373,16 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         options.repoSlug, input.sourceRepoRoot)) throw new Error('original source/REVIEW evidence unverified');
       const context = resolveTargetContext({ projectId: options.projectId });
       const requiredCi = context.requiredCi ? [...context.requiredCi] : undefined;
-      if (!await manualPackReviewRequiredCiGreen({ startInput: input, targetContext: context,
-        target: { prNumber, headSha: currentHead, repoSlug: options.repoSlug,
-          sourceRepoRoot: input.sourceRepoRoot, prBaseRef: context.defaultBranch } })) {
+      try {
+        finalCapCurrentHeadCiGreen = await manualPackReviewRequiredCiGreen({
+          startInput: input, targetContext: context,
+          target: { prNumber, headSha: currentHead, repoSlug: options.repoSlug,
+            sourceRepoRoot: input.sourceRepoRoot, prBaseRef: context.defaultBranch } });
+      } catch { finalCapCurrentHeadCiGreen = false; }
+      if (!finalCapCurrentHeadCiGreen && rebasedC) {
         throw new Error('current-head required CI not green');
       }
-      verifiedFinalCiSelectors = requiredCi;
+      if (finalCapCurrentHeadCiGreen) verifiedFinalCiSelectors = requiredCi;
       if (process.env.OPK_VITEST_HARNESS !== '1') {
         if (!selectedFinalCap) throw new Error('selected base project card unavailable');
         const pr = await resolveCurrentPrTarget(input.sourceRepoRoot, options.repoSlug, prNumber);
@@ -7231,6 +7431,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
     description: string,
     digest: string,
     successReason: string,
+    lane: { ordinaryCleanDelta?: boolean } = {},
   ): Promise<Record<string, unknown>> => {
     const publicationHead = authority?.currentHeadSha ?? '';
     const publicationCycle = authority?.cycle?.cycleId;
@@ -7279,8 +7480,15 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
           freshCiAndBase = pr.headSha === publicationHead.toLowerCase()
             && pr.baseRef === selectedFinalCap.defaultBranch
             && (selectedBaseTipBeforeDelta === undefined || tip === selectedBaseTipBeforeDelta);
+        } else if (freshCiAndBase && selectedFinalCap && lane.ordinaryCleanDelta === true) {
+          // Offline witness of the same live PR head/base read, without CI.
+          freshCiAndBase = trim(input.fixtureRequiredCiHeadAfterGate || publicationHead).toLowerCase()
+              === publicationHead.toLowerCase()
+            && trim(input.fixtureRequiredCiBaseAfterGate || selectedFinalCap.defaultBranch)
+              === selectedFinalCap.defaultBranch;
         }
-        if (freshCiAndBase && selectedFinalCap && (process.env.OPK_VITEST_HARNESS !== '1'
+        if (freshCiAndBase && selectedFinalCap && lane.ordinaryCleanDelta !== true
+            && (process.env.OPK_VITEST_HARNESS !== '1'
             || input.fixtureRequiredCiChecks !== undefined
             || input.fixtureRequiredCiPolicy !== undefined)) {
           freshCiAndBase = await manualPackReviewRequiredCiGreen({
@@ -7425,7 +7633,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
     // The distinct rewritten-C lane can be reused on the exact already
     // published head only after re-proving its original full C witness.
     // A later H3 cannot inherit H2's publication or its C proof.
-    if (completedFinalFindings && !rebasedC
+    if (completedFinalFindings && !rebasedC && finalCapCurrentHeadCiGreen !== false
         && authority.cycle?.settlementKind === undefined
         && authority.publication?.headSha === authority.currentHeadSha
         && authority.publication.terminalRunId === priorRun.id) {
@@ -7492,6 +7700,12 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
               : 'restore the bound worker notification route for persisted findings before fixer continuation'
             : 'reconcile the existing exact-head delta run/source census or use the PR-led claimed runner; never resend uncertain output',
         };
+      }
+      if (deltaOutcome.zeroCall && finalCapCurrentHeadCiGreen === false) {
+        // A zero-call merge is not a reviewed clean delta; it keeps the CI veto.
+        return { prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true, settled: false,
+          reason: 'final_cap_review_binding_unverified', detail: 'current-head required CI not green',
+          nextAction: 'restore original credentialed sources, native delivery and terminal REVIEW plus current-head CI; rerun scoped reconcile without another round' };
       }
       if (!deltaOutcome.zeroCall) {
         const deltaRun = deltaOutcome.runId
@@ -7570,6 +7784,8 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         settlementKind: 'strict_descendant',
       })),
       'final_cap_descendant_settled',
+      { ordinaryCleanDelta: !rebasedC && deltaOutcome?.state === 'clean'
+        && deltaOutcome.zeroCall !== true && Boolean(deltaOutcome.runId) },
     );
   }
 
@@ -7833,7 +8049,15 @@ export async function reconcileStalePackReviewRuns(
     const activeGptRecovery = (input.immediate === true || input.recoverActiveGptSources === true)
       && PACK_REVIEW_ACTIVE_STATUSES.has(candidate.status)
       && candidate.reviewRound?.reviewer === 'gpt';
-    if (!activeStale && !unfinishedTerminal && !activeGptRecovery && !pendingJournalDelivery) continue;
+    // A dead owner does not by itself block finalization: already-published
+    // GitHub source comments are consumed by the existing source recovery.
+    const deadRunnerPublishedSources = !activeStale && !activeGptRecovery && !unfinishedTerminal
+      && PACK_REVIEW_ACTIVE_STATUSES.has(candidate.status)
+      && candidate.reviewRound?.reviewer === 'gpt'
+      && !packReviewJournaledPayload(candidate)
+      && packReviewRunnerPidDead(candidate.runnerPid);
+    if (!activeStale && !unfinishedTerminal && !activeGptRecovery && !pendingJournalDelivery
+      && !deadRunnerPublishedSources) continue;
 
     const unresolvedIdentity = await findUnresolvedSameHeadRepositoryIdentity({
       projectId,
@@ -7980,7 +8204,7 @@ export async function reconcileStalePackReviewRuns(
       }
     }
 
-    if (activeStale || activeGptRecovery || needsGptSourceRecovery) {
+    if (activeStale || activeGptRecovery || needsGptSourceRecovery || deadRunnerPublishedSources) {
       const recovery = await recoverStaleGptSourceComments({
         run,
         input,
@@ -7988,6 +8212,17 @@ export async function reconcileStalePackReviewRuns(
         storeRoot,
         repoSlug,
       });
+      if (!recovery.recovered && deadRunnerPublishedSources) {
+        // Without every published source the existing stale recovery owns it.
+        results.push({
+          runId: run.id, terminalized: false, statusReconciled: false,
+          hydratedSourceCount: recovery.hydratedSourceCount,
+          usableSourceCount: recovery.usableSourceCount,
+          reason: 'dead_runner_sources_not_published:' + recovery.reason,
+          nextAction: recovery.nextAction ?? scopedReconcileAction(run.prNumber),
+        });
+        continue;
+      }
       if (recovery.recovered) {
         const recoveredRun = await bindRepositoryIdentity(
           getPackReviewRun(run.id, { projectId, storeRoot }) ?? run,
