@@ -91,8 +91,8 @@ the **exact reviewed PR** or its **live linked Issue**, not copied text or a
 cross-repository PR. For each claimed closure, establish the canonical repository,
 PR and linked-Issue locator, GitHub comment URL/id, authenticated `user.login`
 (and available publisher metadata), the quoted explicit `closed` decision,
-stable finding code, the specific prior review/finding occurrence and reviewed
-head/code state, and which reviewed PR/current head and code concern it covers.
+stable finding code, the specific prior review/finding occurrence,
+reviewed head/code state, and which reviewed PR/current head and code concern it covers.
 A linked-Issue ruling must explicitly identify this PR and finding instance.
 
 Confirm the publisher is the **independently authorized ARCH/operator principal

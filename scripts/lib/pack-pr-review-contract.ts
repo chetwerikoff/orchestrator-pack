@@ -119,7 +119,7 @@ export function renderAuthenticatedGptFinalCapSection(delta: {
     '',
     `Original H1 run: \`${delta.originalRunId}\`; cycle: \`${delta.originalCycleId}\`.`,
     `Base is the frozen reviewed frontier F = \`${delta.fromSha}\`; exact target T = \`${delta.toSha}\`.`,
-    'Read the connected GitHub comparison F...T completely; inspect all newly added/changed code.',
+    'Read the connected GitHub F..T delta comparison F...T completely; inspect all newly added/changed code.',
     'Do NOT use the whole PR base-to-head diff as your review input.',
     'Prior H1/H2 finding rows are historical inputs, not proof that each occurrence remains outstanding.',
     'First interpret an independently authenticated, explicit and still-applicable ARCH/operator closure of a specific prior occurrence as closed; do not re-raise an unchanged closed instance solely because it remains in priorFindings.',
