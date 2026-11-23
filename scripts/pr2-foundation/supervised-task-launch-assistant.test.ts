@@ -16,7 +16,7 @@ import { readTerminalGoneDispatch, runSupervisedWorkerStart, type SupervisedWork
 import { installManagerPushGuard, restoreManagerPushGuardForClaude, runPrePush } from './manager-push-guard.ts';
 import {
   currentWorkerAssignment, currentWorkerAssignmentByDeliverable, publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath,
-  type BriefWorkerAssignment, type DelegatedIntegrationMarker, type WorkerAssignment,
+  type BriefWorkerAssignment, type DelegatedIntegrationMarker, type WorkerAssignment, type WorkerAssignmentRecord,
 } from '../lib/worker-assignment-store.ts';
 import {
   createManagerTaskWithOrca,
@@ -30,6 +30,7 @@ import {
   prepareWorktreeWithOrca,
   observeFreshManagerBaseWithOrca,
   observeAuthorPrWithOrca,
+  observeWorktreeOwnersWithOrca,
   observeSelectedIssueAssignment,
   resolveExecutorProfile,
   resolveLiveExecutorProfile,
@@ -7280,6 +7281,9 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
       ['Sonnet 5.5\neffort: medium', false],
       ['Sonnet 5.5\nmedium effort', false],
       ['Sonnet 5.5\nHigh', false],
+      ['Sonnet 5.5\nEffort medium', false],
+      ['Sonnet 5.5\nEffort high', true],
+      ['Sonnet 5.5\nreasoning effort unknown', false],
       ['Sonnet 5.5 · Claude Team', false],
       ['Sonnet 5.5\nSonnet 5.5', false],
       ['Sonnet 5.5\nOpus 5.5', false],
@@ -9351,11 +9355,13 @@ describe('Issue #2874 explicit author start: GitHub-first PR continuation and fi
     readonly census?: readonly EdgeResult<true>[];
     readonly dispatch?: DispatchObservation[];
     readonly holder?: (call: number) => WorkerAssignment | null;
+    readonly owners?: readonly EdgeResult<true>[];
   } = {}) {
     const events: string[] = [];
     const requests: Parameters<LaunchDependencies['prepareWorktree']>[0][] = [];
     const prReads = [...(options.prReads ?? [{ status: 'ok', value: null }])];
     const census = [...(options.census ?? [])];
+    const owners = [...(options.owners ?? [])];
     let prepareCalls = 0;
     let holderCalls = 0;
     const base = deps({
@@ -9374,6 +9380,10 @@ describe('Issue #2874 explicit author start: GitHub-first PR continuation and fi
       observeRestoreQuiescence: async () => {
         events.push('census');
         return census.shift() ?? { status: 'ok', value: true };
+      },
+      observeWorktreeOwners: async () => {
+        events.push('owners');
+        return owners.shift() ?? { status: 'ok', value: true };
       },
       prepareWorktree: async (request) => {
         events.push('prepare');
@@ -9450,7 +9460,7 @@ describe('Issue #2874 explicit author start: GitHub-first PR continuation and fi
     const harness = authorHarness({ prReads: [{ status: 'ok', value: pr }] });
     const result = await runSupervisedTaskLaunchAssistant(selected(), harness.launchDeps);
     expect(result.outcome).toBe('ready');
-    expect(harness.events).toEqual(['pr', 'resolve', 'census', 'prepare', 'pr', 'resolve', 'prepare', 'census', 'spawn', 'start']);
+    expect(harness.events).toEqual(['pr', 'resolve', 'census', 'owners', 'prepare', 'pr', 'resolve', 'prepare', 'census', 'owners', 'spawn', 'start']);
     expect(harness.requests[0]).toMatchObject({ authorFirstPlacement: true, authorPr: pr });
     expect(harness.requests[0]).not.toHaveProperty('reuseAssignment');
   });
@@ -9495,6 +9505,24 @@ describe('Issue #2874 explicit author start: GitHub-first PR continuation and fi
     expect(result).toMatchObject({ outcome: 'continue', stage: 'dispatch_admission_early', observedCause: 'worktree_restore_ownership_unproven' });
     expect(harness.events).not.toContain('prepare');
     expect(harness.events).not.toContain('spawn');
+  });
+
+  it('a live manager Dispatch of a different Issue that owns the selected worktree refuses first placement, early or final', async () => {
+    const owned: EdgeResult<true> = { status: 'continue', cause: 'author_first_placement_worktree_owned', actor: 'orchestrator',
+      evidence: { taskId: 'task-manager-other', dispatchId: 'dispatch-paused', issueNumber: 9999 },
+      nextAction: { kind: 'reconcile_dispatch', note: 'retire the owner' } };
+    const early = authorHarness({ owners: [owned] });
+    expect(await runSupervisedTaskLaunchAssistant(selected(), early.launchDeps)).toMatchObject({
+      outcome: 'continue', stage: 'dispatch_admission_early', observedCause: 'author_first_placement_worktree_owned',
+      evidence: { issueNumber: 9999 } });
+    expect(early.events).toEqual(['pr', 'resolve', 'census', 'owners']);
+    const late = authorHarness({ owners: [{ status: 'ok', value: true }, owned] });
+    expect(await runSupervisedTaskLaunchAssistant(selected(), late.launchDeps)).toMatchObject({
+      outcome: 'continue', stage: 'dispatch_admission_final', observedCause: 'author_first_placement_worktree_owned' });
+    expect(late.events).not.toContain('spawn');
+    const { observeWorktreeOwners: _owners, ...withoutOwners } = authorHarness().launchDeps;
+    expect(await runSupervisedTaskLaunchAssistant(selected(), withoutOwners)).toMatchObject({
+      outcome: 'continue', observedCause: 'author_first_placement_unobserved' });
   });
 
   it('a holder that appears before start refuses first placement', async () => {
@@ -9563,6 +9591,57 @@ describe('Issue #2874 author PR observation and first-placement worktree route',
     const placed = await prepareWorktreeWithOrca(placementRequest(overrides), fixture.execute);
     expect(placed).toMatchObject({ status: 'continue', cause });
     expect(mutating(fixture.calls)).toBe(false);
+  });
+
+  it('observes every current project assignment (any Issue) against the selected worktree, failing closed', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2874-owners-'));
+    const target = join(root, 'manager');
+    const other = join(root, 'other');
+    mkdirSync(target);
+    mkdirSync(other);
+    const assignment = (taskId: string, issueNumber: number): WorkerAssignmentRecord => ({
+      schema: 'orchestrator-pack/worker-assignment/v1', projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      issueNumber, taskId, assignmentId: `a-${taskId}`, generation: 1, kind: 'local', provider: 'orca',
+      bindingKey: `d-${taskId}`, role: 'orchestrator', createdAtUtc: '2026-11-23T00:00:00.000Z',
+    } as WorkerAssignmentRecord);
+    const inspector = (rows: Record<string, { status: string; worktreeId?: string; path?: string }>) => {
+      const calls: string[][] = [];
+      return { calls, inspect: async (args: readonly string[]) => {
+        calls.push([...args]);
+        const taskId = args[1] === 'dispatch-show' ? args[3]! : args[3]!.replace(/^d-/u, '');
+        const row = rows[taskId];
+        if (!row) return { ok: false, stdout: '', stderr: 'missing' };
+        if (args[1] === 'dispatch-show') return { ok: true, stdout: okEnvelope({ dispatch: { id: `d-${taskId}`, taskId, status: row.status } }), stderr: '' };
+        return { ok: true, stdout: okEnvelope({
+          worker: row.worktreeId ? { worktree_id: row.worktreeId } : null,
+          terminal: row.path ? { worktreePath: row.path } : null,
+        }), stderr: '' };
+      } };
+    };
+    const selectedWorktree = { id: 'repo::manager', path: target };
+    try {
+      const paused = inspector({ 'task-m': { status: 'paused', worktreeId: 'repo::manager' } });
+      expect(await observeWorktreeOwnersWithOrca([assignment('task-m', 9999)], selectedWorktree, paused.inspect))
+        .toMatchObject({ status: 'continue', cause: 'author_first_placement_worktree_owned',
+          evidence: { taskId: 'task-m', issueNumber: 9999, dispatchStatus: 'paused' } });
+      const byPath = inspector({ 'task-m': { status: 'running', path: target } });
+      expect(await observeWorktreeOwnersWithOrca([assignment('task-m', 9999)], selectedWorktree, byPath.inspect))
+        .toMatchObject({ status: 'continue', cause: 'author_first_placement_worktree_owned' });
+      const elsewhere = inspector({ 'task-x': { status: 'running', worktreeId: 'repo::other', path: other },
+        'task-done': { status: 'completed', worktreeId: 'repo::manager' } });
+      expect(await observeWorktreeOwnersWithOrca([assignment('task-x', 1), assignment('task-done', 2)], selectedWorktree, elsewhere.inspect))
+        .toEqual({ status: 'ok', value: true });
+      expect(elsewhere.calls.filter((args) => args[1] === 'worker-show')).toHaveLength(1);
+      const unknown = inspector({ 'task-u': { status: 'running' } });
+      expect(await observeWorktreeOwnersWithOrca([assignment('task-u', 3)], selectedWorktree, unknown.inspect))
+        .toMatchObject({ status: 'continue', cause: 'author_first_placement_owner_unproven' });
+      const unreadable = inspector({});
+      expect(await observeWorktreeOwnersWithOrca([assignment('task-gone', 4)], selectedWorktree, unreadable.inspect))
+        .toMatchObject({ status: 'continue', cause: 'author_first_placement_owner_unproven' });
+      expect(await observeWorktreeOwnersWithOrca(null, selectedWorktree, unreadable.inspect))
+        .toMatchObject({ status: 'continue', cause: 'author_first_placement_owner_unproven' });
+      expect(await observeWorktreeOwnersWithOrca([], selectedWorktree, unreadable.inspect)).toEqual({ status: 'ok', value: true });
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   it('parses --launch-purpose author only for t1|t2|t3 with --issue-number and --task', () => {

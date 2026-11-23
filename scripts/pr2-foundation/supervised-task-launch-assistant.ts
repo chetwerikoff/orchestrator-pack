@@ -366,6 +366,8 @@ export interface LaunchDependencies {
   readonly observeFreshManagerBase?: () => Promise<EdgeResult<FreshPrHead | null>>;
   /** Explicit author start: live unique open Issue-closing PR (null when none), before any effect. */
   readonly observeAuthorPr?: () => Promise<EdgeResult<FreshPrHead | null>>;
+  /** Explicit author first placement: no live project assignment/Dispatch (any Issue) owns the selected worktree. */
+  readonly observeWorktreeOwners?: (selected: RestoreWorktreeIdentity) => Promise<EdgeResult<true>>;
   readonly observeDispatch: (taskId: string) => Promise<EdgeResult<DispatchObservation>>;
   readonly readCurrentAssignment: (issueNumber: number) => IssueAssignmentObservation;
   /** Existing issue-less assignment, selected only by the exact Task/Dispatch deliverable. */
@@ -988,13 +990,13 @@ export async function claudePaneProfileObserved(
   const modelLine = new RegExp(`^${logoPrefix}(?:Claude\\s+)?${family}(?:[- .]?5[- .]?5)\\b`, 'iu');
   const row = footer[modelIndex]!;
   if (!modelLine.test(row)) return false;
-  const effortLine = new RegExp(`^\\s*(?:effort\\s*[:=]\\s*${profile.effort}|${profile.effort}\\s+effort)\\s*$`, 'iu');
+  const effortLine = new RegExp(`^\\s*(?:effort\\s*(?:[:=]\\s*|\\s+)${profile.effort}|${profile.effort}\\s+effort)\\s*$`, 'iu');
   const suffix = row.replace(modelLine, '').replace(/^\s*[·|•]\s*/u, '').trim();
   // A status footer admits only one compatible effort row anywhere, or a
   // matching inline model/effort row without any separate effort status.
   // With no effort status at all, the already-matched native --model/--effort
   // command plus this unique model row (optionally with a plan label) suffices.
-  const effortStatusRow = /^\s*(?:effort\s*[:=]\s*\S.*|\S+\s+effort)\s*$/iu;
+  const effortStatusRow = /^\s*(?:effort\s*(?:[:=]\s*|\s+)\S.*|\S+\s+effort)\s*$/iu;
   const effortRows = footer.filter((line) => effortStatusRow.test(line));
   const withEffortLine = new RegExp(`^with\\s+${profile.effort}\\s+effort(?:\\s*·\\s*Claude Max)?$`, 'iu');
   const inlineEffort = suffix.toLowerCase() === profile.effort?.toLowerCase()
@@ -1002,7 +1004,9 @@ export async function claudePaneProfileObserved(
   const planOnly = /^Claude\s+(?:Max|Pro)$/iu.test(suffix);
   // A bare effort word on its own row is an ambiguous effort display, not absence.
   const bareEffort = footer.some((line) => /^\s*(?:low|medium|high|xhigh|max)\s*$/iu.test(line));
-  if (effortRows.length === 0 && !bareEffort && (!suffix || planOnly)) return true;
+  // Any other effort-like text in the footer is ambiguous evidence: refuse rather than ignore it.
+  const effortMention = footer.some((line, index) => index !== modelIndex && /\beffort\b/iu.test(line));
+  if (effortRows.length === 0 && !bareEffort && !effortMention && (!suffix || planOnly)) return true;
   return suffix ? inlineEffort && effortRows.length === 0
     : effortRows.length === 1 && effortLine.test(effortRows[0]!);
 }
@@ -1419,7 +1423,7 @@ async function runLaunch(
   const authorFirstPlacement = author && Boolean(input.worktreeSelector) && !earlyCurrent;
   let authorPlacement: RestoreWorktreeIdentity | null = null;
   if (authorFirstPlacement) {
-    if (!deps.resolveRestoreWorktree || !deps.observeRestoreQuiescence) return continued(input, 'dispatch_admission_early', {
+    if (!deps.resolveRestoreWorktree || !deps.observeRestoreQuiescence || !deps.observeWorktreeOwners) return continued(input, 'dispatch_admission_early', {
       cause: 'author_first_placement_unobserved', actor: 'operator', evidence: {},
       nextAction: { kind: 'reconcile_worktree_setup',
         note: 'restore the selected-worktree identity and native terminal/process census before an author first placement' },
@@ -1428,6 +1432,8 @@ async function runLaunch(
     if (selected.status !== 'ok') return continued(input, 'dispatch_admission_early', selected, resources, startedAtMs, timings, deps.now);
     const census = await deps.observeRestoreQuiescence(selected.value.path);
     if (census.status !== 'ok') return continued(input, 'dispatch_admission_early', census, resources, startedAtMs, timings, deps.now);
+    const owners = await deps.observeWorktreeOwners(selected.value);
+    if (owners.status !== 'ok') return continued(input, 'dispatch_admission_early', owners, resources, startedAtMs, timings, deps.now);
     authorPlacement = selected.value;
   }
 
@@ -1764,6 +1770,8 @@ async function runLaunch(
     }
     const census = await deps.observeRestoreQuiescence!(authorPlacement.path);
     if (census.status !== 'ok') return continued(input, 'dispatch_admission_final', census, resources, startedAtMs, timings, deps.now);
+    const owners = await deps.observeWorktreeOwners!(authorPlacement);
+    if (owners.status !== 'ok') return continued(input, 'dispatch_admission_final', owners, resources, startedAtMs, timings, deps.now);
   }
   // Early admission rested on an owned terminal predecessor. If the final read no
   // longer shows that same exact proof (including an absent Dispatch after the
@@ -3282,6 +3290,62 @@ async function reuseTerminalOwnedWorktree(
   };
 }
 
+const TERMINAL_DISPATCH_STATES = ['failed', 'abandoned', 'cancelled', 'done', 'completed'];
+
+/**
+ * Explicit author first placement: every current project assignment (any Issue)
+ * is either a terminal Dispatch or a live one proven bound to another worktree.
+ * A live Dispatch on the selected worktree, or one whose worktree cannot be
+ * observed, refuses. Read-only over existing assignment-store and Orca reads.
+ */
+export async function observeWorktreeOwnersWithOrca(
+  records: readonly WorkerAssignmentRecord[] | null,
+  selected: RestoreWorktreeIdentity,
+  inspect: (args: readonly string[]) => Promise<ChildResult>,
+): Promise<EdgeResult<true>> {
+  const refusal = (cause: string, evidence: Readonly<Record<string, unknown>> = {}): EdgeResult<true> => ({
+    status: 'continue', cause, actor: 'orchestrator', evidence: { worktreeId: selected.id, ...evidence },
+    nextAction: { kind: 'reconcile_dispatch',
+      note: 'inspect the exact assignment and native dispatch-show / worker-show for this worktree; the coordinator ends or retires the live owner through its own lawful route before an author first placement. Never transfer a live holder by inference' },
+  });
+  if (!records) return refusal('author_first_placement_owner_unproven', { reason: 'assignment_store_unreadable' });
+  let selectedPath: string;
+  try { selectedPath = realpathSync(selected.path); } catch { selectedPath = resolve(selected.path); }
+  const samePath = (path: string): boolean => {
+    if (!isAbsolute(path)) return false;
+    try { return realpathSync(path) === selectedPath; } catch { return resolve(path) === selectedPath; }
+  };
+  for (const assignment of records) {
+    const owner = { taskId: assignment.taskId, dispatchId: assignment.bindingKey,
+      ...(assignment.issueNumber !== undefined ? { issueNumber: assignment.issueNumber } : {}) };
+    if (!assignment.taskId || !assignment.bindingKey) return refusal('author_first_placement_owner_unproven', owner);
+    const shownDispatch = resultRecord(envelope(await inspect([
+      'orchestration', 'dispatch-show', '--task', assignment.taskId, '--full', '--json',
+    ])));
+    const dispatch = shownDispatch && record(shownDispatch.dispatch) ? shownDispatch.dispatch : null;
+    const dispatchId = text(dispatch?.id);
+    const status = text(dispatch?.status).toLowerCase();
+    // A different or absent current Dispatch for that Task is not proof the old one is gone.
+    if (dispatchId === assignment.bindingKey && TERMINAL_DISPATCH_STATES.includes(status)) continue;
+    const shown = resultRecord(envelope(await inspect([
+      'orchestration', 'worker-show', '--dispatch', assignment.bindingKey, '--full', '--json',
+    ])));
+    const worker = shown && record(shown.worker) ? shown.worker : null;
+    const resource = shown && record(shown.terminalResource) ? shown.terminalResource : null;
+    const terminal = shown && record(shown.terminal) ? shown.terminal : null;
+    const ids = [text(worker?.worktree_id), text(resource?.worktreeId)].filter(Boolean);
+    const paths = [typeof terminal?.worktreePath === 'string' ? terminal.worktreePath : '',
+      typeof worker?.worktree_path === 'string' ? worker.worktree_path : ''].filter(Boolean);
+    if (ids.includes(selected.id) || paths.some(samePath)) {
+      return refusal('author_first_placement_worktree_owned', { ...owner, dispatchStatus: status || 'unknown' });
+    }
+    if (ids.length === 0 && paths.length === 0) {
+      return refusal('author_first_placement_owner_unproven', { ...owner, dispatchStatus: status || 'unknown' });
+    }
+  }
+  return { status: 'ok', value: true };
+}
+
 function authorPrPlacementNote(pr: FreshPrHead): string {
   return `continue open PR #${pr.prNumber} only in a worktree already on local branch ${pr.branch} at exactly ${pr.head}; reconcile the existing worktree/PR owner. Never switch, reset, force or seed a different branch, and open no second PR`;
 }
@@ -3792,6 +3856,9 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
         defaultBranch: input.defaultBranch ?? target.defaultBranch,
       }, target.primaryRoot,
       (args, timeoutMs, envOverride, childCwd) => child(args, childCwd ?? target.primaryRoot, envOverride ?? env, timeoutMs)),
+      observeWorktreeOwners: (selected) => observeWorktreeOwnersWithOrca(
+        listCurrentWorkerAssignmentRecords(resolveWorkerAssignmentStorePath(target.projectId, env)),
+        selected, (args) => child(['orca', ...args], cwd, env)),
     } : {}),
     observeDispatch: async (taskId) => dispatchEdge(envelope(await child([
       'orca', 'orchestration', 'dispatch-show', '--task', taskId, '--full', '--json',
