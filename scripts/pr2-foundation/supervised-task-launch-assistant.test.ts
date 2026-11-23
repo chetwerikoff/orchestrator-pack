@@ -7284,6 +7284,8 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
       ['Sonnet 5.5\nEffort medium', false],
       ['Sonnet 5.5\nEffort high', true],
       ['Sonnet 5.5\nreasoning effort unknown', false],
+      ['Sonnet 5.5 · high effort\nreasoning effort unknown', false],
+      ['Sonnet 5.5 · high effort\nHigh', false],
       ['Sonnet 5.5 · Claude Team', false],
       ['Sonnet 5.5\nSonnet 5.5', false],
       ['Sonnet 5.5\nOpus 5.5', false],
@@ -9632,6 +9634,22 @@ describe('Issue #2874 author PR observation and first-placement worktree route',
       expect(await observeWorktreeOwnersWithOrca([assignment('task-x', 1), assignment('task-done', 2)], selectedWorktree, elsewhere.inspect))
         .toEqual({ status: 'ok', value: true });
       expect(elsewhere.calls.filter((args) => args[1] === 'worker-show')).toHaveLength(1);
+      // Stale assignment binding: the Task's current Dispatch is a different live one.
+      const replaced = inspector({ 'task-r': { status: 'running', worktreeId: 'repo::other', path: other } });
+      const replacedInspect = async (args: readonly string[]) => args[1] === 'dispatch-show'
+        ? { ok: true, stdout: okEnvelope({ dispatch: { id: 'd-new', taskId: 'task-r', status: 'running' } }), stderr: '' }
+        : replaced.inspect(args);
+      expect(await observeWorktreeOwnersWithOrca([assignment('task-r', 5)], selectedWorktree, replacedInspect))
+        .toMatchObject({ status: 'continue', cause: 'author_first_placement_owner_unproven', evidence: { currentDispatchId: 'd-new' } });
+      const unreadableDispatch = async (args: readonly string[]) => args[1] === 'dispatch-show'
+        ? { ok: false, stdout: '', stderr: 'unavailable' } : replaced.inspect(args);
+      expect(await observeWorktreeOwnersWithOrca([assignment('task-r', 5)], selectedWorktree, unreadableDispatch))
+        .toMatchObject({ status: 'continue', cause: 'author_first_placement_owner_unproven', evidence: { currentDispatchId: 'unobserved' } });
+      const conflictingWorker = async (args: readonly string[]) => args[1] === 'worker-show'
+        ? { ok: true, stdout: okEnvelope({ dispatch: { id: 'd-other' }, worker: { worktree_id: 'repo::other' } }), stderr: '' }
+        : replaced.inspect(args);
+      expect(await observeWorktreeOwnersWithOrca([assignment('task-r', 5)], selectedWorktree, conflictingWorker))
+        .toMatchObject({ status: 'continue', cause: 'author_first_placement_owner_unproven' });
       const unknown = inspector({ 'task-u': { status: 'running' } });
       expect(await observeWorktreeOwnersWithOrca([assignment('task-u', 3)], selectedWorktree, unknown.inspect))
         .toMatchObject({ status: 'continue', cause: 'author_first_placement_owner_unproven' });

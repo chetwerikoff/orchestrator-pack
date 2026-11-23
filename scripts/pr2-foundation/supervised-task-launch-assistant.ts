@@ -1002,11 +1002,12 @@ export async function claudePaneProfileObserved(
   const inlineEffort = suffix.toLowerCase() === profile.effort?.toLowerCase()
     || effortLine.test(suffix) || withEffortLine.test(suffix);
   const planOnly = /^Claude\s+(?:Max|Pro)$/iu.test(suffix);
-  // A bare effort word on its own row is an ambiguous effort display, not absence.
-  const bareEffort = footer.some((line) => /^\s*(?:low|medium|high|xhigh|max)\s*$/iu.test(line));
-  // Any other effort-like text in the footer is ambiguous evidence: refuse rather than ignore it.
-  const effortMention = footer.some((line, index) => index !== modelIndex && /\beffort\b/iu.test(line));
-  if (effortRows.length === 0 && !bareEffort && !effortMention && (!suffix || planOnly)) return true;
+  // A bare effort word or any other unrecognized effort-like row is ambiguous
+  // evidence: refuse on every admission path rather than ignore it.
+  const ambiguousEffort = footer.some((line, index) => index !== modelIndex && !effortStatusRow.test(line)
+    && (/\beffort\b/iu.test(line) || /^\s*(?:low|medium|high|xhigh|max)\s*$/iu.test(line)));
+  if (ambiguousEffort) return false;
+  if (effortRows.length === 0 && (!suffix || planOnly)) return true;
   return suffix ? inlineEffort && effortRows.length === 0
     : effortRows.length === 1 && effortLine.test(effortRows[0]!);
 }
@@ -3325,14 +3326,26 @@ export async function observeWorktreeOwnersWithOrca(
     const dispatch = shownDispatch && record(shownDispatch.dispatch) ? shownDispatch.dispatch : null;
     const dispatchId = text(dispatch?.id);
     const status = text(dispatch?.status).toLowerCase();
-    // A different or absent current Dispatch for that Task is not proof the old one is gone.
-    if (dispatchId === assignment.bindingKey && TERMINAL_DISPATCH_STATES.includes(status)) continue;
+    // An unreadable, absent or replaced current Dispatch for that Task leaves its
+    // actual binding unknown: an old binding's worker elsewhere proves nothing.
+    if (dispatchId !== assignment.bindingKey
+      || (dispatch?.taskId !== undefined && text(dispatch.taskId) !== assignment.taskId)) {
+      return refusal('author_first_placement_owner_unproven',
+        { ...owner, currentDispatchId: dispatchId || 'unobserved' });
+    }
+    if (TERMINAL_DISPATCH_STATES.includes(status)) continue;
     const shown = resultRecord(envelope(await inspect([
       'orchestration', 'worker-show', '--dispatch', assignment.bindingKey, '--full', '--json',
     ])));
+    const shownDispatch2 = shown && record(shown.dispatch) ? shown.dispatch : null;
     const worker = shown && record(shown.worker) ? shown.worker : null;
     const resource = shown && record(shown.terminalResource) ? shown.terminalResource : null;
     const terminal = shown && record(shown.terminal) ? shown.terminal : null;
+    const shownIds = [text(shownDispatch2?.id), text(resource?.dispatchId)].filter(Boolean);
+    if (!shown || shownIds.some((id) => id !== assignment.bindingKey)
+      || (shownDispatch2?.taskId !== undefined && text(shownDispatch2.taskId) !== assignment.taskId)) {
+      return refusal('author_first_placement_owner_unproven', { ...owner, dispatchStatus: status || 'unknown' });
+    }
     const ids = [text(worker?.worktree_id), text(resource?.worktreeId)].filter(Boolean);
     const paths = [typeof terminal?.worktreePath === 'string' ? terminal.worktreePath : '',
       typeof worker?.worktree_path === 'string' ? worker.worktree_path : ''].filter(Boolean);
