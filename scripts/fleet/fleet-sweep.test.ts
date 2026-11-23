@@ -9,6 +9,7 @@ import * as targetContext from '../lib/target-context.ts';
 import {
   classifyFleetPane,
   lastFleetParkedLine,
+  ownPaneOutcome,
   visibleOpenCodePermission,
   collectFleetDiagnostics,
   defaultOrcaExecutor,
@@ -1248,5 +1249,40 @@ describe('Issue #2863 wide OpenCode idle composer is chrome, not the final or in
 
   it('a genuinely stopped wide pane stays STOPPED', () => {
     expect(sweep(frame('     Implementation complete; no step remains.'))?.state).toBe('STOPPED');
+  });
+
+  // Issue #2876: the last own PARKED line wins over a non-outcome tail.
+  it('a composer that wraps the branch onto the model row stays chrome and the park wins', () => {
+    const at = composer.findIndex((line) => line.includes('mgr-689:'));
+    const wrapped = [...composer];
+    wrapped.splice(at, 2, '  ┃' + ' '.repeat(92) + 'mgr-689:',
+      '  ┃  Pack-Opk-00000000000000000000000000000689 · GPT-6 Luna OpenAI · medium'.padEnd(95) + 'feat/689-operator-gate');
+    const screen = frame('     ' + gate).split('\n').slice(0, -composer.length).concat(wrapped).join('\n');
+    expect(lastFleetParkedLine(screen)).toBe(gate);
+    expect(classifyFleetPane(screen, native.handle, new MemoryPollingStore())).toBe('PARKED');
+    expect(sweep(screen)).toMatchObject({ state: 'PARKED', wait: gate });
+  });
+
+  it.each([
+    ['Claude completion banner', '✻ Cooked for 51s · done 11:01 AM'],
+    ['Claude completion banner with minutes', '✻ Worked for 2m 3s'],
+    ['OpenCode completion banner', '     ▣  Build · glm-5.3 · 2m 3s'],
+  ])('a %s after the final park keeps it PARKED with the last park as reason', (_name, banner) => {
+    const older = 'PARKED on CI on 0000000000000000000000000000000000000000';
+    const screen = ['● CI started on the new head.', `  ${older}`, '● Review is running.', `  ${gate}`, banner].join('\n');
+    expect(lastFleetParkedLine(screen)).toBe(gate);
+    expect(ownPaneOutcome(screen).wait).toBe(gate);
+    expect(classifyFleetPane(screen, native.handle, new MemoryPollingStore())).toBe('PARKED');
+    expect(sweep(screen)).toMatchObject({ state: 'PARKED', wait: gate });
+  });
+
+  it('a banner does not hide a new outcome or a missing park', () => {
+    for (const screen of [
+      [`  ${gate}`, 'Done: PR 692 merged.', '✻ Cooked for 51s · done 11:01 AM'].join('\n'),
+      ['Implementation complete; no step remains.', '✻ Cooked for 51s · done 11:01 AM'].join('\n'),
+    ]) {
+      expect(lastFleetParkedLine(screen)).toBeUndefined();
+      expect(classifyFleetPane(screen, native.handle, new MemoryPollingStore())).toBe('STOPPED');
+    }
   });
 });
