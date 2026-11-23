@@ -5012,23 +5012,30 @@ function issueScopeFences(body: string): { denylist: string[]; allowed_roots?: s
   return parseIssueScopeFences(body).constraints;
 }
 
-/** Repository-denied roots apply whether or not an Issue fence restates them. */
-function effectiveDenylist(denylist: readonly string[] | undefined): string {
-  return stableJson([...new Set([...REPOSITORY_DENYLIST, ...(denylist ?? [])])].sort());
-}
+const ISSUE_DENYLIST_FENCE = /^```denylist[ \t]*\r?\n[\s\S]*?^```[ \t]*(?:\r?\n|$)/gm;
+/** Repository-denied roots that an Issue may restate without changing scope. */
+const FORM_ONLY_DENYLIST_ROOTS = ['vendor/**', 'packages/core/**'] as const;
 
-/** #2875: a denylist fence added, removed or restated with only entries that are
- * already effective is form, not an amendment. Any other byte must stay equal. */
-function isFormOnlyDenylistRestatement(reviewedBody: string, liveBody: string): boolean {
-  if (reviewedBody === liveBody) return false;
-  const withoutDenylist = (body: string) => body
-    .replace(/^```denylist[ \t]*\r?\n[\s\S]*?^```[ \t]*(?:\r?\n|$)/gm, '')
-    .replace(/\n{3,}/g, '\n\n');
-  if (withoutDenylist(reviewedBody) !== withoutDenylist(liveBody)) return false;
-  const before = issueScopeFences(reviewedBody);
-  const after = issueScopeFences(liveBody);
-  return effectiveDenylist(before.denylist) === effectiveDenylist(after.denylist)
-    && stableJson(before.allowed_roots ?? []) === stableJson(after.allowed_roots ?? []);
+/** #2875: the only form-only Issue change is one-way: a reviewed body with no
+ * denylist fence gains exactly one fence holding exactly vendor/** and
+ * packages/core/**. Every other byte stays equal, except one blank-line
+ * separator next to the inserted fence. Deletion, extra roots, or any other
+ * edit is not form-only. */
+function isFormOnlyDenylistInsertion(reviewedBody: string, liveBody: string): boolean {
+  if ([...reviewedBody.matchAll(ISSUE_DENYLIST_FENCE)].length !== 0) return false;
+  const fences = [...liveBody.matchAll(ISSUE_DENYLIST_FENCE)];
+  if (fences.length !== 1) return false;
+  const entries = issueScopeFences(liveBody).denylist;
+  if (entries.length !== FORM_ONLY_DENYLIST_ROOTS.length
+      || !FORM_ONLY_DENYLIST_ROOTS.every((root) => entries.includes(root))) return false;
+  const start = fences[0]!.index!;
+  const head = liveBody.slice(0, start);
+  const tail = liveBody.slice(start + fences[0]![0].length);
+  const candidates = [head + tail];
+  if (tail.startsWith('\r\n')) candidates.push(head + tail.slice(2));
+  else if (tail.startsWith('\n')) candidates.push(head + tail.slice(1));
+  if (/\r?\n\r?\n$/.test(head)) candidates.push(head.replace(/\r?\n$/, '') + tail);
+  return candidates.includes(reviewedBody);
 }
 
 /** #2428 same-head dispositions authorize the stated scope correction, not
@@ -5044,14 +5051,17 @@ function isOnlyDispositionScopeCorrection(
     let remainder = body.replace(revisions[0]![0], '<!-- scope-revision -->');
     remainder = remainder.replace(allowed[0]![0], '<!-- allowed-roots -->\n');
     if (denied.length) remainder = remainder.replace(denied[0]![0], '');
-    return remainder.replace(/\n{3,}/g, '\n\n');
+    return remainder;
   };
   const before = withoutScopeFences(frozenBody);
   const after = withoutScopeFences(correctedBody);
   if (before === null || before !== after || dispositionRoots.length === 0) return false;
   const oldScope = issueScopeFences(frozenBody);
   const newScope = issueScopeFences(correctedBody);
-  if (effectiveDenylist(oldScope.denylist) !== effectiveDenylist(newScope.denylist)) return false;
+  const oldDenylist = oldScope.denylist ?? [];
+  const newDenylist = newScope.denylist ?? [];
+  if (oldDenylist.length !== newDenylist.length
+      || oldDenylist.some((root, index) => root !== newDenylist[index])) return false;
   const oldRoots = oldScope.allowed_roots ?? [];
   const newRoots = newScope.allowed_roots ?? [];
   const dispositionAdditions = [...new Set(dispositionRoots)];
@@ -6327,7 +6337,7 @@ export async function maybeAdmitPackReviewBodyAmendment(
   const oldBody = readFileSync(frozen.snapshotPath, 'utf8');
   if (nextDigest === frozen.snapshotHash) return null;
   // #2875: the existing final-cap owner settles a form-only denylist restatement.
-  if (isFormOnlyDenylistRestatement(oldBody, currentIssue.body)) return null;
+  if (isFormOnlyDenylistInsertion(oldBody, currentIssue.body)) return null;
   // The pre-existing #2537 T2 -> T3 promotion changes the authoritative tier
   // without amending any reviewed behavior. Leave exactly that byte-level
   // tier-only transition to the existing tier/CI/head admission owner.
@@ -7348,7 +7358,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         } catch { /* A nonqualifying correction retains the ordinary body-mismatch refusal below. */ }
       }
       if (digest !== expectedDigest && expectedDigest === frozen.snapshotHash && frozen.snapshotPath
-          && isFormOnlyDenylistRestatement(readFileSync(frozen.snapshotPath, 'utf8'), liveIssue.body)) {
+          && isFormOnlyDenylistInsertion(readFileSync(frozen.snapshotPath, 'utf8'), liveIssue.body)) {
         expectedDigest = digest; // #2875: no effective scope change; not an amendment.
       }
       if (digest !== expectedDigest) {
