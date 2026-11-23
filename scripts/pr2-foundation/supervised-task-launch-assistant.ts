@@ -224,6 +224,10 @@ export interface WorktreePreparationRequest {
   readonly managerTaskRunId?: string;
   /** Exact Issue-owned predecessor for an existing worker's worktree (not a guess from path). */
   readonly reuseAssignment?: WorkerAssignment;
+  /** Explicit author start: first placement on an existing clean, unowned worktree. */
+  readonly authorFirstPlacement?: boolean;
+  /** Explicit author start: the verified unique open Issue-closing PR to continue. */
+  readonly authorPr?: FreshPrHead;
 }
 
 export type DispatchObservation = { readonly kind: 'absent' }
@@ -314,7 +318,14 @@ export interface LaunchInput {
   readonly executor?: ExecutorSelectionTuple;
   readonly cwd?: string;
   readonly startMode?: WorkerStartMode;
+  /**
+   * One-shot caller selection of an author start (t1|t2|t3 with --issue-number and
+   * --task). Never inferred from Task/branch/Issue text; never persisted.
+   */
+  readonly launchPurpose?: LaunchPurpose;
 }
+
+export type LaunchPurpose = 'author';
 
 export interface RestoreWorktreeIdentity {
   readonly id: string;
@@ -353,6 +364,8 @@ export interface LaunchDependencies {
   readonly createManagerTask: (runId: string, brief: string) => Promise<EdgeResult<{ readonly taskId: string; readonly status: string }>>;
   /** Existing selected-base/PR-head observation, before Task creation and again before spawn. */
   readonly observeFreshManagerBase?: () => Promise<EdgeResult<FreshPrHead | null>>;
+  /** Explicit author start: live unique open Issue-closing PR (null when none), before any effect. */
+  readonly observeAuthorPr?: () => Promise<EdgeResult<FreshPrHead | null>>;
   readonly observeDispatch: (taskId: string) => Promise<EdgeResult<DispatchObservation>>;
   readonly readCurrentAssignment: (issueNumber: number) => IssueAssignmentObservation;
   /** Existing issue-less assignment, selected only by the exact Task/Dispatch deliverable. */
@@ -979,11 +992,17 @@ export async function claudePaneProfileObserved(
   const suffix = row.replace(modelLine, '').replace(/^\s*[·|•]\s*/u, '').trim();
   // A status footer admits only one compatible effort row anywhere, or a
   // matching inline model/effort row without any separate effort status.
+  // With no effort status at all, the already-matched native --model/--effort
+  // command plus this unique model row (optionally with a plan label) suffices.
   const effortStatusRow = /^\s*(?:effort\s*[:=]\s*\S.*|\S+\s+effort)\s*$/iu;
   const effortRows = footer.filter((line) => effortStatusRow.test(line));
   const withEffortLine = new RegExp(`^with\\s+${profile.effort}\\s+effort(?:\\s*·\\s*Claude Max)?$`, 'iu');
   const inlineEffort = suffix.toLowerCase() === profile.effort?.toLowerCase()
     || effortLine.test(suffix) || withEffortLine.test(suffix);
+  const planOnly = /^Claude\s+(?:Max|Pro)$/iu.test(suffix);
+  // A bare effort word on its own row is an ambiguous effort display, not absence.
+  const bareEffort = footer.some((line) => /^\s*(?:low|medium|high|xhigh|max)\s*$/iu.test(line));
+  if (effortRows.length === 0 && !bareEffort && (!suffix || planOnly)) return true;
   return suffix ? inlineEffort && effortRows.length === 0
     : effortRows.length === 1 && effortLine.test(effortRows[0]!);
 }
@@ -1122,6 +1141,20 @@ async function runLaunch(
       cause: 'executor_override_work_class_invalid', actor: 'operator', evidence: {},
       nextAction: { kind: 'repair_executor_profile',
         note: `Remove --executor and rerun the --work-class ${input.workClass} launch; a per-launch executor applies only to t1|t2|t3` },
+    }, resources, startedAtMs, timings, deps.now);
+  }
+  // The caller's explicit selection is the only author-start authority here.
+  const author = input.launchPurpose !== undefined;
+  if (author && (input.launchPurpose !== 'author'
+    || !EXECUTOR_OVERRIDE_CLASSES.includes(input.workClass)
+    || !Number.isSafeInteger(input.issueNumber) || Number(input.issueNumber) <= 0
+    || !text(input.taskId) || input.existingTerminal !== undefined || input.managerBrief !== undefined
+    || input.runId !== undefined || input.prNumber !== undefined
+    || Boolean(input.worktreeSelector) === Boolean(input.worktreeName))) {
+    return continued(input, 'executor_profile', {
+      cause: 'launch_purpose_invalid', actor: 'orchestrator', evidence: {},
+      nextAction: { kind: 'repair_executor_profile',
+        note: '--launch-purpose author requires --work-class t1|t2|t3, --issue-number, an existing --task and exactly one --worktree or --worktree-name; omit it for every other launch' },
     }, resources, startedAtMs, timings, deps.now);
   }
 
@@ -1361,6 +1394,43 @@ async function runLaunch(
     ), { ...resources, ...(early.value.dispatchId ? { dispatchId: early.value.dispatchId } : {}) }, startedAtMs, timings, deps.now);
   }
 
+  // Explicit author start: read the live Issue-closing PR inventory before any
+  // worktree, branch, terminal or supervised-start effect. One verified open PR
+  // is a continuation target, never a seed for a different new branch.
+  let authorPr: FreshPrHead | null = null;
+  if (author) {
+    if (!deps.observeAuthorPr) return continued(input, 'dispatch_admission_early', {
+      cause: 'author_pr_unobserved', actor: 'operator', evidence: {},
+      nextAction: { kind: 'reconcile_worktree_setup',
+        note: 'restore the tracked GitHub open-PR observation for this Issue before any author start' },
+    }, resources, startedAtMs, timings, deps.now);
+    const observed = await checkpoint('dispatch_admission_early', timings, deps.now, deps.observeAuthorPr);
+    if (observed.status !== 'ok') return continued(input, 'dispatch_admission_early', observed, resources, startedAtMs, timings, deps.now);
+    authorPr = observed.value;
+    if (authorPr && input.worktreeName) return continued(input, 'dispatch_admission_early', {
+      cause: 'author_pr_continuation_required', actor: 'orchestrator',
+      evidence: { prNumber: authorPr.prNumber, branch: authorPr.branch, head: authorPr.head },
+      nextAction: { kind: 'reconcile_worktree_setup',
+        note: `Issue ${input.issueNumber} already has open PR #${authorPr.prNumber} on ${authorPr.branch} at ${authorPr.head}. Continue it only with --worktree selecting the existing clean worktree checked out on that branch at that head, after reconciling its current owner. A fresh --worktree-name, including one seeded from origin/${authorPr.branch}, creates another branch and is not a continuation; start no competing author and open no second PR` },
+    }, resources, startedAtMs, timings, deps.now);
+  }
+  // A first author placement on an existing (e.g. manager) checkout is not a
+  // restoration: no prior worker assignment, no Issue holder, clean and quiescent.
+  const authorFirstPlacement = author && Boolean(input.worktreeSelector) && !earlyCurrent;
+  let authorPlacement: RestoreWorktreeIdentity | null = null;
+  if (authorFirstPlacement) {
+    if (!deps.resolveRestoreWorktree || !deps.observeRestoreQuiescence) return continued(input, 'dispatch_admission_early', {
+      cause: 'author_first_placement_unobserved', actor: 'operator', evidence: {},
+      nextAction: { kind: 'reconcile_worktree_setup',
+        note: 'restore the selected-worktree identity and native terminal/process census before an author first placement' },
+    }, resources, startedAtMs, timings, deps.now);
+    const selected = await deps.resolveRestoreWorktree(input.worktreeSelector!);
+    if (selected.status !== 'ok') return continued(input, 'dispatch_admission_early', selected, resources, startedAtMs, timings, deps.now);
+    const census = await deps.observeRestoreQuiescence(selected.value.path);
+    if (census.status !== 'ok') return continued(input, 'dispatch_admission_early', census, resources, startedAtMs, timings, deps.now);
+    authorPlacement = selected.value;
+  }
+
   // AC5 is only a serialized, quiescent reuse of a currently Issue-bound
   // predecessor. An --existing-terminal handoff is a different operation:
   // its retained terminal is never misrepresented as a zero-terminal census.
@@ -1435,6 +1505,23 @@ async function runLaunch(
   let reusedIdentity: RuntimeWorkerIdentity | undefined;
   let reusedCommand: string | undefined;
   let reusedOpenCodeIds: OpenCodeLaunchIds | undefined;
+  const prepareRequest: WorktreePreparationRequest = {
+    repository: resources.repository,
+    ...(input.issueNumber ? { issueNumber: input.issueNumber } : {}),
+    taskId,
+    ...(input.worktreeSelector ? { worktreeSelector: input.worktreeSelector } : {}),
+    ...(input.worktreeName ? { worktreeName: input.worktreeName } : {}),
+    ...(input.baseBranch ? { baseBranch: input.baseBranch } : {}),
+    ...(input.defaultBranch ? { defaultBranch: input.defaultBranch } : {}),
+    ...(providerMode ? { providerTopLevel: true } : {}),
+    ...(input.workClass === 'manager' ? { managerRefresh: true } : {}),
+    ...(input.workClass === 'merge' ? { primaryReuseRoot: input.primaryRoot } : {}),
+    ...(input.workClass === 'manager' && input.runId?.trim() ? { managerTaskRunId: input.runId.trim() } : {}),
+    ...(input.workClass !== 'merge' && input.worktreeSelector && earlyCurrent && earlyCurrent.issueNumber !== undefined
+      ? { reuseAssignment: earlyCurrent } : {}),
+    ...(authorFirstPlacement ? { authorFirstPlacement: true } : {}),
+    ...(authorPr ? { authorPr } : {}),
+  };
   const prepareStep = (): Promise<EdgeResult<PreparedWorktree>> => {
     if (input.existingTerminal) {
       if (profile.family === 'claude') existingClaudeDeadline = monotonicNow() + CLAUDE_ADMISSION_DEADLINE_MS;
@@ -1494,21 +1581,7 @@ async function runLaunch(
         value: { selector: input.worktreeSelector!, path: observed.value.workspacePath,
           setupWitness: 'proven_reuse' as const } });
     }
-    return deps.prepareWorktree({
-    repository: resources.repository,
-    ...(input.issueNumber ? { issueNumber: input.issueNumber } : {}),
-    taskId,
-    ...(input.worktreeSelector ? { worktreeSelector: input.worktreeSelector } : {}),
-    ...(input.worktreeName ? { worktreeName: input.worktreeName } : {}),
-    ...(input.baseBranch ? { baseBranch: input.baseBranch } : {}),
-    ...(input.defaultBranch ? { defaultBranch: input.defaultBranch } : {}),
-    ...(providerMode ? { providerTopLevel: true } : {}),
-    ...(input.workClass === 'manager' ? { managerRefresh: true } : {}),
-    ...(input.workClass === 'merge' ? { primaryReuseRoot: input.primaryRoot } : {}),
-    ...(input.workClass === 'manager' && input.runId?.trim() ? { managerTaskRunId: input.runId.trim() } : {}),
-    ...(input.workClass !== 'merge' && input.worktreeSelector && earlyCurrent && earlyCurrent.issueNumber !== undefined
-      ? { reuseAssignment: earlyCurrent } : {}),
-    });
+    return deps.prepareWorktree(prepareRequest);
   };
   const prepared = await checkpoint('worktree_prepare', timings, deps.now, async (): Promise<EdgeResult<PreparedWorktree>> => {
     const placed = await prepareStep();
@@ -1539,6 +1612,18 @@ async function runLaunch(
     };
   });
   if (prepared.status !== 'ok') return continued(input, 'worktree_prepare', prepared, resources, startedAtMs, timings, deps.now);
+  const authorPlacementRefusal = (cause: string): Extract<EdgeResult<never>, { status: 'continue' }> => ({
+    status: 'continue', cause, actor: 'operator',
+    evidence: authorPr ? { prNumber: authorPr.prNumber, branch: authorPr.branch, head: authorPr.head } : {},
+    nextAction: { kind: 'reconcile_worktree_setup',
+      note: 'reinspect the exact selected worktree identity, clean status, branch/HEAD, Issue holder, Dispatch and native terminal/process census without worker-start; retire any live owner through its own lawful route, then retry the same --launch-purpose author command' },
+  });
+  if (authorPlacement && (prepared.value.setupWitness !== 'proven_reuse'
+    || prepared.value.id !== authorPlacement.id || !prepared.value.path
+    || resolve(prepared.value.path) !== resolve(authorPlacement.path))) {
+    return continued(input, 'worktree_prepare', authorPlacementRefusal('author_first_placement_identity_changed'),
+      resources, startedAtMs, timings, deps.now);
+  }
   if (input.workClass === 'merge' && (!prepared.value.path || resolve(prepared.value.path) !== resolve(input.primaryRoot!))) {
     return continued(input, 'worktree_prepare', {
       cause: 'merge_primary_checkout_mismatch', actor: 'orchestrator', evidence: {},
@@ -1644,6 +1729,41 @@ async function runLaunch(
     const finalCensus = await deps.observeRestoreQuiescence!(selected.value.path);
     if (finalCensus.status !== 'ok') return continued(input, 'dispatch_admission_final', finalCensus,
       resources, startedAtMs, timings, deps.now);
+  }
+  if (author) {
+    // Reread the PR inventory immediately before the terminal/supervised start.
+    const reread = await deps.observeAuthorPr!();
+    if (reread.status !== 'ok') return continued(input, 'dispatch_admission_final', reread, resources, startedAtMs, timings, deps.now);
+    if (reread.value?.prNumber !== authorPr?.prNumber || reread.value?.branch !== authorPr?.branch
+      || reread.value?.head !== authorPr?.head) {
+      return continued(input, 'dispatch_admission_final', {
+        cause: 'author_pr_head_changed', actor: 'orchestrator',
+        evidence: reread.value ? { prNumber: reread.value.prNumber, branch: reread.value.branch, head: reread.value.head } : {},
+        nextAction: { kind: 'reconcile_worktree_setup',
+          note: 'the Issue-closing open PR set or head changed during admission; reconcile it with its current owner, preserve this worktree and start no author on the stale placement' },
+      }, resources, startedAtMs, timings, deps.now);
+    }
+  }
+  if (authorPlacement) {
+    const current = deps.readCurrentAssignment(input.issueNumber!);
+    if (current && 'status' in current) return continued(input, 'dispatch_admission_final', current, resources, startedAtMs, timings, deps.now);
+    if (current) return continued(input, 'dispatch_admission_final', {
+      ...authorPlacementRefusal('author_first_placement_holder_present'),
+      evidence: { taskId: current.taskId, dispatchId: current.bindingKey },
+    }, resources, startedAtMs, timings, deps.now);
+    const selected = await deps.resolveRestoreWorktree!(input.worktreeSelector!);
+    // The first-placement route is read-only; repeating it rechecks clean status and branch/HEAD.
+    const again = await deps.prepareWorktree(prepareRequest);
+    if (selected.status !== 'ok' || selected.value.id !== authorPlacement.id
+      || resolve(selected.value.path) !== resolve(authorPlacement.path)
+      || again.status !== 'ok' || again.value.id !== authorPlacement.id || !again.value.path
+      || resolve(again.value.path) !== resolve(authorPlacement.path)
+      || again.evidence?.branch !== prepared.evidence?.branch || again.evidence?.head !== prepared.evidence?.head) {
+      return continued(input, 'dispatch_admission_final', authorPlacementRefusal('author_first_placement_changed'),
+        resources, startedAtMs, timings, deps.now);
+    }
+    const census = await deps.observeRestoreQuiescence!(authorPlacement.path);
+    if (census.status !== 'ok') return continued(input, 'dispatch_admission_final', census, resources, startedAtMs, timings, deps.now);
   }
   // Early admission rested on an owned terminal predecessor. If the final read no
   // longer shows that same exact proof (including an absent Dispatch after the
@@ -2695,7 +2815,7 @@ function githubJson(execution: ChildResult): unknown {
 
 /** A fresh local branch may begin at a remote PR head only on complete,
  * current native Git + live GitHub evidence. Never adopt a local alias. */
-interface FreshPrHead {
+export interface FreshPrHead {
   readonly prNumber: number;
   readonly branch: string;
   readonly head: string;
@@ -2799,6 +2919,62 @@ async function resolveFreshPrRemoteHead(
   ], undefined, undefined, registeredRoot));
   if (!matchesFreshPrHead(reread, request, selected)) return denied('fresh_pr_head_changed');
   return { status: 'ok', value: selected, evidence: { prNumber: selected.prNumber, head: selected.head } };
+}
+
+/**
+ * Explicit author start: the complete bounded open-PR inventory for the Issue.
+ * Zero verified closing PRs is null; one must be same-repository, on the
+ * selected default base with a 40-hex head; anything else fails closed.
+ */
+export async function observeAuthorPrWithOrca(
+  request: Pick<WorktreePreparationRequest, 'repository' | 'issueNumber' | 'defaultBranch' | 'baseBranch' | 'taskId'>,
+  registeredRoot: string,
+  execute: ChildExecutor,
+): Promise<EdgeResult<FreshPrHead | null>> {
+  const denied = (cause: string, extra: Readonly<Record<string, unknown>> = {}): EdgeResult<FreshPrHead | null> => ({
+    status: 'continue', cause, actor: 'orchestrator', evidence: { issueNumber: request.issueNumber ?? 'missing', ...extra },
+    nextAction: { kind: 'reconcile_worktree_setup',
+      note: 'reconcile the Issue-closing open PR set on GitHub (one same-repository PR on the selected default base with a current head) with its owner; start no author and open no PR until the inventory is complete and unambiguous' },
+  });
+  const issueNumber = request.issueNumber;
+  const defaultBranch = managerDefaultBranch(request);
+  if (!issueNumber || !defaultBranch) return denied('author_pr_issue_unproven');
+  const listing = githubJson(await execute([
+    'gh', 'pr', 'list', '--repo', request.repository, '--state', 'open', '--limit', '200',
+    '--json', 'baseRefName,headRefName,headRefOid,number',
+  ], undefined, undefined, registeredRoot));
+  if (!Array.isArray(listing) || listing.length >= 200) return denied('author_pr_inventory_unavailable');
+  const seen = new Set<number>();
+  const closing: Record<string, unknown>[] = [];
+  for (const item of listing) {
+    if (!record(item) || typeof item.number !== 'number' || !Number.isSafeInteger(item.number)
+      || item.number <= 0 || seen.has(item.number)) return denied('author_pr_inventory_unavailable');
+    seen.add(item.number);
+    const view = githubJson(await execute([
+      'gh', 'pr', 'view', String(item.number), '--repo', request.repository,
+      '--json', 'baseRefName,body,headRefName,headRefOid,headRepository,number,state',
+    ], undefined, undefined, registeredRoot));
+    if (!record(view) || view.number !== item.number || typeof view.body !== 'string') {
+      return denied('author_pr_inventory_unavailable', { prNumber: item.number });
+    }
+    if (prBodyClosesIssue(view.body, issueNumber)) closing.push(view);
+  }
+  if (closing.length === 0) return { status: 'ok', value: null, evidence: { openClosingPrCount: 0 } };
+  if (closing.length !== 1) {
+    return denied('author_pr_link_ambiguous', { prNumbers: closing.map((pr) => pr.number as number) });
+  }
+  const candidate = closing[0]!;
+  const selected: FreshPrHead = {
+    prNumber: candidate.number as number, branch: text(candidate.headRefName), head: text(candidate.headRefOid),
+  };
+  if (!selected.branch || !matchesFreshPrHead(candidate, request, selected)) {
+    return denied('author_pr_head_mismatch', {
+      prNumber: selected.prNumber, branch: selected.branch, head: selected.head,
+      baseRefName: text(candidate.baseRefName),
+      headRepository: record(candidate.headRepository) ? text(candidate.headRepository.nameWithOwner) : '',
+    });
+  }
+  return { status: 'ok', value: selected, evidence: { prNumber: selected.prNumber, branch: selected.branch, head: selected.head } };
 }
 
 /** Non-ancestor reuse is admitted by the current exact Issue-linked PR, never by ancestry alone. */
@@ -3106,6 +3282,61 @@ async function reuseTerminalOwnedWorktree(
   };
 }
 
+function authorPrPlacementNote(pr: FreshPrHead): string {
+  return `continue open PR #${pr.prNumber} only in a worktree already on local branch ${pr.branch} at exactly ${pr.head}; reconcile the existing worktree/PR owner. Never switch, reset, force or seed a different branch, and open no second PR`;
+}
+
+/**
+ * Explicit author first placement on an existing checkout (e.g. a retired
+ * manager's). Read-only: never restores dirty bytes, moves the branch or
+ * substitutes for the prior-worker terminal-gone restoration.
+ */
+async function placeAuthorOnCleanWorktree(
+  request: WorktreePreparationRequest,
+  id: string,
+  path: string,
+  execute: ChildExecutor,
+): Promise<EdgeResult<PreparedWorktree>> {
+  const pr = request.authorPr;
+  const refused = (cause: string, extra: Readonly<Record<string, unknown>> = {}): EdgeResult<PreparedWorktree> =>
+    worktreeContinue(cause, {
+      worktreeId: id, worktreePath: path,
+      ...(pr ? { prNumber: pr.prNumber, prBranch: pr.branch, prHead: pr.head } : {}), ...extra,
+    }, pr ? authorPrPlacementNote(pr)
+      : 'author first placement requires the exact selected clean, quiescent worktree on its own unique local branch; preserve it and reconcile its owner. Never adopt dirty bytes or move the branch');
+  if (request.reuseAssignment || request.managerRefresh || request.primaryReuseRoot || !request.issueNumber) {
+    return refused('author_first_placement_route_invalid');
+  }
+  const identity = await observeManagerWorktreeIdentity(request, id, path, execute, false);
+  if (identity.status !== 'ok') return identity;
+  const branch = identity.value.branch;
+  const status = await execute(['git', 'status', '--porcelain=v1', '--untracked-files=all'], undefined, undefined, path);
+  const headResult = await execute(['git', 'rev-parse', '--verify', 'HEAD^{commit}'], undefined, undefined, path);
+  const head = text(headResult.stdout);
+  if (!status.ok || !headResult.ok || !/^[0-9a-f]{40}$/iu.test(head)) {
+    return refused('author_first_placement_local_unverified', { branch });
+  }
+  if (status.stdout.trim()) return refused('author_first_placement_dirty', { branch, head });
+  if (pr && (branch !== pr.branch || head !== pr.head)) {
+    return refused('author_pr_local_placement_mismatch', { branch, head });
+  }
+  const finalStatus = await execute(['git', 'status', '--porcelain=v1', '--untracked-files=all'], undefined, undefined, path);
+  const finalHead = await execute(['git', 'rev-parse', '--verify', 'HEAD^{commit}'], undefined, undefined, path);
+  const finalBranch = await execute(['git', 'symbolic-ref', '--quiet', '--short', 'HEAD'], undefined, undefined, path);
+  if (!finalStatus.ok || finalStatus.stdout.trim() || !finalHead.ok || text(finalHead.stdout) !== head
+    || !finalBranch.ok || text(finalBranch.stdout) !== branch) {
+    return refused('author_first_placement_local_changed', { branch, head });
+  }
+  return {
+    status: 'ok',
+    value: { id, selector: request.worktreeSelector!, path, setupWitness: 'proven_reuse' },
+    evidence: {
+      worktreeId: id, worktreePath: path, branch, head, placement: 'author_first_placement',
+      ...(pr ? { prNumber: pr.prNumber } : {}),
+    },
+  };
+}
+
 export async function prepareWorktreeWithOrca(
   request: WorktreePreparationRequest,
   execute: ChildExecutor,
@@ -3146,10 +3377,20 @@ export async function prepareWorktreeWithOrca(
     const id = text(worktree?.id);
     const path = text(worktree?.path);
     if (!id || !path) return worktreeContinue('worktree_prepare_failed_or_unknown');
+    if (request.authorFirstPlacement) return placeAuthorOnCleanWorktree(request, id, path, execute);
     if (!request.managerRefresh || request.reuseAssignment) {
       // An explicitly bound, quiescent manager restoration must preserve dirty
       // HEAD/tracked/untracked bytes, not enter the clean-only refresh path.
-      return reuseTerminalOwnedWorktree(request, id, path, execute);
+      const reused = await reuseTerminalOwnedWorktree(request, id, path, execute);
+      const pr = request.authorPr;
+      if (pr && reused.status === 'ok'
+        && (reused.evidence?.branch !== pr.branch || reused.evidence?.head !== pr.head)) {
+        return worktreeContinue('author_pr_local_placement_mismatch', {
+          worktreeId: id, branch: text(reused.evidence?.branch), head: text(reused.evidence?.head),
+          prNumber: pr.prNumber, prBranch: pr.branch, prHead: pr.head,
+        }, authorPrPlacementNote(pr));
+      }
+      return reused;
     }
     return refreshManagerWorktree(request, id, path, execute);
   }
@@ -3544,6 +3785,14 @@ export async function createProductionLaunchDependencies(input: LaunchInput): Pr
       defaultBranch: input.defaultBranch ?? target.defaultBranch,
     }, target.primaryRoot,
     (args, timeoutMs, envOverride, childCwd) => child(args, childCwd ?? target.primaryRoot, envOverride ?? env, timeoutMs)),
+    ...(input.launchPurpose === 'author' ? {
+      observeAuthorPr: () => observeAuthorPrWithOrca({
+        repository: input.repository, taskId: input.taskId ?? '',
+        ...(input.issueNumber ? { issueNumber: input.issueNumber } : {}),
+        defaultBranch: input.defaultBranch ?? target.defaultBranch,
+      }, target.primaryRoot,
+      (args, timeoutMs, envOverride, childCwd) => child(args, childCwd ?? target.primaryRoot, envOverride ?? env, timeoutMs)),
+    } : {}),
     observeDispatch: async (taskId) => dispatchEdge(envelope(await child([
       'orca', 'orchestration', 'dispatch-show', '--task', taskId, '--full', '--json',
     ], cwd, env))),
@@ -3753,6 +4002,7 @@ const LAUNCH_CLI_OPTIONS = new Set([
   '--base-branch',
   '--start-mode',
   '--executor',
+  '--launch-purpose',
 ]);
 
 function launchCliOptions(argv: readonly string[]): ReadonlyMap<string, string> {
@@ -3877,6 +4127,11 @@ export function parseLaunchAssistantCli(
     || !worktreeSelector || Boolean(worktreeName) || hasManagerBrief)) {
     throw new Error('--existing-terminal requires manager, --run, --task, --issue-number and existing --worktree');
   }
+  const launchPurpose = options.get('--launch-purpose');
+  if (launchPurpose !== undefined && (launchPurpose !== 'author'
+    || !EXECUTOR_OVERRIDE_CLASSES.includes(workClass as LaunchWorkClass) || !issueNumber || !taskId)) {
+    throw new Error('--launch-purpose must be exactly author, with --work-class t1|t2|t3, --issue-number and --task');
+  }
   if (workClass === 'manager') {
     if (!runId) throw new Error('manager requires --run');
     if (hasTask === hasManagerBrief) throw new Error('manager requires exactly one --task or --manager-brief');
@@ -3912,6 +4167,7 @@ export function parseLaunchAssistantCli(
       : requestedMode ? { startMode: requestedMode as WorkerStartMode } : {}),
     baseBranch,
     defaultBranch: target.defaultBranch,
+    ...(launchPurpose === 'author' ? { launchPurpose: 'author' as const } : {}),
   };
 }
 
