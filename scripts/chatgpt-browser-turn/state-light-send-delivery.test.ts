@@ -1443,7 +1443,8 @@ describe('Issue #2536 ordinary end-to-end: one owned Send in a long reused conve
 describe('Issue #2873: a completed marked reply survives later proof gaps and the absolute deadline', () => {
   type Scenario = 'completed_then_unreadable' | 'streaming_until_deadline' | 'marker_missing' | 'empty_reply'
     | 'redirect_after_latch' | 'final_read_streaming' | 'final_read_changed' | 'final_read_throws'
-    | 'final_read_markerless_streaming' | 'final_read_markerless_changed';
+    | 'final_read_markerless_streaming' | 'final_read_markerless_changed' | 'final_read_history_only'
+    | 'redirect_during_publication';
   // Reads 1-3 latch the finished reply after two stable reads; read 4 is the
   // pre-publication final reread.
   const FINAL_READ = 4;
@@ -1489,6 +1490,7 @@ describe('Issue #2873: a completed marked reply survives later proof gaps and th
         // pre-publication read on, every read is an incomplete (unreadable)
         // transcript: the old route ended transcript_continuity_unproven.
         const unreadable = scenario === 'completed_then_unreadable' || scenario === 'redirect_after_latch'
+          || scenario === 'redirect_during_publication'
           || finalReadThrew
           ? postSendReads >= FINAL_READ
           : scenario !== 'streaming_until_deadline' && scenario !== 'marker_missing'
@@ -1497,7 +1499,9 @@ describe('Issue #2873: a completed marked reply survives later proof gaps and th
         const reply = scenario === 'empty_reply' ? '' : streaming ? `partial ${postSendReads}`
           : (scenario === 'final_read_changed' || scenario === 'final_read_markerless_changed') && postSendReads >= FINAL_READ
             ? 'OTHER-2873' : 'DONE-2873';
-        currentRows = sends
+        // A complete final reread that renders only the pre-Send history.
+        const historyOnly = scenario === 'final_read_history_only' && postSendReads === FINAL_READ;
+        currentRows = sends && !historyOnly
           ? [
             ...history,
             { role: 'user', text: userText, key: 'data-message-id:current-user-2873' },
@@ -1518,7 +1522,10 @@ describe('Issue #2873: a completed marked reply survives later proof gaps and th
     };
     const page = {
       __fakeBrowserGptPage: true,
-      url: () => (scenario === 'redirect_after_latch' && now >= turnDeadline ? foreign : target),
+      // redirect_during_publication: the guard verified the target; the Page
+      // moves once the reply bytes are on disk.
+      url: () => ((scenario === 'redirect_after_latch' && now >= turnDeadline)
+        || (scenario === 'redirect_during_publication' && existsSync(output)) ? foreign : target),
       isClosed: () => false,
       goto: vi.fn(async () => undefined),
       close: vi.fn(async () => undefined),
@@ -1581,6 +1588,24 @@ describe('Issue #2873: a completed marked reply survives later proof gaps and th
     expect(run.published).toBe('DONE-2873');
     expect(run.sends).toBe(1);
     expect(run.finalReadThrew).toBe(true);
+  });
+
+  // cap delta issue2873:markerless-history-falsely-invalidates-completed-latch
+  it('keeps the latched reply when a complete reread shows only the pre-Send history', async () => {
+    const run = await runScenario('final_read_history_only');
+    expect(run.result, JSON.stringify(run.result)).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(run.published).toBe('DONE-2873');
+    expect(run.sends).toBe(1);
+  });
+
+  // cap delta issue2873:latch-publication-url-tocou
+  it('publishes only the conversation the guard verified when the Page moves during publication', async () => {
+    const run = await runScenario('redirect_during_publication');
+    expect(run.result, JSON.stringify(run.result)).toMatchObject({
+      state: 'ok', send_count: 1, conversation_id: 'https://chatgpt.com/c/11111111-1111-1111-1111-111111111111',
+    });
+    expect(run.published).toBe('DONE-2873');
+    expect(run.sends).toBe(1);
   });
 
   // source-02 completion_deadline_bypasses_owner_identity (redirect_after_latch)

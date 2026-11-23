@@ -1864,6 +1864,11 @@ export function resolveOwnedReplyWindow(
  * them negates a completed reply already observed after the owned marker.
  * The one list; the flow-manager projection imports it.
  */
+/** #2873: the conversation the latched-reply ownership guard verified. */
+interface ObservedCompletionOwnership {
+  readonly conversationId: string | undefined;
+}
+
 export const POST_SEND_PROOF_VETO_CAUSES: ReadonlySet<string> = new Set([
   'fresh_conversation_owner_unproven',
   'transcript_continuity_unproven',
@@ -7359,7 +7364,12 @@ async function runTurnCore(
     // is the turn's result. Publish it through the normal primary path instead
     // of returning a proof-only or deadline uncertainty. Real page loss, walls,
     // foreign users and send failures are not vetoes and keep their outcome.
-    const publishObservedCompletion = async (reply: string): Promise<TurnRunOutcome> => {
+    // `conversationId` is the URL the ownership guard verified before this
+    // await; the Page URL is not re-read after publication.
+    const publishObservedCompletion = async (
+      reply: string,
+      owned: ObservedCompletionOwnership,
+    ): Promise<TurnRunOutcome> => {
       const committed = verifiedExternalPrimary();
       if (committed) return committed;
       const publication = await finalizeStateLightPrimaryPublication({
@@ -7379,7 +7389,7 @@ async function runTurnCore(
               publication.state === 'conflict' ? 'output_conflict' : 'driver_error',
               'invocation', publication.cause ?? publication.state,
               invocationId, profileKey, sendCount, pollCount, navigation, incidents,
-              { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+              { ...(owned.conversationId ? { conversation_id: owned.conversationId } : {}) },
               journalWriteFailed,
             ),
             ...(publication.retirement_cleanup_required ? { retirement_cleanup_required: true } : {}),
@@ -7396,7 +7406,7 @@ async function runTurnCore(
             'ok', 'none', 'completed_page_only',
             invocationId, profileKey, sendCount, pollCount, navigation, incidents,
             {
-              ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
+              ...(owned.conversationId ? { conversation_id: owned.conversationId } : {}),
               output: { byte_length: publication.output_bytes!, sha256: publication.output_sha256! },
             },
             journalWriteFailed,
@@ -7409,27 +7419,34 @@ async function runTurnCore(
     // still hold for this Page: not lost or forfeited, the exact target
     // conversation for a continued chat, and the live fresh-claim fence (or the
     // held created Page in this project) for a new chat.
-    const observedCompletionStillOwned = (): boolean => {
-      if (browserOrPageDefinitelyLost(page, browser) || ownershipForfeited) return false;
-      if (targetChatUrl) return readOwnedConversationIdentity(page, targetChatUrl).matched;
-      if (!config.newChat) return false;
-      if (ownedConversationUrl) {
-        return freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs)
-          && readOwnedConversationIdentity(page, ownedConversationUrl).matched;
+    // The guard returns the conversation URL it verified (none on an unclaimed
+    // project surface), so publication never re-reads a URL that may have moved.
+    const observedCompletionStillOwned = (): ObservedCompletionOwnership | null => {
+      if (browserOrPageDefinitelyLost(page, browser) || ownershipForfeited) return null;
+      if (targetChatUrl) {
+        const identity = readOwnedConversationIdentity(page, targetChatUrl);
+        return identity.matched ? { conversationId: identity.pageUrl ?? targetChatUrl } : null;
       }
-      if (!createdFreshPage || page !== originalHeldPage || !config.projectUrl) return false;
+      if (!config.newChat) return null;
+      if (ownedConversationUrl) {
+        if (!freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs)) return null;
+        const identity = readOwnedConversationIdentity(page, ownedConversationUrl);
+        return identity.matched ? { conversationId: identity.pageUrl ?? ownedConversationUrl } : null;
+      }
+      if (!createdFreshPage || page !== originalHeldPage || !config.projectUrl) return null;
       try {
         const url = String(page.url());
         if (matchingFreshProjectLocalUrl(url, config.projectUrl)
-          || isBlankProjectSurfaceUrl(url, config.projectUrl)) return true;
+          || isBlankProjectSurfaceUrl(url, config.projectUrl)) return { conversationId: undefined };
         // An unclaimed fresh Page owns only the conversation it showed when the
         // marked reply was latched. A durable URL that first appears after the
         // latch is unchecked; only the fresh-claim branch above may accept it.
         const current = readProjectConversationUrl(page, config.projectUrl);
-        return Boolean(current && observedCompletionPageUrl
-          && pageConversationUrl(page) === observedCompletionPageUrl);
+        return current && observedCompletionPageUrl && pageConversationUrl(page) === observedCompletionPageUrl
+          ? { conversationId: observedCompletionPageUrl }
+          : null;
       } catch {
-        return false;
+        return null;
       }
     };
     // A complete read that shows renewed generation or a different last
@@ -7444,7 +7461,9 @@ async function runTurnCore(
       if (!observedCompletedReply || read.transcriptIncomplete) return false;
       if (read.pageTurnEvidence?.generationInProgress === true) return true;
       if (hasOwnedUserMessage(read.messages, marker) && !read.ownedWindowCompletionReady) return true;
-      const assistants = read.messages.filter((message) => message.role === 'assistant');
+      // Only an assistant after the pre-Send baseline can be a changed reply; a
+      // snapshot showing just the pre-Send history says nothing about it.
+      const assistants = read.messages.slice(baselineCount).filter((message) => message.role === 'assistant');
       const last = assistants[assistants.length - 1];
       return Boolean(last && normalizeVisibleText(last.text)
         && normalizeVisibleText(last.text) !== normalizeVisibleText(observedCompletedReply));
@@ -7453,9 +7472,10 @@ async function runTurnCore(
       outcome: TurnRunOutcome | null,
     ): Promise<TurnRunOutcome | null> => {
       if (!outcome || !observedCompletedReply || sendCount < 1) return outcome;
-      if (!observedCompletionStillOwned()) return outcome;
       if (!isPostSendProofVeto(outcome.result.state, outcome.result.cause)) return outcome;
-      return publishObservedCompletion(observedCompletedReply);
+      const owned = observedCompletionStillOwned();
+      if (!owned) return outcome;
+      return publishObservedCompletion(observedCompletedReply, owned);
     };
     while (true) {
       const independentlyCommitted = verifiedExternalPrimary();
@@ -7463,9 +7483,8 @@ async function runTurnCore(
       const authorEffect = await prAuthorEffect();
       if (authorEffect) return authorEffect;
       if (Date.now() >= hardExhaustionDeadline) {
-        if (observedCompletedReply && sendCount >= 1 && observedCompletionStillOwned()) {
-          return publishObservedCompletion(observedCompletedReply);
-        }
+        const owned = observedCompletedReply && sendCount >= 1 ? observedCompletionStillOwned() : null;
+        if (owned) return publishObservedCompletion(observedCompletedReply, owned);
         const cause = uncertainCause || 'post_send_absolute_deadline_elapsed';
         incident('post_send_observation_error', cause, 'terminal_cleanup_no_resend');
         return {
@@ -8624,7 +8643,8 @@ async function runTurnCore(
             // authenticate the selected conversation. Keep observing within
             // the incumbent deadline; do not publish or close an unbound page.
             if (Date.now() >= hardExhaustionDeadline) {
-              if (observedCompletedReply && observedCompletionStillOwned()) return publishObservedCompletion(observedCompletedReply);
+              const owned = observedCompletedReply ? observedCompletionStillOwned() : null;
+              if (owned) return publishObservedCompletion(observedCompletedReply, owned);
               incident('post_send_observation_error', 'fresh_conversation_owner_unproven', 'retain_page_no_resend');
               return {
                 page,

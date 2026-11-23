@@ -4646,7 +4646,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(readFileSync(output, 'utf8')).toBe(reply);
   });
 
-  it.each(['stays', 'redirects_at_deadline'] as const)(
+  it.each(['stays', 'redirects_at_deadline', 'redirects_during_publication'] as const)(
     '#2873 review 6017476688: a --new-chat latched reply never publishes on a same-project conversation the Page moved to after the latch (%s)',
     async (route) => {
       const prompt = 'PROMPT-2873-NEW-CHAT-REDIRECT-' + route;
@@ -4663,7 +4663,10 @@ describe('state-light fresh conversation collision recovery', () => {
       const deadlineAt = mocks.nowMs + timeoutMs;
       // The Page never shows a durable conversation URL of its own, so no fresh
       // claim binds it: the latch happens on the unclaimed project surface.
-      page.url.mockImplementation(() => (route === 'redirects_at_deadline' && mocks.nowMs >= deadlineAt - 1_000
+      // redirects_during_publication: the guard already accepted the project
+      // surface; the Page moves once the reply bytes are on disk.
+      page.url.mockImplementation(() => ((route === 'redirects_at_deadline' && mocks.nowMs >= deadlineAt - 1_000)
+        || (route === 'redirects_during_publication' && existsSync(output))
         ? LOSER_CONV
         : PROJECT_URL));
       mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
@@ -4672,9 +4675,12 @@ describe('state-light fresh conversation collision recovery', () => {
 
       expect(state.reads, JSON.stringify(outcome.result)).toBeGreaterThan(5);
       expect(outcome.result.send_count).toBe(1);
-      if (route === 'stays') {
+      if (route !== 'redirects_at_deadline') {
+        // cap delta issue2873:latch-publication-url-tocou: only the URL the guard
+        // verified is published; the unclaimed project surface has none.
         expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({ state: 'ok' });
         expect(readFileSync(output, 'utf8')).toBe(reply);
+        expect(outcome.result.conversation_id).toBeUndefined();
       } else {
         expect(outcome.result.state, JSON.stringify(outcome.result)).not.toBe('ok');
         expect(existsSync(output)).toBe(false);
