@@ -549,7 +549,8 @@ export function buildExecutorCommand(profile: SemanticExecutorProfile, resumeSes
       executable,
       modelArgument: profile.model,
       effortArgument: profile.effort,
-      command: `${executable} --model ${quote(profile.model)} --effort ${quote(profile.effort)}`,
+      // #2884: a launched worker must not inherit the operator's interactive defaultMode.
+      command: `${executable} --permission-mode bypassPermissions --model ${quote(profile.model)} --effort ${quote(profile.effort)}`,
     };
   }
 

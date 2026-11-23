@@ -890,7 +890,8 @@ function canonicalClaudeCommand(profile: ExecutorProfile): string | null {
   // A closed direct grammar, not a shell-token substring or a wrapper forwarding guess.
   if (!((profile.model === 'claude-sonnet-5-5' && profile.effort === 'high')
     || (profile.model === 'claude-opus-5-5' && profile.effort === 'medium'))) return null;
-  return `claude --model ${quote(profile.model)} --effort ${quote(profile.effort)}`;
+  // #2884: the flag is part of the closed grammar; a pane without it is not a match.
+  return `claude --permission-mode bypassPermissions --model ${quote(profile.model)} --effort ${quote(profile.effort)}`;
 }
 
 function normalizedOrcaClaudeCommand(command: string): string | null {
@@ -914,9 +915,9 @@ function normalizedOrcaClaudeCommand(command: string): string | null {
   if (!orcaInjected) return command;
   // Orca's native argv display can omit shell quotes around the exact model/effort values.
   return withoutPlugin.replace(
-    /(^| )claude --model (claude-(?:sonnet|opus)-5-5) --effort (high|medium)$/u,
+    /(^| )claude --permission-mode bypassPermissions --model (claude-(?:sonnet|opus)-5-5) --effort (high|medium)$/u,
     (_match, prefix: string, model: string, effort: string) =>
-      `${prefix}claude --model ${quote(model)} --effort ${quote(effort)}`,
+      `${prefix}claude --permission-mode bypassPermissions --model ${quote(model)} --effort ${quote(effort)}`,
   );
 }
 
