@@ -1859,6 +1859,32 @@ export function resolveOwnedReplyWindow(
   };
 }
 
+/**
+ * #2873: post-send causes that only say a proof or the clock ran out. None of
+ * them negates a completed reply already observed after the owned marker.
+ * The one list; the flow-manager projection imports it.
+ */
+/** #2873: the conversation the latched-reply ownership guard verified. */
+interface ObservedCompletionOwnership {
+  readonly conversationId: string | undefined;
+}
+
+export const POST_SEND_PROOF_VETO_CAUSES: ReadonlySet<string> = new Set([
+  'fresh_conversation_owner_unproven',
+  'transcript_continuity_unproven',
+  'owned_reply_boundary_unproven',
+  'owned_carrier_unproven',
+  'owned_prompt_not_observed',
+  'observation_exhausted_no_resend',
+  'post_send_absolute_deadline_elapsed',
+]);
+
+export function isPostSendProofVeto(state: string, cause: string | undefined): boolean {
+  return (state === 'observation_uncertain' || state === 'no_reply')
+    && cause !== undefined
+    && POST_SEND_PROOF_VETO_CAUSES.has(cause);
+}
+
 export function classifyPageObservation(
   messages: readonly PageMessage[],
   baselineCount: number,
@@ -1874,10 +1900,9 @@ export function classifyPageObservation(
     baselineCount,
     expectedMarker,
   );
+  // #2873: several assistant entries after the owned marker (re-rendered or
+  // split turns) do not negate a finished reply; the last one is the answer.
   const assistants = replyWindow.filter((message) => message.role === 'assistant');
-  if (assistants.length > 1) {
-    return { state: 'uncertain', cause: 'owned_reply_boundary_unproven' };
-  }
 
   if (uncertainCause) {
     if (inProgress || assistants.length === 0) {
@@ -6830,6 +6855,13 @@ async function runTurnCore(
     let ownedCarrierKey: string | undefined;
     let lastMarkerlessSnapshotSignature = '';
     let completionReadySeen = false;
+    // #2873: the latest finished, nonempty assistant reply observed after the
+    // visible owned marker. A later read error, incomplete transcript, proof
+    // gap or elapsed deadline does not erase it; new generation does.
+    let observedCompletedReply = '';
+    // The page conversation URL at the read that latched the reply (empty when
+    // the Page had no durable conversation URL yet).
+    let observedCompletionPageUrl = '';
     let deadEvidenceReads = 0;
     let markerlessFinishedReads = 0;
     let markerlessReloadUsed = false;
@@ -7328,12 +7360,131 @@ async function runTurnCore(
         ),
       };
     };
+    // #2873: a completed reply already observed after the visible owned marker
+    // is the turn's result. Publish it through the normal primary path instead
+    // of returning a proof-only or deadline uncertainty. Real page loss, walls,
+    // foreign users and send failures are not vetoes and keep their outcome.
+    // `conversationId` is the URL the ownership guard verified before this
+    // await; the Page URL is not re-read after publication.
+    const publishObservedCompletion = async (
+      reply: string,
+      owned: ObservedCompletionOwnership,
+    ): Promise<TurnRunOutcome> => {
+      const committed = verifiedExternalPrimary();
+      if (committed) return committed;
+      const publication = await finalizeStateLightPrimaryPublication({
+        profileKey,
+        invocationId,
+        target: destination.finalPath,
+        bytes: reply,
+        publish: () => publishStateLightReply(destination.finalPath, invocationId, reply),
+      });
+      if (publication.state !== 'committed_ok') {
+        incident('output_publication_error', publication.cause ?? publication.state, 'return_local_error');
+        return {
+          page, browser,
+          publicationState: publication.state,
+          result: {
+            ...compactResult(
+              publication.state === 'conflict' ? 'output_conflict' : 'driver_error',
+              'invocation', publication.cause ?? publication.state,
+              invocationId, profileKey, sendCount, pollCount, navigation, incidents,
+              { ...(owned.conversationId ? { conversation_id: owned.conversationId } : {}) },
+              journalWriteFailed,
+            ),
+            ...(publication.retirement_cleanup_required ? { retirement_cleanup_required: true } : {}),
+          },
+        };
+      }
+      return {
+        page, browser,
+        publicationState: publication.state,
+        ...(ownedConversationUrl ? { profileKey, ownedConversationUrl } : {}),
+        ...(ownershipForfeited ? { ownershipForfeited: true } : {}),
+        result: {
+          ...compactResult(
+            'ok', 'none', 'completed_page_only',
+            invocationId, profileKey, sendCount, pollCount, navigation, incidents,
+            {
+              ...(owned.conversationId ? { conversation_id: owned.conversationId } : {}),
+              output: { byte_length: publication.output_bytes!, sha256: publication.output_sha256! },
+            },
+            journalWriteFailed,
+          ),
+          ...(publication.retirement_cleanup_required ? { retirement_cleanup_required: true } : {}),
+        },
+      };
+    };
+    // The latched reply is published only while the existing ownership checks
+    // still hold for this Page: not lost or forfeited, the exact target
+    // conversation for a continued chat, and the live fresh-claim fence (or the
+    // held created Page in this project) for a new chat.
+    // The guard returns the conversation URL it verified (none on an unclaimed
+    // project surface), so publication never re-reads a URL that may have moved.
+    const observedCompletionStillOwned = (): ObservedCompletionOwnership | null => {
+      if (browserOrPageDefinitelyLost(page, browser) || ownershipForfeited) return null;
+      if (targetChatUrl) {
+        const identity = readOwnedConversationIdentity(page, targetChatUrl);
+        return identity.matched ? { conversationId: identity.pageUrl ?? targetChatUrl } : null;
+      }
+      if (!config.newChat) return null;
+      if (ownedConversationUrl) {
+        if (!freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs)) return null;
+        const identity = readOwnedConversationIdentity(page, ownedConversationUrl);
+        return identity.matched ? { conversationId: identity.pageUrl ?? ownedConversationUrl } : null;
+      }
+      if (!createdFreshPage || page !== originalHeldPage || !config.projectUrl) return null;
+      try {
+        const url = String(page.url());
+        if (matchingFreshProjectLocalUrl(url, config.projectUrl)
+          || isBlankProjectSurfaceUrl(url, config.projectUrl)) return { conversationId: undefined };
+        // An unclaimed fresh Page owns only the conversation it showed when the
+        // marked reply was latched. A durable URL that first appears after the
+        // latch is unchecked; only the fresh-claim branch above may accept it.
+        const current = readProjectConversationUrl(page, config.projectUrl);
+        return current && observedCompletionPageUrl && pageConversationUrl(page) === observedCompletionPageUrl
+          ? { conversationId: observedCompletionPageUrl }
+          : null;
+      } catch {
+        return null;
+      }
+    };
+    // A complete read that shows renewed generation or a different last
+    // assistant reply disproves the latched reply, with or without the owned
+    // marker. An incomplete or failed read never does.
+    const completeReadDisprovesLatch = (read: {
+      readonly messages: readonly PageMessage[];
+      readonly transcriptIncomplete: boolean;
+      readonly ownedWindowCompletionReady: boolean;
+      readonly pageTurnEvidence?: BrowserGptPageTurnEvidence;
+    }): boolean => {
+      if (!observedCompletedReply || read.transcriptIncomplete) return false;
+      if (read.pageTurnEvidence?.generationInProgress === true) return true;
+      if (hasOwnedUserMessage(read.messages, marker) && !read.ownedWindowCompletionReady) return true;
+      // Only an assistant after the pre-Send baseline can be a changed reply; a
+      // snapshot showing just the pre-Send history says nothing about it.
+      const assistants = read.messages.slice(baselineCount).filter((message) => message.role === 'assistant');
+      const last = assistants[assistants.length - 1];
+      return Boolean(last && normalizeVisibleText(last.text)
+        && normalizeVisibleText(last.text) !== normalizeVisibleText(observedCompletedReply));
+    };
+    const preferObservedCompletion = async (
+      outcome: TurnRunOutcome | null,
+    ): Promise<TurnRunOutcome | null> => {
+      if (!outcome || !observedCompletedReply || sendCount < 1) return outcome;
+      if (!isPostSendProofVeto(outcome.result.state, outcome.result.cause)) return outcome;
+      const owned = observedCompletionStillOwned();
+      if (!owned) return outcome;
+      return publishObservedCompletion(observedCompletedReply, owned);
+    };
     while (true) {
       const independentlyCommitted = verifiedExternalPrimary();
       if (independentlyCommitted) return independentlyCommitted;
       const authorEffect = await prAuthorEffect();
       if (authorEffect) return authorEffect;
       if (Date.now() >= hardExhaustionDeadline) {
+        const owned = observedCompletedReply && sendCount >= 1 ? observedCompletionStillOwned() : null;
+        if (owned) return publishObservedCompletion(observedCompletedReply, owned);
         const cause = uncertainCause || 'post_send_absolute_deadline_elapsed';
         incident('post_send_observation_error', cause, 'terminal_cleanup_no_resend');
         return {
@@ -7541,7 +7692,7 @@ async function runTurnCore(
           observedUserHeads, page, browser, invocationId, profileKey, sendCount, pollCount,
           navigation, incidents, journalWriteFailed, incident,
         );
-        if (readErrorUncertain) return readErrorUncertain;
+        if (readErrorUncertain) return (await preferObservedCompletion(readErrorUncertain))!;
         const readErrorExhausted = maybeReturnObservationExhausted(
           Date.now(),
           softDeadline,
@@ -7564,7 +7715,7 @@ async function runTurnCore(
           ownedPromptEverSeen,
           ownedCarrierKey,
         );
-        if (readErrorExhausted) return readErrorExhausted;
+        if (readErrorExhausted) return (await preferObservedCompletion(readErrorExhausted))!;
         updateHeartbeatForPoll({ state: 'waiting' });
         await postSendSleep(INITIAL_POLL_MS);
         continue;
@@ -7670,7 +7821,7 @@ async function runTurnCore(
           observedUserHeads, page, browser, invocationId, profileKey, sendCount, pollCount,
           navigation, incidents, journalWriteFailed, incident,
         );
-        if (incompleteUncertain) return incompleteUncertain;
+        if (incompleteUncertain) return (await preferObservedCompletion(incompleteUncertain))!;
         const incompleteExhausted = maybeReturnObservationExhausted(
           Date.now(),
           softDeadline,
@@ -7693,9 +7844,9 @@ async function runTurnCore(
           ownedPromptEverSeen,
           ownedCarrierKey,
         );
-        if (incompleteExhausted) return incompleteExhausted;
+        if (incompleteExhausted) return (await preferObservedCompletion(incompleteExhausted))!;
         const unproven = unprovenFreshCutoff();
-        if (unproven) return unproven;
+        if (unproven) return (await preferObservedCompletion(unproven))!;
         updateHeartbeatForPoll({ state: 'waiting' });
         await postSendSleep(INITIAL_POLL_MS);
         continue;
@@ -7884,7 +8035,10 @@ async function runTurnCore(
 
       const currentOwnedCarrier = snapshotOwnedCarrier(transcriptSnapshot, marker);
       if (currentOwnedCarrier?.key) {
-        if (ownedCarrierKey && ownedCarrierKey !== currentOwnedCarrier.key) {
+        // #2873: a re-keyed carrier that still shows the owned marker is the
+        // same owned prompt re-rendered; adopt the new key instead of a veto.
+        if (ownedCarrierKey && ownedCarrierKey !== currentOwnedCarrier.key
+          && !hasOwnedUserMessage(messages, marker)) {
           uncertainCause = 'transcript_continuity_unproven';
         } else {
           ownedCarrierKey = currentOwnedCarrier.key;
@@ -8212,6 +8366,14 @@ async function runTurnCore(
 
       const inProgress = !ownedWindowCompletionReady;
       const decision = forcedDecision ?? classifyPageObservation(messages, baselineCount, marker, inProgress);
+      // A new generation or a changed reply under the owned marker replaces the
+      // completed reply; it is latched again only after two stable reads below.
+      if (!forcedDecision && observedCompletedReply
+        && ((markerVisible && (inProgress || (decision.state === 'ready' && decision.reply !== observedCompletedReply)))
+          || completeReadDisprovesLatch({ messages, transcriptIncomplete, ownedWindowCompletionReady, pageTurnEvidence }))) {
+        observedCompletedReply = '';
+        observedCompletionPageUrl = '';
+      }
 
       if (markerCardinality.matchingUserCarrierCount === 1
         && markerCardinality.exactMarkerTokenCount === 1
@@ -8250,7 +8412,7 @@ async function runTurnCore(
       // Check only after this Page's complete marker census. Never use URL
       // absence alone to reject a uniquely marker-proven late local reply.
       const unproven = unprovenFreshCutoff();
-      if (unproven) return unproven;
+      if (unproven) return (await preferObservedCompletion(unproven))!;
 
       if (decision.state === 'uncertain') {
         uncertainCause = decision.cause === 'owned_prompt_marker_ambiguous'
@@ -8304,7 +8466,7 @@ async function runTurnCore(
           journalWriteFailed,
           incident,
         );
-        if (uncertainExhausted) return uncertainExhausted;
+        if (uncertainExhausted) return (await preferObservedCompletion(uncertainExhausted))!;
         const uncertainWaitingExhausted = maybeReturnObservationExhausted(
           Date.now(),
           softDeadline,
@@ -8327,7 +8489,7 @@ async function runTurnCore(
           ownedPromptEverSeen,
           ownedCarrierKey,
         );
-        if (uncertainWaitingExhausted) return uncertainWaitingExhausted;
+        if (uncertainWaitingExhausted) return (await preferObservedCompletion(uncertainWaitingExhausted))!;
         updateHeartbeatForPoll(decision);
         await postSendSleep(INITIAL_POLL_MS);
         continue;
@@ -8401,6 +8563,7 @@ async function runTurnCore(
           throw error;
         }
         if (continued) {
+          observedCompletedReply = '';
           stableReads = 0;
           lastReadyReply = '';
           lastReadyObservedText = '';
@@ -8443,7 +8606,8 @@ async function runTurnCore(
               && messages.every((message) => message.role !== 'user')
               && transcriptSnapshot.carriers.filter((carrier) => carrier.role === 'assistant').length === 1
               && transcriptSnapshot.carriers.find((carrier) => carrier.role === 'assistant')?.completionReady === true);
-        if (!currentObservedText || !currentAssistantIdentity || currentAssistantIdentity === 'ambiguous' || !currentCandidateReady) {
+        // #2873: duplicate assistant keys under a visible owned marker are a re-render, not ambiguity.
+        if (!currentObservedText || !currentAssistantIdentity || (currentAssistantIdentity === 'ambiguous' && !markerVisible) || !currentCandidateReady) {
           stableReads = 0;
           lastReadyReply = '';
           lastReadyObservedText = '';
@@ -8455,20 +8619,32 @@ async function runTurnCore(
           continue;
         }
         if (decision.reply.length > bestReadyReply.length) bestReadyReply = decision.reply;
-        if (currentAssistantIdentity === lastReadyAssistantIdentity && replyStabilityMatches(currentObservedText, lastReadyObservedText)) stableReads++;
+        // #2873: under a visible owned marker a re-keyed assistant carrier with
+        // the same text is the same reply re-rendered.
+        if ((markerVisible || currentAssistantIdentity === lastReadyAssistantIdentity)
+          && replyStabilityMatches(currentObservedText, lastReadyObservedText)) stableReads++;
         else {
           lastReadyReply = decision.reply;
           lastReadyObservedText = currentObservedText;
           lastReadyAssistantIdentity = currentAssistantIdentity;
           stableReads = 1;
         }
+        if (stableReads >= 2 && markerVisible && !forcedDecision && ownedWindowCompletionReady
+          && normalizeVisibleText(decision.reply)) {
+          observedCompletedReply = decision.reply;
+          observedCompletionPageUrl = pageConversationUrl(page) ?? '';
+        }
         if (stableReads >= 2) {
-          if (config.newChat && !ownedConversationUrl
+          // #2873: the visible owned marker on this held Page is sufficient
+          // ownership for its finished reply; no fresh-owner URL proof needed.
+          if (config.newChat && !ownedConversationUrl && !markerVisible
             && !(createdFreshPage && page === originalHeldPage && ownedPromptEverSeen)) {
             // A ready assistant on a root/foreign/unproven fresh URL does not
             // authenticate the selected conversation. Keep observing within
             // the incumbent deadline; do not publish or close an unbound page.
             if (Date.now() >= hardExhaustionDeadline) {
+              const owned = observedCompletedReply ? observedCompletionStillOwned() : null;
+              if (owned) return publishObservedCompletion(observedCompletedReply, owned);
               incident('post_send_observation_error', 'fresh_conversation_owner_unproven', 'retain_page_no_resend');
               return {
                 page,
@@ -8545,6 +8721,13 @@ async function runTurnCore(
               if (terminal) return terminal;
               continue;
             }
+            // A failed reread on a live Page is not evidence against a reply
+            // already latched; keep polling to the deadline instead of failing.
+            // A real tab failure (target crash) keeps its existing route.
+            if (observedCompletedReply && !isPostSendTargetCrash(error)) {
+              await postSendSleep(INITIAL_POLL_MS);
+              continue;
+            }
             throw error;
           }
           const finalKeyedCandidate = ownedCarrierKey
@@ -8605,7 +8788,15 @@ async function runTurnCore(
             || finalDecision.reply !== managerReply
             || !finalObservedText
             || finalObservedText !== currentObservedText
-            || finalAssistantIdentity !== currentAssistantIdentity) {
+            || (finalAssistantIdentity !== currentAssistantIdentity
+              && !(markerVisible && hasOwnedUserMessage(finalObservation.messages, marker)))) {
+            // A complete reread under the owned marker that shows generation or
+            // a different reply disproves the latched reply; an incomplete one
+            // does not.
+            if (completeReadDisprovesLatch(finalObservation)) {
+              observedCompletedReply = '';
+              observedCompletionPageUrl = '';
+            }
             stableReads = 0;
             lastReadyReply = '';
             lastReadyObservedText = '';
@@ -8700,7 +8891,7 @@ async function runTurnCore(
           ownedPromptEverSeen,
           ownedCarrierKey,
         );
-        if (readyExhausted) return readyExhausted;
+        if (readyExhausted) return (await preferObservedCompletion(readyExhausted))!;
         updateHeartbeatForPoll(decision);
         await postSendSleep(STABILITY_READ_DELAY_MS);
         continue;
@@ -8765,7 +8956,7 @@ async function runTurnCore(
         journalWriteFailed,
         incident,
       );
-      if (ownedPromptUncertainty) return ownedPromptUncertainty;
+      if (ownedPromptUncertainty) return (await preferObservedCompletion(ownedPromptUncertainty))!;
 
       const waitingExhausted = maybeReturnObservationExhausted(
         Date.now(),
@@ -8789,7 +8980,7 @@ async function runTurnCore(
         ownedPromptEverSeen,
         ownedCarrierKey,
       );
-      if (waitingExhausted) return waitingExhausted;
+      if (waitingExhausted) return (await preferObservedCompletion(waitingExhausted))!;
 
       updateHeartbeatForPoll(decision);
 

@@ -18,7 +18,8 @@ import {
   RENDERED_STOP_BUTTON_SELECTOR,
   matchesStopButtonSelector,
 } from './product-page-selectors.ts';
-import { __testComposerMutation, __testSendDelivery, __testWaitForExistingGeneration, atomicSnapshotSignature, keyedHarvestCandidate, PendingLocatorCountTimeoutError, preSendC4ReloadDecision, revalidateKeyedHarvest } from './state-light-turn-base.ts';
+import { __testComposerMutation, __testSendDelivery, __testWaitForExistingGeneration, atomicSnapshotSignature, isPostSendProofVeto, keyedHarvestCandidate, PendingLocatorCountTimeoutError, POST_SEND_PROOF_VETO_CAUSES, preSendC4ReloadDecision, revalidateKeyedHarvest } from './state-light-turn-base.ts';
+import { POST_SEND_PROOF_VETO_CAUSES as FLOW_MANAGER_PROOF_VETO_CAUSES } from '../flow-manager-long-running-child.ts';
 import {
   buildObservationHeartbeat,
   classifyBrowserGptPageTurnStatus,
@@ -3227,5 +3228,55 @@ describe('Issue #2854 pre-Send C4 zero-dispatch recovery decision', () => {
       .filter((record: any) => record.cause === 'owned_conversation_render_mismatch');
     expect(renderMismatch.length).toBeGreaterThan(0);
     for (const record of renderMismatch) expect(record.elapsed_ms).toBeGreaterThanOrEqual(1_800_000);
+  });
+});
+
+describe('Issue #2873: visible owned marker plus a finished reply is the outcome', () => {
+  const marker = generateOwnedPromptMarker();
+  const owned = { role: 'user' as const, text: wrapOwnedPromptPayload(marker, 'owned prompt 2873') };
+  const history = [
+    { role: 'user' as const, text: 'older prompt' },
+    { role: 'assistant' as const, text: 'older reply' },
+  ];
+
+  it('returns the finished reply after the marker, including several assistant entries', () => {
+    expect(classifyPageObservation([...history, owned, { role: 'assistant', text: 'ONLY' }], history.length, marker, false))
+      .toEqual({ state: 'ready', reply: 'ONLY' });
+    expect(classifyPageObservation(
+      [...history, owned, { role: 'assistant', text: 'first part' }, { role: 'assistant', text: 'FINAL' }],
+      history.length, marker, false,
+    )).toEqual({ state: 'ready', reply: 'FINAL' });
+  });
+
+  it('is not ready for a streaming, empty, missing-marker or wrong-marker page', () => {
+    const rows = [...history, owned, { role: 'assistant' as const, text: 'partial' }];
+    expect(classifyPageObservation(rows, history.length, marker, true).state).toBe('waiting');
+    expect(classifyPageObservation([...history, owned, { role: 'assistant', text: '   ' }], history.length, marker, false).state)
+      .not.toBe('ready');
+    expect(classifyPageObservation(
+      [...history, { role: 'user', text: 'prompt without marker' }, { role: 'assistant', text: 'DONE' }],
+      history.length, marker, false,
+    ).state).toBe('waiting');
+    const other = generateOwnedPromptMarker();
+    expect(classifyPageObservation(
+      [...history, { role: 'user', text: wrapOwnedPromptPayload(other, 'foreign') }, { role: 'assistant', text: 'DONE' }],
+      history.length, marker, false,
+    ).state).toBe('waiting');
+  });
+
+  it('treats only proof and deadline causes as vetoes, and both owners agree on them', () => {
+    for (const cause of [
+      'fresh_conversation_owner_unproven', 'transcript_continuity_unproven',
+      'owned_reply_boundary_unproven', 'post_send_absolute_deadline_elapsed',
+    ]) {
+      expect(isPostSendProofVeto('observation_uncertain', cause)).toBe(true);
+    }
+    expect(isPostSendProofVeto('no_reply', 'observation_exhausted_no_resend')).toBe(true);
+    for (const cause of ['foreign_user_after_owned_send', 'dead_turn_page_evidence', 'post_send_target_crashed', 'conversation_load_error']) {
+      expect(isPostSendProofVeto('observation_uncertain', cause)).toBe(false);
+    }
+    expect(isPostSendProofVeto('driver_error', 'transcript_continuity_unproven')).toBe(false);
+    expect(isPostSendProofVeto('send_failed', 'post_send_absolute_deadline_elapsed')).toBe(false);
+    expect(POST_SEND_PROOF_VETO_CAUSES).toBe(FLOW_MANAGER_PROOF_VETO_CAUSES);
   });
 });

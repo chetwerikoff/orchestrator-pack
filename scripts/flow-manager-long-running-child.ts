@@ -45,6 +45,7 @@ import { observationRecordPath, readStateLightTurnObservation, type StateLightTu
 import { loadChromium, normalizeConversationUrl } from './chatgpt-browser-turn/ui-adapter.ts';
 import { releaseCdpBrowser } from './chatgpt-browser-turn/browser-session.ts';
 import { recoveryMarkerCardinality } from './chatgpt-browser-turn/state-light-turn-recovery.ts';
+import { POST_SEND_PROOF_VETO_CAUSES } from './chatgpt-browser-turn/state-light-turn-base.ts';
 import {
   listCurrentWorkerAssignmentRecords, resolveWorkerAssignmentStorePath, withCurrentWorkerAssignmentFence,
   type WorkerAssignmentRecord,
@@ -1137,6 +1138,26 @@ interface FinalObservationProjection {
   readonly cdp: string;
   readonly delivery: DeliveryState;
   readonly replyDiagnostics?: Record<string, unknown>;
+  /** The exact observation record holds a harvested primary whose bytes still match. */
+  readonly harvestedPrimaryVerified: boolean;
+}
+
+/** #2873: the single post-send proof-veto list is owned by the turn base. */
+export { POST_SEND_PROOF_VETO_CAUSES };
+
+/**
+ * #2873: a proof-only uncertain/no-reply result whose own observation already
+ * carries a verified harvested reply is that completed reply, not a recovery case.
+ */
+export function completedDespiteProofVeto(
+  candidate: Pick<ParsedTurnResult, 'state' | 'cause' | 'resolved_send_count'>,
+  observation: Pick<FinalObservationProjection, 'harvestedPrimaryVerified'> | null,
+): boolean {
+  return (candidate.state === 'observation_uncertain' || candidate.state === 'no_reply')
+    && candidate.cause !== undefined
+    && POST_SEND_PROOF_VETO_CAUSES.has(candidate.cause)
+    && (candidate.resolved_send_count ?? 0) > 0
+    && observation?.harvestedPrimaryVerified === true;
 }
 
 // One state-light observation and one final-primary integrity check for both terminal paths.
@@ -1171,6 +1192,16 @@ function finalObservationProjection(
     && (record.send_count === undefined || record.send_count === 0);
 
   let replyDiagnostics = heartbeatDiagnostics;
+  let harvestedPrimaryVerified = false;
+  if (record.phase === 'harvested' && record.primary) {
+    try {
+      const bytes = readFileSync(record.primary.target);
+      harvestedPrimaryVerified = bytes.byteLength === record.primary.byte_length
+        && createHash('sha256').update(bytes).digest('hex') === record.primary.sha256;
+    } catch {
+      harvestedPrimaryVerified = false;
+    }
+  }
   if (record.phase === 'harvested' && (heartbeatDiagnostics || candidate)) {
     // Keep accepted liveness; remove stale reply advisories before checking final bytes.
     // The successful result can receive verified reply length without a heartbeat.
@@ -1203,6 +1234,7 @@ function finalObservationProjection(
       && (record.owned_marker_confirmed || record.send_witness === 'owned_marker'))
       ? 'landed' : preDispatch ? 'not-sent' : 'POSSIBLY_DELIVERED',
     ...(replyDiagnostics ? { replyDiagnostics } : {}),
+    harvestedPrimaryVerified,
   };
 }
 
@@ -1582,8 +1614,8 @@ async function finalizeCandidatePath(
       else capture.duplicateCandidate = true;
     }
   }
-  const candidate = capture.firstCandidate;
-  if (!candidate) {
+  const capturedCandidate = capture.firstCandidate;
+  if (!capturedCandidate) {
     await abortManagedProcess(controller, runPromise);
     return 1;
   }
@@ -1593,7 +1625,11 @@ async function finalizeCandidatePath(
   // evidence, not a lifecycle outcome.
   const resolvedExitCode: number | null = exited ? (completion.result?.exitCode ?? childExitCode) : null;
   const childExitDiagnostic: ChildExitDiagnostic = exited ? 'exited_within_grace' : 'retained_after_result';
-  const candidateObservation = finalObservationProjection(config, heartbeatDiagnostics, candidate);
+  const candidateObservation = finalObservationProjection(config, heartbeatDiagnostics, capturedCandidate);
+  // #2873: keep the original cause for audit; the verified harvested reply makes the turn `ok`.
+  const candidate: ParsedTurnResult = completedDespiteProofVeto(capturedCandidate, candidateObservation)
+    ? (({ next_action: _staleRecoveryAction, ...completed }) => ({ ...completed, state: 'ok' as const }))(capturedCandidate)
+    : capturedCandidate;
   const provenNoDispatch = affirmativelyNotDispatched(candidate, candidateObservation);
   const candidateBound = candidateBoundToInvocation(config, candidate, candidateObservation);
   const withEffect = (envelope: TerminalEnvelope): Promise<TerminalEnvelope> =>

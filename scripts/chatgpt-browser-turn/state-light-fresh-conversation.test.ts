@@ -4611,10 +4611,10 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(state.reloads).toBeGreaterThan(0);
   });
 
-  it('does not transfer a stable reply proof across assistant carrier-key changes', async () => {
+  it('#2873: a re-keyed assistant carrier under the visible owned marker still delivers its finished reply', async () => {
     const prompt = 'PROMPT-ASSISTANT-KEY-DRIFT';
     const reply = 'SAME-KEYED-REPLY-TEXT';
-    const output = join(stateDir, 'assistant-key-drift-must-not-publish.txt');
+    const output = join(stateDir, 'assistant-key-drift-publishes.txt');
     const changingKeys = [
       'unused-key-00000000',
       'unused-key-00000000',
@@ -4642,10 +4642,52 @@ describe('state-light fresh conversation collision recovery', () => {
 
     const outcome = await runNewChatTurn(page, output, '90000');
 
-    expect(outcome.result.state).not.toBe('ok');
-    expect(outcome.result.send_count).toBe(1);
-    expect(existsSync(output)).toBe(false);
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(readFileSync(output, 'utf8')).toBe(reply);
   });
+
+  it.each(['stays', 'redirects_at_deadline', 'redirects_during_publication'] as const)(
+    '#2873 review 6017476688: a --new-chat latched reply never publishes on a same-project conversation the Page moved to after the latch (%s)',
+    async (route) => {
+      const prompt = 'PROMPT-2873-NEW-CHAT-REDIRECT-' + route;
+      const reply = 'LATCHED-NEW-CHAT-REPLY';
+      const output = join(stateDir, '2873-new-chat-' + route + '.txt');
+      // Reads 3-4 are complete and stable; every later read is incomplete, so the
+      // reply can only settle through the latched deadline publication.
+      const incompleteReads = Array.from({ length: 400 }, (_, index) => index + 5);
+      const { page, state } = unrenderedOwnedMessagePage(
+        prompt, reply, false, false, false, [reply], [],
+        { includeOwnedUser: true, incompleteReads },
+      );
+      const timeoutMs = 90_000;
+      const deadlineAt = mocks.nowMs + timeoutMs;
+      // The Page never shows a durable conversation URL of its own, so no fresh
+      // claim binds it: the latch happens on the unclaimed project surface.
+      // redirects_during_publication: the guard already accepted the project
+      // surface; the Page moves once the reply bytes are on disk.
+      page.url.mockImplementation(() => ((route === 'redirects_at_deadline' && mocks.nowMs >= deadlineAt - 1_000)
+        || (route === 'redirects_during_publication' && existsSync(output))
+        ? LOSER_CONV
+        : PROJECT_URL));
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+      const outcome = await runNewChatTurn(page, output, String(timeoutMs));
+
+      expect(state.reads, JSON.stringify(outcome.result)).toBeGreaterThan(5);
+      expect(outcome.result.send_count).toBe(1);
+      if (route !== 'redirects_at_deadline') {
+        // cap delta issue2873:latch-publication-url-tocou: only the URL the guard
+        // verified is published; the unclaimed project surface has none.
+        expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({ state: 'ok' });
+        expect(readFileSync(output, 'utf8')).toBe(reply);
+        expect(outcome.result.conversation_id).toBeUndefined();
+      } else {
+        expect(outcome.result.state, JSON.stringify(outcome.result)).not.toBe('ok');
+        expect(existsSync(output)).toBe(false);
+        expect(outcome.result.conversation_id).not.toBe(LOSER_CONV);
+      }
+    },
+  );
 
   it('returns conversation-scoped stream recovery timeout without reload when the owner is unrendered', async () => {
     const prompt = 'PROMPT-STREAM-RECOVERY';

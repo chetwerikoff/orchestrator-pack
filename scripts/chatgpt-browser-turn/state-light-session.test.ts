@@ -1137,7 +1137,7 @@ describe('Issue #2536: current session harvest in a long reused chat', () => {
     });
   });
 
-  it('never publishes one of concurrently finished X/Y in the marked current window', async () => {
+  it('#2873: publishes the last finished assistant of X/Y in the marked current window', async () => {
     const history = harvestHistory2536();
     const harness = makeHarness(['one'], { timeoutMs: 60 });
     const published: string[] = [];
@@ -1159,10 +1159,8 @@ describe('Issue #2536: current session harvest in a long reused chat', () => {
     };
     await runStateLightSession(harness.argv, dependencies);
     expect(harness.metrics.sends).toBe(1);
-    expect(published).toEqual([]);
-    expect(aggregate(harness.stream)).toMatchObject({
-      state: 'observation_uncertain', total_send_count: 1,
-    });
+    expect(published).toEqual(['finished Y']);
+    expect(aggregate(harness.stream)).toMatchObject({ state: 'ok', total_send_count: 1 });
   });
 
   it.each([false, true])('preserves strict markerless U bridge (competing X/Y: %s)', async (competing) => {

@@ -1291,11 +1291,13 @@ describe('Issue #2536: unique current reply and strict keyed cardinality', () =>
       .toEqual({ state: 'ready', reply: 'SHORT' });
   });
 
-  it('does not select the last of two concurrently finished visible assistants', () => {
+  it('#2873: returns the last finished assistant after the owned marker, never a streaming one', () => {
     const rows = [...history, { role: 'user' as const, text: MARKED_PROMPT, key: ownKey }, assistantX, assistantY];
-    expect(classifyPageObservation(rows, history.length, MARKER, false).state).not.toBe('ready');
+    expect(classifyPageObservation(rows, history.length, MARKER, false))
+      .toEqual({ state: 'ready', reply: assistantY.text });
     expect(classifyPageObservation(rows, history.length, MARKER, true).state).not.toBe('ready');
-    expect(classifyPageObservation([...rows, { role: 'user', text: 'foreign turn', key: 'data-message-id:foreign-2536' }], history.length, MARKER, false).state).not.toBe('ready');
+    expect(classifyPageObservation([...rows, { role: 'user', text: 'foreign turn', key: 'data-message-id:foreign-2536' }], history.length, MARKER, false))
+      .toEqual({ state: 'ready', reply: assistantY.text });
   });
 
   it('refuses complete-markerless keyed X/Y even when the last carrier would revalidate', async () => {
@@ -1419,9 +1421,10 @@ describe('Issue #2536 ordinary end-to-end: one owned Send in a long reused conve
       expect(result.send_count, JSON.stringify(result)).toBe(1);
       expect(postSendReads).toBeGreaterThanOrEqual(3);
       if (competing) {
-        expect(result.state).not.toBe('ok');
-        expect(existsSync(output)).toBe(false);
-        expect(page.close).not.toHaveBeenCalled();
+        // #2873: a second finished assistant entry after the owned marker is
+        // not a veto; the last finished entry is the turn's reply.
+        expect(result.state, JSON.stringify(result)).toBe('ok');
+        expect(readFileSync(output, 'utf8')).toBe('OTHER');
       } else {
         expect(result.state, JSON.stringify(result)).toBe('ok');
         expect(readFileSync(output, 'utf8')).toBe('SHORT');
@@ -1435,6 +1438,202 @@ describe('Issue #2536 ordinary end-to-end: one owned Send in a long reused conve
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+describe('Issue #2873: a completed marked reply survives later proof gaps and the absolute deadline', () => {
+  type Scenario = 'completed_then_unreadable' | 'streaming_until_deadline' | 'marker_missing' | 'empty_reply'
+    | 'redirect_after_latch' | 'final_read_streaming' | 'final_read_changed' | 'final_read_throws'
+    | 'final_read_markerless_streaming' | 'final_read_markerless_changed' | 'final_read_history_only'
+    | 'redirect_during_publication';
+  // Reads 1-3 latch the finished reply after two stable reads; read 4 is the
+  // pre-publication final reread.
+  const FINAL_READ = 4;
+  async function runScenario(scenario: Scenario) {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2873-'));
+    const invocation = randomUUID();
+    const target = 'https://chatgpt.com/c/11111111-1111-1111-1111-111111111111';
+    const foreign = 'https://chatgpt.com/c/22222222-2222-2222-2222-222222222222';
+    const output = join(root, 'reply.txt');
+    let now = 20_000;
+    // --timeout-ms 60000 from the fixed clock start: the absolute post-send deadline.
+    const turnDeadline = now + 60_000;
+    let composerText = '';
+    let deliveredText = '';
+    let sends = 0;
+    let postSendReads = 0;
+    let finalReadThrew = false;
+    const history = [
+      { role: 'user' as const, text: 'older user', key: 'data-message-id:older-user-2873' },
+      { role: 'assistant' as const, text: 'older assistant', key: 'data-message-id:older-assistant-2873' },
+    ];
+    type Row = { role: 'user' | 'assistant'; text: string; key: string };
+    let currentRows: Row[] = history;
+    const composer = scalarLocator({
+      count: async () => 1,
+      fill: async (text: string) => { composerText = text; },
+      innerText: async () => composerText,
+    });
+    const send = vi.fn(async () => { sends += 1; deliveredText = composerText; composerText = ''; });
+    const sendButton = scalarLocator({ count: async () => 1, click: send });
+    const messageNodes = {
+      count: async () => currentRows.length,
+      nth: (index: number) => collectionLocator(currentRows).nth(index),
+      evaluateAll: async () => {
+        if (sends) postSendReads++;
+        const streaming = (scenario === 'streaming_until_deadline' && sends > 0)
+          || ((scenario === 'final_read_streaming' || scenario === 'final_read_markerless_streaming')
+            && postSendReads === FINAL_READ);
+        // A complete final reread that no longer shows the owned marker.
+        const markerGone = (scenario === 'final_read_markerless_streaming' || scenario === 'final_read_markerless_changed')
+          && postSendReads === FINAL_READ;
+        // Reads 1-3 show the finished reply (two stable reads); from the final
+        // pre-publication read on, every read is an incomplete (unreadable)
+        // transcript: the old route ended transcript_continuity_unproven.
+        const unreadable = scenario === 'completed_then_unreadable' || scenario === 'redirect_after_latch'
+          || scenario === 'redirect_during_publication'
+          || finalReadThrew
+          ? postSendReads >= FINAL_READ
+          : scenario !== 'streaming_until_deadline' && scenario !== 'marker_missing'
+            && scenario !== 'empty_reply' && postSendReads > FINAL_READ;
+        const userText = scenario === 'marker_missing' || markerGone ? 'a prompt without the owned marker' : deliveredText;
+        const reply = scenario === 'empty_reply' ? '' : streaming ? `partial ${postSendReads}`
+          : (scenario === 'final_read_changed' || scenario === 'final_read_markerless_changed') && postSendReads >= FINAL_READ
+            ? 'OTHER-2873' : 'DONE-2873';
+        // A complete final reread that renders only the pre-Send history.
+        const historyOnly = scenario === 'final_read_history_only' && postSendReads === FINAL_READ;
+        currentRows = sends && !historyOnly
+          ? [
+            ...history,
+            { role: 'user', text: userText, key: 'data-message-id:current-user-2873' },
+            { role: 'assistant', text: reply, key: `data-message-id:current-assistant-${postSendReads}-2873` },
+          ]
+          : history;
+        return {
+          rows: currentRows.map((row, domIndex) => ({
+            ...row, domIndex, complete: !unreadable, completionReady: !streaming, continuationVisible: false,
+          })),
+          pageTurnEvidence: {
+            generationInProgress: streaming,
+            observedAssistantNodes: currentRows.filter((row) => row.role === 'assistant').length,
+            continueGeneratingVisible: false,
+          },
+        };
+      },
+    };
+    const page = {
+      __fakeBrowserGptPage: true,
+      // redirect_during_publication: the guard verified the target; the Page
+      // moves once the reply bytes are on disk.
+      url: () => ((scenario === 'redirect_after_latch' && now >= turnDeadline)
+        || (scenario === 'redirect_during_publication' && existsSync(output)) ? foreign : target),
+      isClosed: () => false,
+      goto: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      waitForTimeout: async (ms: number) => { now += ms; },
+      getByRole: () => scalarLocator(),
+      getByText: () => scalarLocator(),
+      locator: (selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (selector === MESSAGE_NODE_SELECTOR) {
+          // The pre-publication final reread fails once on a live Page.
+          if (scenario === 'final_read_throws' && postSendReads === FINAL_READ - 1 && !finalReadThrew) {
+            finalReadThrew = true;
+            throw new Error('synthetic transient DOM read failure');
+          }
+          return messageNodes;
+        }
+        return scalarLocator();
+      },
+    };
+    const browserFixture = enqueueBrowserForTurn(mocks, page);
+    Object.assign(browserFixture.context, { pages: () => [page] });
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
+    try {
+      const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+        '--profile', join(root, 'profile'), '--cdp', 'http://127.0.0.1:9222',
+        '--input', join(root, 'synthetic-prompt.txt'),
+        '--output', output, '--chat-url', target,
+        '--invocation-id', invocation, '--timeout-ms', '60000',
+      ]);
+      return {
+        result, sends, postSendReads, finalReadThrew,
+        published: existsSync(output) ? readFileSync(output, 'utf8') : undefined,
+      };
+    } finally {
+      clock.mockRestore();
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+      mocks.browserQueue.length = 0;
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it('publishes the completed reply at the deadline instead of a continuity uncertainty', async () => {
+    const run = await runScenario('completed_then_unreadable');
+    expect(run.result, JSON.stringify(run.result)).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(run.result.cause).not.toMatch(/unproven|deadline_elapsed/u);
+    expect(run.published).toBe('DONE-2873');
+    expect(run.result.output).toMatchObject({ byte_length: Buffer.byteLength('DONE-2873') });
+    expect(run.sends).toBe(1);
+    // The finished reply was never re-read cleanly: it settled only at the finite deadline.
+    expect(run.postSendReads).toBeGreaterThan(10);
+  });
+
+  // source-02 final_reread_exception_discards_completed_reply
+  it('keeps the latched reply when the final reread throws on a live Page', async () => {
+    const run = await runScenario('final_read_throws');
+    expect(run.result, JSON.stringify(run.result)).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(run.published).toBe('DONE-2873');
+    expect(run.sends).toBe(1);
+    expect(run.finalReadThrew).toBe(true);
+  });
+
+  // cap delta issue2873:markerless-history-falsely-invalidates-completed-latch
+  it('keeps the latched reply when a complete reread shows only the pre-Send history', async () => {
+    const run = await runScenario('final_read_history_only');
+    expect(run.result, JSON.stringify(run.result)).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(run.published).toBe('DONE-2873');
+    expect(run.sends).toBe(1);
+  });
+
+  // cap delta issue2873:latch-publication-url-tocou
+  it('publishes only the conversation the guard verified when the Page moves during publication', async () => {
+    const run = await runScenario('redirect_during_publication');
+    expect(run.result, JSON.stringify(run.result)).toMatchObject({
+      state: 'ok', send_count: 1, conversation_id: 'https://chatgpt.com/c/11111111-1111-1111-1111-111111111111',
+    });
+    expect(run.published).toBe('DONE-2873');
+    expect(run.sends).toBe(1);
+  });
+
+  // source-02 completion_deadline_bypasses_owner_identity (redirect_after_latch)
+  // and final_read_change_leaves_stale_reply_latched (final_read_streaming, final_read_changed)
+  // review 6017476688 markerless_complete_reread_cannot_invalidate_stale_latch
+  // (final_read_markerless_streaming, final_read_markerless_changed)
+  it.each(['redirect_after_latch', 'final_read_streaming', 'final_read_changed',
+    'final_read_markerless_streaming', 'final_read_markerless_changed'] as const)(
+    'never publishes a latched reply the Page no longer owns or a complete reread disproved: %s',
+    async (scenario) => {
+      const run = await runScenario(scenario);
+      expect(run.result.state, JSON.stringify(run.result)).not.toBe('ok');
+      expect(run.published).toBeUndefined();
+      expect(run.result.output).toBeUndefined();
+      expect(run.sends).toBe(1);
+    },
+  );
+
+  it.each(['streaming_until_deadline', 'marker_missing', 'empty_reply'] as const)(
+    'keeps an honest bounded non-success with no reply bytes: %s',
+    async (scenario) => {
+      const run = await runScenario(scenario);
+      expect(run.result.state, JSON.stringify(run.result)).not.toBe('ok');
+      expect(run.published).toBeUndefined();
+      expect(run.result.output).toBeUndefined();
+      expect(run.sends).toBe(1);
+    },
+  );
 });
 
 
