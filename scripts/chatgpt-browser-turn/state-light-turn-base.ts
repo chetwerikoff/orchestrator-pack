@@ -6854,6 +6854,9 @@ async function runTurnCore(
     // visible owned marker. A later read error, incomplete transcript, proof
     // gap or elapsed deadline does not erase it; new generation does.
     let observedCompletedReply = '';
+    // The page conversation URL at the read that latched the reply (empty when
+    // the Page had no durable conversation URL yet).
+    let observedCompletionPageUrl = '';
     let deadEvidenceReads = 0;
     let markerlessFinishedReads = 0;
     let markerlessReloadUsed = false;
@@ -7417,12 +7420,34 @@ async function runTurnCore(
       if (!createdFreshPage || page !== originalHeldPage || !config.projectUrl) return false;
       try {
         const url = String(page.url());
-        return matchingFreshProjectLocalUrl(url, config.projectUrl)
-          || isBlankProjectSurfaceUrl(url, config.projectUrl)
-          || Boolean(readProjectConversationUrl(page, config.projectUrl));
+        if (matchingFreshProjectLocalUrl(url, config.projectUrl)
+          || isBlankProjectSurfaceUrl(url, config.projectUrl)) return true;
+        // An unclaimed fresh Page owns only the conversation it showed when the
+        // marked reply was latched. A durable URL that first appears after the
+        // latch is unchecked; only the fresh-claim branch above may accept it.
+        const current = readProjectConversationUrl(page, config.projectUrl);
+        return Boolean(current && observedCompletionPageUrl
+          && pageConversationUrl(page) === observedCompletionPageUrl);
       } catch {
         return false;
       }
+    };
+    // A complete read that shows renewed generation or a different last
+    // assistant reply disproves the latched reply, with or without the owned
+    // marker. An incomplete or failed read never does.
+    const completeReadDisprovesLatch = (read: {
+      readonly messages: readonly PageMessage[];
+      readonly transcriptIncomplete: boolean;
+      readonly ownedWindowCompletionReady: boolean;
+      readonly pageTurnEvidence?: BrowserGptPageTurnEvidence;
+    }): boolean => {
+      if (!observedCompletedReply || read.transcriptIncomplete) return false;
+      if (read.pageTurnEvidence?.generationInProgress === true) return true;
+      if (hasOwnedUserMessage(read.messages, marker) && !read.ownedWindowCompletionReady) return true;
+      const assistants = read.messages.filter((message) => message.role === 'assistant');
+      const last = assistants[assistants.length - 1];
+      return Boolean(last && normalizeVisibleText(last.text)
+        && normalizeVisibleText(last.text) !== normalizeVisibleText(observedCompletedReply));
     };
     const preferObservedCompletion = async (
       outcome: TurnRunOutcome | null,
@@ -8324,9 +8349,11 @@ async function runTurnCore(
       const decision = forcedDecision ?? classifyPageObservation(messages, baselineCount, marker, inProgress);
       // A new generation or a changed reply under the owned marker replaces the
       // completed reply; it is latched again only after two stable reads below.
-      if (markerVisible && !forcedDecision && observedCompletedReply
-        && (inProgress || (decision.state === 'ready' && decision.reply !== observedCompletedReply))) {
+      if (!forcedDecision && observedCompletedReply
+        && ((markerVisible && (inProgress || (decision.state === 'ready' && decision.reply !== observedCompletedReply)))
+          || completeReadDisprovesLatch({ messages, transcriptIncomplete, ownedWindowCompletionReady, pageTurnEvidence }))) {
         observedCompletedReply = '';
+        observedCompletionPageUrl = '';
       }
 
       if (markerCardinality.matchingUserCarrierCount === 1
@@ -8586,6 +8613,7 @@ async function runTurnCore(
         if (stableReads >= 2 && markerVisible && !forcedDecision && ownedWindowCompletionReady
           && normalizeVisibleText(decision.reply)) {
           observedCompletedReply = decision.reply;
+          observedCompletionPageUrl = pageConversationUrl(page) ?? '';
         }
         if (stableReads >= 2) {
           // #2873: the visible owned marker on this held Page is sufficient
@@ -8745,11 +8773,9 @@ async function runTurnCore(
             // A complete reread under the owned marker that shows generation or
             // a different reply disproves the latched reply; an incomplete one
             // does not.
-            if (observedCompletedReply && !finalObservation.transcriptIncomplete
-              && hasOwnedUserMessage(finalObservation.messages, marker)
-              && (!finalObservation.ownedWindowCompletionReady
-                || (finalDecision.state === 'ready' && finalDecision.reply !== observedCompletedReply))) {
+            if (completeReadDisprovesLatch(finalObservation)) {
               observedCompletedReply = '';
+              observedCompletionPageUrl = '';
             }
             stableReads = 0;
             lastReadyReply = '';

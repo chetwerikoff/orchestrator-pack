@@ -1442,7 +1442,8 @@ describe('Issue #2536 ordinary end-to-end: one owned Send in a long reused conve
 
 describe('Issue #2873: a completed marked reply survives later proof gaps and the absolute deadline', () => {
   type Scenario = 'completed_then_unreadable' | 'streaming_until_deadline' | 'marker_missing' | 'empty_reply'
-    | 'redirect_after_latch' | 'final_read_streaming' | 'final_read_changed' | 'final_read_throws';
+    | 'redirect_after_latch' | 'final_read_streaming' | 'final_read_changed' | 'final_read_throws'
+    | 'final_read_markerless_streaming' | 'final_read_markerless_changed';
   // Reads 1-3 latch the finished reply after two stable reads; read 4 is the
   // pre-publication final reread.
   const FINAL_READ = 4;
@@ -1479,7 +1480,11 @@ describe('Issue #2873: a completed marked reply survives later proof gaps and th
       evaluateAll: async () => {
         if (sends) postSendReads++;
         const streaming = (scenario === 'streaming_until_deadline' && sends > 0)
-          || (scenario === 'final_read_streaming' && postSendReads === FINAL_READ);
+          || ((scenario === 'final_read_streaming' || scenario === 'final_read_markerless_streaming')
+            && postSendReads === FINAL_READ);
+        // A complete final reread that no longer shows the owned marker.
+        const markerGone = (scenario === 'final_read_markerless_streaming' || scenario === 'final_read_markerless_changed')
+          && postSendReads === FINAL_READ;
         // Reads 1-3 show the finished reply (two stable reads); from the final
         // pre-publication read on, every read is an incomplete (unreadable)
         // transcript: the old route ended transcript_continuity_unproven.
@@ -1488,9 +1493,10 @@ describe('Issue #2873: a completed marked reply survives later proof gaps and th
           ? postSendReads >= FINAL_READ
           : scenario !== 'streaming_until_deadline' && scenario !== 'marker_missing'
             && scenario !== 'empty_reply' && postSendReads > FINAL_READ;
-        const userText = scenario === 'marker_missing' ? 'a prompt without the owned marker' : deliveredText;
+        const userText = scenario === 'marker_missing' || markerGone ? 'a prompt without the owned marker' : deliveredText;
         const reply = scenario === 'empty_reply' ? '' : streaming ? `partial ${postSendReads}`
-          : scenario === 'final_read_changed' && postSendReads >= FINAL_READ ? 'OTHER-2873' : 'DONE-2873';
+          : (scenario === 'final_read_changed' || scenario === 'final_read_markerless_changed') && postSendReads >= FINAL_READ
+            ? 'OTHER-2873' : 'DONE-2873';
         currentRows = sends
           ? [
             ...history,
@@ -1579,7 +1585,10 @@ describe('Issue #2873: a completed marked reply survives later proof gaps and th
 
   // source-02 completion_deadline_bypasses_owner_identity (redirect_after_latch)
   // and final_read_change_leaves_stale_reply_latched (final_read_streaming, final_read_changed)
-  it.each(['redirect_after_latch', 'final_read_streaming', 'final_read_changed'] as const)(
+  // review 6017476688 markerless_complete_reread_cannot_invalidate_stale_latch
+  // (final_read_markerless_streaming, final_read_markerless_changed)
+  it.each(['redirect_after_latch', 'final_read_streaming', 'final_read_changed',
+    'final_read_markerless_streaming', 'final_read_markerless_changed'] as const)(
     'never publishes a latched reply the Page no longer owns or a complete reread disproved: %s',
     async (scenario) => {
       const run = await runScenario(scenario);

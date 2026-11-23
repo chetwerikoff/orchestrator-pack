@@ -4646,6 +4646,43 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(readFileSync(output, 'utf8')).toBe(reply);
   });
 
+  it.each(['stays', 'redirects_at_deadline'] as const)(
+    '#2873 review 6017476688: a --new-chat latched reply never publishes on a same-project conversation the Page moved to after the latch (%s)',
+    async (route) => {
+      const prompt = 'PROMPT-2873-NEW-CHAT-REDIRECT-' + route;
+      const reply = 'LATCHED-NEW-CHAT-REPLY';
+      const output = join(stateDir, '2873-new-chat-' + route + '.txt');
+      // Reads 3-4 are complete and stable; every later read is incomplete, so the
+      // reply can only settle through the latched deadline publication.
+      const incompleteReads = Array.from({ length: 400 }, (_, index) => index + 5);
+      const { page, state } = unrenderedOwnedMessagePage(
+        prompt, reply, false, false, false, [reply], [],
+        { includeOwnedUser: true, incompleteReads },
+      );
+      const timeoutMs = 90_000;
+      const deadlineAt = mocks.nowMs + timeoutMs;
+      // The Page never shows a durable conversation URL of its own, so no fresh
+      // claim binds it: the latch happens on the unclaimed project surface.
+      page.url.mockImplementation(() => (route === 'redirects_at_deadline' && mocks.nowMs >= deadlineAt - 1_000
+        ? LOSER_CONV
+        : PROJECT_URL));
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+
+      const outcome = await runNewChatTurn(page, output, String(timeoutMs));
+
+      expect(state.reads, JSON.stringify(outcome.result)).toBeGreaterThan(5);
+      expect(outcome.result.send_count).toBe(1);
+      if (route === 'stays') {
+        expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({ state: 'ok' });
+        expect(readFileSync(output, 'utf8')).toBe(reply);
+      } else {
+        expect(outcome.result.state, JSON.stringify(outcome.result)).not.toBe('ok');
+        expect(existsSync(output)).toBe(false);
+        expect(outcome.result.conversation_id).not.toBe(LOSER_CONV);
+      }
+    },
+  );
+
   it('returns conversation-scoped stream recovery timeout without reload when the owner is unrendered', async () => {
     const prompt = 'PROMPT-STREAM-RECOVERY';
     const reply = 'NEVER-FINISHED';
