@@ -2072,6 +2072,7 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
       // Only the one-way missing -> exact vendor/packages-core fence is form-only.
       // Each control below keeps the existing guarded mismatch.
       const criteriaB0 = B0.replace('- unchanged\n', '- output:\n\n\n  B\n');
+      const literalB0 = B0.replace('- unchanged\n', '- exact output:\n\n```text\nA\nB\n```\n');
       const controls: Array<[string, string, string, string[]]> = [
         ['effective scope change', effective, B0, mismatch],
         ['reverse fence deletion', B0, redundant, mismatch],
@@ -2083,6 +2084,10 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
             fence('vendor/**\npackages/core/**\n')), criteriaB0, guarded],
         ['whitespace-only edit without fence',
           criteriaB0.replace('\n\n\n  B', '\n\n  B'), criteriaB0, guarded],
+        // The exact redundant fence inside a criteria literal block changes criteria.
+        ['redundant fence inside criteria literal block',
+          literalB0.replace('A\nB\n', 'A\n```denylist\nvendor/**\npackages/core/**\n```\nB\n'),
+          literalB0, guarded],
       ];
       for (const [label, live, reviewed, expected] of controls) {
         const changed = await outcomeFor(live, reviewed);

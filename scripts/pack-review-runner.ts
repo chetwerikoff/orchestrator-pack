@@ -5031,6 +5031,11 @@ function isFormOnlyDenylistInsertion(reviewedBody: string, liveBody: string): bo
   const start = fences[0]!.index!;
   const head = liveBody.slice(0, start);
   const tail = liveBody.slice(start + fences[0]![0].length);
+  // The fence must stand alone: outside any open fenced literal block and
+  // outside the reviewed behavior criteria, which must stay byte-equal.
+  if ((head.match(/^(?:```|~~~)/gm) ?? []).length % 2 !== 0) return false;
+  const criteria = reviewBehaviorCriteria(reviewedBody);
+  if (!criteria || reviewBehaviorCriteria(liveBody) !== criteria) return false;
   const candidates = [head + tail];
   if (tail.startsWith('\r\n')) candidates.push(head + tail.slice(2));
   else if (tail.startsWith('\n')) candidates.push(head + tail.slice(1));
