@@ -1273,7 +1273,9 @@ describe('Issue #2863 wide OpenCode idle composer is chrome, not the final or in
     expect(lastFleetParkedLine(screen)).toBe(gate);
     expect(ownPaneOutcome(screen).wait).toBe(gate);
     expect(classifyFleetPane(screen, native.handle, new MemoryPollingStore())).toBe('PARKED');
-    expect(sweep(screen)).toMatchObject({ state: 'PARKED', wait: gate });
+    expect(sweep(screen)).toMatchObject({ state: 'PARKED', wait: gate, ownParkObservation: gate });
+    const unknown = 'PARKED on unknown-producer hold';
+    expect(sweep(`  ${unknown}\n${banner}`)).toMatchObject({ state: 'PARKED', ownParkObservation: unknown });
   });
 
   it('a banner does not hide a new outcome or a missing park', () => {

@@ -968,7 +968,8 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
       ...(permissionCleared ? { permissionCleared: true } : {}),
       ...(wait ? { wait } : {}),
       ...(wait && outcome.wait === wait && state === 'PARKED'
-        ? { ownParkObservation: nonChromeLines(withoutOpenCodeComposer(screen)).at(-1) ?? outcome.wait } : {}),
+        ? { ownParkObservation: nonChromeLines(withoutOpenCodeComposer(screen))
+          .filter((line) => !COMPLETION_BANNER_RE.test(line)).at(-1) ?? outcome.wait } : {}),
       ...(binding ? { taskBinding: binding } : {}),
       lines: permission || lineCount === 0 ? [] : nonChromeLines(screen).slice(-lineCount),
     }];
