@@ -16,7 +16,7 @@ import { readTerminalGoneDispatch, runSupervisedWorkerStart, type SupervisedWork
 import { installManagerPushGuard, restoreManagerPushGuardForClaude, runPrePush } from './manager-push-guard.ts';
 import {
   currentWorkerAssignment, currentWorkerAssignmentByDeliverable, publishCurrentWorkerAssignment, resolveWorkerAssignmentStorePath,
-  type BriefWorkerAssignment, type DelegatedIntegrationMarker, type WorkerAssignment,
+  type BriefWorkerAssignment, type DelegatedIntegrationMarker, type WorkerAssignment, type WorkerAssignmentRecord,
 } from '../lib/worker-assignment-store.ts';
 import {
   createManagerTaskWithOrca,
@@ -29,6 +29,8 @@ import {
   parseLaunchAssistantCli,
   prepareWorktreeWithOrca,
   observeFreshManagerBaseWithOrca,
+  observeAuthorPrWithOrca,
+  observeWorktreeOwnersWithOrca,
   observeSelectedIssueAssignment,
   resolveExecutorProfile,
   resolveLiveExecutorProfile,
@@ -7258,6 +7260,53 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
     }
   });
 
+  it('Issue #2874 admits a matching native --model/--effort command with a model-only footer, never a conflicting one', async () => {
+    const profile = resolveExecutorProfile('manager', claudeEnv('claude-sonnet-5-5', 'high'), 'exact_terminal_worktree');
+    if (profile.status !== 'ok') throw new Error('Claude fixture profile refused');
+    expect(profile.value.launchCommand).toContain("--model 'claude-sonnet-5-5' --effort 'high'");
+    const withFooter = (base: RuntimeAdapter, footer: string): RuntimeAdapter => ({
+      ...base, readBoundedOutputAsync: async (input) => {
+        const output = await base.readBoundedOutputAsync!(input);
+        return output.status === 'ok' ? { ...output, value: { ...output.value, lines: ['✻ Welcome to Claude Code!', ...footer.split('\n')] } } : output;
+      },
+    });
+    const native = observedClaudeAdapter(profile.value.launchCommand, 'Sonnet', 'high', { commandObserved: true });
+    for (const [footer, accepted] of [
+      ['Sonnet 5.5', true],
+      ['Claude Sonnet 5.5', true],
+      ['Sonnet 5.5 · Claude Max', true],
+      ['Sonnet 5.5\neffort: high', true],
+      ['Sonnet 5.5 with high effort · Claude Max', true],
+      ['Opus 5.5', false],
+      ['Sonnet 5.5\neffort: medium', false],
+      ['Sonnet 5.5\nmedium effort', false],
+      ['Sonnet 5.5\nHigh', false],
+      ['Sonnet 5.5\nEffort medium', false],
+      ['Sonnet 5.5\nEffort high', true],
+      ['Sonnet 5.5\nreasoning effort unknown', false],
+      ['Sonnet 5.5 · high effort\nreasoning effort unknown', false],
+      ['Sonnet 5.5 · high effort\nHigh', false],
+      ['Sonnet 5.5 · Claude Team', false],
+      ['Sonnet 5.5\nSonnet 5.5', false],
+      ['Sonnet 5.5\nOpus 5.5', false],
+      ['```\nSonnet 5.5', false],
+      ['Transcript: x\nSonnet 5.5', false],
+    ] as const) {
+      expect(await claudePaneProfileObserved(profile.value, worker, withFooter(native, footer)), footer).toBe(accepted);
+    }
+    // The footer never substitutes for the adapter-observed native command.
+    const missing = observedClaudeAdapter(profile.value.launchCommand, 'Sonnet', 'high', { commandObserved: false });
+    expect(await claudePaneProfileObserved(profile.value, worker, withFooter(missing, 'Sonnet 5.5'))).toBe(false);
+    const wrongEffort = observedClaudeAdapter(profile.value.launchCommand, 'Sonnet', 'high', {
+      commandOverride: profile.value.launchCommand.replace("--effort 'high'", "--effort 'medium'"),
+    });
+    expect(await claudePaneProfileObserved(profile.value, worker, withFooter(wrongEffort, 'Sonnet 5.5'))).toBe(false);
+    const exited = observedClaudeAdapter(profile.value.launchCommand, 'Sonnet', 'high', { commandObserved: true, state: 'exited' });
+    expect(await claudePaneProfileObserved(profile.value, worker, withFooter(exited, 'Sonnet 5.5'))).toBe(false);
+    const foreign = observedClaudeAdapter(profile.value.launchCommand, 'Sonnet', 'high', { commandObserved: true, generation: 'pty-other' });
+    expect(await claudePaneProfileObserved(profile.value, worker, withFooter(foreign, 'Sonnet 5.5'))).toBe(false);
+  });
+
   it('admits exact native Claude identity without a command, but refuses foreign or missing identity', async () => {
     const env = claudeEnv('claude-opus-5-5', 'medium');
     const profile = resolveExecutorProfile('manager', env, 'exact_terminal_worktree');
@@ -9288,5 +9337,343 @@ describe('Issue #2863 new terminal native attachment before Dispatch and before 
       deps({ readTerminalAttachment: attach }));
     expect(result).toMatchObject({ outcome: 'continue', observedCause: 'existing_terminal_project_unverified' });
     expect(attach).not.toHaveBeenCalled();
+  });
+});
+
+describe('Issue #2874 explicit author start: GitHub-first PR continuation and first placement', () => {
+  const pr = { prNumber: 42, branch: 'issue-1479-pr', head: 'a'.repeat(40) } as const;
+  const placement = { id: 'repo::manager-worktree', path: '/tmp/exact-worktree' } as const;
+  const managerHolder: WorkerAssignment = {
+    schema: 'orchestrator-pack/worker-assignment/v1',
+    projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+    issueNumber: 1479, taskId: 'task-manager', assignmentId: 'manager-assignment',
+    generation: 1, kind: 'local', provider: 'orca', bindingKey: 'dispatch-manager',
+    role: 'orchestrator', createdAtUtc: '2026-11-23T00:00:00.000Z',
+  };
+
+  function authorHarness(options: {
+    readonly prReads?: readonly EdgeResult<{ prNumber: number; branch: string; head: string } | null>[];
+    readonly placementHeads?: readonly string[];
+    readonly census?: readonly EdgeResult<true>[];
+    readonly dispatch?: DispatchObservation[];
+    readonly holder?: (call: number) => WorkerAssignment | null;
+    readonly owners?: readonly EdgeResult<true>[];
+  } = {}) {
+    const events: string[] = [];
+    const requests: Parameters<LaunchDependencies['prepareWorktree']>[0][] = [];
+    const prReads = [...(options.prReads ?? [{ status: 'ok', value: null }])];
+    const census = [...(options.census ?? [])];
+    const owners = [...(options.owners ?? [])];
+    let prepareCalls = 0;
+    let holderCalls = 0;
+    const base = deps({
+      ...(options.dispatch ? { dispatch: options.dispatch } : {}),
+      adapter: runtimeAdapter({ onSpawn: () => { events.push('spawn'); } }),
+      onSupervised: () => { events.push('start'); },
+    });
+    const launchDeps: LaunchDependencies = {
+      ...base,
+      readCurrentAssignment: () => options.holder?.(holderCalls++) ?? null,
+      observeAuthorPr: async () => {
+        events.push('pr');
+        return prReads.length > 1 ? prReads.shift()! : prReads[0]!;
+      },
+      resolveRestoreWorktree: async () => { events.push('resolve'); return { status: 'ok', value: placement }; },
+      observeRestoreQuiescence: async () => {
+        events.push('census');
+        return census.shift() ?? { status: 'ok', value: true };
+      },
+      observeWorktreeOwners: async () => {
+        events.push('owners');
+        return owners.shift() ?? { status: 'ok', value: true };
+      },
+      prepareWorktree: async (request) => {
+        events.push('prepare');
+        requests.push(request);
+        const head = options.placementHeads?.[prepareCalls] ?? options.placementHeads?.at(-1) ?? pr.head;
+        prepareCalls += 1;
+        if (request.worktreeSelector) {
+          return { status: 'ok', value: { id: placement.id, selector: request.worktreeSelector, path: placement.path, setupWitness: 'proven_reuse' },
+            evidence: { branch: pr.branch, head } };
+        }
+        return { status: 'ok', value: { id: 'repo::fresh', selector: 'id:repo::fresh', path: placement.path, setupWitness: 'same_invocation_complete' } };
+      },
+    };
+    return { events, requests, launchDeps };
+  }
+  const fresh = (): LaunchInput => ({ ...launchInput('t2'), launchPurpose: 'author' });
+  const selected = (): LaunchInput => {
+    const { worktreeName: _name, ...rest } = launchInput('t2');
+    return { ...rest, worktreeSelector: 'path:/tmp/exact-worktree', launchPurpose: 'author' };
+  };
+
+  it('omitted purpose keeps the ordinary worker start without any author GitHub read', async () => {
+    const harness = authorHarness({ prReads: [{ status: 'ok', value: pr }] });
+    const result = await runSupervisedTaskLaunchAssistant(launchInput('t2'), harness.launchDeps);
+    expect(result.outcome).toBe('ready');
+    expect(harness.events).not.toContain('pr');
+    expect(harness.requests[0]).not.toHaveProperty('authorPr');
+    expect(harness.requests[0]).not.toHaveProperty('authorFirstPlacement');
+  });
+
+  it.each([
+    ['manager', { ...launchInput('manager'), launchPurpose: 'author' as const }],
+    ['merge', { ...launchInput('t2'), workClass: 'merge' as const, launchPurpose: 'author' as const }],
+    ['issue-less', (() => { const { issueNumber: _i, ...rest } = launchInput('t2'); return { ...rest, launchPurpose: 'author' as const }; })()],
+    ['task-less', (() => { const { taskId: _t, ...rest } = launchInput('t2'); return { ...rest, launchPurpose: 'author' as const }; })()],
+    ['unknown value', { ...launchInput('t2'), launchPurpose: 'reviewer' as unknown as 'author' }],
+  ])('refuses an incompatible author purpose before any effect: %s', async (_name, input) => {
+    const harness = authorHarness();
+    const result = await runSupervisedTaskLaunchAssistant(input as LaunchInput, harness.launchDeps);
+    expect(result).toMatchObject({ outcome: 'continue', observedCause: 'launch_purpose_invalid' });
+    expect(harness.events).toEqual([]);
+  });
+
+  it('zero verified PRs admits the fresh author start; PR inventory is read before and after placement, before spawn', async () => {
+    const harness = authorHarness();
+    const result = await runSupervisedTaskLaunchAssistant(fresh(), harness.launchDeps);
+    expect(result.outcome).toBe('ready');
+    expect(harness.events).toEqual(['pr', 'prepare', 'pr', 'spawn', 'start']);
+  });
+
+  it('an existing PR is never continued by a fresh or PR-seeded --worktree-name branch', async () => {
+    for (const baseBranch of [undefined, `origin/${pr.branch}`]) {
+      const harness = authorHarness({ prReads: [{ status: 'ok', value: pr }] });
+      const result = await runSupervisedTaskLaunchAssistant({ ...fresh(), ...(baseBranch ? { baseBranch } : {}) }, harness.launchDeps);
+      expect(result).toMatchObject({ outcome: 'continue', stage: 'dispatch_admission_early',
+        observedCause: 'author_pr_continuation_required',
+        evidence: { prNumber: 42, branch: pr.branch, head: pr.head } });
+      if (result.outcome !== 'continue') throw new Error('expected refusal');
+      expect(result.nextAction.note).toContain('open no second PR');
+      expect(harness.events).toEqual(['pr']);
+    }
+  });
+
+  it('ambiguous or incomplete GitHub inventory fails closed with zero author effects', async () => {
+    const refusal: EdgeResult<null> = { status: 'continue', cause: 'author_pr_link_ambiguous', actor: 'orchestrator',
+      evidence: { prNumbers: [42, 43] }, nextAction: { kind: 'reconcile_worktree_setup', note: 'reconcile' } };
+    const harness = authorHarness({ prReads: [refusal] });
+    const result = await runSupervisedTaskLaunchAssistant(selected(), harness.launchDeps);
+    expect(result).toMatchObject({ outcome: 'continue', observedCause: 'author_pr_link_ambiguous', evidence: { prNumbers: [42, 43] } });
+    expect(harness.events).toEqual(['pr']);
+  });
+
+  it('continues the exact PR branch/head on a clean, unowned, quiescent manager worktree as first placement', async () => {
+    const harness = authorHarness({ prReads: [{ status: 'ok', value: pr }] });
+    const result = await runSupervisedTaskLaunchAssistant(selected(), harness.launchDeps);
+    expect(result.outcome).toBe('ready');
+    expect(harness.events).toEqual(['pr', 'resolve', 'census', 'owners', 'prepare', 'pr', 'resolve', 'prepare', 'census', 'owners', 'spawn', 'start']);
+    expect(harness.requests[0]).toMatchObject({ authorFirstPlacement: true, authorPr: pr });
+    expect(harness.requests[0]).not.toHaveProperty('reuseAssignment');
+  });
+
+  it('a moved PR head between reads refuses before spawn', async () => {
+    const harness = authorHarness({ prReads: [{ status: 'ok', value: pr }, { status: 'ok', value: { ...pr, head: 'b'.repeat(40) } }] });
+    const result = await runSupervisedTaskLaunchAssistant(selected(), harness.launchDeps);
+    expect(result).toMatchObject({ outcome: 'continue', stage: 'dispatch_admission_final', observedCause: 'author_pr_head_changed' });
+    expect(harness.events).not.toContain('spawn');
+    expect(harness.events).not.toContain('start');
+  });
+
+  it('a changed local HEAD/status at the final recheck refuses before spawn', async () => {
+    const harness = authorHarness({ placementHeads: [pr.head, 'c'.repeat(40)] });
+    const result = await runSupervisedTaskLaunchAssistant(selected(), harness.launchDeps);
+    expect(result).toMatchObject({ outcome: 'continue', stage: 'dispatch_admission_final', observedCause: 'author_first_placement_changed' });
+    expect(harness.events).not.toContain('spawn');
+  });
+
+  it('a retained terminal or process refuses first placement with no prepare or spawn', async () => {
+    const retained: EdgeResult<true> = { status: 'continue', cause: 'worktree_restore_target_terminal_retained', actor: 'operator',
+      evidence: { terminalId: 'term-manager' }, nextAction: { kind: 'reconcile_worktree_setup', note: 'quiesce' } };
+    const harness = authorHarness({ census: [retained] });
+    const result = await runSupervisedTaskLaunchAssistant(selected(), harness.launchDeps);
+    expect(result).toMatchObject({ outcome: 'continue', stage: 'dispatch_admission_early', observedCause: 'worktree_restore_target_terminal_retained' });
+    expect(harness.events).toEqual(['pr', 'resolve', 'census']);
+  });
+
+  it('an active Dispatch on the new Task refuses before any author effect', async () => {
+    const harness = authorHarness({ dispatch: [{ kind: 'present', dispatchId: 'dispatch-live', status: 'running' }] });
+    const result = await runSupervisedTaskLaunchAssistant(selected(), harness.launchDeps);
+    expect(result).toMatchObject({ outcome: 'continue', stage: 'dispatch_admission_early' });
+    expect(harness.events).toEqual([]);
+  });
+
+  it('a live manager Issue holder is never transferred by inference: generic restoration still refuses', async () => {
+    const harness = authorHarness({ holder: () => managerHolder });
+    const result = await runSupervisedTaskLaunchAssistant(selected(), {
+      ...harness.launchDeps,
+      proveTerminalGone: async () => null,
+    });
+    expect(result).toMatchObject({ outcome: 'continue', stage: 'dispatch_admission_early', observedCause: 'worktree_restore_ownership_unproven' });
+    expect(harness.events).not.toContain('prepare');
+    expect(harness.events).not.toContain('spawn');
+  });
+
+  it('a live manager Dispatch of a different Issue that owns the selected worktree refuses first placement, early or final', async () => {
+    const owned: EdgeResult<true> = { status: 'continue', cause: 'author_first_placement_worktree_owned', actor: 'orchestrator',
+      evidence: { taskId: 'task-manager-other', dispatchId: 'dispatch-paused', issueNumber: 9999 },
+      nextAction: { kind: 'reconcile_dispatch', note: 'retire the owner' } };
+    const early = authorHarness({ owners: [owned] });
+    expect(await runSupervisedTaskLaunchAssistant(selected(), early.launchDeps)).toMatchObject({
+      outcome: 'continue', stage: 'dispatch_admission_early', observedCause: 'author_first_placement_worktree_owned',
+      evidence: { issueNumber: 9999 } });
+    expect(early.events).toEqual(['pr', 'resolve', 'census', 'owners']);
+    const late = authorHarness({ owners: [{ status: 'ok', value: true }, owned] });
+    expect(await runSupervisedTaskLaunchAssistant(selected(), late.launchDeps)).toMatchObject({
+      outcome: 'continue', stage: 'dispatch_admission_final', observedCause: 'author_first_placement_worktree_owned' });
+    expect(late.events).not.toContain('spawn');
+    const { observeWorktreeOwners: _owners, ...withoutOwners } = authorHarness().launchDeps;
+    expect(await runSupervisedTaskLaunchAssistant(selected(), withoutOwners)).toMatchObject({
+      outcome: 'continue', observedCause: 'author_first_placement_unobserved' });
+  });
+
+  it('a holder that appears before start refuses first placement', async () => {
+    const harness = authorHarness({ holder: (call) => call >= 2 ? managerHolder : null });
+    const result = await runSupervisedTaskLaunchAssistant(selected(), harness.launchDeps);
+    expect(result).toMatchObject({ outcome: 'continue', stage: 'dispatch_admission_final',
+      observedCause: 'author_first_placement_holder_present', evidence: { taskId: 'task-manager' } });
+    expect(harness.events).not.toContain('spawn');
+  });
+});
+
+describe('Issue #2874 author PR observation and first-placement worktree route', () => {
+  const request = { repository: 'chetwerikoff/orchestrator-pack', taskId: 'task-1', issueNumber: 2430, defaultBranch: 'main' };
+
+  it('observes the unique same-repository Issue-closing PR, or null for none, and fails closed otherwise', async () => {
+    const one = managerReuseFixture();
+    expect(await observeAuthorPrWithOrca(request, one.worktreePath, one.execute)).toMatchObject({
+      status: 'ok', value: { prNumber: 42, branch: 'manager-2024', head: '1'.repeat(40) } });
+    expect(one.calls.every((args) => args[0] === 'gh')).toBe(true);
+    const none = managerReuseFixture({ noPr: true });
+    expect(await observeAuthorPrWithOrca(request, none.worktreePath, none.execute)).toMatchObject({ status: 'ok', value: null });
+    for (const [fixture, cause] of [
+      [managerReuseFixture({ duplicatePr: true }), 'author_pr_link_ambiguous'],
+      [managerReuseFixture({ prListOk: false }), 'author_pr_inventory_unavailable'],
+      [managerReuseFixture({ prViewOk: false }), 'author_pr_inventory_unavailable'],
+      [managerReuseFixture({ prOverrides: { baseRefName: 'develop' } }), 'author_pr_head_mismatch'],
+      [managerReuseFixture({ prOverrides: { headRepository: { nameWithOwner: 'fork/orchestrator-pack' } } }), 'author_pr_head_mismatch'],
+      [managerReuseFixture({ prOverrides: { headRefOid: 'short' } }), 'author_pr_head_mismatch'],
+    ] as const) {
+      expect(await observeAuthorPrWithOrca(request, fixture.worktreePath, fixture.execute)).toMatchObject({ status: 'continue', cause });
+    }
+    const ambiguous = managerReuseFixture({ duplicatePr: true });
+    expect(await observeAuthorPrWithOrca(request, ambiguous.worktreePath, ambiguous.execute))
+      .toMatchObject({ evidence: { prNumbers: [42, 43] } });
+  });
+
+  const placementRequest = (overrides: Record<string, unknown> = {}) => ({
+    ...request, worktreeSelector: 'path:/tmp/existing', authorFirstPlacement: true,
+    authorPr: { prNumber: 42, branch: 'manager-2024', head: '1'.repeat(40) }, ...overrides,
+  }) as Parameters<typeof prepareWorktreeWithOrca>[0];
+  const mutating = (calls: readonly string[][]) => calls.some((args) => args[0] === 'git'
+    && ['merge', 'fetch', 'checkout', 'switch', 'reset', 'branch', 'stash'].includes(args[1] ?? ''));
+
+  it('admits a clean exact-branch/head first placement read-only, without a prior worker assignment', async () => {
+    const fixture = managerReuseFixture();
+    const placed = await prepareWorktreeWithOrca(placementRequest(), fixture.execute);
+    expect(placed).toMatchObject({ status: 'ok', value: { id: 'repo::existing', path: '/tmp/existing', setupWitness: 'proven_reuse' },
+      evidence: { branch: 'manager-2024', head: '1'.repeat(40), placement: 'author_first_placement', prNumber: 42 } });
+    expect(mutating(fixture.calls)).toBe(false);
+    const noPr = managerReuseFixture();
+    const { authorPr: _pr, ...withoutPr } = placementRequest();
+    expect(await prepareWorktreeWithOrca(withoutPr, noPr.execute)).toMatchObject({ status: 'ok', evidence: { placement: 'author_first_placement' } });
+  });
+
+  it.each([
+    ['dirty status', { status: ' M file.ts\n' }, {}, 'author_first_placement_dirty'],
+    ['local branch mismatch', {}, { authorPr: { prNumber: 42, branch: 'other-branch', head: '1'.repeat(40) } }, 'author_pr_local_placement_mismatch'],
+    ['moved PR head', {}, { authorPr: { prNumber: 42, branch: 'manager-2024', head: '9'.repeat(40) } }, 'author_pr_local_placement_mismatch'],
+    ['changed HEAD', { localHeadChanged: true }, {}, 'author_first_placement_local_changed'],
+    ['shared branch', { sharedBranch: true }, {}, 'manager_worktree_branch_not_distinct'],
+    ['wrong repository', { remoteUrl: 'git@github.com:other/repo.git' }, {}, 'manager_worktree_repository_identity_mismatch'],
+    ['wrong worktree', { worktreeId: 'repo::other', worktreePath: '/tmp/other' }, {}, 'manager_worktree_selector_mismatch'],
+    ['restoration request', {}, { reuseAssignment: { taskId: 'task-old' } }, 'author_first_placement_route_invalid'],
+  ] as const)('refuses first placement: %s', async (_name, fixtureInput, overrides, cause) => {
+    const fixture = managerReuseFixture(fixtureInput);
+    const placed = await prepareWorktreeWithOrca(placementRequest(overrides), fixture.execute);
+    expect(placed).toMatchObject({ status: 'continue', cause });
+    expect(mutating(fixture.calls)).toBe(false);
+  });
+
+  it('observes every current project assignment (any Issue) against the selected worktree, failing closed', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2874-owners-'));
+    const target = join(root, 'manager');
+    const other = join(root, 'other');
+    mkdirSync(target);
+    mkdirSync(other);
+    const assignment = (taskId: string, issueNumber: number): WorkerAssignmentRecord => ({
+      schema: 'orchestrator-pack/worker-assignment/v1', projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      issueNumber, taskId, assignmentId: `a-${taskId}`, generation: 1, kind: 'local', provider: 'orca',
+      bindingKey: `d-${taskId}`, role: 'orchestrator', createdAtUtc: '2026-11-23T00:00:00.000Z',
+    } as WorkerAssignmentRecord);
+    const inspector = (rows: Record<string, { status: string; worktreeId?: string; path?: string }>) => {
+      const calls: string[][] = [];
+      return { calls, inspect: async (args: readonly string[]) => {
+        calls.push([...args]);
+        const taskId = args[1] === 'dispatch-show' ? args[3]! : args[3]!.replace(/^d-/u, '');
+        const row = rows[taskId];
+        if (!row) return { ok: false, stdout: '', stderr: 'missing' };
+        if (args[1] === 'dispatch-show') return { ok: true, stdout: okEnvelope({ dispatch: { id: `d-${taskId}`, taskId, status: row.status } }), stderr: '' };
+        return { ok: true, stdout: okEnvelope({
+          worker: row.worktreeId ? { worktree_id: row.worktreeId } : null,
+          terminal: row.path ? { worktreePath: row.path } : null,
+        }), stderr: '' };
+      } };
+    };
+    const selectedWorktree = { id: 'repo::manager', path: target };
+    try {
+      const paused = inspector({ 'task-m': { status: 'paused', worktreeId: 'repo::manager' } });
+      expect(await observeWorktreeOwnersWithOrca([assignment('task-m', 9999)], selectedWorktree, paused.inspect))
+        .toMatchObject({ status: 'continue', cause: 'author_first_placement_worktree_owned',
+          evidence: { taskId: 'task-m', issueNumber: 9999, dispatchStatus: 'paused' } });
+      const byPath = inspector({ 'task-m': { status: 'running', path: target } });
+      expect(await observeWorktreeOwnersWithOrca([assignment('task-m', 9999)], selectedWorktree, byPath.inspect))
+        .toMatchObject({ status: 'continue', cause: 'author_first_placement_worktree_owned' });
+      const elsewhere = inspector({ 'task-x': { status: 'running', worktreeId: 'repo::other', path: other },
+        'task-done': { status: 'completed', worktreeId: 'repo::manager' } });
+      expect(await observeWorktreeOwnersWithOrca([assignment('task-x', 1), assignment('task-done', 2)], selectedWorktree, elsewhere.inspect))
+        .toEqual({ status: 'ok', value: true });
+      expect(elsewhere.calls.filter((args) => args[1] === 'worker-show')).toHaveLength(1);
+      // Stale assignment binding: the Task's current Dispatch is a different live one.
+      const replaced = inspector({ 'task-r': { status: 'running', worktreeId: 'repo::other', path: other } });
+      const replacedInspect = async (args: readonly string[]) => args[1] === 'dispatch-show'
+        ? { ok: true, stdout: okEnvelope({ dispatch: { id: 'd-new', taskId: 'task-r', status: 'running' } }), stderr: '' }
+        : replaced.inspect(args);
+      expect(await observeWorktreeOwnersWithOrca([assignment('task-r', 5)], selectedWorktree, replacedInspect))
+        .toMatchObject({ status: 'continue', cause: 'author_first_placement_owner_unproven', evidence: { currentDispatchId: 'd-new' } });
+      const unreadableDispatch = async (args: readonly string[]) => args[1] === 'dispatch-show'
+        ? { ok: false, stdout: '', stderr: 'unavailable' } : replaced.inspect(args);
+      expect(await observeWorktreeOwnersWithOrca([assignment('task-r', 5)], selectedWorktree, unreadableDispatch))
+        .toMatchObject({ status: 'continue', cause: 'author_first_placement_owner_unproven', evidence: { currentDispatchId: 'unobserved' } });
+      const conflictingWorker = async (args: readonly string[]) => args[1] === 'worker-show'
+        ? { ok: true, stdout: okEnvelope({ dispatch: { id: 'd-other' }, worker: { worktree_id: 'repo::other' } }), stderr: '' }
+        : replaced.inspect(args);
+      expect(await observeWorktreeOwnersWithOrca([assignment('task-r', 5)], selectedWorktree, conflictingWorker))
+        .toMatchObject({ status: 'continue', cause: 'author_first_placement_owner_unproven' });
+      const unknown = inspector({ 'task-u': { status: 'running' } });
+      expect(await observeWorktreeOwnersWithOrca([assignment('task-u', 3)], selectedWorktree, unknown.inspect))
+        .toMatchObject({ status: 'continue', cause: 'author_first_placement_owner_unproven' });
+      const unreadable = inspector({});
+      expect(await observeWorktreeOwnersWithOrca([assignment('task-gone', 4)], selectedWorktree, unreadable.inspect))
+        .toMatchObject({ status: 'continue', cause: 'author_first_placement_owner_unproven' });
+      expect(await observeWorktreeOwnersWithOrca(null, selectedWorktree, unreadable.inspect))
+        .toMatchObject({ status: 'continue', cause: 'author_first_placement_owner_unproven' });
+      expect(await observeWorktreeOwnersWithOrca([], selectedWorktree, unreadable.inspect)).toEqual({ status: 'ok', value: true });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('parses --launch-purpose author only for t1|t2|t3 with --issue-number and --task', () => {
+    const target = () => ({
+      projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
+      primaryRoot: '/tmp/primary', defaultBranch: 'main',
+    } as ReturnType<typeof import('../lib/target-context.ts').resolveTargetContext>);
+    const base = ['--project', 'orchestrator-pack', '--work-class', 't2', '--issue-number', '2874', '--task', 'task-1', '--worktree', 'path:/tmp/w'];
+    expect(parseLaunchAssistantCli([...base, '--launch-purpose', 'author'], profileEnv(), target)).toMatchObject({ launchPurpose: 'author' });
+    expect(parseLaunchAssistantCli(base, profileEnv(), target)).not.toHaveProperty('launchPurpose');
+    expect(() => parseLaunchAssistantCli([...base, '--launch-purpose', 'reviewer'], profileEnv(), target)).toThrow(/launch-purpose/u);
+    expect(() => parseLaunchAssistantCli(['--project', 'orchestrator-pack', '--work-class', 't2', '--task', 'task-1', '--worktree', 'path:/tmp/w',
+      '--launch-purpose', 'author'], profileEnv(), target)).toThrow(/launch-purpose/u);
+    expect(() => parseLaunchAssistantCli(['--project', 'orchestrator-pack', '--work-class', 'manager', '--run', 'run-1', '--issue-number', '2874',
+      '--task', 'task-1', '--worktree', 'path:/tmp/w', '--launch-purpose', 'author'], profileEnv(), target)).toThrow(/launch-purpose/u);
   });
 });
