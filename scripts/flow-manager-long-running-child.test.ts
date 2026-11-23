@@ -47,6 +47,7 @@ import {
   readRefusalCompanion,
   resolveDurableArtifactPath,
   resolveDurableArtifactRoot,
+  completedDespiteProofVeto,
   sameHandoffIdentity,
   validateLaunchPreSpawn,
   invocationReceiptLocatorPath,
@@ -5541,6 +5542,77 @@ describe('Issue #2524: final persisted no-result terminal projection', () => {
       expect(envelope.diagnostics).toEqual({ last_reply_length: 17 });
     }
     expect(JSON.stringify(envelope)).not.toContain(reply);
+  });
+
+  describe('Issue #2873: a verified completed reply is not downgraded by a proof-only cause', () => {
+    const vetoes = [
+      ['observation_uncertain', 'fresh_conversation_owner_unproven'],
+      ['observation_uncertain', 'transcript_continuity_unproven'],
+      ['observation_uncertain', 'owned_reply_boundary_unproven'],
+      ['observation_uncertain', 'post_send_absolute_deadline_elapsed'],
+      ['no_reply', 'observation_exhausted_no_resend'],
+    ] as const;
+    const proofOnly = (state: string, cause: string) => (profileKey: string, invocationId: string) => matchingSuccess(
+      profileKey, invocationId, {
+        state: state as TurnResultV1['state'], scope: 'invocation', cause,
+        next_action: 'read GitHub first (stale recovery advice)',
+        observation_uncertainty_diagnostics: { cause, send_count: 1, owned_prompt_seen: true },
+      },
+    );
+
+    it.each(vetoes)('projects %s/%s with a verified harvested reply as success', async (state, cause) => {
+      const { envelope, exitCode } = await savedTerminal({
+        phase: 'harvested', sendCount: 1, reply: 'synthetic reply!!', childResult: proofOnly(state, cause),
+      });
+      expect(exitCode).toBe(0);
+      expect(envelope).toMatchObject({
+        lifecycle_outcome: 'success', delivery: 'landed', turn_result_state: 'ok',
+        turn_result_cause: cause, send_count: 1, diagnostics: { last_reply_length: 17 },
+      });
+      expect(envelope).not.toHaveProperty('incident');
+      expect(envelope).not.toHaveProperty('next_action');
+    });
+
+    it.each(['mutated', 'unreadable'] as const)('keeps the uncertainty when the harvested reply is %s', async (targetChange) => {
+      const { envelope, exitCode } = await savedTerminal({
+        phase: 'harvested', sendCount: 1, reply: 'synthetic reply!!', targetChange,
+        childResult: proofOnly('observation_uncertain', 'transcript_continuity_unproven'),
+      });
+      expect(exitCode).toBe(1);
+      expect(envelope).toMatchObject({
+        lifecycle_outcome: 'incident', turn_result_state: 'observation_uncertain',
+        incident: 'child_turn_state:observation_uncertain',
+      });
+    });
+
+    it('keeps the uncertainty when nothing was harvested', async () => {
+      const { envelope, exitCode } = await savedTerminal({
+        phase: 'sent_unharvested', sendCount: 1,
+        childResult: proofOnly('observation_uncertain', 'post_send_absolute_deadline_elapsed'),
+      });
+      expect(exitCode).toBe(1);
+      expect(envelope).toMatchObject({ lifecycle_outcome: 'incident', turn_result_state: 'observation_uncertain' });
+    });
+
+    it('never upgrades a real negative even with a harvested reply', async () => {
+      const { envelope, exitCode } = await savedTerminal({
+        phase: 'harvested', sendCount: 1, reply: 'synthetic reply!!',
+        childResult: proofOnly('no_reply', 'foreign_user_after_owned_send'),
+      });
+      expect(exitCode).toBe(1);
+      expect(envelope).toMatchObject({ lifecycle_outcome: 'incident', turn_result_state: 'no_reply' });
+    });
+
+    it('decides from the verified harvest flag and a counted Send only', () => {
+      const verified = { harvestedPrimaryVerified: true };
+      const base = { state: 'observation_uncertain', cause: 'transcript_continuity_unproven', resolved_send_count: 1 } as const;
+      expect(completedDespiteProofVeto(base, verified)).toBe(true);
+      expect(completedDespiteProofVeto(base, { harvestedPrimaryVerified: false })).toBe(false);
+      expect(completedDespiteProofVeto(base, null)).toBe(false);
+      expect(completedDespiteProofVeto({ ...base, resolved_send_count: 0 }, verified)).toBe(false);
+      expect(completedDespiteProofVeto({ ...base, state: 'driver_error' }, verified)).toBe(false);
+      expect(completedDespiteProofVeto({ ...base, cause: 'dead_turn_page_evidence' }, verified)).toBe(false);
+    });
   });
 
   it('uses JS string units for a verified harvested emoji success', async () => {

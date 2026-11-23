@@ -4611,10 +4611,10 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(state.reloads).toBeGreaterThan(0);
   });
 
-  it('does not transfer a stable reply proof across assistant carrier-key changes', async () => {
+  it('#2873: a re-keyed assistant carrier under the visible owned marker still delivers its finished reply', async () => {
     const prompt = 'PROMPT-ASSISTANT-KEY-DRIFT';
     const reply = 'SAME-KEYED-REPLY-TEXT';
-    const output = join(stateDir, 'assistant-key-drift-must-not-publish.txt');
+    const output = join(stateDir, 'assistant-key-drift-publishes.txt');
     const changingKeys = [
       'unused-key-00000000',
       'unused-key-00000000',
@@ -4642,9 +4642,8 @@ describe('state-light fresh conversation collision recovery', () => {
 
     const outcome = await runNewChatTurn(page, output, '90000');
 
-    expect(outcome.result.state).not.toBe('ok');
-    expect(outcome.result.send_count).toBe(1);
-    expect(existsSync(output)).toBe(false);
+    expect(outcome.result, JSON.stringify(outcome.result)).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(readFileSync(output, 'utf8')).toBe(reply);
   });
 
   it('returns conversation-scoped stream recovery timeout without reload when the owner is unrendered', async () => {

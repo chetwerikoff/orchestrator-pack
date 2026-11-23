@@ -1291,11 +1291,13 @@ describe('Issue #2536: unique current reply and strict keyed cardinality', () =>
       .toEqual({ state: 'ready', reply: 'SHORT' });
   });
 
-  it('does not select the last of two concurrently finished visible assistants', () => {
+  it('#2873: returns the last finished assistant after the owned marker, never a streaming one', () => {
     const rows = [...history, { role: 'user' as const, text: MARKED_PROMPT, key: ownKey }, assistantX, assistantY];
-    expect(classifyPageObservation(rows, history.length, MARKER, false).state).not.toBe('ready');
+    expect(classifyPageObservation(rows, history.length, MARKER, false))
+      .toEqual({ state: 'ready', reply: assistantY.text });
     expect(classifyPageObservation(rows, history.length, MARKER, true).state).not.toBe('ready');
-    expect(classifyPageObservation([...rows, { role: 'user', text: 'foreign turn', key: 'data-message-id:foreign-2536' }], history.length, MARKER, false).state).not.toBe('ready');
+    expect(classifyPageObservation([...rows, { role: 'user', text: 'foreign turn', key: 'data-message-id:foreign-2536' }], history.length, MARKER, false))
+      .toEqual({ state: 'ready', reply: assistantY.text });
   });
 
   it('refuses complete-markerless keyed X/Y even when the last carrier would revalidate', async () => {
@@ -1419,9 +1421,10 @@ describe('Issue #2536 ordinary end-to-end: one owned Send in a long reused conve
       expect(result.send_count, JSON.stringify(result)).toBe(1);
       expect(postSendReads).toBeGreaterThanOrEqual(3);
       if (competing) {
-        expect(result.state).not.toBe('ok');
-        expect(existsSync(output)).toBe(false);
-        expect(page.close).not.toHaveBeenCalled();
+        // #2873: a second finished assistant entry after the owned marker is
+        // not a veto; the last finished entry is the turn's reply.
+        expect(result.state, JSON.stringify(result)).toBe('ok');
+        expect(readFileSync(output, 'utf8')).toBe('OTHER');
       } else {
         expect(result.state, JSON.stringify(result)).toBe('ok');
         expect(readFileSync(output, 'utf8')).toBe('SHORT');
@@ -1435,6 +1438,125 @@ describe('Issue #2536 ordinary end-to-end: one owned Send in a long reused conve
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+describe('Issue #2873: a completed marked reply survives later proof gaps and the absolute deadline', () => {
+  type Scenario = 'completed_then_unreadable' | 'streaming_until_deadline' | 'marker_missing' | 'empty_reply';
+  async function runScenario(scenario: Scenario) {
+    const root = mkdtempSync(join(tmpdir(), 'opk-2873-'));
+    const invocation = randomUUID();
+    const target = 'https://chatgpt.com/c/11111111-1111-1111-1111-111111111111';
+    const output = join(root, 'reply.txt');
+    let now = 20_000;
+    let composerText = '';
+    let deliveredText = '';
+    let sends = 0;
+    let postSendReads = 0;
+    const history = [
+      { role: 'user' as const, text: 'older user', key: 'data-message-id:older-user-2873' },
+      { role: 'assistant' as const, text: 'older assistant', key: 'data-message-id:older-assistant-2873' },
+    ];
+    type Row = { role: 'user' | 'assistant'; text: string; key: string };
+    let currentRows: Row[] = history;
+    const composer = scalarLocator({
+      count: async () => 1,
+      fill: async (text: string) => { composerText = text; },
+      innerText: async () => composerText,
+    });
+    const send = vi.fn(async () => { sends += 1; deliveredText = composerText; composerText = ''; });
+    const sendButton = scalarLocator({ count: async () => 1, click: send });
+    const messageNodes = {
+      count: async () => currentRows.length,
+      nth: (index: number) => collectionLocator(currentRows).nth(index),
+      evaluateAll: async () => {
+        if (sends) postSendReads++;
+        const streaming = scenario === 'streaming_until_deadline' && sends > 0;
+        // Reads 1-3 show the finished reply (two stable reads); from the final
+        // pre-publication read on, every read is an incomplete (unreadable)
+        // transcript: the old route ended transcript_continuity_unproven.
+        const unreadable = scenario === 'completed_then_unreadable' && postSendReads > 3;
+        const userText = scenario === 'marker_missing' ? 'a prompt without the owned marker' : deliveredText;
+        const reply = scenario === 'empty_reply' ? '' : streaming ? `partial ${postSendReads}` : 'DONE-2873';
+        currentRows = sends
+          ? [
+            ...history,
+            { role: 'user', text: userText, key: 'data-message-id:current-user-2873' },
+            { role: 'assistant', text: reply, key: `data-message-id:current-assistant-${postSendReads}-2873` },
+          ]
+          : history;
+        return {
+          rows: currentRows.map((row, domIndex) => ({
+            ...row, domIndex, complete: !unreadable, completionReady: !streaming, continuationVisible: false,
+          })),
+          pageTurnEvidence: {
+            generationInProgress: streaming,
+            observedAssistantNodes: currentRows.filter((row) => row.role === 'assistant').length,
+            continueGeneratingVisible: false,
+          },
+        };
+      },
+    };
+    const page = {
+      __fakeBrowserGptPage: true,
+      url: () => target,
+      isClosed: () => false,
+      goto: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      waitForTimeout: async (ms: number) => { now += ms; },
+      getByRole: () => scalarLocator(),
+      getByText: () => scalarLocator(),
+      locator: (selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (selector === MESSAGE_NODE_SELECTOR) return messageNodes;
+        return scalarLocator();
+      },
+    };
+    const browserFixture = enqueueBrowserForTurn(mocks, page);
+    Object.assign(browserFixture.context, { pages: () => [page] });
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    vi.stubEnv('CHATGPT_BROWSER_TURN_STATE_DIR', root);
+    try {
+      const { result } = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+        '--profile', join(root, 'profile'), '--cdp', 'http://127.0.0.1:9222',
+        '--input', join(root, 'synthetic-prompt.txt'),
+        '--output', output, '--chat-url', target,
+        '--invocation-id', invocation, '--timeout-ms', '60000',
+      ]);
+      return {
+        result, sends, postSendReads,
+        published: existsSync(output) ? readFileSync(output, 'utf8') : undefined,
+      };
+    } finally {
+      clock.mockRestore();
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+      mocks.browserQueue.length = 0;
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it('publishes the completed reply at the deadline instead of a continuity uncertainty', async () => {
+    const run = await runScenario('completed_then_unreadable');
+    expect(run.result, JSON.stringify(run.result)).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(run.result.cause).not.toMatch(/unproven|deadline_elapsed/u);
+    expect(run.published).toBe('DONE-2873');
+    expect(run.result.output).toMatchObject({ byte_length: Buffer.byteLength('DONE-2873') });
+    expect(run.sends).toBe(1);
+    // The finished reply was never re-read cleanly: it settled only at the finite deadline.
+    expect(run.postSendReads).toBeGreaterThan(10);
+  });
+
+  it.each(['streaming_until_deadline', 'marker_missing', 'empty_reply'] as const)(
+    'keeps an honest bounded non-success with no reply bytes: %s',
+    async (scenario) => {
+      const run = await runScenario(scenario);
+      expect(run.result.state, JSON.stringify(run.result)).not.toBe('ok');
+      expect(run.published).toBeUndefined();
+      expect(run.result.output).toBeUndefined();
+      expect(run.sends).toBe(1);
+    },
+  );
 });
 
 
