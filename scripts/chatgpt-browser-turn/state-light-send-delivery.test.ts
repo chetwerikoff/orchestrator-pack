@@ -1441,17 +1441,25 @@ describe('Issue #2536 ordinary end-to-end: one owned Send in a long reused conve
 });
 
 describe('Issue #2873: a completed marked reply survives later proof gaps and the absolute deadline', () => {
-  type Scenario = 'completed_then_unreadable' | 'streaming_until_deadline' | 'marker_missing' | 'empty_reply';
+  type Scenario = 'completed_then_unreadable' | 'streaming_until_deadline' | 'marker_missing' | 'empty_reply'
+    | 'redirect_after_latch' | 'final_read_streaming' | 'final_read_changed' | 'final_read_throws';
+  // Reads 1-3 latch the finished reply after two stable reads; read 4 is the
+  // pre-publication final reread.
+  const FINAL_READ = 4;
   async function runScenario(scenario: Scenario) {
     const root = mkdtempSync(join(tmpdir(), 'opk-2873-'));
     const invocation = randomUUID();
     const target = 'https://chatgpt.com/c/11111111-1111-1111-1111-111111111111';
+    const foreign = 'https://chatgpt.com/c/22222222-2222-2222-2222-222222222222';
     const output = join(root, 'reply.txt');
     let now = 20_000;
+    // --timeout-ms 60000 from the fixed clock start: the absolute post-send deadline.
+    const turnDeadline = now + 60_000;
     let composerText = '';
     let deliveredText = '';
     let sends = 0;
     let postSendReads = 0;
+    let finalReadThrew = false;
     const history = [
       { role: 'user' as const, text: 'older user', key: 'data-message-id:older-user-2873' },
       { role: 'assistant' as const, text: 'older assistant', key: 'data-message-id:older-assistant-2873' },
@@ -1470,13 +1478,19 @@ describe('Issue #2873: a completed marked reply survives later proof gaps and th
       nth: (index: number) => collectionLocator(currentRows).nth(index),
       evaluateAll: async () => {
         if (sends) postSendReads++;
-        const streaming = scenario === 'streaming_until_deadline' && sends > 0;
+        const streaming = (scenario === 'streaming_until_deadline' && sends > 0)
+          || (scenario === 'final_read_streaming' && postSendReads === FINAL_READ);
         // Reads 1-3 show the finished reply (two stable reads); from the final
         // pre-publication read on, every read is an incomplete (unreadable)
         // transcript: the old route ended transcript_continuity_unproven.
-        const unreadable = scenario === 'completed_then_unreadable' && postSendReads > 3;
+        const unreadable = scenario === 'completed_then_unreadable' || scenario === 'redirect_after_latch'
+          || finalReadThrew
+          ? postSendReads >= FINAL_READ
+          : scenario !== 'streaming_until_deadline' && scenario !== 'marker_missing'
+            && scenario !== 'empty_reply' && postSendReads > FINAL_READ;
         const userText = scenario === 'marker_missing' ? 'a prompt without the owned marker' : deliveredText;
-        const reply = scenario === 'empty_reply' ? '' : streaming ? `partial ${postSendReads}` : 'DONE-2873';
+        const reply = scenario === 'empty_reply' ? '' : streaming ? `partial ${postSendReads}`
+          : scenario === 'final_read_changed' && postSendReads >= FINAL_READ ? 'OTHER-2873' : 'DONE-2873';
         currentRows = sends
           ? [
             ...history,
@@ -1498,7 +1512,7 @@ describe('Issue #2873: a completed marked reply survives later proof gaps and th
     };
     const page = {
       __fakeBrowserGptPage: true,
-      url: () => target,
+      url: () => (scenario === 'redirect_after_latch' && now >= turnDeadline ? foreign : target),
       isClosed: () => false,
       goto: vi.fn(async () => undefined),
       close: vi.fn(async () => undefined),
@@ -1508,7 +1522,14 @@ describe('Issue #2873: a completed marked reply survives later proof gaps and th
       locator: (selector: string) => {
         if (selector === COMPOSER_SELECTOR) return composer;
         if (selector === SEND_BUTTON_SELECTOR) return sendButton;
-        if (selector === MESSAGE_NODE_SELECTOR) return messageNodes;
+        if (selector === MESSAGE_NODE_SELECTOR) {
+          // The pre-publication final reread fails once on a live Page.
+          if (scenario === 'final_read_throws' && postSendReads === FINAL_READ - 1 && !finalReadThrew) {
+            finalReadThrew = true;
+            throw new Error('synthetic transient DOM read failure');
+          }
+          return messageNodes;
+        }
         return scalarLocator();
       },
     };
@@ -1524,7 +1545,7 @@ describe('Issue #2873: a completed marked reply survives later proof gaps and th
         '--invocation-id', invocation, '--timeout-ms', '60000',
       ]);
       return {
-        result, sends, postSendReads,
+        result, sends, postSendReads, finalReadThrew,
         published: existsSync(output) ? readFileSync(output, 'utf8') : undefined,
       };
     } finally {
@@ -1546,6 +1567,28 @@ describe('Issue #2873: a completed marked reply survives later proof gaps and th
     // The finished reply was never re-read cleanly: it settled only at the finite deadline.
     expect(run.postSendReads).toBeGreaterThan(10);
   });
+
+  // source-02 final_reread_exception_discards_completed_reply
+  it('keeps the latched reply when the final reread throws on a live Page', async () => {
+    const run = await runScenario('final_read_throws');
+    expect(run.result, JSON.stringify(run.result)).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(run.published).toBe('DONE-2873');
+    expect(run.sends).toBe(1);
+    expect(run.finalReadThrew).toBe(true);
+  });
+
+  // source-02 completion_deadline_bypasses_owner_identity (redirect_after_latch)
+  // and final_read_change_leaves_stale_reply_latched (final_read_streaming, final_read_changed)
+  it.each(['redirect_after_latch', 'final_read_streaming', 'final_read_changed'] as const)(
+    'never publishes a latched reply the Page no longer owns or a complete reread disproved: %s',
+    async (scenario) => {
+      const run = await runScenario(scenario);
+      expect(run.result.state, JSON.stringify(run.result)).not.toBe('ok');
+      expect(run.published).toBeUndefined();
+      expect(run.result.output).toBeUndefined();
+      expect(run.sends).toBe(1);
+    },
+  );
 
   it.each(['streaming_until_deadline', 'marker_missing', 'empty_reply'] as const)(
     'keeps an honest bounded non-success with no reply bytes: %s',

@@ -7402,10 +7402,33 @@ async function runTurnCore(
         },
       };
     };
+    // The latched reply is published only while the existing ownership checks
+    // still hold for this Page: not lost or forfeited, the exact target
+    // conversation for a continued chat, and the live fresh-claim fence (or the
+    // held created Page in this project) for a new chat.
+    const observedCompletionStillOwned = (): boolean => {
+      if (browserOrPageDefinitelyLost(page, browser) || ownershipForfeited) return false;
+      if (targetChatUrl) return readOwnedConversationIdentity(page, targetChatUrl).matched;
+      if (!config.newChat) return false;
+      if (ownedConversationUrl) {
+        return freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs)
+          && readOwnedConversationIdentity(page, ownedConversationUrl).matched;
+      }
+      if (!createdFreshPage || page !== originalHeldPage || !config.projectUrl) return false;
+      try {
+        const url = String(page.url());
+        return matchingFreshProjectLocalUrl(url, config.projectUrl)
+          || isBlankProjectSurfaceUrl(url, config.projectUrl)
+          || Boolean(readProjectConversationUrl(page, config.projectUrl));
+      } catch {
+        return false;
+      }
+    };
     const preferObservedCompletion = async (
       outcome: TurnRunOutcome | null,
     ): Promise<TurnRunOutcome | null> => {
       if (!outcome || !observedCompletedReply || sendCount < 1) return outcome;
+      if (!observedCompletionStillOwned()) return outcome;
       if (!isPostSendProofVeto(outcome.result.state, outcome.result.cause)) return outcome;
       return publishObservedCompletion(observedCompletedReply);
     };
@@ -7415,7 +7438,9 @@ async function runTurnCore(
       const authorEffect = await prAuthorEffect();
       if (authorEffect) return authorEffect;
       if (Date.now() >= hardExhaustionDeadline) {
-        if (observedCompletedReply && sendCount >= 1) return publishObservedCompletion(observedCompletedReply);
+        if (observedCompletedReply && sendCount >= 1 && observedCompletionStillOwned()) {
+          return publishObservedCompletion(observedCompletedReply);
+        }
         const cause = uncertainCause || 'post_send_absolute_deadline_elapsed';
         incident('post_send_observation_error', cause, 'terminal_cleanup_no_resend');
         return {
@@ -8571,7 +8596,7 @@ async function runTurnCore(
             // authenticate the selected conversation. Keep observing within
             // the incumbent deadline; do not publish or close an unbound page.
             if (Date.now() >= hardExhaustionDeadline) {
-              if (observedCompletedReply) return publishObservedCompletion(observedCompletedReply);
+              if (observedCompletedReply && observedCompletionStillOwned()) return publishObservedCompletion(observedCompletedReply);
               incident('post_send_observation_error', 'fresh_conversation_owner_unproven', 'retain_page_no_resend');
               return {
                 page,
@@ -8648,6 +8673,13 @@ async function runTurnCore(
               if (terminal) return terminal;
               continue;
             }
+            // A failed reread on a live Page is not evidence against a reply
+            // already latched; keep polling to the deadline instead of failing.
+            // A real tab failure (target crash) keeps its existing route.
+            if (observedCompletedReply && !isPostSendTargetCrash(error)) {
+              await postSendSleep(INITIAL_POLL_MS);
+              continue;
+            }
             throw error;
           }
           const finalKeyedCandidate = ownedCarrierKey
@@ -8710,6 +8742,15 @@ async function runTurnCore(
             || finalObservedText !== currentObservedText
             || (finalAssistantIdentity !== currentAssistantIdentity
               && !(markerVisible && hasOwnedUserMessage(finalObservation.messages, marker)))) {
+            // A complete reread under the owned marker that shows generation or
+            // a different reply disproves the latched reply; an incomplete one
+            // does not.
+            if (observedCompletedReply && !finalObservation.transcriptIncomplete
+              && hasOwnedUserMessage(finalObservation.messages, marker)
+              && (!finalObservation.ownedWindowCompletionReady
+                || (finalDecision.state === 'ready' && finalDecision.reply !== observedCompletedReply))) {
+              observedCompletedReply = '';
+            }
             stableReads = 0;
             lastReadyReply = '';
             lastReadyObservedText = '';
