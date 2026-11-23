@@ -2031,6 +2031,72 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
     },
   );
 
+  it.each([
+    ['codex', false], ['codex', true], ['gpt', false], ['gpt', true],
+  ] as const)(
+    'Issue #2875: PR 715 shape, missing vs redundant denylist fence keeps %s final-cap parity (credentialed=%s)',
+    async (reviewer, credentialed) => {
+      // First review accepted this body without a fenced denylist.
+      const B0 = '<!-- source-revision: r02 -->\n```complexity-tier\ntier: T2\n```\n'
+        + '## Files out of scope\n\nAll other paths.\n\n'
+        + '```allowed-roots\nscripts/pack-review-runner.ts\n```\n'
+        + '## Acceptance criteria\n- unchanged\n';
+      const redundant = B0.replace('All other paths.\n\n',
+        'All other paths.\n\n```denylist\nvendor/**\npackages/core/**\n```\n\n');
+      const fence = (entries: string) => 'All other paths.\n\n```denylist\n' + entries + '```\n\n';
+      const effective = B0.replace('All other paths.\n\n', fence('vendor/**\nscripts/**\n'));
+      const outcomeFor = async (body: string, reviewedBody = B0) => {
+        const f = fixture(reviewer, reviewedBody, credentialed);
+        const { results } = await reconcileStalePackReviewRuns(f.request(body));
+        // A credentialed GPT fixture also reports its unrelated journaled resume first.
+        const result = results.find((entry) => 'finalCapSettlement' in entry
+          || 'amendmentAdmission' in entry)!;
+        expect(result, JSON.stringify(results)).toBeDefined();
+        expect(f.statusWrites, JSON.stringify(result)).not.toContain('success');
+        // A genuine criteria amendment keeps its existing ordinary admission.
+        if (result.amendmentAdmission === true) return result;
+        expect(listPackReviewRuns({ projectId: f.projectId, storeRoot: f.storeRoot })).toHaveLength(1);
+        expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle)
+          .toMatchObject({ consumedRoundOrdinals: [1] });
+        return result;
+      };
+      const mismatch = ['amendment_unverified_body_mismatch', 'final_cap_issue_body_amended'];
+      const guarded = [...mismatch, 'body_amendment_admitted'];
+      const original = await outcomeFor(B0);
+      expect(mismatch).not.toContain(original.reason);
+      expect(String(original.detail ?? '')).not.toContain('denylist');
+      // A restatement of already-effective repository roots is not an amendment.
+      const restated = await outcomeFor(redundant);
+      expect(restated.reason, JSON.stringify(restated)).toBe(original.reason);
+      expect(restated.amendmentAdmission).not.toBe(true);
+      // Only the one-way missing -> exact vendor/packages-core fence is form-only.
+      // Each control below keeps the existing guarded mismatch.
+      const criteriaB0 = B0.replace('- unchanged\n', '- output:\n\n\n  B\n');
+      const literalB0 = B0.replace('- unchanged\n', '- exact output:\n\n```text\nA\nB\n```\n');
+      const controls: Array<[string, string, string, string[]]> = [
+        ['effective scope change', effective, B0, mismatch],
+        ['reverse fence deletion', B0, redundant, mismatch],
+        ['extra repository-denied root', B0.replace('All other paths.\n\n',
+          fence('vendor/**\npackages/core/**\nsecrets/**\n')), B0, mismatch],
+        // A criteria byte change is a genuine amendment, never form-only.
+        ['criteria blank-line change with redundant fence',
+          criteriaB0.replace('\n\n\n  B', '\n\n  B').replace('All other paths.\n\n',
+            fence('vendor/**\npackages/core/**\n')), criteriaB0, guarded],
+        ['whitespace-only edit without fence',
+          criteriaB0.replace('\n\n\n  B', '\n\n  B'), criteriaB0, guarded],
+        // The exact redundant fence inside a criteria literal block changes criteria.
+        ['redundant fence inside criteria literal block',
+          literalB0.replace('A\nB\n', 'A\n```denylist\nvendor/**\npackages/core/**\n```\nB\n'),
+          literalB0, guarded],
+      ];
+      for (const [label, live, reviewed, expected] of controls) {
+        const changed = await outcomeFor(live, reviewed);
+        expect(expected, label + ':' + JSON.stringify(changed)).toContain(changed.reason);
+        if (expected === mismatch) expect(changed.amendmentAdmission).not.toBe(true);
+      }
+    },
+  );
+
   it('final-cap native snapshot binding rejects missing preflight metadata and wrong actual closing Issue', async () => {
     const f = fixture();
     const paths = boundIssueSnapshotArtifactPaths({
