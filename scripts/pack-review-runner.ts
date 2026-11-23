@@ -200,7 +200,7 @@ import {
   type RequiredCiProtectionRead,
 } from './lib/required-ci.ts';
 export { requiredStatusChecksEndpoint } from './lib/required-ci.ts';
-import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
+import { parseIssueBody, parseIssueScopeFences } from '@orchestrator-pack/shared/lib/issue_parser.js';
 import type { ResolvedScopeContext } from '../plugins/codex-pr-reviewer/lib/scope_context.ts';
 export { resolveRepositorySlug };
 
@@ -1717,28 +1717,20 @@ async function resolveAuthoritativeReviewContext(input: StartInput, target: {
       && (PACK_REVIEW_ACTIVE_STATUSES.has(run.status) || packReviewDeliveryNeedsResume(run)));
     if (!exactOldRun) throw new Error(`caller tier ${input.tier} conflicts with authoritative Issue tier ${tier}`);
   }
-  let frozenScope: ResolvedScopeContext;
-  try {
-    const issueConstraints = parseIssueBody(body);
-    frozenScope = {
-      issueNumber,
-      hasScope: true,
-      issueConstraints,
-      declaredPaths: [],
-      declaredGlobs: [],
-      unverifiedIssueConstraints: false,
-    };
-  } catch {
-    frozenScope = {
-      issueNumber,
-      hasScope: false,
-      issueConstraints: null,
-      declaredPaths: [],
-      declaredGlobs: [],
-      unverifiedIssueConstraints: true,
-    };
-  }
+  const frozenScope = reviewIssueScopeContext(issueNumber, body);
   return { tier, issueNumber, snapshotDigest, issueBody: body, frozenScope };
+}
+
+/** #2875: first and final-cap reviews read one Issue body with the same scope
+ * requirements; a body without a denylist fence is unverified, never refused. */
+function reviewIssueScopeContext(issueNumber: number, body: string): ResolvedScopeContext {
+  try {
+    return { issueNumber, hasScope: true, issueConstraints: parseIssueBody(body),
+      declaredPaths: [], declaredGlobs: [], unverifiedIssueConstraints: false };
+  } catch {
+    return { issueNumber, hasScope: false, issueConstraints: null,
+      declaredPaths: [], declaredGlobs: [], unverifiedIssueConstraints: true };
+  }
 }
 
 function parseReviewPayload(stdout: string): ReviewPayload {
@@ -5014,6 +5006,43 @@ export async function resolveFinalCapIssueBodyRevision(input: {
   return { body: before.body as string, revision: revisions[0]![1]! };
 }
 
+/** #2875: final-cap reads Issue scope fences like the first review: an absent
+ * denylist fence is empty (repository policy still applies), never a refusal. */
+function issueScopeFences(body: string): { denylist: string[]; allowed_roots?: string[] } {
+  return parseIssueScopeFences(body).constraints;
+}
+
+const ISSUE_DENYLIST_FENCE = /^```denylist[ \t]*\r?\n[\s\S]*?^```[ \t]*(?:\r?\n|$)/gm;
+/** Repository-denied roots that an Issue may restate without changing scope. */
+const FORM_ONLY_DENYLIST_ROOTS = ['vendor/**', 'packages/core/**'] as const;
+
+/** #2875: the only form-only Issue change is one-way: a reviewed body with no
+ * denylist fence gains exactly one fence holding exactly vendor/** and
+ * packages/core/**. Every other byte stays equal, except one blank-line
+ * separator next to the inserted fence. Deletion, extra roots, or any other
+ * edit is not form-only. */
+function isFormOnlyDenylistInsertion(reviewedBody: string, liveBody: string): boolean {
+  if ([...reviewedBody.matchAll(ISSUE_DENYLIST_FENCE)].length !== 0) return false;
+  const fences = [...liveBody.matchAll(ISSUE_DENYLIST_FENCE)];
+  if (fences.length !== 1) return false;
+  const entries = issueScopeFences(liveBody).denylist;
+  if (entries.length !== FORM_ONLY_DENYLIST_ROOTS.length
+      || !FORM_ONLY_DENYLIST_ROOTS.every((root) => entries.includes(root))) return false;
+  const start = fences[0]!.index!;
+  const head = liveBody.slice(0, start);
+  const tail = liveBody.slice(start + fences[0]![0].length);
+  // The fence must stand alone: outside any open fenced literal block and
+  // outside the reviewed behavior criteria, which must stay byte-equal.
+  if ((head.match(/^(?:```|~~~)/gm) ?? []).length % 2 !== 0) return false;
+  const criteria = reviewBehaviorCriteria(reviewedBody);
+  if (!criteria || reviewBehaviorCriteria(liveBody) !== criteria) return false;
+  const candidates = [head + tail];
+  if (tail.startsWith('\r\n')) candidates.push(head + tail.slice(2));
+  else if (tail.startsWith('\n')) candidates.push(head + tail.slice(1));
+  if (/\r?\n\r?\n$/.test(head)) candidates.push(head.replace(/\r?\n$/, '') + tail);
+  return candidates.includes(reviewedBody);
+}
+
 /** #2428 same-head dispositions authorize the stated scope correction, not
  * other edits under a reusable source-revision label. */
 function isOnlyDispositionScopeCorrection(
@@ -5032,8 +5061,8 @@ function isOnlyDispositionScopeCorrection(
   const before = withoutScopeFences(frozenBody);
   const after = withoutScopeFences(correctedBody);
   if (before === null || before !== after || dispositionRoots.length === 0) return false;
-  const oldScope = parseIssueBody(frozenBody);
-  const newScope = parseIssueBody(correctedBody);
+  const oldScope = issueScopeFences(frozenBody);
+  const newScope = issueScopeFences(correctedBody);
   const oldDenylist = oldScope.denylist ?? [];
   const newDenylist = newScope.denylist ?? [];
   if (oldDenylist.length !== newDenylist.length
@@ -5264,7 +5293,7 @@ stage: { binding: PackReviewAmendmentBinding }, candidateHeadSha?: string) {
   const blockers = payload.findings.filter((finding) =>
     !['warning', 'info', 'non-blocking'].includes(trim(finding.severity).toLowerCase()));
   if (blockers.length === 0) throw new Error('terminal original blocking findings missing');
-  const scope = parseIssueBody(revision.body);
+  const scope = issueScopeFences(revision.body);
   // A scope-only correction on a fix head uses this same disposition, now
   // bound to the complete live PR diff as well as the original findings.
   const descendantCorrection = currentHead !== terminal.targetSha
@@ -6312,6 +6341,8 @@ export async function maybeAdmitPackReviewBodyAmendment(
   }
   const oldBody = readFileSync(frozen.snapshotPath, 'utf8');
   if (nextDigest === frozen.snapshotHash) return null;
+  // #2875: the existing final-cap owner settles a form-only denylist restatement.
+  if (isFormOnlyDenylistInsertion(oldBody, currentIssue.body)) return null;
   // The pre-existing #2537 T2 -> T3 promotion changes the authoritative tier
   // without amending any reviewed behavior. Leave exactly that byte-level
   // tier-only transition to the existing tier/CI/head admission owner.
@@ -6867,11 +6898,7 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
         || computeBoundIssueSnapshotHash(issueBody) !== opts.issueDigest) {
       throw new Error('delta review current Issue not exact bound body');
     }
-    const frozenScope: ResolvedScopeContext = {
-      issueNumber: opts.issueNumber, hasScope: true,
-      issueConstraints: parseIssueBody(issueBody), declaredPaths: [], declaredGlobs: [],
-      unverifiedIssueConstraints: false,
-    };
+    const frozenScope = reviewIssueScopeContext(opts.issueNumber, issueBody);
     if (await readCheckedReviewPrHead(input, opts.repoSlug, opts.prNumber, opts.targetSha) !== opts.targetSha) {
       throw new Error('delta review head changed before invocation');
     }
@@ -7334,6 +7361,10 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
           sameHeadPublicationDigest = proof.publicationDigest;
           verifiedScopeCorrection = true;
         } catch { /* A nonqualifying correction retains the ordinary body-mismatch refusal below. */ }
+      }
+      if (digest !== expectedDigest && expectedDigest === frozen.snapshotHash && frozen.snapshotPath
+          && isFormOnlyDenylistInsertion(readFileSync(frozen.snapshotPath, 'utf8'), liveIssue.body)) {
+        expectedDigest = digest; // #2875: no effective scope change; not an amendment.
       }
       if (digest !== expectedDigest) {
         // This path also owns legacy/incomplete-terminal mismatch refusals,

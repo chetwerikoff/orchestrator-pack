@@ -559,7 +559,10 @@ function withoutOpenCodeComposer(screen: string): string {
   let indent: number | undefined;
   const column: string[] = [];
   while (start > 0 && /^\s*┃/u.test(lines[start - 1]!)) {
-    const right = /^(\s*┃\s{20,})(\S+)\s*$/u.exec(lines[start - 1]!);
+    // A narrow pane wraps the column onto the model status row: `┃  <model · …>   <fragment>`.
+    const modelRow = /^(\s*┃\s+(\S.*?)\s{2,})(\S+)\s*$/u.exec(lines[start - 1]!);
+    const right = /^(\s*┃\s{20,})(\S+)\s*$/u.exec(lines[start - 1]!)
+      ?? (modelRow && TUI_STATUS_LINE_RE.test(modelRow[2]!) ? [modelRow[0], modelRow[1], modelRow[3]] : null);
     if (right && (indent === undefined || right[1]!.length === indent)) {
       indent = right[1]!.length;
       column.unshift(right[2]!);
@@ -571,6 +574,10 @@ function withoutOpenCodeComposer(screen: string): string {
   if (!suffix || !footer.split(/\s+/u).some((token) => token.startsWith('/') && token.endsWith(suffix))) return screen;
   return lines.slice(0, start).join('\n');
 }
+
+// A finished turn's completion banner reports its duration, not a new outcome: Claude Code
+// `✻ Cooked for 51s · done 11:01 AM`, OpenCode `▣  Build · glm-5.3 · 2m 3s`.
+const COMPLETION_BANNER_RE = /^(?:[✻✶✳✢✽*]\s+)?[A-Z][a-z]+ for \d+(?:\.\d+)?[hms](?:\s+\d+(?:\.\d+)?[hms])*(?:\s+·\s+done(?:\s+\d{1,2}:\d{2}(?:\s*[AP]M)?)?)?$|^[A-Z][\w-]* · [^·]+ · \d+(?:\.\d+)?[hms](?:\s+\d+(?:\.\d+)?[hms])*$/u;
 
 // Only the final own response is an outcome. A park quoted in a tool result, instruction,
 // table or older response does not authorize waiting. Wrapped outcome lines are joined.
@@ -596,10 +603,13 @@ export function ownPaneOutcome(screen: string): { wait?: string; acknowledgment:
     .filter((line) => !/^(?:>|→ Add a follow-up|\d+ tasks?)\s*$/u.test(line))).filter((part) => part.length > 0);
   const lines = paragraphs.at(-1) ?? [];
   const boundary = lines.reduce((last, line, index) => /^(?:>\s+|User:|Assistant:)/iu.test(line) ? index : last, -1);
-  const own = boundary < 0 ? lines : /^Assistant:/iu.test(lines[boundary]!)
+  const spoken = boundary < 0 ? lines : /^Assistant:/iu.test(lines[boundary]!)
     ? [lines[boundary]!.replace(/^Assistant:\s*/iu, ''), ...lines.slice(boundary + 1)].filter(Boolean)
     : lines.slice(boundary + 1);
-  const start = own.reduce((last, line, index) => /^PARKED(?: on\b|:)/iu.test(line) ? index : last, -1);
+  const start = spoken.reduce((last, line, index) => /^PARKED(?: on\b|:)/iu.test(line) ? index : last, -1);
+  // The last PARKED line wins over a trailing completion banner; the banner never joins its reason.
+  const own = start < 0 ? spoken
+    : [...spoken.slice(0, start + 1), ...spoken.slice(start + 1).filter((line) => !COMPLETION_BANNER_RE.test(line))];
   const response = own.slice(Math.max(0, start)).join(' ').trim();
   const context = own.slice(0, Math.max(0, start));
   const newOutcome = /\?\s*$|\b(?:STOPPED|done|finished|handed[- ]off|worker_done|error)\b/iu;
@@ -667,9 +677,11 @@ function liveTaskBinding(terminal: FleetTerminal, projectId: string, executor: O
     || observed.worktreePath !== terminal.worktreePath || observed.branch !== terminal.branch) return undefined;
   return JSON.stringify([projectId, terminal.handle, terminal.incarnationId, terminal.worktreePath, terminal.branch, row.taskId, row.dispatchId]);
 }
-/** The final non-empty content line, not a Task/receipt, is park authority. */
+/** The final non-empty content line, not a Task/receipt, is park authority; a completion banner after it is not content. */
 export function lastFleetParkedLine(screen: string): string | undefined {
-  const final = contentLines(withoutOpenCodeComposer(screen)).at(-1);
+  const content = contentLines(withoutOpenCodeComposer(screen));
+  while (content.length > 1 && !content.at(-1)!.running && COMPLETION_BANNER_RE.test(content.at(-1)!.text)) content.pop();
+  const final = content.at(-1);
   const last = final?.text.trim() ?? '';
   // A running spinner before PARKED is an executing command, not the agent's final own response.
   return !final?.running && (/^PARKED on\s+\S.+$/u.test(last) || /^PARKED on\s+\S$/u.test(last))
@@ -956,7 +968,8 @@ export function runFleetSweep(options: FleetSweepOptions): FleetPaneObservation[
       ...(permissionCleared ? { permissionCleared: true } : {}),
       ...(wait ? { wait } : {}),
       ...(wait && outcome.wait === wait && state === 'PARKED'
-        ? { ownParkObservation: nonChromeLines(withoutOpenCodeComposer(screen)).at(-1) ?? outcome.wait } : {}),
+        ? { ownParkObservation: nonChromeLines(withoutOpenCodeComposer(screen))
+          .filter((line) => !COMPLETION_BANNER_RE.test(line)).at(-1) ?? outcome.wait } : {}),
       ...(binding ? { taskBinding: binding } : {}),
       lines: permission || lineCount === 0 ? [] : nonChromeLines(screen).slice(-lineCount),
     }];
