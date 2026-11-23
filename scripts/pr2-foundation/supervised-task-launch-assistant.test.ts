@@ -6958,7 +6958,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
       const invocation = buildExecutorCommand(profile);
       expect(invocation).toMatchObject({
         executable: 'claude', modelArgument: model, effortArgument: effort,
-        command: "claude --model '" + model + "' --effort '" + effort + "'",
+        command: "claude --permission-mode bypassPermissions --model '" + model + "' --effort '" + effort + "'",
       });
       expect(invocation.command).not.toMatch(/context|OPENCODE_CONFIG_CONTENT|--agent/iu);
       expect(buildProviderInvocation(profile)).toBeNull();
@@ -6968,8 +6968,31 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
     expect(EXECUTOR_FAMILY_DESCRIPTORS.claude.smokeCapabilityProbeCommands).toEqual([['claude', '--help']]);
     expect(resolveExecutorProfile('manager', claudeEnv(model, effort), 'exact_terminal_worktree')).toMatchObject({
       status: 'ok', value: { family: 'claude', route: 'exact_terminal_worktree',
-        model, effort, launchCommand: "claude --model '" + model + "' --effort '" + effort + "'" },
+        model, effort, launchCommand: "claude --permission-mode bypassPermissions --model '" + model + "' --effort '" + effort + "'" },
     });
+  });
+
+  it.each(models)('#2884 puts --permission-mode bypassPermissions in the %s %s launch argv', (model, effort) => {
+    const resolved = resolveSemanticExecutorProfile({
+      surface: 'task', names: profileNamesForTask('manager'), env: claudeEnv(model, effort),
+    });
+    if (!resolved.ok) throw new Error('supported Claude profile refused');
+    const argv = buildExecutorCommand(resolved.profile).command.split(' ');
+    expect(argv.slice(0, 3)).toEqual(['claude', '--permission-mode', 'bypassPermissions']);
+    expect(argv.slice(3)).toEqual(['--model', "'" + model + "'", '--effort', "'" + effort + "'"]);
+  });
+
+  it('#2884 leaves Cursor and OpenCode launch commands without --permission-mode', () => {
+    const cursor = resolveSemanticExecutorProfile({ surface: 'task', names: profileNamesForTask('t2'), env: profileEnv() });
+    const opencode = resolveSemanticExecutorProfile({ surface: 'task', names: profileNamesForTask('t2'), env: opencodeProfileEnv('t2') });
+    if (!cursor.ok || !opencode.ok) throw new Error('cursor/opencode profile should resolve');
+    expect(cursor.profile.family).toBe('cursor');
+    expect(opencode.profile.family).toBe('opencode');
+    for (const profile of [cursor.profile, opencode.profile]) {
+      const invocation = buildExecutorCommand(profile);
+      expect(invocation.command).not.toContain('--permission-mode');
+      expect(invocation.command).not.toContain('bypassPermissions');
+    }
   });
 
   it.each(models)('admits %s %s using only native help and verified child inheritance', async (model, effort) => {
@@ -7059,7 +7082,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
 
   it.each(models)('launches a new Claude Code manager terminal for %s %s after screen proof', async (model, effort, family) => {
     const env = claudeEnv(model, effort);
-    const command = "claude --model '" + model + "' --effort '" + effort + "'";
+    const command = "claude --permission-mode bypassPermissions --model '" + model + "' --effort '" + effort + "'";
     let spawns = 0;
     let reads = 0;
     let supervised = 0;
@@ -7086,7 +7109,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
 
   it.each(models)('reuses the exact Claude manager terminal for %s %s without spawn or profile loss', async (model, effort, family) => {
     const env = claudeEnv(model, effort);
-    const command = "OPK_PROJECT_ID='orchestrator-pack' claude --model '" + model + "' --effort '" + effort + "'";
+    const command = "OPK_PROJECT_ID='orchestrator-pack' claude --permission-mode bypassPermissions --model '" + model + "' --effort '" + effort + "'";
     const target = () => ({
       projectId: 'orchestrator-pack', repository: 'chetwerikoff/orchestrator-pack',
       primaryRoot: '/tmp/primary', defaultBranch: 'main',
@@ -7127,7 +7150,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
 
   it('admits a late correct footer within the existing startup window on the same bound pane', async () => {
     const env = claudeEnv('claude-sonnet-5-5', 'high');
-    const command = "claude --model 'claude-sonnet-5-5' --effort 'high'";
+    const command = "claude --permission-mode bypassPermissions --model 'claude-sonnet-5-5' --effort 'high'";
     const observedIdentities: RuntimeWorker['identity'][] = [];
     let elapsedMs = 0;
     let starts = 0;
@@ -7153,7 +7176,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
 
   it('refuses without a footer at the shared Claude admission deadline', async () => {
     const env = claudeEnv('claude-sonnet-5-5', 'high');
-    const command = "claude --model 'claude-sonnet-5-5' --effort 'high'";
+    const command = "claude --permission-mode bypassPermissions --model 'claude-sonnet-5-5' --effort 'high'";
     let elapsedMs = 0;
     let reads = 0;
     let starts = 0;
@@ -7187,7 +7210,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
     ['foreign generation', { generation: 'other-pty' }],
   ] as const)('never admits %s across the full Claude footer observation window', async (_name, overrides) => {
     const env = claudeEnv('claude-sonnet-5-5', 'high');
-    const command = "claude --model 'claude-sonnet-5-5' --effort 'high'";
+    const command = "claude --permission-mode bypassPermissions --model 'claude-sonnet-5-5' --effort 'high'";
     let elapsedMs = 0;
     let reads = 0;
     let starts = 0;
@@ -7336,7 +7359,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
       observedClaudeAdapter(command, 'Opus', 'medium', { commandObserved: true, agentIdentity: null }))).toBe(true);
     expect(await claudePaneProfileObserved(profile.value, worker,
       observedClaudeAdapter(command, 'Opus', 'medium', {
-        commandOverride: 'claude --model wrong --effort medium', agentIdentity: 'claude',
+        commandOverride: 'claude --permission-mode bypassPermissions --model wrong --effort medium', agentIdentity: 'claude',
       }))).toBe(false);
   });
 
@@ -7346,7 +7369,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
     if (result.status !== 'ok') throw new Error('Claude fixture profile refused');
     const command = result.value.launchCommand;
     for (const options of [
-      { commandOverride: 'claude --model wrong --effort medium' },
+      { commandOverride: 'claude --permission-mode bypassPermissions --model wrong --effort medium' },
       { modelOverride: 'Sonnet' },
       { effortOverride: 'high' },
       { source: 'stream' as const },
@@ -7402,8 +7425,8 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
   });
 
   describe('Issue #2842 direct Claude', () => {
-    const sonnet = "claude --model 'claude-sonnet-5-5' --effort 'high'";
-    const opus = "claude --model 'claude-opus-5-5' --effort 'medium'";
+    const sonnet = "claude --permission-mode bypassPermissions --model 'claude-sonnet-5-5' --effort 'high'";
+    const opus = "claude --permission-mode bypassPermissions --model 'claude-opus-5-5' --effort 'medium'";
 
     it.each([
       ['Sonnet', 'claude-sonnet-5-5', 'high', sonnet],
@@ -7421,7 +7444,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
 
     it('admits the observed Orca plugin-dir command for fresh and reused Claude panes', async () => {
       const pluginDir = join(homedir(), '.config', 'orca', 'claude-agent-view', 'abcdef0123', 'orca-agent-view');
-      const command = `claude --plugin-dir ${pluginDir} --model claude-opus-5-5 --effort medium`;
+      const command = `claude --plugin-dir ${pluginDir} --permission-mode bypassPermissions --model claude-opus-5-5 --effort medium`;
       const env = claudeEnv('claude-opus-5-5', 'medium');
       let starts = 0;
       const fresh = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), env, issueNumber: 2847 },
@@ -7446,6 +7469,35 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
       expect(starts).toBe(2);
     });
 
+    it('#2884 refuses fresh and reused Claude panes launched without --permission-mode bypassPermissions', async () => {
+      const pluginDir = join(homedir(), '.config', 'orca', 'claude-agent-view', 'abcdef0123', 'orca-agent-view');
+      const legacy = `claude --plugin-dir ${pluginDir} --model claude-opus-5-5 --effort medium`;
+      const env = claudeEnv('claude-opus-5-5', 'medium');
+      for (const command of [legacy, "claude --model 'claude-opus-5-5' --effort 'medium'"]) {
+        let starts = 0;
+        const fresh = await runSupervisedTaskLaunchAssistant({ ...launchInput('manager'), env, issueNumber: 2884 },
+          deps({ adapter: observedClaudeAdapter(command, 'Opus', 'medium', { commandObserved: true }),
+            onSupervised: () => { starts += 1; } }));
+        expect(fresh).toMatchObject({ outcome: 'continue', stage: 'terminal_prepare' });
+        expect(starts).toBe(0);
+      }
+
+      const base = readyStart('task-1');
+      if (!base.assignment || !base.receipt) throw Error('missing supervised fixture');
+      const reusedStart: SupervisedWorkerStartResult = {
+        ...base,
+        assignment: { ...base.assignment, issueNumber: 2884, role: 'orchestrator' },
+        receipt: { ...base.receipt, effects: [{ kind: 'worktree', action: 'reused', id: 'repo::exact-worktree' }] },
+      };
+      let reusedStarts = 0;
+      const reused = await runSupervisedTaskLaunchAssistant({
+        ...launchInput('manager'), env, issueNumber: 2884, existingTerminal: worker.identity.id,
+      }, deps({ adapter: observedClaudeAdapter(`OPK_PROJECT_ID='orchestrator-pack' ${legacy}`, 'Opus', 'medium', { commandObserved: true }),
+        supervised: reusedStart, onSupervised: () => { reusedStarts += 1; } }));
+      expect(reused.outcome).toBe('continue');
+      expect(reusedStarts).toBe(0);
+    });
+
     it('refuses plugin-dir paths outside the exact Orca agent-view hex root', async () => {
       const env = claudeEnv('claude-sonnet-5-5', 'high');
       for (const outside of [
@@ -7454,7 +7506,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
         join(homedir(), '.config', 'orca', 'claude-agent-view', 'abcdef0123', 'outside'),
       ]) {
         let livenessCalls = 0;
-        const command = `claude --plugin-dir '${outside}' --model 'claude-sonnet-5-5' --effort 'high'`;
+        const command = `claude --plugin-dir '${outside}' --permission-mode bypassPermissions --model 'claude-sonnet-5-5' --effort 'high'`;
         const original = observedClaudeAdapter(command, 'Sonnet', 'high', { commandObserved: true });
         const adapter: RuntimeAdapter = { ...original, liveness: (input, options) => {
           livenessCalls += 1;
@@ -7469,7 +7521,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
 
     it('refuses extra unknown Claude flags despite a valid Orca plugin-dir', async () => {
       const pluginDir = join(homedir(), '.config', 'orca', 'claude-agent-view', 'abcdef0123', 'orca-agent-view');
-      const command = `claude --plugin-dir '${pluginDir}' --model 'claude-sonnet-5-5' --effort 'high' --unrecognized`;
+      const command = `claude --plugin-dir '${pluginDir}' --permission-mode bypassPermissions --model 'claude-sonnet-5-5' --effort 'high' --unrecognized`;
       const env = claudeEnv('claude-sonnet-5-5', 'high');
       let livenessCalls = 0;
       const original = observedClaudeAdapter(command, 'Sonnet', 'high', { commandObserved: true });
@@ -7484,11 +7536,11 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
     });
 
     it.each([
-      "caveman --plugin-dir '/tmp/plugin' claude --model 'claude-sonnet-5-5' --effort 'high'",
-      "claude --plugin-dir '/tmp/plugin' --model 'claude-sonnet-5-5' --effort 'high'",
-      "claude --model 'claude-sonnet-5-5' --effort 'high' --effort 'medium'",
-      "claude --model 'claude-sonnet-5-5' --effort 'high'; echo hi",
-      "echo claude --model 'claude-sonnet-5-5' --effort 'high'",
+      "caveman --plugin-dir '/tmp/plugin' claude --permission-mode bypassPermissions --model 'claude-sonnet-5-5' --effort 'high'",
+      "claude --plugin-dir '/tmp/plugin' --permission-mode bypassPermissions --model 'claude-sonnet-5-5' --effort 'high'",
+      "claude --permission-mode bypassPermissions --model 'claude-sonnet-5-5' --effort 'high' --effort 'medium'",
+      "claude --permission-mode bypassPermissions --model 'claude-sonnet-5-5' --effort 'high'; echo hi",
+      "echo claude --permission-mode bypassPermissions --model 'claude-sonnet-5-5' --effort 'high'",
       '',
     ])('refuses unsupported or commandless native %s before liveness', async (nativeCommand) => {
       let livenessCalls = 0;
@@ -7572,7 +7624,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
   });
 
   describe('Issue #2842 observation deadline', () => {
-    const command = "claude --model 'claude-sonnet-5-5' --effort 'high'";
+    const command = "claude --permission-mode bypassPermissions --model 'claude-sonnet-5-5' --effort 'high'";
     const env = claudeEnv('claude-sonnet-5-5', 'high');
 
     it('budgets initial/repeated/final native lookup, show, screen and liveness from one clock', async () => {
@@ -7751,7 +7803,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
   });
 
   describe('Issue #2842 existing terminal', () => {
-    const sonnet = "claude --model 'claude-sonnet-5-5' --effort 'high'";
+    const sonnet = "claude --permission-mode bypassPermissions --model 'claude-sonnet-5-5' --effort 'high'";
     const env = claudeEnv('claude-sonnet-5-5', 'high');
 
     it('propagates parsed selected project for unprefixed Sonnet; one start, zero new terminals', async () => {
@@ -7938,7 +7990,7 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
         expect(first.spawnWorker({ title, command: sonnet, workspace: worker.workspacePath }).status).toBe('ok');
         const second = new OrcaTaskRuntimeAdapter({ runJson: runJson as never, env: state });
         const reused = second.spawnWorker({ title,
-          command: "claude --model 'claude-opus-5-5' --effort 'medium'", workspace: worker.workspacePath });
+          command: "claude --permission-mode bypassPermissions --model 'claude-opus-5-5' --effort 'medium'", workspace: worker.workspacePath });
         expect(reused).toMatchObject({ status: 'ok', value: { identity: worker.identity, provenance: 'internal' } });
         expect(creates).toBe(1);
         if (reused.status !== 'ok') throw Error('recovery unavailable');
