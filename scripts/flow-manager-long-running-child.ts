@@ -45,6 +45,7 @@ import { observationRecordPath, readStateLightTurnObservation, type StateLightTu
 import { loadChromium, normalizeConversationUrl } from './chatgpt-browser-turn/ui-adapter.ts';
 import { releaseCdpBrowser } from './chatgpt-browser-turn/browser-session.ts';
 import { recoveryMarkerCardinality } from './chatgpt-browser-turn/state-light-turn-recovery.ts';
+import { POST_SEND_PROOF_VETO_CAUSES } from './chatgpt-browser-turn/state-light-turn-base.ts';
 import {
   listCurrentWorkerAssignmentRecords, resolveWorkerAssignmentStorePath, withCurrentWorkerAssignmentFence,
   type WorkerAssignmentRecord,
@@ -1141,19 +1142,8 @@ interface FinalObservationProjection {
   readonly harvestedPrimaryVerified: boolean;
 }
 
-/**
- * #2873: post-send causes that only report a missing proof or an elapsed clock.
- * Kept equal to `POST_SEND_PROOF_VETO_CAUSES` in state-light-turn-base.ts (a test pins it).
- */
-export const POST_SEND_PROOF_VETO_CAUSES: ReadonlySet<string> = new Set([
-  'fresh_conversation_owner_unproven',
-  'transcript_continuity_unproven',
-  'owned_reply_boundary_unproven',
-  'owned_carrier_unproven',
-  'owned_prompt_not_observed',
-  'observation_exhausted_no_resend',
-  'post_send_absolute_deadline_elapsed',
-]);
+/** #2873: the single post-send proof-veto list is owned by the turn base. */
+export { POST_SEND_PROOF_VETO_CAUSES };
 
 /**
  * #2873: a proof-only uncertain/no-reply result whose own observation already

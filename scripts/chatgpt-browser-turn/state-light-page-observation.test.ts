@@ -3277,6 +3277,6 @@ describe('Issue #2873: visible owned marker plus a finished reply is the outcome
     }
     expect(isPostSendProofVeto('driver_error', 'transcript_continuity_unproven')).toBe(false);
     expect(isPostSendProofVeto('send_failed', 'post_send_absolute_deadline_elapsed')).toBe(false);
-    expect([...FLOW_MANAGER_PROOF_VETO_CAUSES].sort()).toEqual([...POST_SEND_PROOF_VETO_CAUSES].sort());
+    expect(POST_SEND_PROOF_VETO_CAUSES).toBe(FLOW_MANAGER_PROOF_VETO_CAUSES);
   });
 });

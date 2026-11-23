@@ -1862,6 +1862,7 @@ export function resolveOwnedReplyWindow(
 /**
  * #2873: post-send causes that only say a proof or the clock ran out. None of
  * them negates a completed reply already observed after the owned marker.
+ * The one list; the flow-manager projection imports it.
  */
 export const POST_SEND_PROOF_VETO_CAUSES: ReadonlySet<string> = new Set([
   'fresh_conversation_owner_unproven',
