@@ -765,12 +765,13 @@ For every required logical round:
   state are the progression authority. The manager observes/consumes them and
   never republishes or paraphrases them into a replacement review authority.
 
-Only when the canonical exact-PR/head original source union contains blocking
-findings, open one **fresh GPT fixer conversation** for that logical round.
+Only when the round's persisted payload contains blocking findings, open one
+**fresh GPT fixer conversation** for that logical round.
 Give the fixer the exact Issue URL, PR URL, 40-hex reviewed head and **every
-original blocking source occurrence individually**, using the published GitHub
+blocking finding of the persisted payload individually**, using the published GitHub
 COMMENT and source-slot provenance without grouping, filtering or deduplication.
-Advisory-only findings do not launch a fixer. The six-line worker notification
+Occurrences listed under "Not fixing" in the verdict comment are not forwarded to
+the fixer. Advisory-only findings do not launch a fixer. The six-line worker notification
 reports the count and status; it is not a per-finding fixer packet.
 The fixer differs from implementation and each reviewer chat. The manager
 rereads current CI and original source comments before acting; a stale copied

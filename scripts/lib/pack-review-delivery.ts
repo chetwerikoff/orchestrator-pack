@@ -10,6 +10,7 @@ import {
   hasValidPackReviewGithubReconciliation,
   hasValidPackReviewJournalOutcome,
   hasPersistedPackReviewVerdict,
+  appendPackReviewKnownNotFixing,
   setPackReviewRunTerminal,
   updatePackReviewRun,
   updatePackReviewRunIf,
@@ -736,6 +737,16 @@ function persistRequiredStatusOutcome(
   }
 }
 
+/** Arbiter `not-fixing` lines; a failure is logged and never changes the review (Issue #2892). */
+function appendKnownNotFixingBestEffort(runId: string, options: PackReviewStoreOptions): void {
+  try {
+    const result = appendPackReviewKnownNotFixing(runId, storeOptions(options));
+    if (result.error) process.stderr.write(`known-not-fixing append failed: ${result.error}\n`);
+  } catch (error) {
+    process.stderr.write(`known-not-fixing append failed: ${describeError(error)}\n`);
+  }
+}
+
 async function journalVerdict(
   options: DeliverPackReviewVerdictOptions,
   classification: PackReviewVerdictClassification,
@@ -820,6 +831,9 @@ export async function deliverPackReviewVerdict(
       journalOutcome: journal.outcome,
     };
   }
+  // Every journaled path (fresh write, durable-after-error, journal resume)
+  // reaches this line; the append is idempotent per occurrence.
+  appendKnownNotFixingBestEffort(options.run.id, options);
 
   const githubKey = githubCommentIdempotencyKey(options.run);
   const statusKey = requiredStatusIdempotencyKey(options.run);

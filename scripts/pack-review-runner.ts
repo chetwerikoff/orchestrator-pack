@@ -99,6 +99,18 @@ import {
 } from './lib/review-start-claim-store.ts';
 import { releaseForTerminalizedRun, type ExplicitDeadReviewerTakeover } from './lib/review-start-claim-cli.ts';
 import {
+  PACK_REVIEW_ARBITER_TIMEOUT_MS,
+  formatArbiterNotFixingSection,
+  arbiterOutstandingFindings,
+  isArbiterNotFixingFinding,
+  isArbiterSourceFinding,
+  projectArbiterUnion,
+  runPackReviewArbiter,
+  type ArbiterUnionFinding,
+  type PackReviewGptArbiterRecord,
+} from './lib/pack-review-arbiter.ts';
+import { loadCanonicalReviewContract } from './lib/pack-pr-review-contract.ts';
+import {
   PACK_REVIEW_ACTIVE_STATUSES,
   createPackReviewRun,
   derivePackReviewGptCoverage,
@@ -266,6 +278,9 @@ interface StartInput {
   /** Simulate targeted Git removal failure without altering the repository's Git metadata. */
   fixtureReviewWorktreeRemoveFailure?: boolean;
   fixtureReviewBySourceSlot?: FixtureReviewBySourceSlot;
+  /** Offline-only: the harness never spawns the arbiter unless it names an executable. */
+  fixtureArbiterCommand?: string;
+  fixtureArbiterTimeoutMs?: number;
   fixtureGptSourceCommentTransport?: PackGptSourceCommentTransport;
   fixtureGptAdmissionReadObservation?: typeof readStateLightTurnObservation;
   /** Offline-only stall before the durable per-slot bind, testing sibling independence. */
@@ -2057,6 +2072,10 @@ function formatGithubReviewBody(run: PackReviewRunRecord, payload: ReviewPayload
       if (finding.filePath) lines.push(`Path: \`${finding.filePath}\``, '');
       if (finding.severity) lines.push(`Severity: \`${finding.severity}\``, '');
       if (finding.sourceSlotId) lines.push(`Source slot: \`${finding.sourceSlotId}\``, '');
+      if (isArbiterSourceFinding(finding)) lines.push('Source: Opus arbiter (own review of the PR head)', '');
+      if (isArbiterNotFixingFinding(finding)) {
+        lines.push(`Arbiter decision: not-fixing (original severity \`${String((finding as Record<string, unknown>).originalSeverity ?? '')}\`)`, '');
+      }
     });
   }
   if (hasHarvestIncident) {
@@ -2069,6 +2088,7 @@ function formatGithubReviewBody(run: PackReviewRunRecord, payload: ReviewPayload
       lines.push('');
     }
   }
+  lines.push(...formatArbiterNotFixingSection(payload.findings));
   lines.push('---', '_Automated review by orchestrator-pack pack-owned runner_');
   return lines.join('\n');
 }
@@ -3419,6 +3439,8 @@ async function runGptSourceBatch(options: {
   frozenScope: ResolvedScopeContext;
   sameRoundEligibleSlotIds?: ReadonlySet<string>;
   reviewer: PackReviewer | null;
+  /** Normal source-settling path only: start the Opus arbiter once the round has settled. */
+  arbiter?: boolean;
 }): Promise<ReviewPayload> {
   const harness = process.env.OPK_VITEST_HARNESS === '1';
   const admissionInterval = harness && !options.input.fixtureGptAdmissionReadObservation
@@ -3771,19 +3793,120 @@ async function runGptSourceBatch(options: {
     return { slot: persistedSlot, payload: acceptedPayload };
   }));
 
-  const findings: ReviewPayloadFinding[] = [];
+  const union: ReviewPayloadFinding[] = [];
   for (const outcome of outcomes) {
     if (!outcome.payload) continue;
-    findings.push(...outcome.payload.findings.map((finding) => ({
+    union.push(...outcome.payload.findings.map((finding) => ({
       ...finding,
       sourceSlotId: outcome.slot.slotId,
     })));
   }
+  const storeOptions = { projectId: options.projectId, storeRoot: options.storeRoot };
+  // A record that already holds an arbiter result is projected the same way on
+  // every path; a new arbiter session starts only from the normal path once
+  // every source of the round has settled with a credentialed payload.
+  let arbiter = getPackReviewRun(options.run.id, storeOptions)?.gptArbiter;
+  if (!arbiter && options.arbiter
+      && outcomes.length > 0 && outcomes.every((outcome) => outcome.payload)) {
+    const result = await invokeSettledGptArbiter({
+      run: options.run,
+      worktree: options.reviewTargetRoot,
+      baseRef: options.baseRef,
+      target: options.target,
+      input: options.input,
+      projectId: options.projectId,
+      union,
+    });
+    if (result) {
+      try {
+        // Validate the projection before it becomes durable run state.
+        projectArbiterUnion(union as ArbiterUnionFinding[], result);
+        arbiter = updatePackReviewRun(options.run.id, { gptArbiter: result }, storeOptions).gptArbiter;
+      } catch (error) {
+        process.stderr.write(`pack-review arbiter discarded: ${describeError(error)}\n`);
+      }
+    }
+  }
+  const findings = projectArbiterUnion(union as ArbiterUnionFinding[], arbiter) as ReviewPayloadFinding[];
   return {
     verdict: findings.length > 0 ? 'findings' : 'clean',
     findingCount: findings.length,
     findings,
   };
+}
+
+/**
+ * Opus arbiter for a freshly settled GPT round (Issue #2892). Normal source-
+ * settling path only; any failure returns null and the GPT union stands.
+ */
+async function invokeSettledGptArbiter(options: {
+  run: PackReviewRunRecord;
+  worktree: string;
+  baseRef: string;
+  target: { prNumber: number; headSha: string; issueNumber?: number };
+  input: StartInput;
+  projectId: string;
+  union: readonly ReviewPayloadFinding[];
+}): Promise<PackReviewGptArbiterRecord | null> {
+  const { run, input } = options;
+  const harness = process.env.OPK_VITEST_HARNESS === '1';
+  const command = harness ? input.fixtureArbiterCommand : 'claude';
+  if (!command) return null;
+  const log = (line: string) => { process.stderr.write(`${line}\n`); };
+  try {
+    let issueText: string;
+    if (harness && input.fixtureIssueBody !== undefined) {
+      issueText = input.fixtureBoundIssueSnapshotBytes ?? input.fixtureIssueBody;
+    } else {
+      const round = run.reviewRound;
+      if (!round || !options.target.issueNumber) throw new Error('bound Issue unavailable');
+      const snapshot = resolveBoundIssueSnapshot({
+        projectId: options.projectId, prNumber: run.prNumber, prHeadSha: run.targetSha,
+        issueNumber: options.target.issueNumber,
+        snapshotDigest: round.boundIssueSnapshotDigest,
+        storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+      });
+      if (snapshot.status !== 'found' || !snapshot.snapshotPath) throw new Error('bound Issue snapshot not found');
+      issueText = loadValidatedBoundSnapshotBody({
+        projectId: options.projectId, prNumber: run.prNumber, prHeadSha: run.targetSha,
+        issueNumber: options.target.issueNumber,
+        snapshotFilePath: snapshot.snapshotPath,
+        snapshotDigest: round.boundIssueSnapshotDigest,
+        storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+      }).body;
+    }
+    const contract = loadCanonicalReviewContract();
+    let changedFiles: string | undefined;
+    const listed = await runProcess({
+      command: 'git', args: ['-C', options.worktree, '--no-pager', 'diff', '--no-ext-diff',
+        '--name-status', `${options.baseRef}...HEAD`],
+      timeoutMs: 30_000, inheritParentEnv: true, allowEmptyStdout: true,
+    }).catch(() => null);
+    if (listed?.ok) changedFiles = listed.stdout.trim() || undefined;
+    let netDiff: string | undefined;
+    const hunks = await runProcess({
+      command: 'git', args: ['-C', options.worktree, '--no-pager', 'diff', '--no-ext-diff',
+        '--unified=3', `${options.baseRef}...HEAD`],
+      timeoutMs: 30_000, inheritParentEnv: true, allowEmptyStdout: true,
+    }).catch(() => null);
+    if (hunks?.ok) netDiff = hunks.stdout.trim() || undefined;
+    return await runPackReviewArbiter({
+      cwd: options.worktree,
+      baseRef: options.baseRef,
+      issueText,
+      contract,
+      union: options.union as ArbiterUnionFinding[],
+      command,
+      timeoutMs: harness ? input.fixtureArbiterTimeoutMs : PACK_REVIEW_ARBITER_TIMEOUT_MS,
+      changedFiles,
+      netDiff,
+      log,
+      runProcess: (request) => runProcess(request),
+    });
+  } catch (error) {
+    log(`pack-review arbiter discarded: ${describeError(error)}`);
+    return null;
+  }
 }
 
 async function resolvePackReviewRunCanonicalRepository(
@@ -4629,13 +4752,15 @@ async function recoverStaleGptSourceComments(options: {
   }) ?? persisted;
   round = persisted.reviewRound ?? round;
   usableSourceCount = gptUsableSourceCount(round);
-  const findings: ReviewPayloadFinding[] = [];
+  const union: ReviewPayloadFinding[] = [];
   for (const slot of round.sourceSlots) {
     if (slot.lifecycle !== 'terminal'
       || (slot.terminalClass !== 'complete_clean' && slot.terminalClass !== 'complete_findings')) continue;
     const payload = slot.payload as ReviewPayload;
-    findings.push(...payload.findings.map((finding) => ({ ...finding, sourceSlotId: slot.slotId })));
+    union.push(...payload.findings.map((finding) => ({ ...finding, sourceSlotId: slot.slotId })));
   }
+  // Recovery never starts an arbiter; it uses whatever the run record already holds.
+  const findings = projectArbiterUnion(union as ArbiterUnionFinding[], persisted.gptArbiter) as ReviewPayloadFinding[];
   const aggregate: ReviewPayload = {
     verdict: findings.length > 0 ? 'findings' : 'clean',
     findingCount: findings.length,
@@ -6704,7 +6829,8 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
       && r.deliveryOutcomes.githubComment?.state === 'succeeded')
     .sort((a, b) => Date.parse(a.completedAtUtc ?? '') - Date.parse(b.completedAtUtc ?? ''));
   let frontier = original.targetSha;
-  let unresolved: unknown[] = [...original.findings];
+  // Occurrences the arbiter decided `not-fixing` are not outstanding prior blockers.
+  let unresolved: unknown[] = arbiterOutstandingFindings(original.findings);
   let lastComplete: PackReviewRunRecord | undefined;
   // A previously verified F..T ordinary run authenticates its own parent
   // frontier even after restart. Recover the exact stored T lineage backwards;
@@ -11880,6 +12006,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
           frozenScope: authoritative.frozenScope,
           sameRoundEligibleSlotIds: sameRoundGptEligibleSlotIds,
           reviewer,
+          arbiter: reviewer === 'gpt' && sameRoundGptEligibleSlotIds === undefined,
         });
         result = {
           outcome: 'exit' as const,

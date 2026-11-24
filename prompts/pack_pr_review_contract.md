@@ -49,12 +49,6 @@ caller, or exclusive resource). Otherwise describe the reachable race and use
 proportionate blocking or non-blocking reviewer judgment based on concrete harm,
 not estimated probability.
 
-## 6. Security and scope carve-out
-
-Security and scope-violation findings are material by definition and are always
-surfaced. Proportionality may shape the cheapest sufficient remedy but cannot
-suppress the defect because it is inconvenient or expensive.
-
 ## 7. Reviewer recommendations are prose only
 
 Recommendations use `FIX_NOW`, `DEFER`, or `ACCEPT_RISK` in prose only. They
@@ -79,6 +73,6 @@ must not present a historical finding as preverified closed.
 Closure is **not** a code-wide exception: a semantically relevant new changed
 hunk, including outside the old filename or in F..T, can support a fresh
 finding with exact current changed-code evidence. An independently material
-security/scope violation remains reportable under section 6.
+security/scope violation remains reportable under sections 2 and 3.
 Closing a reviewer finding never expands the live Issue's allowed edit paths
 or waives review, CI, smoke, status, or merge authority.

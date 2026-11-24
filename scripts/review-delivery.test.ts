@@ -2,6 +2,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -569,6 +570,51 @@ describe('runtime-neutral review delivery contract', () => {
       state: 'escalated',
       reason: 'worker_generation_mismatch',
     });
+  });
+});
+
+
+describe('Issue #2892 known-not-fixing on journal resume', () => {
+  it('appends the downgraded occurrence when delivery resumes from the journal', async () => {
+    const home = tempRoot('opk-known-not-fixing-home-');
+    process.env.HOME = home;
+    const storeRoot = tempRoot('opk-known-not-fixing-store-');
+    const union = [{ title: 'Blocker', body: 'b', path: 'a.ts', severity: 'error', sourceSlotId: 'source-01' }];
+    const arbiter = {
+      schema: 'pack-review-gpt-arbiter/v1',
+      decisions: [{ slotId: 'source-01', index: 0, decision: 'not-fixing', reason: 'Rare trigger, large fix.' }],
+      findings: [],
+    } as const;
+    const run = createPackReviewRun({
+      projectId: 'orchestrator-pack', storeRoot, prNumber: 2892, headSha,
+      startReason: 'test', surface: 'review-delivery-test',
+      trustedPackRoot: process.cwd(), sourceRepoRoot: process.cwd(),
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+    }).run;
+    const journaled = updatePackReviewRun(run.id, {
+      status: 'reviewing', latestRunStatus: 'reviewing', reviewVerdict: 'findings', findingCount: 1,
+      gptArbiter: arbiter,
+      findings: [{ ...union[0], severity: 'non-blocking', originalSeverity: 'error',
+        arbiterDecision: 'not-fixing', arbiterReason: 'Rare trigger, large fix.' }],
+      journalOutcome: {
+        state: 'persisted', recordedAtUtc: '2026-08-05T00:00:00.000Z', reason: 'verdict_persisted',
+        idempotencyKey: `verdict:${run.id}:${headSha}`, attempts: 1,
+      },
+      deliveryOutcomes: {
+        githubComment: deliveryOutcome('succeeded', `github-comment:${run.id}:${headSha}`, 'comment_posted'),
+        requiredStatus: deliveryOutcome('succeeded',
+          `required-status:orchestrator-pack/pack-review:${headSha}`, 'status_success'),
+        workerNotification: deliveryOutcome('succeeded', `worker-notification:${run.id}:${headSha}`, 'sent'),
+      },
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    await resumePackReviewVerdictDelivery({
+      run: journaled, projectId: 'orchestrator-pack', storeRoot,
+      postGithubComment: vi.fn(async () => { throw new Error('must not replay'); }),
+      writeRequiredStatus: vi.fn(async () => { throw new Error('must not replay'); }),
+      notifyWorker: vi.fn(async () => { throw new Error('must not replay'); }),
+    });
+    const file = path.join(home, '.local', 'state', 'orchestrator-session', 'orchestrator-pack', 'known-not-fixing.md');
+    expect(readFileSync(file, 'utf8')).toContain(`runId=${run.id} slot=source-01:0 | title=Blocker | reason=Rare trigger, large fix.`);
   });
 });
 

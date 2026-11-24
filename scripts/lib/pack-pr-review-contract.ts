@@ -21,7 +21,6 @@ export const CANONICAL_CONTRACT_CLAUSE_MARKERS = [
   'Blocking is an economic decision',
   'Persistent machinery is priced only when proposed',
   'Operational envelope is explicit',
-  'Security and scope carve-out',
   'Reviewer recommendations are prose only',
 ] as const;
 
