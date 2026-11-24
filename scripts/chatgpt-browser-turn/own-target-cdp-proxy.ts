@@ -364,6 +364,28 @@ export async function createOwnCdpTarget(cdp: string, timeoutMs: number): Promis
   return (value as { id: string }).id;
 }
 
+/**
+ * Issue #2888: best-effort close of one exact target this invocation created.
+ * Browser-side HTTP close; it never reads or evaluates the page, so a frozen
+ * renderer cannot stall it past the budget. Confirmed only by ID absence.
+ */
+export async function closeOwnCdpTarget(cdp: string, targetId: string, budgetMs: number): Promise<boolean> {
+  if (!targetId) return false;
+  const end = Date.now() + Math.max(1, budgetMs);
+  const root = new URL(cdp);
+  root.pathname = '/json/close/' + encodeURIComponent(targetId);
+  root.search = '';
+  const response = await fetch(root, { signal: AbortSignal.timeout(Math.max(1, end - Date.now())) });
+  // 404 means the exact ID is already gone; absence below still decides.
+  await response.text().catch(() => '');
+  while (Date.now() < end) {
+    const pages = await listCdpPageTargets(cdp, Math.max(1, end - Date.now()));
+    if (!pages.some((page) => page.id === targetId)) return true;
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(200, Math.max(1, end - Date.now()))));
+  }
+  return false;
+}
+
 function encodeFrame(data: Buffer, opcode = 1): Buffer {
   const length = data.length;
   const header = Buffer.alloc(length < 126 ? 2 : length <= 65535 ? 4 : 10);

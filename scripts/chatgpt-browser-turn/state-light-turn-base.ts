@@ -34,7 +34,8 @@ import {
   countUninspectedRecoveryTargets,
   getOwnTargetInfo,
 } from './own-target-attach.ts';
-import { listCdpPageTargets, probeCdpSiblingEvaluations } from './own-target-cdp-proxy.ts';
+import { closeOwnCdpTarget, listCdpPageTargets, probeCdpSiblingEvaluations } from './own-target-cdp-proxy.ts';
+import { isPreSendContentionCause, preSendPausedRetryDelayMs } from './pre-send-paused-retry.ts';
 import {
   turnExitCode,
   type ComposerMutationDiagnosticV1,
@@ -6155,8 +6156,50 @@ async function runTurnCore(
       return null;
     };
 
+    // #2888: a pre-send contention failure (busy shared browser) is not a
+    // verdict on this invocation's own tab. Pause inside this turn, then rerun
+    // the fresh pre-send phase on the same owned Page. The existing invocation
+    // deadline is the only budget; once Send was attempted nothing is retried.
+    const withPausedPreSendRetry = async (
+      attempt: () => Promise<TurnRunOutcome | undefined>,
+    ): Promise<TurnRunOutcome | undefined> => {
+      let previous: { outcome?: TurnRunOutcome; failure?: unknown; failed: boolean } | undefined;
+      for (;;) {
+        let outcome: TurnRunOutcome | undefined;
+        let failure: unknown;
+        let failed = false;
+        try { outcome = await attempt(); } catch (error) { failure = error; failed = true; }
+        const cause = failed
+          ? (failure instanceof Error ? failure.message : String(failure))
+          : outcome?.result.cause;
+        // A retry that only ran out of the same invocation budget reports the
+        // contention it retried, not a new budget cause.
+        if (previous && !sendAttempted && !afterSend && sendCount === 0
+          && PAUSED_RETRY_BUDGET_CAUSES.has(cause ?? '')) {
+          if (previous.failed) throw previous.failure;
+          return previous.outcome;
+        }
+        const delayMs = preSendPausedRetryDelayMs();
+        const retry = (failed || outcome !== undefined) && isPreSendContentionCause(cause)
+          && !sendAttempted && !afterSend && sendCount === 0 && !ownershipForfeited
+          && (!outcome || (outcome.page === page && outcome.ownershipForfeited !== true
+            && outcome.result.send_count === 0 && outcome.result.send_attempted !== true))
+          && Boolean(page) && !browserOrPageDefinitelyLost(page, browser)
+          && Date.now() + delayMs + COMPOSER_READINESS_WAIT_MS + FRESH_SEND_RESERVE_MS
+            + FRESH_SEND_PREPARE_RESERVE_MS + deriveComposerInsertionBudgetMs(markedPayload)
+            < invocationDeadlineMs;
+        if (!retry) {
+          if (failed) throw failure;
+          return outcome;
+        }
+        previous = { outcome, failure, failed };
+        incident('pre_send_contention_paused_retry', `${cause};delay_ms=${delayMs}`,
+          'pause_then_retry_same_owned_page');
+        await sleep(page, delayMs);
+      }
+    };
     if (config.newChat) {
-      {
+      const freshOutcome = await withPausedPreSendRetry(async (): Promise<TurnRunOutcome | undefined> => {
         const entryAccountError = await checkAccountLoadError();
         if (entryAccountError && entryAccountError !== 'recovered') return entryAccountError;
         assertFreshOwner();
@@ -6603,7 +6646,8 @@ async function runTurnCore(
             ),
           };
         }
-      }
+      });
+      if (freshOutcome) return freshOutcome;
     } else {
       // #2854: the existing-chat pre-Send preparation reruns unchanged after one C4 reload.
       const runExistingPreSend = async (): Promise<TurnRunOutcome | null> => {
@@ -9863,6 +9907,17 @@ async function guardedOriginalTargetRetirement(input: {
   }
 }
 
+/** #2888: causes that only mean a paused retry ran out of the invocation budget. */
+const PAUSED_RETRY_BUDGET_CAUSES: ReadonlySet<string> = new Set([
+  'state_light_new_chat_send_budget_unavailable',
+  'state_light_new_chat_owner_pre_dispatch_deadline_exhausted',
+  'fresh_send_readiness_deadline_exhausted',
+  'fresh_send_readiness_budget_exhausted',
+]);
+
+/** #2888: bound for the best-effort close of an own unsent tab at final exit. */
+const OWN_UNSENT_TAB_CLOSE_BUDGET_MS = 5_000;
+
 async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactTurnResult> {
   let cleanup: ResourceCleanupOutcome = outcome.createdAttachFailureCleanup ?? 'skipped';
   let journalWriteFailed = outcome.result.journal_write_failed === true;
@@ -10072,6 +10127,57 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
     });
     cleanup = detached.status === 'confirmed' ? 'confirmed' : 'unconfirmed';
     detachedOriginalCleanupUnconfirmed = detached.status !== 'confirmed';
+  }
+  // #2888: the turn finally ends without a Send. The tab this invocation
+  // created is its own: close that exact ID best-effort, never a foreign tab.
+  // A close failure is logged only; it never changes the turn's outcome.
+  if (positivelyCreatedOriginal && cleanup !== 'confirmed' && cdp && observedNotSent
+    && outcome.result.send_count === 0 && outcome.result.send_attempted !== true
+    && outcome.ownershipForfeited !== true) {
+    let ownTargetId: string | undefined;
+    let ownInitialRoute: string | undefined;
+    try {
+      const owned = readStateLightTurnObservation(
+        outcome.result.configured_profile_key, outcome.result.invocation_id,
+      ).owned_target;
+      if (owned?.created === true && owned.id) {
+        ownTargetId = owned.id;
+        ownInitialRoute = owned.initial_route;
+      }
+    } catch { /* fall back to the attach-failure creation witness */ }
+    ownTargetId ??= outcome.createdAttachFailureTargetId;
+    // A readable URL that left this invocation's own route shows someone
+    // else's conversation; keep that tab. Unreadable/blank stays own.
+    const stillOnOwnRoute = ((): boolean => {
+      if (!outcome.page || typeof outcome.page !== 'object' || pageLost) return true;
+      let url: string;
+      try { url = String(outcome.page.url()); } catch { return true; }
+      if (!url || url === 'about:blank') return true;
+      try {
+        if (outcome.ownedFreshProjectUrl) return isBlankProjectSurfaceUrl(url, outcome.ownedFreshProjectUrl);
+        return Boolean(ownInitialRoute) && normalizeConversationUrl(url) === ownInitialRoute;
+      } catch { return false; }
+    })();
+    if (ownTargetId && stillOnOwnRoute) {
+      let closeFailure: string | undefined;
+      try {
+        if (await closeOwnCdpTarget(cdp, ownTargetId, OWN_UNSENT_TAB_CLOSE_BUDGET_MS)) {
+          cleanup = 'confirmed';
+          detachedOriginalCleanupUnconfirmed = false;
+        } else {
+          closeFailure = 'own_unsent_tab_still_present';
+        }
+      } catch (error) {
+        closeFailure = ('own_unsent_tab_close_error:'
+          + (error instanceof Error ? error.message : String(error))).slice(0, 128);
+      }
+      if (closeFailure) incidents.push('own_unsent_tab_close_failed');
+      if (closeFailure && !appendIncident({
+        eventClass: 'own_unsent_tab_close_failed',
+        symptom: closeFailure,
+        action: 'log_only_outcome_unchanged',
+      }, outcome.result.invocation_id)) journalWriteFailed = true;
+    }
   }
   if (positivelyCreatedOriginal && cleanup !== 'confirmed') {
     // Never report a close from an old marker, an old Page reference or a

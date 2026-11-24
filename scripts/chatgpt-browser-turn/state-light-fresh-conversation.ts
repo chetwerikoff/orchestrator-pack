@@ -22,6 +22,7 @@ import {
 import type { TurnState } from './contracts.ts';
 import { readStateLightTurnObservation } from './state-light-turn-observation.ts';
 import { profileDirs, sha256 } from './storage-common.ts';
+import { preSendPausedRetryDelayMs } from './pre-send-paused-retry.ts';
 
 const STATE_LIGHT_FRESH_CLAIM_SCHEMA = 'state-light-fresh-claim/v1' as const;
 const STATE_LIGHT_NEW_CHAT_SEND_SLOT_SCHEMA = 'state-light-new-chat-send-slot/v1' as const;
@@ -821,8 +822,13 @@ export async function prepareStateLightFreshConversation(
     for (let attempt = 0; attempt < STATE_LIGHT_FRESH_PREPARE_ATTEMPTS; attempt++) {
       requireFreshPreparationTime(deadlineMs, now);
       if (attempt > 0) {
+        // #2888: a locator_count failure is shared-browser contention; pause
+        // with spread instead of retrying at once alongside every other turn.
+        const backoffMs = observedNavigationFailure === 'browser_operation_timeout:locator_count'
+          ? preSendPausedRetryDelayMs()
+          : STATE_LIGHT_FRESH_PREPARE_BACKOFF_BASE_MS * (2 ** (attempt - 1));
         await boundedFreshPreparation(
-          () => sleepMs(STATE_LIGHT_FRESH_PREPARE_BACKOFF_BASE_MS * (2 ** (attempt - 1))),
+          () => sleepMs(backoffMs),
           deadlineMs,
           now,
         );

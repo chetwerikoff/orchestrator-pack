@@ -12,7 +12,8 @@ import {
   countUninspectedRecoveryTargets,
   getOwnTargetInfo,
 } from './own-target-attach.ts';
-import { listCdpPageTargets, probeCdpSiblingEvaluations } from './own-target-cdp-proxy.ts';
+import { closeOwnCdpTarget, listCdpPageTargets, probeCdpSiblingEvaluations } from './own-target-cdp-proxy.ts';
+import { PRE_SEND_PAUSED_RETRY_MIN_MS, PRE_SEND_PAUSED_RETRY_SPREAD_MS } from './pre-send-paused-retry.ts';
 import { takeRecoveryCensus, type PostSendRecoveryAdapter } from './state-light-turn-recovery.ts';
 
 const CDP = 'http://127.0.0.1:9222';
@@ -24,6 +25,9 @@ type Target = { id: string; type: string; url: string };
 let targets: Target[];
 let targetCounter: number;
 let chromeCommands: Array<Record<string, any>>;
+let httpClosed: string[] = [];
+/** Issue #2888: a frozen renderer never answers commands on its own session. */
+let frozenSessionIds = new Set<string>();
 
 type Listener = (event: { data?: unknown }) => void;
 class FakeChromeSocket {
@@ -57,6 +61,7 @@ class FakeChromeSocket {
     chromeCommands.push(command);
     queueMicrotask(() => {
       if (this.readyState !== 1) return;
+      if (typeof command.sessionId === 'string' && frozenSessionIds.has(command.sessionId)) return;
       if (command.method === 'Target.attachToTarget') {
         const target = targets.find((candidate) => candidate.id === command.params?.targetId);
         if (target) {
@@ -108,6 +113,8 @@ function setupChrome(known: readonly Target[]): void {
   targets = [...known];
   targetCounter = 0;
   chromeCommands = [];
+  httpClosed = [];
+  frozenSessionIds = new Set();
   FakeChromeSocket.sockets.length = 0;
   vi.stubGlobal('WebSocket', FakeChromeSocket);
   vi.stubGlobal('fetch', vi.fn(async (input: URL | string, options?: RequestInit) => {
@@ -121,6 +128,14 @@ function setupChrome(known: readonly Target[]): void {
       const newTarget = { id, type: 'page', url: 'about:blank' };
       targets.push(newTarget);
       return new Response(JSON.stringify(newTarget), { status: 200 });
+    }
+    if (url.pathname.startsWith('/json/close/')) {
+      const id = decodeURIComponent(url.pathname.slice('/json/close/'.length));
+      httpClosed.push(id);
+      const index = targets.findIndex((candidate) => candidate.id === id);
+      if (index < 0) return new Response('No such target id: ' + id, { status: 404 });
+      targets.splice(index, 1);
+      return new Response('Target is closing', { status: 200 });
     }
     throw new Error('unexpected HTTP CDP endpoint: ' + url);
   }));
@@ -473,6 +488,113 @@ describe('Issue #2625 own-target attach isolation', () => {
 });
 
 
+
+describe('Issue #2888 shared Chrome under a burst', () => {
+  it('pauses at least 10 s plus spread before a connect-timeout retry and reuses the same own target', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      vi.spyOn(Math, 'random').mockReturnValue(0.5);
+      const protocol = protocolChromium();
+      const connectTimes: number[] = [];
+      const chromium = {
+        connectOverCDP: vi.fn(async (endpoint: string) => {
+          connectTimes.push(Date.now());
+          if (connectTimes.length === 1) throw new Error('browser_operation_timeout:connect_over_cdp');
+          return protocol.connectOverCDP(endpoint);
+        }),
+      };
+      const pending = attachOwnTarget(chromium, {
+        mode: 'own-target', cdp: CDP, deadlineMs: Date.now() + 120_000,
+        newChat: true, cleanupBudgetMs: 2_000,
+      });
+      await vi.advanceTimersByTimeAsync(PRE_SEND_PAUSED_RETRY_MIN_MS + PRE_SEND_PAUSED_RETRY_SPREAD_MS);
+      const attached = await pending;
+      expect(attached.attachAttempts).toBe(2);
+      const pause = connectTimes[1]! - connectTimes[0]!;
+      expect(pause).toBeGreaterThanOrEqual(PRE_SEND_PAUSED_RETRY_MIN_MS);
+      expect(pause).toBe(PRE_SEND_PAUSED_RETRY_MIN_MS + PRE_SEND_PAUSED_RETRY_SPREAD_MS / 2);
+      // The retry reuses the tab it opened; no second tab is created.
+      expect(targets.filter((target) => target.id.startsWith('created-'))).toHaveLength(1);
+      expect(attached.targetId).toBe('created-1');
+      await attached.browser.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the short backoff for a non-timeout transport error', async () => {
+    const protocol = protocolChromium();
+    const connectTimes: number[] = [];
+    const chromium = {
+      connectOverCDP: vi.fn(async (endpoint: string) => {
+        connectTimes.push(Date.now());
+        if (connectTimes.length === 1) throw new Error('ECONNRESET');
+        return protocol.connectOverCDP(endpoint);
+      }),
+    };
+    const attached = await attachOwnTarget(chromium, {
+      mode: 'own-target', cdp: CDP, deadlineMs: Date.now() + 10_000,
+      newChat: true, cleanupBudgetMs: 2_000,
+    });
+    expect(connectTimes[1]! - connectTimes[0]!).toBeLessThan(PRE_SEND_PAUSED_RETRY_MIN_MS);
+    await attached.browser.close();
+  });
+
+  it('is not stalled by a frozen foreign tab on connect or own reads, and never touches it', async () => {
+    setupChrome([
+      { id: 'frozen-foreign', type: 'page', url: FOREIGN },
+      { id: 'leaked-prompt-typed', type: 'page', url: 'https://chatgpt.com/g/g-p-x-project/project' },
+    ]);
+    frozenSessionIds = new Set(['session-frozen-foreign']);
+    const chromium = protocolChromium();
+    const startedAt = Date.now();
+    const attached = await attachOwnTarget(chromium, {
+      mode: 'own-target', cdp: CDP, deadlineMs: Date.now() + 5_000,
+      newChat: true, cleanupBudgetMs: 2_000,
+    });
+    await attached.page.goto(CHAT);
+    expect(await attached.page.title()).toBe('owned page');
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+    expect(attached.attachAttempts).toBe(1);
+    expect(chromeCommands.every((command) => command.params?.targetId !== 'frozen-foreign'
+      && command.params?.targetId !== 'leaked-prompt-typed'
+      && command.sessionId !== 'session-frozen-foreign')).toBe(true);
+    await attached.browser.close();
+    // Final not-sent exit: the exact own tab closes; foreign and leaked tabs stay.
+    expect(await closeOwnCdpTarget(CDP, attached.targetId, 2_000)).toBe(true);
+    expect(httpClosed).toEqual([attached.targetId]);
+    expect(targets.map((target) => target.id)).toEqual(['frozen-foreign', 'leaked-prompt-typed']);
+  });
+
+  it('does not grow the own tab count across repeated not-sent turns next to leaked tabs', async () => {
+    setupChrome([
+      { id: 'leaked-1', type: 'page', url: 'https://chatgpt.com/g/g-p-x-project/project' },
+      { id: 'leaked-2', type: 'page', url: 'https://chatgpt.com/g/g-p-x-project/project' },
+    ]);
+    for (let turn = 0; turn < 3; turn++) {
+      const attached = await attachOwnTarget(protocolChromium(), {
+        mode: 'own-target', cdp: CDP, deadlineMs: Date.now() + 5_000,
+        newChat: true, cleanupBudgetMs: 2_000,
+      });
+      await attached.browser.close();
+      expect(await closeOwnCdpTarget(CDP, attached.targetId, 2_000)).toBe(true);
+      expect(targets.map((target) => target.id)).toEqual(['leaked-1', 'leaked-2']);
+    }
+  });
+
+  it('reports an own close that fails without touching any other target', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: URL | string) => {
+      const url = new URL(String(input));
+      if (url.pathname.startsWith('/json/close/')) throw new Error('injected_close_failure');
+      return new Response(JSON.stringify(targets), { status: 200 });
+    }));
+    targets.push({ id: 'own-created', type: 'page', url: 'about:blank' });
+    await expect(closeOwnCdpTarget(CDP, 'own-created', 500)).rejects.toThrow('injected_close_failure');
+    expect(targets.map((target) => target.id)).toEqual(['foreign-id', 'own-created']);
+    targets.pop();
+    expect(targets.map((target) => target.id)).toEqual(['foreign-id']);
+  });
+});
 
 describe('Issue #2682 direct-target sibling evaluation (same endpoint, not same context)', () => {
   const owner = { id: 'probe-owner', type: 'page', url: CHAT, browserContextId: 'context-one' };

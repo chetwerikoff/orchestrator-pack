@@ -146,6 +146,7 @@ import { deriveDelivery, COMPLETION_MODE, HANDOFF_SCHEMA, RECEIPT_LOCATOR_SCHEMA
 import { __testBrowserOrPageDefinitelyLost, __testComposerMutation, __testSendDelivery, deriveComposerInsertionBudgetMs, POST_SEND_OBSERVATION_POLL_MS, probePageLiveness } from './state-light-turn-base.ts';
 import { attachOwnTarget, __testAttachOwnTargetFixture } from './own-target-attach.ts';
 import { probeCdpSiblingEvaluations } from './own-target-cdp-proxy.ts';
+import { isPreSendContentionCause } from './pre-send-paused-retry.ts';
 import { currentOwnedPromptMarker, wrapOwnedPromptPayload } from './owned-prompt-marker.ts';
 import {
   EXPLICIT_CANCELLATION_AUTHORITY,
@@ -423,6 +424,27 @@ function proveCreatedPageRemainsVisibleToCdp(page: any): void {
       { id: 'opk-keepalive', type: 'page', url: 'about:blank#opk-keepalive' },
     ]), { status: 200 });
   });
+}
+
+// #2888: CDP census where the exact own target disappears after its
+// browser-side /json/close. Foreign targets are never closable.
+function fakeOwnTabCloseCdp(ownId = 'fixture-own-target', url = 'about:blank'): { closed: string[] } {
+  const record = { closed: [] as string[] };
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const path = new URL(String(input)).pathname;
+    if (path.startsWith('/json/close/')) {
+      const id = decodeURIComponent(path.slice('/json/close/'.length));
+      if (id !== ownId) throw new Error('foreign_target_close_forbidden');
+      record.closed.push(id);
+      return new Response('Target is closing', { status: 200 });
+    }
+    if (path !== '/json/list') throw new Error('unexpected CDP operation in own-tab close fixture');
+    return new Response(JSON.stringify([
+      ...(record.closed.includes(ownId) ? [] : [{ id: ownId, type: 'page', url }]),
+      { id: 'foreign-frozen', type: 'page', url: 'https://chatgpt.com/c/foreign' },
+    ]), { status: 200 });
+  });
+  return record;
 }
 
 async function runNewChatTurn(
@@ -878,6 +900,9 @@ describe('state-light fresh conversation collision recovery', () => {
     attach.mockRejectedValueOnce(new Error('injected_cleanup_reattach_failure'));
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = new URL(String(input));
+      // #2888: the only close ever sent is the exact own created ID; here it
+      // throws, which is logged only and leaves the outcome unchanged.
+      if (url.pathname === '/json/close/' + createdId) throw new Error('injected_own_tab_close_failure');
       if (url.pathname !== '/json/list') throw new Error('unexpected_destructive_cdp_request');
       return new Response(JSON.stringify([
         { id: createdId, type: 'page', url: 'about:blank', webSocketDebuggerUrl: 'ws://example/created-attach-failed' },
@@ -903,7 +928,9 @@ describe('state-light fresh conversation collision recovery', () => {
       });
       expect(fixture.getSends()).toBe(0);
       expect(fixture.page.close).not.toHaveBeenCalled();
-      expect(fetchSpy.mock.calls.every(([input]) => new URL(String(input)).pathname === '/json/list')).toBe(true);
+      const paths = fetchSpy.mock.calls.map(([input]) => new URL(String(input)).pathname);
+      expect(paths).toContain('/json/close/' + createdId);
+      expect(paths.every((path) => path === '/json/list' || path === '/json/close/' + createdId)).toBe(true);
     } finally {
       attach.mockImplementation(__testAttachOwnTargetFixture);
       fetchSpy.mockRestore();
@@ -1783,11 +1810,12 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
   });
 
-  it('preserves a never-clicked draft when atomic compare-and-clear cannot be verified', async () => {
+  it('closes its own never-clicked tab by exact ID at final exit without modifying an unverifiable draft', async () => {
     const invocationId = randomUUID();
     const prompt = 'PROMPT-FAILED-COMPOSER-CLEAR';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const turn = makeLoserPage(prompt, 'NOT-SENT');
+    const cdp = fakeOwnTabCloseCdp();
     turn.sendButton.isEnabled.mockResolvedValue(false);
     const evaluate = turn.composer.evaluate.getMockImplementation()!;
     turn.composer.evaluate.mockImplementation(async (
@@ -1808,7 +1836,9 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(turn.composer.evaluate).toHaveBeenCalled();
     expect(turn.composer.fill).not.toHaveBeenCalledWith('', expect.anything());
     expect(turn.getComposerText()).toContain(prompt);
-    expect(outcome.result.cleanup).not.toBe('confirmed');
+    expect(outcome.result.cleanup).toBe('confirmed');
+    expect(outcome.result).not.toHaveProperty('cleanup_status');
+    expect(cdp.closed).toEqual(['fixture-own-target']);
     expect(outcome.result.incidents).toContain('owned_composer_cleanup_unavailable');
     expect(outcome.result.send_attempted).not.toBe(true);
     expect(turn.getSends()).toBe(0);
@@ -1822,10 +1852,11 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
   });
 
-  it('preserves an edited shared draft when atomic comparison sees a concurrent mutation', async () => {
+  it('never edits a changed draft and closes only its own unsent tab at final exit', async () => {
     const prompt = 'PROMPT-ATOMIC-COMPARE-EDIT';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const turn = makeLoserPage(prompt, 'UNREACHED');
+    const cdp = fakeOwnTabCloseCdp();
     turn.sendButton.isEnabled.mockResolvedValue(false);
     const evaluate = turn.composer.evaluate.getMockImplementation()!;
     let changed = false;
@@ -1844,7 +1875,8 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await runNewChatTurn(turn.page, join(stateDir, 'atomic-shared-edit-2651.txt'));
     expect(changed).toBe(true);
     expect(outcome.result.send_count).toBe(0);
-    expect(outcome.result.cleanup).not.toBe('confirmed');
+    expect(outcome.result.cleanup).toBe('confirmed');
+    expect(cdp.closed).toEqual(['fixture-own-target']);
     expect(turn.getComposerText()).toBe('FOREIGN-EDIT-BEFORE-ATOMIC-COMPARE');
     expect(turn.page.close).not.toHaveBeenCalled();
     expect(turn.sendButton.click).not.toHaveBeenCalled();
@@ -1854,6 +1886,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const prompt = 'PROMPT-ATOMIC-NAVIGATION';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const turn = makeLoserPage(prompt, 'UNREACHED');
+    const cdp = fakeOwnTabCloseCdp();
     turn.sendButton.isEnabled.mockResolvedValue(false);
     const originalUrl = turn.page.url.getMockImplementation()!;
     let navigated = false;
@@ -1872,9 +1905,141 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(navigated).toBe(true);
     expect(outcome.result.send_count).toBe(0);
     expect(outcome.result.cleanup).not.toBe('confirmed');
+    // The tab left its own route for a foreign conversation: never closed.
+    expect(cdp.closed).toEqual([]);
     expect(turn.getComposerText()).toContain(prompt);
     expect(turn.page.close).not.toHaveBeenCalled();
     expect(turn.sendButton.click).not.toHaveBeenCalled();
+  });
+
+  describe('Issue #2888 shared Chrome burst: own-tab cleanup and paused retry', () => {
+    const PAUSE_MIN = 10_000;
+    const PAUSE_MAX = 15_000;
+    const pauses = (page: any): number[] => page.waitForTimeout.mock.calls
+      .map(([ms]: [number]) => ms).filter((ms: number) => ms >= PAUSE_MIN);
+
+    it('1-4 clean fresh sends land without any paused retry', async () => {
+      for (let index = 0; index < 4; index++) {
+        const prompt = `PROMPT-2888-CLEAN-${index}`;
+        mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+        const turn = makeLoserPage(prompt, `REPLY-2888-CLEAN-${index}`);
+        const outcome = await runNewChatTurn(turn.page, join(stateDir, `clean-2888-${index}.txt`));
+        expect(outcome.result.send_count).toBe(1);
+        expect(turn.getSends()).toBe(1);
+        expect(outcome.result.incidents).not.toContain('pre_send_contention_paused_retry');
+        expect(pauses(turn.page)).toEqual([]);
+      }
+    });
+
+    it('burst contention keeps the tab, pauses >=10 s plus spread, and lands in the same tab', async () => {
+      vi.spyOn(Math, 'random').mockReturnValue(0.25);
+      const prompt = 'PROMPT-2888-BURST';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'REPLY-2888-BURST');
+      // Real 2026-11-23 cause: fresh Send actionability unreadable under load.
+      turn.sendButton.count.mockImplementationOnce(() => new Promise<number>(() => {}));
+      const cdp = fakeOwnTabCloseCdp('fixture-own-target', PROJECT_URL);
+      const attachCalls = vi.mocked(attachOwnTarget).mock.calls.length;
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, 'burst-2888.txt'), '600000');
+      expect(outcome.result.send_count).toBe(1);
+      expect(turn.getSends()).toBe(1);
+      expect(outcome.result.incidents).toContain('pre_send_contention_paused_retry');
+      expect(pauses(turn.page)).toEqual([PAUSE_MIN + 1_250]);
+      // Same tab: one attach, no new tab, own tab never closed mid-turn.
+      expect(vi.mocked(attachOwnTarget).mock.calls.length - attachCalls).toBe(1);
+      expect(cdp.closed).toEqual([]);
+    });
+
+    it('a slow-loading tab is not closed and a later paused retry sends in it without reopening', async () => {
+      const prompt = 'PROMPT-2888-SLOW-LOAD';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'REPLY-2888-SLOW-LOAD');
+      const openedAt = mocks.nowMs;
+      // The page becomes actionable ~30 s after it opened.
+      turn.sendButton.count.mockImplementation(async () => mocks.nowMs - openedAt >= 30_000
+        ? 1 : await new Promise<number>(() => {}));
+      const cdp = fakeOwnTabCloseCdp('fixture-own-target', PROJECT_URL);
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, 'slow-load-2888.txt'), '600000');
+      expect(outcome.result.send_count).toBe(1);
+      expect(turn.getSends()).toBe(1);
+      const delays = pauses(turn.page);
+      expect(delays.length).toBeGreaterThanOrEqual(1);
+      expect(delays.every((ms) => ms >= PAUSE_MIN && ms < PAUSE_MAX)).toBe(true);
+      expect(turn.page.goto.mock.calls.filter(([url]: [string]) => url === PROJECT_URL).length).toBeLessThanOrEqual(1);
+      expect(cdp.closed).toEqual([]);
+      expect(turn.page.close).not.toHaveBeenCalled();
+    }, 90_000);
+
+    it('closes its own tab best-effort only when the turn finally ends without a send', { timeout: 60_000 }, async () => {
+      const prompt = 'PROMPT-2888-FINAL-EXIT';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      turn.sendButton.count.mockImplementation(() => new Promise<number>(() => {}));
+      const cdp = fakeOwnTabCloseCdp('fixture-own-target', PROJECT_URL);
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, 'final-exit-2888.txt'), '200000');
+      expect(outcome.result).toMatchObject({
+        state: 'ui_contract_mismatch', cause: 'fresh_send_actionability_unknown_or_busy', send_count: 0,
+      });
+      expect(turn.getSends()).toBe(0);
+      expect(outcome.result.incidents).toContain('pre_send_contention_paused_retry');
+      expect(cdp.closed).toEqual(['fixture-own-target']);
+      expect(outcome.result.cleanup).toBe('confirmed');
+      expect(outcome.result).not.toHaveProperty('cleanup_status');
+    });
+
+    it('a throwing own-tab close leaves the outcome unchanged and is only logged', { timeout: 60_000 }, async () => {
+      const prompt = 'PROMPT-2888-CLOSE-THROWS';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      turn.sendButton.count.mockImplementation(() => new Promise<number>(() => {}));
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const path = new URL(String(input)).pathname;
+        if (path.startsWith('/json/close/')) throw new Error('injected_own_tab_close_failure');
+        if (path !== '/json/list') throw new Error('unexpected CDP operation');
+        return new Response(JSON.stringify([
+          { id: 'fixture-own-target', type: 'page', url: PROJECT_URL },
+        ]), { status: 200 });
+      });
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, 'close-throws-2888.txt'), '200000');
+      expect(outcome.result).toMatchObject({
+        state: 'ui_contract_mismatch', cause: 'fresh_send_actionability_unknown_or_busy', send_count: 0,
+        cleanup_status: 'cleanup_unconfirmed',
+      });
+      // Logged as a diagnostic incident only; state, cause and delivery are unchanged.
+      expect(outcome.result.incidents).toContain('own_unsent_tab_close_failed');
+      expect(outcome.result.incidents).toContain('pre_send_contention_paused_retry');
+    });
+
+    it('a post-send failure is never retried and never closes the own tab', async () => {
+      const prompt = 'PROMPT-2888-POST-SEND';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED', () => {
+        throw new Error('browser_operation_timeout:locator_count');
+      });
+      const cdp = fakeOwnTabCloseCdp('fixture-own-target', PROJECT_URL);
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, 'post-send-2888.txt'), '90000');
+      expect(turn.getSends()).toBe(1);
+      expect(outcome.result.incidents).not.toContain('pre_send_contention_paused_retry');
+      expect(pauses(turn.page)).toEqual([]);
+      expect(cdp.closed).toEqual([]);
+    });
+
+    it('classifies the real 2026-11-23 / 2026-11-24 envelopes', () => {
+      const fixture = JSON.parse(readFileSync(
+        new URL('./fixtures/issue-2888-burst-envelopes.json', import.meta.url), 'utf8',
+      )) as { envelopes: Array<{ turn_result_cause: string; delivery: string; send_count: number }> };
+      const byCause = Object.fromEntries(fixture.envelopes.map((envelope) => [
+        envelope.turn_result_cause,
+        isPreSendContentionCause(envelope.turn_result_cause) && envelope.delivery === 'not-sent'
+          && envelope.send_count === 0,
+      ]));
+      expect(byCause).toEqual({
+        'browser_operation_timeout:locator_count': true,
+        'fresh_send_actionability_unknown_or_busy': true,
+        // Possibly delivered: post-send recovery path, never a pre-send retry.
+        'owned_conversation_recovery_census_failed': false,
+      });
+    });
   });
 
   it('preserves a formerly owned tab that navigates during terminal composer cleanup (#2487)', async () => {
@@ -5325,6 +5490,37 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(navigation.snapshotGoto()).toBe(1);
   });
 
+  it('#2888 pauses >=10 s plus spread before re-opening the surface after a locator_count failure', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      vi.spyOn(Math, 'random').mockReturnValue(0);
+      const navigation = new StateLightNavigationCounter();
+      let url = 'about:blank';
+      const gotoTimes: number[] = [];
+      const page = {
+        goto: vi.fn(async (target: string) => {
+          gotoTimes.push(performance.now());
+          if (gotoTimes.length === 1) throw new Error('browser_operation_timeout:locator_count');
+          url = target;
+        }),
+        url: vi.fn(() => url),
+        locator: vi.fn(() => scalarLocator({ count: vi.fn(async () => 0) })),
+      };
+      const pending = prepareStateLightFreshConversation(page, {
+        cdp: 'http://127.0.0.1:9222', profile: '/tmp/profile',
+        newChat: true, projectUrl: PROJECT_URL, timeoutMs: 120_000,
+      }, 'collision-profile', 'prepare-2888', navigation);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(page.goto).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(await pending).toEqual({ state: 'ready' });
+      // Same Page, one re-open on it, no new tab.
+      expect(page.goto).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('prepareStateLightFreshConversation skips a second goto when already on a blank project surface', async () => {
     const navigation = new StateLightNavigationCounter();
     const page = {
@@ -7349,7 +7545,8 @@ describe('Issue #1752 production liveness regressions', () => {
     const prompt = 'PROMPT-LIVENESS-LOCATOR-STALL';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const fake = makeLoserPage(prompt, 'UNREACHABLE');
-    fake.sendButton.count.mockImplementationOnce(() => new Promise<number>(() => {}));
+    // #2888: busy persists across the turn's paused retries on the same tab.
+    fake.sendButton.count.mockImplementation(() => new Promise<number>(() => {}));
     enqueueBrowserForTurn(mocks, fake.page);
 
     const writes: string[] = [];
