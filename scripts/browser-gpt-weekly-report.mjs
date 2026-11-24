@@ -48,8 +48,13 @@ terminal attempts, not successful sends and not non-ok turn-result rates.
 
 Cause key (incident attempts only): the specific lifecycle "incident" label; for a
 generic child_turn_state:* wrapper, "<wrapper>|<turn_result_cause>" when the result cause
-is a safe label, else the wrapper; with no usable incident label, the safe
-turn_result_cause; else "unknown". Unsafe text is never printed.
+is a recognized label, else the wrapper; with no usable incident label, the recognized
+turn_result_cause; else "unknown". A label is recognized only when each ':' segment is an
+identifier token found in the Browser-GPT turn production sources (selector below) at the
+resolved default-branch commit; unrecognized text (credentials, private ids, free-form
+diagnostics) is never printed. Root paths and raw Git diagnostics are never printed; Git
+subjects/titles are printed with credential-, email-, URL- and home-path-shaped text redacted.
+Git runs with GIT_NO_LAZY_FETCH=1 and GIT_OPTIONAL_LOCKS=0 (no network, no writes).
 
 Integrations: first-parent history of the default branch. "Merge pull request #N" merge
 commits and single-parent commits whose subject ends in "(#N)" identify a PR; others are
@@ -106,19 +111,23 @@ export function parseArgs(argv) {
 
 // ---------- labels ----------
 
-/** A safe label: short single token of [A-Za-z0-9_.:-], without long hex/uuid-like runs. */
-export function safeLabel(value) {
-  if (typeof value !== 'string') return undefined;
+/**
+ * A recognized label: at most four ':'-separated segments, each an identifier-shaped
+ * token that literally occurs in the Browser-GPT turn production sources at the
+ * resolved default-branch commit (the producer vocabulary). Anything else, such as an
+ * opaque credential or a private account/attempt label, is not recognized and never printed.
+ */
+export function safeLabel(value, vocabulary) {
+  if (typeof value !== 'string' || !vocabulary) return undefined;
   const v = value.trim();
-  if (!/^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,95}$/u.test(v)) return undefined;
-  if (/[0-9a-f]{16,}/iu.test(v.replace(/[-_:]/gu, ''))) return undefined;
-  return v;
+  if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}(:[A-Za-z_][A-Za-z0-9_]{0,63}){0,3}$/u.test(v)) return undefined;
+  return v.split(':').every((segment) => vocabulary.has(segment)) ? v : undefined;
 }
 
-export function causeKey(env) {
+export function causeKey(env, vocabulary) {
   if (env.lifecycle_outcome !== 'incident') return undefined;
-  const incident = safeLabel(env.incident);
-  const result = safeLabel(env.turn_result_cause);
+  const incident = safeLabel(env.incident, vocabulary);
+  const result = safeLabel(env.turn_result_cause, vocabulary);
   if (incident && incident.startsWith(GENERIC_INCIDENT_PREFIX)) {
     return result ? `${incident}|${result}` : incident;
   }
@@ -127,11 +136,6 @@ export function causeKey(env) {
 }
 
 // ---------- envelopes ----------
-
-function displayPath(p) {
-  const home = homedir();
-  return home && (p === home || p.startsWith(`${home}/`)) ? `~${p.slice(home.length)}` : p;
-}
 
 function listEnvelopeFiles(root, depth, out) {
   let entries;
@@ -169,13 +173,13 @@ function validateEnvelope(body) {
   return undefined;
 }
 
-export function loadObservations(roots) {
+export function loadObservations(roots, vocabulary) {
   const coverage = [];
   const skipped = { unreadable: 0, malformed: 0, unsupported: 0, invalid: 0 };
   const byIdentity = new Map();
   let duplicateFiles = 0;
   for (const root of roots) {
-    const record = { label: root.label, path: displayPath(root.path), available: false, files: 0, unreadableDirs: 0 };
+    const record = { label: root.label, available: false, files: 0, unreadableDirs: 0 };
     coverage.push(record);
     let stat;
     try {
@@ -225,7 +229,7 @@ export function loadObservations(roots) {
     observations.push({
       atMs: Date.parse(entry.body.terminal_at),
       incident: entry.body.lifecycle_outcome === 'incident',
-      cause: causeKey(entry.body),
+      cause: causeKey(entry.body, vocabulary),
     });
   }
   observations.sort((a, b) => a.atMs - b.atMs);
@@ -239,13 +243,33 @@ function git(repoRoot, args) {
     command: 'git',
     args: ['-C', repoRoot, '--no-pager', ...args],
     inheritParentEnv: true,
-    env: { GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
+    // Read-only: no optional locks, prompts or promisor lazy fetch (no network, no object writes).
+    env: { GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', GIT_NO_LAZY_FETCH: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   if (!result.ok) {
-    throw new Error(`git ${args[0]} failed: ${oneLine(result.error ?? result.stderr ?? '', 300) || `exit ${result.exitCode}`}`);
+    // Bounded category only; raw Git stderr can carry private paths or remote URLs.
+    throw new GitError(result.outcome === 'spawn-failure'
+      ? 'git could not be started'
+      : `git ${args[0]} failed (exit ${result.exitCode ?? 'signal'})`);
   }
   return result.stdout;
+}
+
+class GitError extends Error {}
+
+const MIN_NO_LAZY_FETCH_GIT = [2, 45];
+
+/** Refuse a partial clone when the installed Git cannot disable lazy fetching. */
+function assertLocalOnlyHistory(repoRoot) {
+  const partial = tryGit(repoRoot, ['config', '--get', 'extensions.partialclone'])?.trim();
+  if (!partial) return;
+  const version = /git version (\d+)\.(\d+)/u.exec(tryGit(repoRoot, ['version']) ?? '');
+  const major = Number(version?.[1] ?? 0);
+  const minor = Number(version?.[2] ?? 0);
+  if (major > MIN_NO_LAZY_FETCH_GIT[0] || (major === MIN_NO_LAZY_FETCH_GIT[0] && minor >= MIN_NO_LAZY_FETCH_GIT[1])) return;
+  throw new UsageError('--repo-root is a partial clone and this Git cannot disable lazy fetching '
+    + '(needs Git >= 2.45); use a full local clone');
 }
 
 function tryGit(repoRoot, args) {
@@ -258,8 +282,9 @@ function tryGit(repoRoot, args) {
 
 export function resolveDefaultRef(repoRoot, explicitRef) {
   if (tryGit(repoRoot, ['rev-parse', '--git-dir']) === undefined) {
-    throw new UsageError(`--repo-root ${repoRoot} is not a readable Git checkout`);
+    throw new UsageError('--repo-root is not a readable Git checkout');
   }
+  assertLocalOnlyHistory(repoRoot);
   const candidates = [];
   let source;
   const originHead = tryGit(repoRoot, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD'])?.trim();
@@ -293,6 +318,43 @@ export function isBrowserGptTurnPath(path) {
   return true;
 }
 
+const PRODUCER_PATHSPECS = [
+  'scripts/chatgpt-browser-turn', 'scripts/chatgpt-browser-turn.ts',
+  'scripts/flow-manager-browser-gpt-long-run.ts', 'scripts/flow-manager-long-running-child.ts',
+];
+
+/** Identifier tokens of the turn production sources at <sha> (local objects only). */
+export function readProducerVocabulary(repoRoot, sha) {
+  const paths = git(repoRoot, ['ls-tree', '-r', '-z', '--name-only', sha, '--', ...PRODUCER_PATHSPECS])
+    .split('\u0000').filter((p) => p && isBrowserGptTurnPath(p));
+  const tokens = new Set();
+  let unreadable = 0;
+  for (const path of paths) {
+    const text = tryGit(repoRoot, ['cat-file', 'blob', `${sha}:${path}`]);
+    if (text === undefined) { unreadable += 1; continue; }
+    for (const match of text.matchAll(/[A-Za-z_][A-Za-z0-9_]*/gu)) tokens.add(match[0]);
+  }
+  return { tokens, files: paths.length - unreadable, unreadable };
+}
+
+const SENSITIVE_PATTERNS = [
+  /\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+/gu,
+  /\bsk-[A-Za-z0-9_-]{8,}/gu,
+  /\bxox[a-z]-[A-Za-z0-9-]+/gu,
+  /\bAKIA[0-9A-Z]{12,}/gu,
+  /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/gu,
+  /\b[a-z][a-z0-9+.-]*:\/\/\S+/giu,
+  /(?:\/home|\/Users|\/root)(?:\/[^\s/]+)*/gu,
+  /\b(?=[A-Za-z0-9_+/=-]*[0-9])(?=[A-Za-z0-9_+/=-]*[A-Za-z])[A-Za-z0-9_+/=-]{24,}/gu,
+];
+
+/** Single-line Git subject/title with credential-, email-, URL- and home-path-shaped text redacted. */
+export function scrubText(text, max = 100) {
+  let clean = String(text).replace(/[\u0000-\u001f\u007f]+/gu, ' ').trim();
+  for (const pattern of SENSITIVE_PATTERNS) clean = clean.replace(pattern, '[redacted]');
+  return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
+}
+
 function parseIntegration(parents, subject, body) {
   const merge = /^Merge pull request #([0-9]+) from \S+/u.exec(subject);
   if (merge && parents.length > 1) {
@@ -308,7 +370,8 @@ export function readIntegrations(repoRoot, ref, startMs, untilMs) {
   const sep = '\u001f';
   const rec = '\u001e';
   const out = git(repoRoot, [
-    'log', '--first-parent', `--since=@${Math.floor(startMs / 1000) - 1}`,
+    // --since-as-filter filters without pruning traversal, so nonmonotonic dates cannot hide markers.
+    'log', '--first-parent', `--since-as-filter=@${Math.floor(startMs / 1000) - 1}`,
     `--format=%H${sep}%P${sep}%ct${sep}%s${rec}`, ref, '--',
   ]);
   const items = [];
@@ -374,9 +437,12 @@ function iso(ms) {
   return new Date(ms).toISOString();
 }
 
-function oneLine(text, max = 100) {
-  const clean = String(text).replace(/[\u0000-\u001f\u007f]+/gu, ' ').trim();
-  return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
+const DAILY_CAUSES = 5;
+
+function causeList(causes, limit = Infinity) {
+  const list = sortedCauses(causes);
+  const shown = list.slice(0, limit).map(([k, n]) => `${k}=${n}`).join(', ');
+  return list.length > limit ? `${shown}, … ${list.length - limit} more` : shown;
 }
 
 export function buildReport(opts) {
@@ -384,15 +450,17 @@ export function buildReport(opts) {
   const startMs = untilMs - opts.days * DAY_MS;
   const repoRoot = resolve(opts.repoRoot);
   const primary = resolve(opts.primaryRoot ?? join(homedir(), '.local', 'state', 'orchestrator-pack'));
-  const roots = [{ label: opts.primaryRoot ? 'primary (explicit)' : 'primary (default)', path: primary }];
+  const roots = [{ label: opts.primaryRoot ? 'primary (explicit --primary-root)' : 'primary (default $HOME/.local/state/orchestrator-pack)', path: primary }];
   opts.extraRoots.forEach((r, i) => roots.push({ label: `extra #${i + 1}`, path: resolve(r) }));
   for (const r of [opts.repoRoot, opts.primaryRoot, ...opts.extraRoots]) {
     if (r !== undefined && !r.trim()) throw new UsageError('empty path argument');
   }
 
   const ref = resolveDefaultRef(repoRoot, opts.defaultRef);
+  const vocabulary = readProducerVocabulary(repoRoot, ref.sha);
+  const shallow = tryGit(repoRoot, ['rev-parse', '--is-shallow-repository'])?.trim() === 'true';
   const { integrations, duplicatePrMarkers } = readIntegrations(repoRoot, ref.sha, startMs, untilMs);
-  const data = loadObservations(roots);
+  const data = loadObservations(roots, vocabulary.tokens);
   const obs = data.observations;
   const L = [];
 
@@ -404,13 +472,15 @@ export function buildReport(opts) {
   L.push('Source coverage:');
   for (const c of data.coverage) {
     L.push(c.available
-      ? `  ${c.label}: ${c.path} — ${c.files} envelope file(s)${c.unreadableDirs ? `, ${c.unreadableDirs} unreadable dir(s)` : ''}`
-      : `  ${c.label}: ${c.path} — UNAVAILABLE (missing or not a directory)`);
+      ? `  ${c.label}: ${c.files} envelope file(s)${c.unreadableDirs ? `, ${c.unreadableDirs} unreadable dir(s)` : ''}`
+      : `  ${c.label}: UNAVAILABLE (missing or not a directory)`);
   }
   const sk = data.skipped;
   L.push(`  skipped files: unreadable ${sk.unreadable}, malformed JSON ${sk.malformed}, unsupported schema ${sk.unsupported}, invalid fields ${sk.invalid}`);
   L.push(`  duplicate files of an already-seen attempt: ${data.duplicateFiles}; conflicting attempt identities excluded: ${data.conflictingIdentities}`);
   L.push(`  valid distinct terminal attempts (all time): ${obs.length}`);
+  L.push(`  cause-label vocabulary: ${vocabulary.files} turn production file(s) at the default-branch commit`
+    + `${vocabulary.unreadable ? `, ${vocabulary.unreadable} unreadable` : ''}; unrecognized labels are not printed`);
   const noData = obs.length === 0;
   if (noData) L.push('  NO DATA: no valid terminal envelopes in the scanned roots; shares below are N/A, not zero.');
   L.push('');
@@ -424,6 +494,7 @@ export function buildReport(opts) {
     const partial = from !== day || to !== day + DAY_MS ? ` partial [${iso(from).slice(11, 19)}, ${to === day + DAY_MS ? '24:00:00' : iso(to).slice(11, 19)})` : '';
     const tail = noData ? ' (no data)' : '';
     L.push(`  ${iso(day).slice(0, 10)}${partial}: ${s.incidents}/${s.total} incident ${share(s)}${tail}`);
+    if (s.incidents > 0) L.push(`    causes: ${causeList(s.causes, DAILY_CAUSES)}`);
   }
   const win = summarize(obs, startMs, untilMs);
   L.push(`  window total: ${win.incidents}/${win.total} incident ${share(win)}`);
@@ -440,10 +511,11 @@ export function buildReport(opts) {
   if (integrations.length === 0) L.push('  (none)');
   for (const i of integrations) {
     const pr = i.pr !== undefined ? `PR #${i.pr}` : 'PR unknown';
-    const title = i.pr !== undefined ? (i.title ? oneLine(i.title) : 'title unknown') : `subject: ${oneLine(i.subject)}`;
+    const title = i.pr !== undefined ? (i.title ? scrubText(i.title) : 'title unknown') : `subject: ${scrubText(i.subject)}`;
     L.push(`  ${iso(i.atMs)}  ${i.sha.slice(0, 12)}  ${pr}  ${i.relevant ? '[browser-gpt]' : '[other]'}  ${title}`);
   }
   if (unknownMeta > 0) L.push(`  coverage limitation: ${unknownMeta} integration(s) without identifiable PR metadata`);
+  if (shallow) L.push('  coverage limitation: shallow clone; history before the shallow boundary is absent');
   if (duplicatePrMarkers > 0) L.push(`  ${duplicatePrMarkers} repeated PR marker(s) skipped (each PR counted once)`);
   L.push('');
 
@@ -458,12 +530,11 @@ export function buildReport(opts) {
     const clipped = aTo < i.atMs + DAY_MS;
     const before = summarize(obs, bFrom, i.atMs);
     const after = summarize(obs, i.atMs, aTo);
-    L.push(`  PR #${i.pr} ${i.sha.slice(0, 12)} at ${iso(i.atMs)}${i.title ? ` — ${oneLine(i.title)}` : ''}`);
+    L.push(`  PR #${i.pr} ${i.sha.slice(0, 12)} at ${iso(i.atMs)}${i.title ? ` — ${scrubText(i.title)}` : ''}`);
     L.push(`    before [${iso(bFrom)}, ${iso(i.atMs)}): ${before.incidents}/${before.total} incident ${share(before)}`);
     L.push(`    after  [${iso(i.atMs)}, ${iso(aTo)})${clipped ? ' INCOMPLETE (clipped to --until)' : ''}: ${after.incidents}/${after.total} incident ${share(after)}`);
     for (const [name, s] of [['before', before], ['after', after]]) {
-      const list = sortedCauses(s.causes);
-      L.push(`    ${name} causes: ${list.length ? list.map(([k, n]) => `${k}=${n}`).join(', ') : '(none)'}`);
+      L.push(`    ${name} causes: ${s.causes.size ? causeList(s.causes) : '(none)'}`);
     }
     if (before.total === 0 || after.total === 0) {
       L.push('    comparison: N/A (a side has zero observations; no directional conclusion)');
@@ -492,9 +563,11 @@ export function main(argv = process.argv.slice(2)) {
     process.stdout.write(buildReport(opts));
     return 0;
   } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    const prefix = error instanceof UsageError ? 'browser-gpt-weekly-report: ' : 'browser-gpt-weekly-report: git history unusable: ';
-    process.stderr.write(`${prefix}${oneLine(msg, 400)}\n`);
+    // Usage and Git messages are bounded categories; anything else prints only its class name.
+    const msg = error instanceof UsageError ? error.message
+      : error instanceof GitError ? `git history unusable: ${error.message}`
+        : `internal error (${error instanceof Error ? error.name : typeof error})`;
+    process.stderr.write(`browser-gpt-weekly-report: ${scrubText(msg, 400)}\n`);
     return 2;
   }
 }

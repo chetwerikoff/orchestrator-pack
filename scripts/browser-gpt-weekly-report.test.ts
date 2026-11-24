@@ -9,6 +9,13 @@ import { runProcessSync } from './kernel/subprocess.ts';
 const SCRIPT = resolve(dirname(fileURLToPath(import.meta.url)), 'browser-gpt-weekly-report.mjs');
 const SCHEMA = 'flow-manager-long-running-child-terminal/v1';
 const UNTIL = '2026-11-10T12:00:00Z';
+// Producer vocabulary: the report recognizes only labels whose segments occur in turn production sources.
+const PRODUCER_SOURCE = [
+  'child_terminal_result_duplicate', 'child_turn_result_identity_mismatch', 'child_turn_state',
+  'driver_error', 'terminated_by_sigterm', 'no_reply', 'dead_turn_page_evidence', 'fallback_cause',
+  'shared_candidate_cause', 'completed_page_only', 'author_effect_pr_head_changed',
+].map((label) => `export const L_${label} = '${label}';`).join('\n');
+const PRIVATE_TOKEN = 'ghp_Ab12Cd34Ef56Gh78Ij90';
 
 let base: string;
 let repo: string;
@@ -30,9 +37,9 @@ function commitFile(path: string, content: string, message: string, date: string
   sh(repo, ['commit', '-q', '-m', message], date);
 }
 
-function mergePr(pr: number, branch: string, path: string, title: string, date: string): void {
+function mergePr(pr: number, branch: string, path: string, title: string, date: string, content = `${branch}\n`): void {
   sh(repo, ['checkout', '-q', '-b', branch, 'main']);
-  commitFile(path, `${branch}\n`, `work for ${branch}`, '2026-11-02T00:00:00Z');
+  commitFile(path, content, `work for ${branch}`, '2026-11-02T00:00:00Z');
   sh(repo, ['checkout', '-q', 'main']);
   sh(repo, ['merge', '-q', '--no-ff', branch, '-m', `Merge pull request #${pr} from owner/${branch}`, '-m', title], date);
 }
@@ -101,7 +108,7 @@ beforeAll(() => {
   base = mkdtempSync(join(tmpdir(), 'bgpt-weekly-'));
   repo = join(base, 'repo');
   primary = join(base, 'primary');
-  extra = join(base, 'extra');
+  extra = join(base, 'secret-root-name');
   mkdirSync(repo);
   mkdirSync(primary);
   mkdirSync(join(extra, 'nested'), { recursive: true });
@@ -113,13 +120,17 @@ beforeAll(() => {
   // Unrelated PR (merge commit).
   mergePr(101, 'docs-tweak', 'docs/a.md', 'Docs tweak', '2026-11-05T10:00:00Z');
   // Relevant PR (merge commit touching a turn production source).
-  mergePr(102, 'turn-fix', 'scripts/chatgpt-browser-turn/ui-adapter.ts', 'Fix turn adapter', '2026-11-07T00:00:00Z');
+  mergePr(102, 'turn-fix', 'scripts/chatgpt-browser-turn/ui-adapter.ts', 'Fix turn adapter', '2026-11-07T00:00:00Z', `${PRODUCER_SOURCE}\n`);
   // Direct commit without PR metadata.
   commitFile('notes.txt', 'n\n', 'chore: direct commit without pr', '2026-11-08T00:00:00Z');
   // Squash PR touching only a turn test file: not Browser-GPT production.
   commitFile('scripts/chatgpt-browser-turn/ui-adapter.test.ts', 't\n', 'test(turn): add cases (#104)', '2026-11-08T06:00:00Z');
   // Relevant squash PR (late in the window, after-window clipped by --until).
+  // Squash PR whose subject carries credential- and home-path-shaped text.
+  commitFile('docs/rotate.md', 'r\n', 'fix: rotate ghp_Zz99Yy88Xx77Ww66Vv55 for /home/alice/x (#106)', '2026-11-08T07:00:00Z');
   commitFile('scripts/flow-manager-long-running-child.ts', 'c\n', 'fix(child): settle late (#103)', '2026-11-09T20:00:00Z');
+  // Backdated first-parent tip: date-pruned traversal (--since) would hide every in-window marker.
+  commitFile('docs/late.md', 'l\n', 'chore: backdated tip (#105)', '2026-10-20T00:00:00Z');
   // Feature branch checked out, must never be used as the default branch.
   sh(repo, ['checkout', '-q', '-b', 'feature']);
   commitFile('scripts/chatgpt-browser-turn.ts', 'f\n', 'feat: feature only (#999)', '2026-11-09T21:00:00Z');
@@ -140,6 +151,8 @@ beforeAll(() => {
   put(primary, 'e9-terminal.json', envelope({ run: 'r9', at: '2026-11-09T10:00:00Z', outcome: 'success', cause: 'completed_page_only' }));
   put(extra, 'nested/e10-terminal.json', envelope({ run: 'r10', at: '2026-11-10T11:59:59.999Z', outcome: 'incident', incident: 'child_turn_state:no_reply', cause: 'dead_turn_page_evidence' }));
   put(primary, 'e11-terminal.json', envelope({ run: 'r11', at: UNTIL, outcome: 'incident', incident: 'after_until_excluded' }));
+  // Credential-shaped incident and private result label are unrecognized -> unknown, never printed.
+  put(primary, 'e15-terminal.json', envelope({ run: 'r15', at: '2026-11-04T12:00:00Z', outcome: 'incident', incident: PRIVATE_TOKEN, cause: 'alice_private_account' }));
   // Window start boundary (start = 2026-11-03T12:00Z).
   put(primary, 'e12-terminal.json', envelope({ run: 'r12', at: '2026-11-03T11:59:59Z', outcome: 'incident', incident: 'before_start_excluded' }));
   put(primary, 'e13-terminal.json', envelope({ run: 'r13', at: '2026-11-03T12:00:00Z', outcome: 'success' }));
@@ -191,7 +204,8 @@ describe('browser-gpt-weekly-report CLI', () => {
     expect(out).toContain('terminal attempts');
     expect(out).toContain('not successful sends');
     // Coverage.
-    expect(out).toContain('extra #2:');
+    expect(out).toContain('extra #2: UNAVAILABLE');
+    expect(out).toContain('primary (explicit --primary-root): ');
     expect(out).toContain('UNAVAILABLE');
     expect(out).toContain(`skipped files: unreadable ${isRoot ? 0 : 1}, malformed JSON 1, unsupported schema 1, invalid fields 2`);
     expect(out).toContain('duplicate files of an already-seen attempt: 2; conflicting attempt identities excluded: 1');
@@ -199,30 +213,31 @@ describe('browser-gpt-weekly-report CLI', () => {
 
     // Daily rows (zero-turn days and partial boundaries visible).
     expect(out).toContain('  2026-11-03 partial [12:00:00, 24:00:00): 0/1 incident 0.0%');
-    expect(out).toContain('  2026-11-04: 0/0 incident N/A\n');
+    expect(out).toContain('  2026-11-04: 1/1 incident 100.0%\n    causes: unknown=1\n');
     expect(out).toContain('  2026-11-05: 0/0 incident N/A\n');
-    expect(out).toContain('  2026-11-06: 1/2 incident 50.0%');
-    expect(out).toContain('  2026-11-07: 3/4 incident 75.0%');
+    expect(out).toContain('  2026-11-06: 1/2 incident 50.0%\n    causes: child_terminal_result_duplicate=1\n');
+    expect(out).toContain('  2026-11-07: 3/4 incident 75.0%\n    causes: child_turn_result_identity_mismatch=1, child_turn_state:driver_error=1, child_turn_state:driver_error|terminated_by_sigterm=1\n');
     expect(out).toContain('  2026-11-08: 2/2 incident 100.0%');
     expect(out).toContain('  2026-11-09: 0/1 incident 0.0%');
     expect(out).toContain('  2026-11-10 partial [00:00:00, 12:00:00): 1/1 incident 100.0%');
-    expect(out).toContain('  window total: 7/11 incident 63.6%');
+    expect(out).toContain('  window total: 8/12 incident 66.7%');
 
     // Cause keys: specific incident wins over a shared result cause; generic wrapper refinement and
     // fallbacks; successes never counted.
     const causes = out.split('Top incident causes')[1].split('Default-branch integrations')[0];
     expect(causes.trim().split('\n').slice(1).map((l) => l.trim())).toEqual([
+      '2  unknown',
       '1  child_terminal_result_duplicate',
       '1  child_turn_result_identity_mismatch',
       '1  child_turn_state:driver_error',
       '1  child_turn_state:driver_error|terminated_by_sigterm',
       '1  child_turn_state:no_reply|dead_turn_page_evidence',
       '1  fallback_cause',
-      '1  unknown',
     ]);
     for (const absent of ['shared_candidate_cause', 'completed_page_only', 'author_effect_pr_head_changed',
       'conflict_a', 'conflict_b', 'not_an_envelope_file', 'after_until_excluded', 'before_start_excluded',
-      'secret-user', 'private', 'Target closed', 'chatgpt.com', 'r10-a', 'locked_unread']) {
+      'secret-user', 'private', 'Target closed', 'chatgpt.com', 'r10-a', 'locked_unread', PRIVATE_TOKEN,
+      'alice', 'ghp_Zz99', 'secret-root-name', base]) {
       expect(out).not.toContain(absent);
     }
 
@@ -233,6 +248,8 @@ describe('browser-gpt-weekly-report CLI', () => {
     expect(markers).toMatch(/2026-11-08T00:00:00\.000Z {2}[0-9a-f]{12} {2}PR unknown {2}\[other\] {2}subject: chore: direct commit without pr/u);
     expect(markers).toMatch(/PR #104 {2}\[other\] {2}test\(turn\): add cases/u);
     expect(markers).toMatch(/2026-11-09T20:00:00\.000Z {2}[0-9a-f]{12} {2}PR #103 {2}\[browser-gpt\] {2}fix\(child\): settle late/u);
+    expect(markers).toMatch(/PR #106 {2}\[other\] {2}fix: rotate \[redacted\] for \[redacted\]/u);
+    expect(markers).not.toContain('PR #105');
     expect(markers).toContain('coverage limitation: 1 integration(s) without identifiable PR metadata');
     expect(out).not.toContain('#999');
     expect(markers.match(/PR #102/gu)).toHaveLength(1);
@@ -289,6 +306,7 @@ describe('browser-gpt-weekly-report CLI', () => {
       expect(r.status).toBe(2);
       expect(r.stdout).toBe('');
       expect(r.stderr).toMatch(pattern);
+      expect(r.stderr).not.toContain(base);
     }
 
     const bare = join(base, 'no-origin');
