@@ -14,7 +14,12 @@ const PRODUCER_SOURCE = [
   'child_terminal_result_duplicate', 'child_turn_result_identity_mismatch', 'child_turn_state',
   'driver_error', 'terminated_by_sigterm', 'no_reply', 'dead_turn_page_evidence', 'fallback_cause',
   'shared_candidate_cause', 'completed_page_only', 'author_effect_pr_head_changed',
-].map((label) => `export const L_${label} = '${label}';`).join('\n');
+].map((label) => `export const L_${label} = '${label}';`).concat([
+  'export const wrap = (state: string): string => `child_turn_state:${state}`;',
+  // Comments, identifiers and field names are not producer reasons (source-token collision).
+  '// owner private note: owner_private_note is a comment word',
+  'const owner_private_field = { owner: 1, private: 2 };',
+]).join('\n');
 const PRIVATE_TOKEN = 'ghp_Ab12Cd34Ef56Gh78Ij90';
 
 let base: string;
@@ -127,7 +132,7 @@ beforeAll(() => {
   commitFile('scripts/chatgpt-browser-turn/ui-adapter.test.ts', 't\n', 'test(turn): add cases (#104)', '2026-11-08T06:00:00Z');
   // Relevant squash PR (late in the window, after-window clipped by --until).
   // Squash PR whose subject carries credential- and home-path-shaped text.
-  commitFile('docs/rotate.md', 'r\n', 'fix: rotate ghp_Zz99Yy88Xx77Ww66Vv55 for /home/alice/x (#106)', '2026-11-08T07:00:00Z');
+  commitFile('docs/rotate.md', 'r\n', 'fix: rotate ghp_Zz99Yy88Xx77Ww66Vv55 password=exampleSecretWord Authorization: Bearer abcdefghijklmnopqrst at /srv/private-data (#106)', '2026-11-08T07:00:00Z');
   commitFile('scripts/flow-manager-long-running-child.ts', 'c\n', 'fix(child): settle late (#103)', '2026-11-09T20:00:00Z');
   // Backdated first-parent tip: date-pruned traversal (--since) would hide every in-window marker.
   commitFile('docs/late.md', 'l\n', 'chore: backdated tip (#105)', '2026-10-20T00:00:00Z');
@@ -153,6 +158,8 @@ beforeAll(() => {
   put(primary, 'e11-terminal.json', envelope({ run: 'r11', at: UNTIL, outcome: 'incident', incident: 'after_until_excluded' }));
   // Credential-shaped incident and private result label are unrecognized -> unknown, never printed.
   put(primary, 'e15-terminal.json', envelope({ run: 'r15', at: '2026-11-04T12:00:00Z', outcome: 'incident', incident: PRIVATE_TOKEN, cause: 'alice_private_account' }));
+  // Source-token collision: words of producer comments/identifiers are not recognized reasons.
+  put(primary, 'e16-terminal.json', envelope({ run: 'r16', at: '2026-11-04T13:00:00Z', outcome: 'incident', incident: 'owner:private', cause: 'owner_private_field' }));
   // Window start boundary (start = 2026-11-03T12:00Z).
   put(primary, 'e12-terminal.json', envelope({ run: 'r12', at: '2026-11-03T11:59:59Z', outcome: 'incident', incident: 'before_start_excluded' }));
   put(primary, 'e13-terminal.json', envelope({ run: 'r13', at: '2026-11-03T12:00:00Z', outcome: 'success' }));
@@ -213,20 +220,20 @@ describe('browser-gpt-weekly-report CLI', () => {
 
     // Daily rows (zero-turn days and partial boundaries visible).
     expect(out).toContain('  2026-11-03 partial [12:00:00, 24:00:00): 0/1 incident 0.0%');
-    expect(out).toContain('  2026-11-04: 1/1 incident 100.0%\n    causes: unknown=1\n');
+    expect(out).toContain('  2026-11-04: 2/2 incident 100.0%\n    causes: unknown=2\n');
     expect(out).toContain('  2026-11-05: 0/0 incident N/A\n');
     expect(out).toContain('  2026-11-06: 1/2 incident 50.0%\n    causes: child_terminal_result_duplicate=1\n');
     expect(out).toContain('  2026-11-07: 3/4 incident 75.0%\n    causes: child_turn_result_identity_mismatch=1, child_turn_state:driver_error=1, child_turn_state:driver_error|terminated_by_sigterm=1\n');
     expect(out).toContain('  2026-11-08: 2/2 incident 100.0%');
     expect(out).toContain('  2026-11-09: 0/1 incident 0.0%');
     expect(out).toContain('  2026-11-10 partial [00:00:00, 12:00:00): 1/1 incident 100.0%');
-    expect(out).toContain('  window total: 8/12 incident 66.7%');
+    expect(out).toContain('  window total: 9/13 incident 69.2%');
 
     // Cause keys: specific incident wins over a shared result cause; generic wrapper refinement and
     // fallbacks; successes never counted.
     const causes = out.split('Top incident causes')[1].split('Default-branch integrations')[0];
     expect(causes.trim().split('\n').slice(1).map((l) => l.trim())).toEqual([
-      '2  unknown',
+      '3  unknown',
       '1  child_terminal_result_duplicate',
       '1  child_turn_result_identity_mismatch',
       '1  child_turn_state:driver_error',
@@ -237,7 +244,8 @@ describe('browser-gpt-weekly-report CLI', () => {
     for (const absent of ['shared_candidate_cause', 'completed_page_only', 'author_effect_pr_head_changed',
       'conflict_a', 'conflict_b', 'not_an_envelope_file', 'after_until_excluded', 'before_start_excluded',
       'secret-user', 'private', 'Target closed', 'chatgpt.com', 'r10-a', 'locked_unread', PRIVATE_TOKEN,
-      'alice', 'ghp_Zz99', 'secret-root-name', base]) {
+      'alice', 'ghp_Zz99', 'secret-root-name', base, 'owner:private', 'owner_private_field',
+      'exampleSecretWord', 'abcdefghijklmnopqrst', 'private-data', '/srv']) {
       expect(out).not.toContain(absent);
     }
 
@@ -248,7 +256,7 @@ describe('browser-gpt-weekly-report CLI', () => {
     expect(markers).toMatch(/2026-11-08T00:00:00\.000Z {2}[0-9a-f]{12} {2}PR unknown {2}\[other\] {2}subject: chore: direct commit without pr/u);
     expect(markers).toMatch(/PR #104 {2}\[other\] {2}test\(turn\): add cases/u);
     expect(markers).toMatch(/2026-11-09T20:00:00\.000Z {2}[0-9a-f]{12} {2}PR #103 {2}\[browser-gpt\] {2}fix\(child\): settle late/u);
-    expect(markers).toMatch(/PR #106 {2}\[other\] {2}fix: rotate \[redacted\] for \[redacted\]/u);
+    expect(markers).toMatch(/PR #106 {2}\[other\] {2}fix: rotate \[redacted\] \[redacted\] \[redacted\] at \[redacted\]/u);
     expect(markers).not.toContain('PR #105');
     expect(markers).toContain('coverage limitation: 1 integration(s) without identifiable PR metadata');
     expect(out).not.toContain('#999');
@@ -295,10 +303,12 @@ describe('browser-gpt-weekly-report CLI', () => {
     const cases: Array<[string[], RegExp]> = [
       [['--until', UNTIL], /--repo-root <pack-checkout> is required/u],
       [['--repo-root', repo, '--days', '0'], /--days must be a whole number/u],
+      [['--repo-root', repo, '--days', 'SECRETVALUE'], /--days must be a whole number/u],
+      [['--repo-root', repo, '--until', 'SECRETVALUE'], /--until must be an ISO-8601 timestamp/u],
+      [['--repo-root', repo, '--SECRETVALUE'], /unknown argument \(see --help\)/u],
       [['--repo-root', repo, '--days', '1.5'], /--days must be a whole number/u],
       [['--repo-root', repo, '--days', 'Infinity'], /--days must be a whole number/u],
       [['--repo-root', repo, '--until', '2026-11-10 12:00'], /--until must be an ISO-8601 timestamp/u],
-      [['--repo-root', repo, '--bogus'], /unknown argument "--bogus"/u],
       [['--repo-root', join(base, 'primary')], /is not a readable Git checkout/u],
     ];
     for (const [args, pattern] of cases) {
@@ -306,6 +316,21 @@ describe('browser-gpt-weekly-report CLI', () => {
       expect(r.status).toBe(2);
       expect(r.stdout).toBe('');
       expect(r.stderr).toMatch(pattern);
+      expect(r.stderr).not.toContain(base);
+      expect(r.stderr).not.toContain('SECRETVALUE');
+    }
+
+    // Partial clones are refused before any object read (config-only; no remote is contacted).
+    for (const [key, value] of [['remote.origin.promisor', 'true'], ['remote.origin.partialclonefilter', 'blob:none']]) {
+      const partial = join(base, `partial-${key.split('.').pop()}`);
+      mkdirSync(partial);
+      sh(partial, ['init', '-q', '-b', 'main']);
+      sh(partial, ['config', 'remote.origin.url', join(base, 'no-such-remote')]);
+      sh(partial, ['config', key, value]);
+      const r = run(['--repo-root', partial, '--primary-root', join(base, 'empty'), '--until', UNTIL, '--default-ref', 'refs/heads/main']);
+      expect(r.status).toBe(2);
+      expect(r.stdout).toBe('');
+      expect(r.stderr).toMatch(/is a partial clone \(promisor remote\); local-only reads cannot be guaranteed/u);
       expect(r.stderr).not.toContain(base);
     }
 

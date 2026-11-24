@@ -49,12 +49,14 @@ terminal attempts, not successful sends and not non-ok turn-result rates.
 Cause key (incident attempts only): the specific lifecycle "incident" label; for a
 generic child_turn_state:* wrapper, "<wrapper>|<turn_result_cause>" when the result cause
 is a recognized label, else the wrapper; with no usable incident label, the recognized
-turn_result_cause; else "unknown". A label is recognized only when each ':' segment is an
-identifier token found in the Browser-GPT turn production sources (selector below) at the
-resolved default-branch commit; unrecognized text (credentials, private ids, free-form
-diagnostics) is never printed. Root paths and raw Git diagnostics are never printed; Git
-subjects/titles are printed with credential-, email-, URL- and home-path-shaped text redacted.
-Git runs with GIT_NO_LAZY_FETCH=1 and GIT_OPTIONAL_LOCKS=0 (no network, no writes).
+turn_result_cause; else "unknown". A label is recognized only when it is a whole string
+literal of the Browser-GPT turn production sources (selector below) at the resolved
+default-branch commit, or a producer wrapper prefix ("<wrapper>:${...}" template) followed by
+such a literal; comments and identifiers do not count. Unrecognized text (credentials,
+private ids, free-form diagnostics) is never printed. Root paths, raw option values and raw
+Git diagnostics are never printed; Git subjects/titles are printed with credential contexts,
+token-, email-, URL- and absolute-path-shaped text redacted. Git runs with GIT_NO_LAZY_FETCH=1
+and GIT_OPTIONAL_LOCKS=0; partial clones (promisor remotes) are refused (no network, no writes).
 
 Integrations: first-parent history of the default branch. "Merge pull request #N" merge
 commits and single-parent commits whose subject ends in "(#N)" identify a PR; others are
@@ -85,7 +87,7 @@ export function parseArgs(argv) {
       case '--days': {
         const raw = value();
         if (!/^[0-9]+$/u.test(raw) || Number(raw) < 1 || Number(raw) > MAX_DAYS) {
-          throw new UsageError(`--days must be a whole number from 1 to ${MAX_DAYS}, got "${raw}"`);
+          throw new UsageError(`--days must be a whole number from 1 to ${MAX_DAYS}`);
         }
         opts.days = Number(raw);
         break;
@@ -94,7 +96,7 @@ export function parseArgs(argv) {
         const raw = value();
         if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/u.test(raw)
           || !Number.isFinite(Date.parse(raw))) {
-          throw new UsageError(`--until must be an ISO-8601 timestamp with Z or an offset, got "${raw}"`);
+          throw new UsageError('--until must be an ISO-8601 timestamp with Z or an offset');
         }
         opts.untilMs = Date.parse(raw);
         break;
@@ -102,7 +104,7 @@ export function parseArgs(argv) {
       case '--envelope-root': opts.extraRoots.push(value()); break;
       case '--primary-root': opts.primaryRoot = value(); break;
       case '--default-ref': opts.defaultRef = value(); break;
-      default: throw new UsageError(`unknown argument "${arg}" (see --help)`);
+      default: throw new UsageError('unknown argument (see --help)');
     }
   }
   if (!opts.help && !opts.repoRoot) throw new UsageError('--repo-root <pack-checkout> is required');
@@ -111,17 +113,29 @@ export function parseArgs(argv) {
 
 // ---------- labels ----------
 
+const LABEL_SHAPE = /^[A-Za-z_][A-Za-z0-9_]{0,63}(:[A-Za-z_][A-Za-z0-9_]{0,63}){0,3}$/u;
+
+function recognized(label, vocabulary, depth = 0) {
+  if (vocabulary.literals.has(label)) return true;
+  if (depth >= 3) return false;
+  for (const prefix of vocabulary.prefixes) {
+    if (label.startsWith(prefix) && recognized(label.slice(prefix.length), vocabulary, depth + 1)) return true;
+  }
+  return false;
+}
+
 /**
- * A recognized label: at most four ':'-separated segments, each an identifier-shaped
- * token that literally occurs in the Browser-GPT turn production sources at the
- * resolved default-branch commit (the producer vocabulary). Anything else, such as an
- * opaque credential or a private account/attempt label, is not recognized and never printed.
+ * A recognized label is an actual producer reason: a whole string literal of the
+ * Browser-GPT turn production sources at the resolved default-branch commit, or a
+ * producer wrapper prefix (template literal "<wrapper>:${...}") followed by a recognized
+ * label. Comments, identifiers and field names are not reasons. Anything else, such as an
+ * opaque credential or a private operator-defined label, is not recognized and never printed.
  */
 export function safeLabel(value, vocabulary) {
   if (typeof value !== 'string' || !vocabulary) return undefined;
   const v = value.trim();
-  if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}(:[A-Za-z_][A-Za-z0-9_]{0,63}){0,3}$/u.test(v)) return undefined;
-  return v.split(':').every((segment) => vocabulary.has(segment)) ? v : undefined;
+  if (!LABEL_SHAPE.test(v)) return undefined;
+  return recognized(v, vocabulary) ? v : undefined;
 }
 
 export function causeKey(env, vocabulary) {
@@ -258,18 +272,20 @@ function git(repoRoot, args) {
 
 class GitError extends Error {}
 
-const MIN_NO_LAZY_FETCH_GIT = [2, 45];
-
-/** Refuse a partial clone when the installed Git cannot disable lazy fetching. */
+/**
+ * Refuse any partial clone before object reads, whatever the Git version: a promisor
+ * remote (remote.<name>.promisor / partialclonefilter) or the legacy extension can make
+ * Git fetch missing objects and write them, and older Git ignores GIT_NO_LAZY_FETCH.
+ */
 function assertLocalOnlyHistory(repoRoot) {
-  const partial = tryGit(repoRoot, ['config', '--get', 'extensions.partialclone'])?.trim();
-  if (!partial) return;
-  const version = /git version (\d+)\.(\d+)/u.exec(tryGit(repoRoot, ['version']) ?? '');
-  const major = Number(version?.[1] ?? 0);
-  const minor = Number(version?.[2] ?? 0);
-  if (major > MIN_NO_LAZY_FETCH_GIT[0] || (major === MIN_NO_LAZY_FETCH_GIT[0] && minor >= MIN_NO_LAZY_FETCH_GIT[1])) return;
-  throw new UsageError('--repo-root is a partial clone and this Git cannot disable lazy fetching '
-    + '(needs Git >= 2.45); use a full local clone');
+  const legacy = tryGit(repoRoot, ['config', '--get', 'extensions.partialclone'])?.trim();
+  const promisor = (tryGit(repoRoot, ['config', '--get-regexp', '^remote\\..*\\.(promisor|partialclonefilter)$']) ?? '')
+    .split('\n').map((line) => line.trim()).filter(Boolean)
+    .some((line) => /\.partialclonefilter\s/iu.test(line) || /\.promisor\s+(true|yes|on|1)$/iu.test(line));
+  if (legacy || promisor) {
+    throw new UsageError('--repo-root is a partial clone (promisor remote); local-only reads cannot be '
+      + 'guaranteed, use a full local clone');
+  }
 }
 
 function tryGit(repoRoot, args) {
@@ -303,7 +319,7 @@ export function resolveDefaultRef(repoRoot, explicitRef) {
     const sha = tryGit(repoRoot, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])?.trim();
     if (sha) return { ref, sha, source };
   }
-  throw new UsageError(`default-branch ref ${candidates.join(' / ')} does not resolve to a local commit`);
+  throw new UsageError(`the default-branch ref from ${source} does not resolve to a local commit`);
 }
 
 export function isBrowserGptTurnPath(path) {
@@ -323,28 +339,54 @@ const PRODUCER_PATHSPECS = [
   'scripts/flow-manager-browser-gpt-long-run.ts', 'scripts/flow-manager-long-running-child.ts',
 ];
 
-/** Identifier tokens of the turn production sources at <sha> (local objects only). */
+/** A producer reason literal: snake_case with an underscore (optionally ':'-joined), or a signal name. */
+function reasonLiteral(text) {
+  if (/^SIG[A-Z0-9]{2,12}$/u.test(text)) return true;
+  return /^[a-z][a-z0-9_]{0,63}(:[a-z][a-z0-9_]{0,63}){0,3}$/u.test(text) && text.includes('_');
+}
+
+/** Strip comments, keeping string and template literal contents intact. */
+function stripComments(text) {
+  return text.replace(/\/\*[\s\S]*?\*\/|(?<![:'"`\\])\/\/[^\n]*|'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\])*`/gu,
+    (m) => (m.startsWith('/*') || m.startsWith('//') ? ' ' : m));
+}
+
+/** Producer reason literals and wrapper prefixes of the turn production sources at <sha> (local objects only). */
 export function readProducerVocabulary(repoRoot, sha) {
   const paths = git(repoRoot, ['ls-tree', '-r', '-z', '--name-only', sha, '--', ...PRODUCER_PATHSPECS])
     .split('\u0000').filter((p) => p && isBrowserGptTurnPath(p));
-  const tokens = new Set();
+  const literals = new Set();
+  const prefixes = new Set();
   let unreadable = 0;
   for (const path of paths) {
-    const text = tryGit(repoRoot, ['cat-file', 'blob', `${sha}:${path}`]);
-    if (text === undefined) { unreadable += 1; continue; }
-    for (const match of text.matchAll(/[A-Za-z_][A-Za-z0-9_]*/gu)) tokens.add(match[0]);
+    const raw = tryGit(repoRoot, ['cat-file', 'blob', `${sha}:${path}`]);
+    if (raw === undefined) { unreadable += 1; continue; }
+    const text = stripComments(raw);
+    for (const m of text.matchAll(/'((?:\\.|[^'\\\n])*)'|"((?:\\.|[^"\\\n])*)"/gu)) {
+      const value = m[1] ?? m[2];
+      if (reasonLiteral(value)) literals.add(value);
+    }
+    for (const m of text.matchAll(/`([^`]*)`/gu)) {
+      const body = m[1];
+      if (!body.includes('${')) { if (reasonLiteral(body)) literals.add(body); continue; }
+      const prefix = /^([a-z][a-z0-9_]{0,63}(?::[a-z][a-z0-9_]{0,63}){0,2}:)\$\{/u.exec(body)?.[1];
+      if (prefix && prefix.includes('_')) prefixes.add(prefix);
+    }
   }
-  return { tokens, files: paths.length - unreadable, unreadable };
+  return { tokens: { literals, prefixes }, files: paths.length - unreadable, unreadable };
 }
 
 const SENSITIVE_PATTERNS = [
+  // Explicit credential contexts: keep the key, redact the value (any alphabet).
+  /\b(authorization\s*[:=]\s*(?:bearer|basic|token)?|bearer|basic|token|password|passwd|pwd|secret|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|cookie|session[_-]?id|credentials?|auth)(\s*[:=]\s*|\s+(?=[A-Za-z0-9_+/=.~-]{12,}\b))[^\s,;]+/giu,
   /\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+/gu,
   /\bsk-[A-Za-z0-9_-]{8,}/gu,
   /\bxox[a-z]-[A-Za-z0-9-]+/gu,
   /\bAKIA[0-9A-Z]{12,}/gu,
   /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/gu,
   /\b[a-z][a-z0-9+.-]*:\/\/\S+/giu,
-  /(?:\/home|\/Users|\/root)(?:\/[^\s/]+)*/gu,
+  // Any absolute or home-relative path (relative repository paths stay).
+  /(?<![\w.~-])(?:~|[A-Za-z]:)?[\\/](?:[^\s\\/]+[\\/])*[^\s\\/]+/gu,
   /\b(?=[A-Za-z0-9_+/=-]*[0-9])(?=[A-Za-z0-9_+/=-]*[A-Za-z])[A-Za-z0-9_+/=-]{24,}/gu,
 ];
 
