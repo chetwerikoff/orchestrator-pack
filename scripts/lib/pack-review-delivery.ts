@@ -768,7 +768,6 @@ async function journalVerdict(
         findings: [...options.payload.findings],
         journalOutcome: persisted,
       }, storeOptions(options));
-      appendKnownNotFixingBestEffort(options.run.id, options);
       return { ok: true, run, outcome: persisted };
     } catch (error) {
       lastError = describeError(error);
@@ -832,6 +831,9 @@ export async function deliverPackReviewVerdict(
       journalOutcome: journal.outcome,
     };
   }
+  // Every journaled path (fresh write, durable-after-error, journal resume)
+  // reaches this line; the append is idempotent per occurrence.
+  appendKnownNotFixingBestEffort(options.run.id, options);
 
   const githubKey = githubCommentIdempotencyKey(options.run);
   const statusKey = requiredStatusIdempotencyKey(options.run);

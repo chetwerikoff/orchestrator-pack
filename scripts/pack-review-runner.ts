@@ -3883,6 +3883,13 @@ async function invokeSettledGptArbiter(options: {
       timeoutMs: 30_000, inheritParentEnv: true, allowEmptyStdout: true,
     }).catch(() => null);
     if (listed?.ok) changedFiles = listed.stdout.trim() || undefined;
+    let netDiff: string | undefined;
+    const hunks = await runProcess({
+      command: 'git', args: ['-C', options.worktree, '--no-pager', 'diff', '--no-ext-diff',
+        '--unified=3', `${options.baseRef}...HEAD`],
+      timeoutMs: 30_000, inheritParentEnv: true, allowEmptyStdout: true,
+    }).catch(() => null);
+    if (hunks?.ok) netDiff = hunks.stdout.trim() || undefined;
     return await runPackReviewArbiter({
       cwd: options.worktree,
       baseRef: options.baseRef,
@@ -3892,6 +3899,7 @@ async function invokeSettledGptArbiter(options: {
       command,
       timeoutMs: harness ? input.fixtureArbiterTimeoutMs : PACK_REVIEW_ARBITER_TIMEOUT_MS,
       changedFiles,
+      netDiff,
       log,
       runProcess: (request) => runProcess(request),
     });

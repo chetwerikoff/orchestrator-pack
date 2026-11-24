@@ -21,6 +21,7 @@ export const PACK_REVIEW_NON_BLOCKING_SEVERITY = 'non-blocking';
 const REASON_LIMIT = 400;
 const MAX_ARBITER_FINDINGS = 50;
 const DIFF_LIST_LIMIT = 20_000;
+const NET_DIFF_LIMIT = 200_000;
 
 export interface PackReviewArbiterDecision {
   slotId: string;
@@ -167,10 +168,11 @@ function normalizeDecision(value: unknown): PackReviewArbiterDecision {
   if (typeof slotId !== 'string' || !slotId
       || typeof index !== 'number' || !Number.isInteger(index) || index < 0
       || (decision !== 'fix' && decision !== 'not-fixing')
-      || typeof reason !== 'string' || reason.trim() === '' || reason.length > REASON_LIMIT) {
+      || typeof reason !== 'string' || reason.trim() === '') {
     throw new Error('arbiter decision is malformed');
   }
-  return { slotId, index, decision, reason: reason.trim() };
+  // An over-long reason is clipped, not a cause to discard a complete answer.
+  return { slotId, index, decision, reason: reason.trim().slice(0, REASON_LIMIT) };
 }
 
 function normalizeFindings(values: readonly unknown[]): PackReviewArbiterFinding[] {
@@ -248,6 +250,7 @@ export function buildArbiterTurn1Prompt(options: {
   baseRef: string;
   contract: string;
   changedFiles?: string;
+  netDiff?: string;
 }): string {
   return [
     'You are the arbiter of a pack PR review. The current working directory is a read-only checkout of the PR head.',
@@ -266,6 +269,9 @@ export function buildArbiterTurn1Prompt(options: {
     `The PR base ref is \`${options.baseRef}\`; the checkout is the PR head.`,
     ...(options.changedFiles
       ? ['Files changed against the base (name-status):', '```', options.changedFiles, '```']
+      : []),
+    ...(options.netDiff
+      ? ['Net diff against the base, with removed lines (unified, may be truncated):', '```diff', options.netDiff, '```']
       : []),
     'Review the PR head against the Issue acceptance criteria, using Read, Grep and Glob on the checkout.',
     'Report only findings that meet the contract. Return exactly one JSON object and nothing else:',
@@ -321,6 +327,7 @@ export async function runPackReviewArbiter(options: {
   timeoutMs?: number;
   sessionId?: string;
   changedFiles?: string;
+  netDiff?: string;
   log: (line: string) => void;
 }): Promise<PackReviewGptArbiterRecord | null> {
   const command = options.command ?? 'claude';
@@ -345,6 +352,7 @@ export async function runPackReviewArbiter(options: {
     const first = await turn('--session-id', buildArbiterTurn1Prompt({
       issueText: options.issueText, baseRef: options.baseRef, contract: options.contract,
       changedFiles: options.changedFiles?.slice(0, DIFF_LIST_LIMIT),
+      netDiff: options.netDiff?.slice(0, NET_DIFF_LIMIT),
     }));
     const findings = parseArbiterFindingsTurn(first);
     const second = await turn('--resume', buildArbiterTurn2Prompt(occurrences));

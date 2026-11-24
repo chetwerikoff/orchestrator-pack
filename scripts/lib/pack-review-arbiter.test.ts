@@ -118,12 +118,18 @@ describe('arbiter output parsing', () => {
       { slotId: 'source-01', index: 0, decision: 'fix', reason: 'x' }] })],
     ['bad decision value', JSON.stringify({ decisions: JSON.parse(turn2).decisions.map(
       (entry: Record<string, unknown>) => ({ ...entry, decision: 'defer' })) })],
-    ['reason too long', JSON.stringify({ decisions: JSON.parse(turn2).decisions.map(
-      (entry: Record<string, unknown>) => ({ ...entry, reason: 'x'.repeat(401) })) })],
     ['empty reason', JSON.stringify({ decisions: JSON.parse(turn2).decisions.map(
       (entry: Record<string, unknown>) => ({ ...entry, reason: ' ' })) })],
   ])('rejects %s in turn 2', (_label, text) => {
     expect(() => parseArbiterDecisionsTurn(text, occurrences)).toThrow();
+  });
+
+  it('clips an over-long reason instead of discarding the answer', () => {
+    const long = JSON.stringify({ decisions: JSON.parse(turn2).decisions.map(
+      (entry: Record<string, unknown>) => ({ ...entry, reason: 'x'.repeat(900) })) });
+    const parsed = parseArbiterDecisionsTurn(long, occurrences);
+    expect(parsed).toHaveLength(3);
+    expect(parsed.every((entry) => entry.reason.length === 400)).toBe(true);
   });
 
   it('rejects a malformed turn 1 finding', () => {
@@ -135,7 +141,11 @@ describe('arbiter output parsing', () => {
 
 describe('arbiter prompts', () => {
   it('turn 1 carries the Issue and contract but no GPT finding text; turn 2 carries the rule and the findings', () => {
-    const first = buildArbiterTurn1Prompt({ issueText: 'ISSUE-TEXT', baseRef: 'origin/main', contract: 'CONTRACT-TEXT' });
+    const first = buildArbiterTurn1Prompt({
+      issueText: 'ISSUE-TEXT', baseRef: 'origin/main', contract: 'CONTRACT-TEXT',
+      netDiff: '-removed validation line\n+added line',
+    });
+    expect(first).toContain('-removed validation line');
     expect(first).toContain('ISSUE-TEXT');
     expect(first).toContain('origin/main');
     expect(first).toContain('CONTRACT-TEXT');
