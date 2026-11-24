@@ -561,7 +561,8 @@ describe('Issue #2888 shared Chrome under a burst', () => {
       && command.sessionId !== 'session-frozen-foreign')).toBe(true);
     await attached.browser.close();
     // Final not-sent exit: the exact own tab closes; foreign and leaked tabs stay.
-    expect(await closeOwnCdpTarget(CDP, attached.targetId, 2_000)).toBe(true);
+    const ownRoute = (url: string) => url === 'about:blank' || url === CHAT;
+    expect(await closeOwnCdpTarget(CDP, attached.targetId, 2_000, ownRoute)).toBe('closed');
     expect(httpClosed).toEqual([attached.targetId]);
     expect(targets.map((target) => target.id)).toEqual(['frozen-foreign', 'leaked-prompt-typed']);
   });
@@ -577,7 +578,7 @@ describe('Issue #2888 shared Chrome under a burst', () => {
         newChat: true, cleanupBudgetMs: 2_000,
       });
       await attached.browser.close();
-      expect(await closeOwnCdpTarget(CDP, attached.targetId, 2_000)).toBe(true);
+      expect(await closeOwnCdpTarget(CDP, attached.targetId, 2_000, (url) => url === 'about:blank')).toBe('closed');
       expect(targets.map((target) => target.id)).toEqual(['leaked-1', 'leaked-2']);
     }
   });
@@ -589,10 +590,23 @@ describe('Issue #2888 shared Chrome under a burst', () => {
       return new Response(JSON.stringify(targets), { status: 200 });
     }));
     targets.push({ id: 'own-created', type: 'page', url: 'about:blank' });
-    await expect(closeOwnCdpTarget(CDP, 'own-created', 500)).rejects.toThrow('injected_close_failure');
+    await expect(closeOwnCdpTarget(CDP, 'own-created', 500, (url) => url === 'about:blank'))
+      .rejects.toThrow('injected_close_failure');
     expect(targets.map((target) => target.id)).toEqual(['foreign-id', 'own-created']);
     targets.pop();
     expect(targets.map((target) => target.id)).toEqual(['foreign-id']);
+  });
+
+  it('keeps a created ID that now shows a foreign conversation and skips an absent ID', async () => {
+    setupChrome([{ id: 'own-created-moved', type: 'page', url: FOREIGN }]);
+    const ownRoute = (url: string) => url === 'about:blank' || url === CHAT;
+    // The census sees the exact ID on someone else's conversation: no close.
+    expect(await closeOwnCdpTarget(CDP, 'own-created-moved', 500, ownRoute)).toBe('foreign_route');
+    expect(httpClosed).toEqual([]);
+    expect(targets.map((target) => target.id)).toContain('own-created-moved');
+    // An ID already gone needs no close request at all.
+    expect(await closeOwnCdpTarget(CDP, 'never-existed', 500, ownRoute)).toBe('absent');
+    expect(httpClosed).toEqual([]);
   });
 });
 

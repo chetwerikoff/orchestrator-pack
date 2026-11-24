@@ -5760,6 +5760,39 @@ async function runTurnCore(
           incident('pre_send_c4_recovery', decision.refusal, 'preserve_original_cause');
           throw error;
         }
+        // #2888: locator_count is shared-browser contention. Pause inside this
+        // turn with spread before the one reload, within the same C4 budget,
+        // then repeat the owner, identity, idle and deadline checks.
+        const pauseMs = preSendPausedRetryDelayMs();
+        if (Date.now() + pauseMs >= lastSafeReloadMs) {
+          incident('pre_send_c4_recovery', 'budget_exhausted', 'preserve_original_cause');
+          throw error;
+        }
+        incident('pre_send_contention_paused_retry',
+          `browser_operation_timeout:locator_count;delay_ms=${pauseMs}`, 'pause_then_reload_same_owned_page');
+        await sleep(page, pauseMs);
+        let pausedIdle = false;
+        if (pageIsOriginalOwned() && !browserOrPageDefinitelyLost(page, browser)
+          && readOwnedConversationIdentity(page, chatUrlTarget).matched) {
+          try {
+            const observed = await observePreSendPagePredicate(page, lastSafeReloadMs, beforeBrowserAction);
+            pausedIdle = observed.verdict === 'idle';
+          } catch {
+            pausedIdle = false;
+          }
+        }
+        const pausedLost = browserOrPageDefinitelyLost(page, browser);
+        const recheck = preSendC4ReloadDecision({
+          error, readSettled, dispatchBoundaryEntered: dispatchBoundaryEntered(),
+          remedialNavigationUsed: remedialNavigationUsed(),
+          pageLost: pausedLost, pageIsOriginalOwned: pageIsOriginalOwned(),
+          identityMatched: !pausedLost && readOwnedConversationIdentity(page, chatUrlTarget).matched,
+          pageIdle: pausedIdle, nowMs: Date.now(), lastSafeReloadMs,
+        });
+        if (!recheck.reload) {
+          incident('pre_send_c4_recovery', recheck.refusal, 'preserve_original_cause');
+          throw error;
+        }
         remedialNavigation.c4 = true; // A failed attempt consumes the shared allowance.
         incident('pre_send_c4_recovery', 'locator_count_settled_zero_dispatch', 'reload_owned_page_once');
         beforeBrowserAction();
@@ -9787,6 +9820,13 @@ const PAUSED_RETRY_BUDGET_CAUSES: ReadonlySet<string> = new Set([
   'fresh_send_readiness_budget_exhausted',
 ]);
 
+/** #2888: guarded-retirement refusals that show foreign use or must keep the tab. */
+const AFFIRMATIVE_FOREIGN_USE_CAUSES: ReadonlySet<string> = new Set([
+  'foreign_draft', 'route_changed', 'stop_visible', 'generation_in_progress',
+  'foreign_user_message', 'foreign_assistant_turn', 'continuation_control_visible',
+  'last_page_guard',
+]);
+
 /** #2888: bound for the best-effort close of an own unsent tab at final exit. */
 const OWN_UNSENT_TAB_CLOSE_BUDGET_MS = 5_000;
 
@@ -9914,6 +9954,7 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
       || outcome.authorEffectSettleUntilMs !== undefined)
     && outcome.ownershipForfeited !== true && positivelyCreatedOriginal
     && outcomePageIsOriginal ? 'close' : 'skip';
+  let affirmativeForeignUse = false;
   if (pageAction === 'close' && outcome.result.send_count === 0
     && outcome.result.send_attempted !== true && outcome.ownedFreshProjectUrl) {
     const stillOwnedBlankSurface = (): boolean => {
@@ -9940,6 +9981,9 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
         ? 'frozen_ownership_unproven' : draft === 'foreign_draft'
           ? 'foreign_draft' : 'composer_unknown';
       incidents.push('owned_composer_cleanup_unavailable', refusal);
+      // #2888: a foreign draft or a Stop seen before any own Send is a positive
+      // sign of foreign use; the final-exit close must keep that tab.
+      if (draft === 'foreign_draft' || stop === true) affirmativeForeignUse = true;
       if (!appendIncident({
         eventClass: 'owned_composer_cleanup_unavailable',
         symptom: refusal,
@@ -9974,6 +10018,9 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
       retirement = await guard();
     }
     cleanup = retirement.status === 'confirmed' ? 'confirmed' : 'unconfirmed';
+    if (retirement.status !== 'confirmed' && AFFIRMATIVE_FOREIGN_USE_CAUSES.has(retirement.cause)) {
+      affirmativeForeignUse = true;
+    }
     if (retirement.status !== 'confirmed') {
       incidents.push(retirement.cause);
       if (!appendIncident({
@@ -10002,10 +10049,13 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
   }
   // #2888: the turn finally ends without a Send. The tab this invocation
   // created is its own: close that exact ID best-effort, never a foreign tab.
-  // A close failure is logged only; it never changes the turn's outcome.
+  // Creation proves which ID was allocated, not that it is still owned now:
+  // a positive foreign-use refusal keeps the tab, and a fresh browser-side
+  // census of the exact ID decides at the close boundary. A close failure is
+  // logged only; it never changes the turn's outcome.
   if (positivelyCreatedOriginal && cleanup !== 'confirmed' && cdp && observedNotSent
     && outcome.result.send_count === 0 && outcome.result.send_attempted !== true
-    && outcome.ownershipForfeited !== true) {
+    && outcome.ownershipForfeited !== true && !affirmativeForeignUse) {
     let ownTargetId: string | undefined;
     let ownInitialRoute: string | undefined;
     try {
@@ -10018,26 +10068,32 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
       }
     } catch { /* fall back to the attach-failure creation witness */ }
     ownTargetId ??= outcome.createdAttachFailureTargetId;
-    // A readable URL that left this invocation's own route shows someone
-    // else's conversation; keep that tab. Unreadable/blank stays own.
-    const stillOnOwnRoute = ((): boolean => {
-      if (!outcome.page || typeof outcome.page !== 'object' || pageLost) return true;
-      let url: string;
-      try { url = String(outcome.page.url()); } catch { return true; }
+    // Own route: blank, this invocation's blank project surface, or its exact
+    // bound conversation. Any other readable URL is someone else's tab.
+    const isOwnUnsentRoute = (url: string): boolean => {
       if (!url || url === 'about:blank') return true;
       try {
-        if (outcome.ownedFreshProjectUrl) return isBlankProjectSurfaceUrl(url, outcome.ownedFreshProjectUrl);
+        if (outcome.ownedFreshProjectUrl && isBlankProjectSurfaceUrl(url, outcome.ownedFreshProjectUrl)) return true;
         return Boolean(ownInitialRoute) && normalizeConversationUrl(url) === ownInitialRoute;
       } catch { return false; }
+    };
+    // A readable Page URL off the own route is a positive refusal as well.
+    const pageOnForeignRoute = ((): boolean => {
+      if (!outcome.page || typeof outcome.page !== 'object' || pageLost) return false;
+      try { return !isOwnUnsentRoute(String(outcome.page.url())); } catch { return false; }
     })();
-    if (ownTargetId && stillOnOwnRoute) {
+    if (ownTargetId && !pageOnForeignRoute) {
       let closeFailure: string | undefined;
       try {
-        if (await closeOwnCdpTarget(cdp, ownTargetId, OWN_UNSENT_TAB_CLOSE_BUDGET_MS)) {
+        const closed = await closeOwnCdpTarget(
+          cdp, ownTargetId, OWN_UNSENT_TAB_CLOSE_BUDGET_MS, isOwnUnsentRoute,
+        );
+        if (closed === 'closed' || closed === 'absent') {
           cleanup = 'confirmed';
           detachedOriginalCleanupUnconfirmed = false;
         } else {
-          closeFailure = 'own_unsent_tab_still_present';
+          closeFailure = closed === 'foreign_route' ? 'own_unsent_tab_on_foreign_route_kept'
+            : closed === 'last_page' ? 'own_unsent_tab_last_page_kept' : 'own_unsent_tab_still_present';
         }
       } catch (error) {
         closeFailure = ('own_unsent_tab_close_error:'

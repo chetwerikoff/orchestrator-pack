@@ -58,14 +58,31 @@ export async function createOwnCdpTarget(cdp: string, timeoutMs: number): Promis
   return (value as { id: string }).id;
 }
 
+/** Outcome of the #2888 best-effort close of one exact own target. */
+export type OwnCdpTargetCloseResult = 'closed' | 'absent' | 'foreign_route' | 'last_page' | 'still_present';
+
 /**
  * Issue #2888: best-effort close of one exact target this invocation created.
- * Browser-side HTTP close; it never reads or evaluates the page, so a frozen
- * renderer cannot stall it past the budget. Confirmed only by ID absence.
+ * A bounded /json/list census runs first: an absent ID needs no close, and an
+ * ID whose current URL is not this invocation's own route is kept, and so is
+ * the last page target (closing it would close the window). Browser-side
+ * HTTP close never reads or evaluates the page, so a frozen own renderer cannot
+ * stall it past the budget. The close is confirmed only by ID absence. Census
+ * or close errors propagate to the caller, which logs them.
  */
-export async function closeOwnCdpTarget(cdp: string, targetId: string, budgetMs: number): Promise<boolean> {
-  if (!targetId) return false;
+export async function closeOwnCdpTarget(
+  cdp: string,
+  targetId: string,
+  budgetMs: number,
+  isOwnUrl: (url: string) => boolean,
+): Promise<OwnCdpTargetCloseResult> {
+  if (!targetId) return 'still_present';
   const end = Date.now() + Math.max(1, budgetMs);
+  const census = await listCdpPageTargets(cdp, Math.max(1, end - Date.now()));
+  const before = census.filter((page) => page.id === targetId);
+  if (before.length === 0) return 'absent';
+  if (before.length !== 1 || !isOwnUrl(String(before[0]!.url ?? ''))) return 'foreign_route';
+  if (!census.some((page) => page.id !== targetId && page.type === 'page')) return 'last_page';
   const root = new URL(cdp);
   root.pathname = '/json/close/' + encodeURIComponent(targetId);
   root.search = '';
@@ -74,10 +91,10 @@ export async function closeOwnCdpTarget(cdp: string, targetId: string, budgetMs:
   await response.text().catch(() => '');
   while (Date.now() < end) {
     const pages = await listCdpPageTargets(cdp, Math.max(1, end - Date.now()));
-    if (!pages.some((page) => page.id === targetId)) return true;
+    if (!pages.some((page) => page.id === targetId)) return 'closed';
     await new Promise<void>((resolve) => setTimeout(resolve, Math.min(200, Math.max(1, end - Date.now()))));
   }
-  return false;
+  return 'still_present';
 }
 
 function encodeFrame(data: Buffer, opcode = 1): Buffer {

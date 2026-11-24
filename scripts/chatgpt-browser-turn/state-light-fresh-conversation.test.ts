@@ -921,6 +921,42 @@ describe('state-light fresh conversation collision recovery', () => {
     }
   });
 
+  it('#2888 keeps a created tab that moved to a foreign conversation after a failed attach', async () => {
+    const invocationId = randomUUID();
+    const createdId = 'created-then-moved-foreign';
+    const attach = vi.mocked(attachOwnTarget);
+    attach.mockRejectedValueOnce(Object.assign(new Error('injected_created_target_identity_changed'), {
+      attachAttempts: 1, createdTargetId: createdId,
+    }));
+    attach.mockRejectedValueOnce(new Error('injected_cleanup_reattach_failure'));
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname !== '/json/list') throw new Error('unexpected_destructive_cdp_request');
+      return new Response(JSON.stringify([
+        // No Page is held; the browser-side census shows the exact created ID
+        // on someone else's conversation now.
+        { id: createdId, type: 'page', url: 'https://chatgpt.com/c/28882888-2888-4888-8888-288828882888' },
+        { id: 'foreign-survivor', type: 'page', url: 'https://chatgpt.com/c/foreign' },
+      ]), { status: 200 });
+    });
+    try {
+      const fixture = makeLoserPage('NO-SEND-MOVED-FOREIGN', 'NEVER');
+      const outcome = await runNewChatTurn(
+        fixture.page, join(stateDir, 'attach-moved-foreign.txt'), '30000', invocationId,
+      );
+      expect(outcome.result).toMatchObject({
+        send_count: 0, owned_target_id: createdId, owned_target_created: true,
+        cleanup: 'unconfirmed', cleanup_status: 'cleanup_unconfirmed',
+      });
+      expect(outcome.result.incidents).toContain('own_unsent_tab_close_failed');
+      const paths = fetchSpy.mock.calls.map(([input]) => new URL(String(input)).pathname);
+      expect(paths.some((path) => path.startsWith('/json/close/'))).toBe(false);
+    } finally {
+      attach.mockImplementation(__testAttachOwnTargetFixture);
+      fetchSpy.mockRestore();
+    }
+  });
+
   it('AC12 closes only a freshly opened existing-chat Page after a witnessed pre-Send fetch 429', async () => {
     const fixture = makeLoserPage('NO-SEND-429', 'NEVER-SEND');
     proveCreatedPageCanClose(fixture.page);
@@ -1483,7 +1519,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
   });
 
-  it('never edits a changed draft and closes only its own unsent tab at final exit', async () => {
+  it('never edits a changed draft and keeps that foreign-edited tab at final exit (#2888)', async () => {
     const prompt = 'PROMPT-ATOMIC-COMPARE-EDIT';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const turn = makeLoserPage(prompt, 'UNREACHED');
@@ -1506,8 +1542,10 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await runNewChatTurn(turn.page, join(stateDir, 'atomic-shared-edit-2651.txt'));
     expect(changed).toBe(true);
     expect(outcome.result.send_count).toBe(0);
-    expect(outcome.result.cleanup).toBe('confirmed');
-    expect(cdp.closed).toEqual(['fixture-own-target']);
+    // A positive foreign draft is foreign use: the created tab is kept, not closed.
+    expect(outcome.result.incidents).toContain('foreign_draft');
+    expect(outcome.result.cleanup).not.toBe('confirmed');
+    expect(cdp.closed).toEqual([]);
     expect(turn.getComposerText()).toBe('FOREIGN-EDIT-BEFORE-ATOMIC-COMPARE');
     expect(turn.page.close).not.toHaveBeenCalled();
     expect(turn.sendButton.click).not.toHaveBeenCalled();
@@ -1629,6 +1667,7 @@ describe('state-light fresh conversation collision recovery', () => {
         if (path !== '/json/list') throw new Error('unexpected CDP operation');
         return new Response(JSON.stringify([
           { id: 'fixture-own-target', type: 'page', url: PROJECT_URL },
+          { id: 'foreign-survivor', type: 'page', url: 'https://chatgpt.com/c/foreign' },
         ]), { status: 200 });
       });
       const outcome = await runNewChatTurn(turn.page, join(stateDir, 'close-throws-2888.txt'), '200000');
@@ -5712,6 +5751,10 @@ describe('state-light fresh conversation collision recovery', () => {
       expect(turn.existing.sendButton.click).toHaveBeenCalledTimes(1);
       expect(turn.existing.getSends()).toBe(1);
       expect(result.incidents).toContain('pre_send_c4_recovery');
+      // #2888: the one reload waits >=10 s plus spread inside the same C4 budget.
+      expect(result.incidents).toContain('pre_send_contention_paused_retry');
+      const waits = turn.existing.page.waitForTimeout.mock.calls.map(([ms]: [number]) => ms);
+      expect(waits.some((ms: number) => ms >= 10_000 && ms < 15_000)).toBe(true);
       expect(readFileSync(turn.output, 'utf8')).toBe('C4-RECOVERED-OK');
       expect(turn.existing.page.close).not.toHaveBeenCalled();
     }, 30_000);
