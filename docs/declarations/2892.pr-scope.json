@@ -11,7 +11,8 @@
     "scripts/lib/pack-review-delivery.ts",
     "scripts/lib/pack-review-run-store.ts",
     "scripts/pack-review-runner-gpt.test.ts",
-    "scripts/pack-review-runner.ts"
+    "scripts/pack-review-runner.ts",
+    "scripts/review-delivery.test.ts"
   ],
   "denylist": [
     ".github/workflows/",
@@ -42,5 +43,5 @@
     "scripts/pack-review-runner.ts",
     "scripts/review-delivery.test.ts"
   ],
-  "source_revision": "53f78c0952bb2577cf4a7cd0dd320a9ba2b77183"
+  "source_revision": "277d461247db1988e4cbca391e489280bf2310cd"
 }
