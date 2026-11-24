@@ -1,12 +1,15 @@
 import { createHash } from 'node:crypto';
 import { parseArgs as parseSelectedGptReviewArgs } from './run-pack-review-gpt.ts';
 import { buildGptReviewPrompt } from './lib/pack-pr-review-contract.ts';
+import { arbiterOutstandingFindings } from './lib/pack-review-arbiter.ts';
 import {
   chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -46,8 +49,9 @@ import {
   readPackReviewAuthority,
   reconcilePackReviewTier,
 } from './pack-review-state.js';
-import { packReviewDeliveryNeedsResume, restorePackReviewAuthoritativeRequiredStatus } from './lib/pack-review-delivery.js';
+import { classifyPackReviewPayload, packReviewDeliveryNeedsResume, restorePackReviewAuthoritativeRequiredStatus } from './lib/pack-review-delivery.js';
 import {
+  appendPackReviewKnownNotFixing,
   createPackReviewRun,
   derivePackReviewNoJudgmentBudgetOutcome,
   getPackReviewRun,
@@ -8213,8 +8217,11 @@ describe('Issue #2719 CLI and manager interpretation of primary and secondary re
 });
 
 
-describe('Issue #2796 plain source union after Opus removal', () => {
-  async function settled(options: { clean?: boolean; advisoryOnly?: boolean } = {}) {
+describe('Issue #2796 plain source union and Issue #2892 Opus arbiter', () => {
+  async function settled(options: {
+    clean?: boolean; advisoryOnly?: boolean; t3Blockers?: boolean; arbiterSentinel?: boolean;
+    arbiterCommand?: (storeRoot: string) => string; arbiterTimeoutMs?: number;
+  } = {}) {
     const storeRoot = tempRoot('opk-2796-union-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
@@ -8232,7 +8239,7 @@ describe('Issue #2796 plain source union after Opus removal', () => {
     const statuses: string[] = [];
     const notifications: string[] = [];
     const fence = String.fromCharCode(96).repeat(3);
-    const tier = options.clean || options.advisoryOnly ? 'T3' : 'T2';
+    const tier = options.clean || options.advisoryOnly || options.t3Blockers ? 'T3' : 'T2';
     const blocker = {
       type: 'quality', code: 'quality:duplicate', severity: 'blocking',
       path: 'scripts/pack-review-runner.ts', summary: 'Original duplicate blocker',
@@ -8256,9 +8263,17 @@ describe('Issue #2796 plain source union after Opus removal', () => {
       fixtureIssueTitle: '[' + tier + '] Synthetic plain source union',
       fixtureIssueBody: fence + 'complexity-tier\ntier: ' + tier + '\n' + fence,
       fixtureIssueNumber: 2796, claimMode: 'preacquired',
+      ...(options.arbiterSentinel || options.arbiterCommand ? {
+        fixtureArbiterCommand: options.arbiterCommand ? options.arbiterCommand(storeRoot) : sentinel,
+        fixtureArbiterTimeoutMs: options.arbiterTimeoutMs,
+      } : {}),
       fixtureReviewBySourceSlot: options.clean ? {
         'source-01': [{ stdout: successfulCleanReviewPayload('inv-source-01') }],
         'source-02': [{ stdout: successfulCleanReviewPayload('inv-source-02') }],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
+      } : options.t3Blockers ? {
+        'source-01': [{ stdout: sourcePayload('inv-duplicate-01', [blocker]) }],
+        'source-02': [{ stdout: sourcePayload('inv-duplicate-02', [blocker, advisory]) }],
         'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
       } : options.advisoryOnly ? {
         'source-01': [{ stdout: findingsPayload('advice-01', 'warning') }],
@@ -8280,7 +8295,8 @@ describe('Issue #2796 plain source union after Opus removal', () => {
   }
 
   it('plain union after Opus removal', async () => {
-    const result = await settled();
+    // The arbiter is attempted and fails (the sentinel exits 99): the review is the baseline union.
+    const result = await settled({ arbiterSentinel: true });
     expect(result.output, JSON.stringify(result.output)).toMatchObject({ ok: true });
     expect(result.run?.reviewVerdict).toBe('findings');
     expect(result.run?.status).toBe('changes_requested');
@@ -8314,9 +8330,11 @@ describe('Issue #2796 plain source union after Opus removal', () => {
       'Run: ' + result.run!.id, 'Head: ' + HEAD_A,
       'Verdict: findings', 'Findings: 3', 'Pack-review status: failure',
     ].join('\n')]);
-    expect(existsSync(result.invoked)).toBe(false);
+    expect(existsSync(result.invoked)).toBe(true);
     expect(existsSync(path.join(result.storeRoot,'.local','state',
       'orchestrator-session','orchestrator-pack',['review','todo.md'].join('-')))).toBe(false);
+    expect(existsSync(path.join(result.storeRoot,'.local','state',
+      'orchestrator-session','orchestrator-pack','known-not-fixing.md'))).toBe(false);
   });
 
   it('legacy triage record ignored', async () => {
@@ -8431,6 +8449,189 @@ describe('Issue #2796 plain source union after Opus removal', () => {
       expect(existsSync(path.join(result.storeRoot, '.local', 'state',
         'orchestrator-session', 'orchestrator-pack', ['review', 'todo.md'].join('-')))).toBe(false);
     }
+  });
+
+
+  // ---- Issue #2892 Opus arbiter -------------------------------------------------
+  const ARBITER_FINDING = {
+    title: 'Arbiter own blocker', body: 'Trigger, harm and cheapest reaction.',
+    path: 'scripts/pack-review-runner.ts', severity: 'blocking',
+  };
+  const decisionsFor = (map: Record<string, 'fix' | 'not-fixing'>) => ({
+    decisions: Object.entries(map).map(([key, decision]) => {
+      const [slotId, index] = key.split(':');
+      return { slotId, index: Number(index), decision, reason: 'Reason for ' + key + '.' };
+    }),
+  });
+  function fakeClaude(root: string, spec: {
+    turn1?: unknown; turn2?: unknown; exit?: number; sleep?: number;
+  }): string {
+    const dir = path.join(root, 'fake-claude');
+    const log = path.join(dir, 'log');
+    mkdirSync(log, { recursive: true });
+    const raw = (value: unknown) => typeof value === 'string' ? value : JSON.stringify(value);
+    writeFileSync(path.join(dir, 'turn1.txt'), raw(spec.turn1 ?? { findings: [] }));
+    writeFileSync(path.join(dir, 'turn2.txt'), raw(spec.turn2 ?? { decisions: [] }));
+    const script = path.join(dir, 'claude');
+    writeFileSync(script, [
+      '#!/bin/sh',
+      'i=$(( $(ls "' + log + '" | grep -c "^args-") + 1 ))',
+      'printf "%s\\n" "$@" > "' + log + '/args-$i"',
+      'pwd -P > "' + log + '/cwd-$i"',
+      'cat > "' + log + '/input-$i"',
+      ...(spec.exit !== undefined ? ['exit ' + spec.exit] : []),
+      ...(spec.sleep !== undefined ? ['exec sleep ' + spec.sleep] : []),
+      'if [ "$i" = 1 ]; then cat "' + dir + '/turn1.txt"; else cat "' + dir + '/turn2.txt"; fi',
+      '',
+    ].join('\n'));
+    chmodSync(script, 0o755);
+    return script;
+  }
+  const calls = (root: string) => {
+    const log = path.join(root, 'fake-claude', 'log');
+    if (!existsSync(log)) return [];
+    const count = readdirSync(log).filter((name) => name.startsWith('args-')).length;
+    return Array.from({ length: count }, (_unused, index) => ({
+      args: readFileSync(path.join(log, 'args-' + (index + 1)), 'utf8').split('\n').filter(Boolean),
+      cwd: readFileSync(path.join(log, 'cwd-' + (index + 1)), 'utf8').trim(),
+      input: readFileSync(path.join(log, 'input-' + (index + 1)), 'utf8'),
+    }));
+  };
+  const knownNotFixing = (root: string) => path.join(root, '.local', 'state',
+    'orchestrator-session', 'orchestrator-pack', 'known-not-fixing.md');
+
+  it('arbiter applies decisions end to end', async () => {
+    const result = await settled({
+      arbiterCommand: (root) => fakeClaude(root, {
+        turn1: { findings: [ARBITER_FINDING] },
+        turn2: decisionsFor({ 'source-01:0': 'not-fixing', 'source-02:0': 'fix', 'source-02:1': 'fix' }),
+      }),
+    });
+    expect(result.output, JSON.stringify(result.output)).toMatchObject({ ok: true });
+    const run = result.run!;
+    // Two turns of one session in the review worktree, read-only Opus.
+    const made = calls(result.storeRoot);
+    expect(made).toHaveLength(2);
+    const [first, second] = made;
+    expect(first!.args).toContain('--session-id');
+    expect(second!.args).toContain('--resume');
+    expect(first!.args[first!.args.indexOf('--session-id') + 1])
+      .toBe(second!.args[second!.args.indexOf('--resume') + 1]);
+    for (const call of made) {
+      expect(call.args[call.args.indexOf('--model') + 1]).toBe('claude-opus-5-5');
+      expect(call.args[call.args.indexOf('--tools') + 1]).toBe('Read,Grep,Glob');
+      expect(call.cwd).toBe(path.join(realpathSync(path.dirname(run.reviewTargetRoot!)), path.basename(run.reviewTargetRoot!)));
+    }
+    expect(first!.input).not.toContain('Original duplicate blocker');
+    expect(first!.input).toContain('Blocking is an economic decision');
+    expect(first!.input).toContain('complexity-tier');
+    expect(second!.input).toContain('Original duplicate blocker');
+    // Persisted payload: GPT occurrences in source order, then the arbiter finding.
+    expect(run.findings).toEqual([
+      { ...result.blocker, sourceSlotId: 'source-01', severity: 'non-blocking', originalSeverity: 'blocking',
+        arbiterDecision: 'not-fixing', arbiterReason: 'Reason for source-01:0.' },
+      { ...result.blocker, sourceSlotId: 'source-02' },
+      { ...result.advisory, sourceSlotId: 'source-02' },
+      expect.objectContaining({ sourceSlotId: 'arbiter-01', severity: 'blocking', title: ARBITER_FINDING.title }),
+    ]);
+    expect(run.findingCount).toBe(4);
+    expect(run.status).toBe('changes_requested');
+    expect(result.statuses.at(-1)).toBe('failure');
+    expect(arbiterOutstandingFindings(run.findings)).toHaveLength(3);
+    // Verdict comment.
+    const posted = (JSON.parse(readFileSync(result.capture, 'utf8')) as { body: string }).body;
+    expect(posted).toContain('Source: Opus arbiter');
+    expect(posted).toContain('## Not fixing');
+    expect(posted.slice(posted.indexOf('## Not fixing'))).toContain('`source-01`: ');
+    expect(posted.slice(posted.indexOf('## Not fixing'))).toContain('Reason for source-01:0.');
+    expect(posted.slice(posted.indexOf('## Not fixing'))).not.toContain('source-02');
+    // known-not-fixing.md: one line, idempotent, never review-todo.md.
+    const lines = readFileSync(knownNotFixing(result.storeRoot), 'utf8').split('\n').filter(Boolean);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(new RegExp(
+      '^\\d{4}-\\d{2}-\\d{2} \\| repo=chetwerikoff/orchestrator-pack \\| PR=#2796 \\| head=' + HEAD_A
+      + ' \\| runId=' + run.id + ' slot=source-01:0 \\| title=[^|]+ \\| reason=Reason for source-01:0\\.$'));
+    expect(appendPackReviewKnownNotFixing(run.id, { projectId: 'orchestrator-pack', storeRoot: result.storeRoot }))
+      .toMatchObject({ appended: 0, skipped: 1 });
+    expect(existsSync(path.join(path.dirname(knownNotFixing(result.storeRoot)), ['review', 'todo.md'].join('-')))).toBe(false);
+    // The persisted record reloads and the arbiter result is stored once.
+    expect(getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot: result.storeRoot })?.gptArbiter)
+      .toMatchObject({ schema: 'pack-review-gpt-arbiter/v1' });
+  });
+
+  it('arbiter starts a two-turn session for a zero-finding round', async () => {
+    const result = await settled({
+      clean: true,
+      arbiterCommand: (root) => fakeClaude(root, { turn1: { findings: [] }, turn2: { decisions: [] } }),
+    });
+    expect(result.output).toMatchObject({ ok: true });
+    expect(calls(result.storeRoot)).toHaveLength(2);
+    expect(result.run?.findings).toEqual([]);
+    expect(existsSync(knownNotFixing(result.storeRoot))).toBe(false);
+  });
+
+  it('arbiter downgrading every blocker leaves the round non-blocking', async () => {
+    const t2 = await settled({
+      arbiterCommand: (root) => fakeClaude(root, {
+        turn2: decisionsFor({ 'source-01:0': 'not-fixing', 'source-02:0': 'not-fixing', 'source-02:1': 'fix' }),
+      }),
+    });
+    expect(t2.output).toMatchObject({ ok: true });
+    expect(t2.run?.findings.map((finding) => (finding as { severity: string }).severity))
+      .toEqual(['non-blocking', 'non-blocking', 'non-blocking']);
+    expect(t2.run?.status).toBe('commented');
+    // The harness has no GitHub evidence for a success write, so assert the projection itself.
+    expect(classifyPackReviewPayload({ verdict: 'findings', findingCount: 3, findings: t2.run!.findings }, t2.run!))
+      .toMatchObject({ blocking: false, requiredStatus: 'success' });
+    expect(readFileSync(knownNotFixing(t2.storeRoot), 'utf8').split('\n').filter(Boolean)).toHaveLength(2);
+
+    const t3 = await settled({
+      t3Blockers: true,
+      arbiterCommand: (root) => fakeClaude(root, {
+        turn2: decisionsFor({ 'source-01:0': 'not-fixing', 'source-02:0': 'not-fixing', 'source-02:1': 'fix' }),
+      }),
+    });
+    expect(t3.output).toMatchObject({ ok: true });
+    expect(t3.run?.status).toBe('commented');
+    expect(t3.statuses.at(-1)).toBe('pending');
+  });
+
+  describe('arbiter fallback', () => {
+    const decided = decisionsFor({ 'source-01:0': 'not-fixing', 'source-02:0': 'not-fixing', 'source-02:1': 'fix' });
+    const normalize = (text: string, runId: string) => text.split(runId).join('<run>');
+    it.each([
+      ['binary absent', { command: (root: string) => path.join(root, 'no-such-claude') }],
+      ['non-zero exit', { spec: { exit: 3 } }],
+      ['timeout', { spec: { sleep: 20 }, timeoutMs: 600 }],
+      ['unparseable output', { spec: { turn2: 'I will not answer in JSON' } }],
+      ['a missing occurrence', { spec: { turn2: { decisions: decided.decisions.slice(1) } } }],
+      ['an unknown occurrence', { spec: { turn2: { decisions: [...decided.decisions,
+        { slotId: 'source-07', index: 0, decision: 'fix', reason: 'x' }] } } }],
+      ['a duplicated occurrence', { spec: { turn2: { decisions: [...decided.decisions, decided.decisions[0]] } } }],
+    ] as const)('yields the baseline result for %s', async (_label, variant) => {
+      const baseline = await settled();
+      const result = await settled({
+        arbiterCommand: (root) => 'command' in variant
+          ? variant.command(root)
+          : fakeClaude(root, { turn1: { findings: [ARBITER_FINDING] }, ...variant.spec }),
+        arbiterTimeoutMs: 'timeoutMs' in variant ? variant.timeoutMs : undefined,
+      });
+      const base = baseline.run!;
+      const run = result.run!;
+      expect(result.output).toMatchObject({ ok: true });
+      expect(run.findings).toEqual(base.findings);
+      expect(run.findingCount).toBe(base.findingCount);
+      expect(run.reviewVerdict).toBe(base.reviewVerdict);
+      expect(run.status).toBe(base.status);
+      expect(run.gptArbiter).toBeUndefined();
+      expect(result.statuses).toEqual(baseline.statuses);
+      expect(result.notifications.map((text) => normalize(text, run.id)))
+        .toEqual(baseline.notifications.map((text) => normalize(text, base.id)));
+      const body = (file: string, id: string) => normalize((JSON.parse(readFileSync(file, 'utf8')) as { body: string }).body, id);
+      expect(body(result.capture, run.id)).toBe(body(baseline.capture, base.id));
+      expect(body(result.capture, run.id)).not.toContain('## Not fixing');
+      expect(existsSync(knownNotFixing(result.storeRoot))).toBe(false);
+    });
   });
 
   it.each([

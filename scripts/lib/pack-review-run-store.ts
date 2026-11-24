@@ -1,5 +1,7 @@
 import {
+  appendFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -13,6 +15,15 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import type { PackReviewer, PackReviewerResolutionSource } from './resolve-pack-reviewer.ts';
+import {
+  arbiterOccurrences,
+  isArbiterNotFixingFinding,
+  isArbiterSourceFinding,
+  normalizeArbiterRecord,
+  projectArbiterUnion,
+  type ArbiterUnionFinding,
+  type PackReviewGptArbiterRecord,
+} from './pack-review-arbiter.ts';
 import { TURN_STATES } from '../chatgpt-browser-turn/contracts.ts';
 import {
   PACK_REVIEW_CAPS,
@@ -298,6 +309,8 @@ export interface PackReviewRunRecord {
   canonicalRepository?: string;
   reviewRound?: PackReviewGptRoundRecord;
   finalCapDelta?: PackReviewFinalCapDelta;
+  /** Opus arbiter decisions and findings for the settled GPT round (Issue #2892). */
+  gptArbiter?: PackReviewGptArbiterRecord;
   /** Immutable exact body for native as well as GPT verdicts. */
   boundIssueSnapshotDigest?: string;
   stale?: boolean;
@@ -1257,17 +1270,19 @@ export interface PackReviewGptAggregate {
 function deriveCompleteGptRoundAggregate(
   round: PackReviewGptRoundRecord,
   path: string,
+  arbiter?: PackReviewGptArbiterRecord,
 ): PackReviewGptAggregate {
   assertCompleteGptRound(round, path);
-  const findings: unknown[] = [];
+  const union: unknown[] = [];
   for (const slot of round.sourceSlots) {
     if (!COMPLETE_GPT_TERMINAL_CLASSES.has(slot.terminalClass ?? '')) continue;
     const payload = slot.payload as { findings: Array<Record<string, unknown>> };
-    findings.push(...payload.findings.map((finding) => ({
+    union.push(...payload.findings.map((finding) => ({
       ...finding,
       sourceSlotId: slot.slotId,
     })));
   }
+  const findings = projectArbiterUnion(union as ArbiterUnionFinding[], arbiter);
   return {
     reviewVerdict: findings.length > 0 ? 'findings' : 'clean',
     findingCount: findings.length,
@@ -1293,8 +1308,9 @@ function assertGptRoundAggregate(
     findings: unknown;
   },
   path: string,
+  arbiter?: PackReviewGptArbiterRecord,
 ): void {
-  const expected = deriveCompleteGptRoundAggregate(round, path);
+  const expected = deriveCompleteGptRoundAggregate(round, path, arbiter);
   if (aggregate.reviewVerdict !== expected.reviewVerdict) {
     throw new Error(
       `corrupt pack review run record at ${path}: reviewVerdict does not match terminal source census`,
@@ -1693,6 +1709,14 @@ function parseRecord(
       throw new Error(`corrupt pack review run record at ${path}: GPT logical source version/round identity mismatch`);
     }
   }
+  let gptArbiter: PackReviewGptArbiterRecord | undefined;
+  if (raw.gptArbiter !== undefined) {
+    try {
+      gptArbiter = normalizeArbiterRecord(raw.gptArbiter);
+    } catch (error) {
+      throw new Error(`corrupt pack review run record at ${path}: invalid gptArbiter (${describePackReviewError(error)})`);
+    }
+  }
   const reviewVerdict = raw.reviewVerdict === 'clean' || raw.reviewVerdict === 'findings'
     ? raw.reviewVerdict
     : undefined;
@@ -1725,7 +1749,7 @@ function parseRecord(
         `corrupt pack review run record at ${path || '<record>'}: reviewVerdict does not match terminal source census`,
       );
     }
-    assertGptRoundAggregate(reviewRound, aggregate, path || '<record>');
+    assertGptRoundAggregate(reviewRound, aggregate, path || '<record>', gptArbiter);
   }
   return {
     ...(raw as unknown as PackReviewRunRecord),
@@ -1757,6 +1781,7 @@ function parseRecord(
     nativeAttempt,
     reviewRound,
     finalCapDelta,
+    ...(gptArbiter ? { gptArbiter } : {}),
     boundIssueSnapshotDigest,
     runnerPid: Number(raw.runnerPid ?? 0),
     createdAt,
@@ -2078,8 +2103,8 @@ export function validatePersistedPackReviewGptAggregate(
     if (!record.reviewRound) {
       throw new Error(`pack review run ${runId} has no persisted GPT round`);
     }
-    assertGptRoundAggregate(record.reviewRound, aggregate, path);
-    return deriveCompleteGptRoundAggregate(record.reviewRound, path);
+    assertGptRoundAggregate(record.reviewRound, aggregate, path, record.gptArbiter);
+    return deriveCompleteGptRoundAggregate(record.reviewRound, path, record.gptArbiter);
   });
 }
 
@@ -2486,6 +2511,73 @@ export function updatePackReviewRunIf(
     writeRecordUnlocked(storeRoot, next);
     return next;
   });
+}
+
+function onePhysicalKnownNotFixingField(value: unknown, limit: number): string {
+  return String(value ?? '').replace(/[|\r\n\t\x00-\x1f\x7f]/g, ' ')
+    .replace(/\s+/g, ' ').trim().slice(0, limit);
+}
+
+/**
+ * Append one line per arbiter `not-fixing` occurrence of a persisted run to the
+ * per-project known-not-fixing.md (Issue #2892). Idempotent per
+ * `runId slot=<slotId>:<index>`; a failure is returned, never thrown. This
+ * never touches review-todo.md.
+ */
+export function appendPackReviewKnownNotFixing(
+  runId: string,
+  options: PackReviewStoreOptions = {},
+): { appended: number; skipped: number; error?: string; path?: string } {
+  try {
+    const storeRoot = resolvePackReviewRunStoreRoot(options);
+    return withStoreLock(storeRoot, () => {
+      const path = recordPath(storeRoot, runId);
+      if (!existsSync(path)) return { appended: 0, skipped: 0, error: 'run_missing' };
+      const run = parseRecord(JSON.parse(readFileSync(path, 'utf8')), path);
+      const arbiter = run.gptArbiter;
+      if (!arbiter || !arbiter.decisions.some((entry) => entry.decision === 'not-fixing')) {
+        return { appended: 0, skipped: 0 };
+      }
+      const project = normalizePackReviewProjectId(run.projectId);
+      if (project !== run.projectId) return { appended: 0, skipped: 0, error: 'project_identity_untrusted' };
+      const gptFindings = run.findings.filter((finding) => !isArbiterSourceFinding(finding));
+      const downgraded = arbiterOccurrences(gptFindings as ArbiterUnionFinding[])
+        .filter((entry) => isArbiterNotFixingFinding(entry.finding));
+      const home = process.env.HOME || homedir();
+      const target = join(home, '.local', 'state', 'orchestrator-session', project, 'known-not-fixing.md');
+      let appended = 0;
+      let skipped = 0;
+      try {
+        mkdirSync(dirname(target), { recursive: true });
+        if (existsSync(target) && !lstatSync(target).isFile()) {
+          return { appended, skipped, error: 'known_not_fixing_target_not_regular_file', path: target };
+        }
+        let existing = existsSync(target) ? readFileSync(target, 'utf8') : '';
+        for (const { slotId, index, finding } of downgraded) {
+          const identity = `runId=${run.id} slot=${slotId}:${index}`;
+          if (existing.split('\n').some((line) => line.includes(` | ${identity} | `))) { skipped += 1; continue; }
+          const date = (options.now ?? new Date()).toISOString().slice(0, 10);
+          const line = [
+            date,
+            `repo=${onePhysicalKnownNotFixingField(run.canonicalRepository, 120)}`,
+            `PR=#${run.prNumber}`,
+            `head=${run.targetSha}`,
+            identity,
+            `title=${onePhysicalKnownNotFixingField(finding.title ?? finding.code, 180)}`,
+            `reason=${onePhysicalKnownNotFixingField(finding.arbiterReason, 400)}`,
+          ].join(' | ') + '\n';
+          appendFileSync(target, line, 'utf8');
+          existing += line;
+          appended += 1;
+        }
+        return { appended, skipped, path: target };
+      } catch (error) {
+        return { appended, skipped, error: describePackReviewError(error), path: target };
+      }
+    });
+  } catch (error) {
+    return { appended: 0, skipped: 0, error: describePackReviewError(error) };
+  }
 }
 
 export function heartbeatPackReviewRun(runId: string, options: PackReviewStoreOptions = {}): PackReviewRunRecord {

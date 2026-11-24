@@ -10,6 +10,7 @@ import {
   hasValidPackReviewGithubReconciliation,
   hasValidPackReviewJournalOutcome,
   hasPersistedPackReviewVerdict,
+  appendPackReviewKnownNotFixing,
   setPackReviewRunTerminal,
   updatePackReviewRun,
   updatePackReviewRunIf,
@@ -736,6 +737,16 @@ function persistRequiredStatusOutcome(
   }
 }
 
+/** Arbiter `not-fixing` lines; a failure is logged and never changes the review (Issue #2892). */
+function appendKnownNotFixingBestEffort(runId: string, options: PackReviewStoreOptions): void {
+  try {
+    const result = appendPackReviewKnownNotFixing(runId, storeOptions(options));
+    if (result.error) process.stderr.write(`known-not-fixing append failed: ${result.error}\n`);
+  } catch (error) {
+    process.stderr.write(`known-not-fixing append failed: ${describeError(error)}\n`);
+  }
+}
+
 async function journalVerdict(
   options: DeliverPackReviewVerdictOptions,
   classification: PackReviewVerdictClassification,
@@ -757,6 +768,7 @@ async function journalVerdict(
         findings: [...options.payload.findings],
         journalOutcome: persisted,
       }, storeOptions(options));
+      appendKnownNotFixingBestEffort(options.run.id, options);
       return { ok: true, run, outcome: persisted };
     } catch (error) {
       lastError = describeError(error);

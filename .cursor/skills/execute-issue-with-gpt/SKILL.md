@@ -123,9 +123,10 @@ binding is unavailable, omit `--session-id`. For every start or delivery resume 
 [Long-review recipe](../../../docs/orchestration-runbook.md#long-review-recipe), including
 its dedicated terminal, output log and exit wake; do not wait for an unbound `workerNotification`. Required
 reviewer sources are fresh project chats owned by that runner. A logical round gets one fresh GPT fixer conversation distinct from implementation
-and source reviewers only when the published original source union contains blocking
-findings. Give the fixer every original blocking source occurrence individually,
-including source-slot provenance; never deduplicate or downgrade blockers. Advisory-only
+and source reviewers only when the round's persisted payload contains blocking
+findings. Give the fixer every blocking finding of the persisted payload individually,
+including source-slot provenance; never deduplicate blockers. Occurrences listed under
+"Not fixing" in the verdict comment are not forwarded to the fixer. Advisory-only
 findings do not launch a fixer. The original GitHub COMMENT and durable journal are
 the source of findings, while the worker notification remains a six-line count/status
 summary, not a fixer packet.
