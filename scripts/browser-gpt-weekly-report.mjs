@@ -51,7 +51,7 @@ generic child_turn_state:* wrapper, "<wrapper>|<turn_result_cause>" when the res
 is a recognized label, else the wrapper; with no usable incident label, the recognized
 turn_result_cause; else "unknown". A label is recognized only when it is a whole string
 literal of the Browser-GPT turn production sources (selector below) at the resolved
-default-branch commit, or a producer wrapper prefix ("<wrapper>:${...}" template) followed by
+default-branch commit, or a producer wrapper prefix ("<wrapper>:\${...}" template) followed by
 such a literal; comments and identifiers do not count. Unrecognized text (credentials,
 private ids, free-form diagnostics) is never printed. Root paths, raw option values and raw
 Git diagnostics are never printed; Git subjects/titles are printed with credential contexts,
