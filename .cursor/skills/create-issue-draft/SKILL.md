@@ -143,6 +143,20 @@ The Issue body uses this order:
 13. **Verification** mapped to ACs;
 14. `contract-evidence` fence or accepted explicit none.
 
+### Recurrence regression fixture
+
+When the defect log or the Issue records a recurrence after a fix (including a fix
+that did not hold), the numbered Acceptance criteria name: the specific redacted
+real-incident fixture or capture source (sanitized terminal envelope, terminal
+capture or DOM snapshot, whichever fits), its in-scope test/fixture path, the
+observed failure, and the expected corrected behavior. The normal CI test reproduces
+the captured conditions, fails on the recurrence and passes with the fix. Never
+require live browser replay or publish private raw material. When no usable capture
+exists, the Issue says so explicitly and still names the best available regression
+test, without calling it capture-backed. This adds no new capture, receipt,
+validator or review/merge gate, does not apply to Issues without a recorded
+recurrence, and never asks to rewrite old Issues.
+
 For an ordinary Issue-linked PR targeting a configured guard-enabled repository,
 apply the **pack-owned** [PR scope declaration authoring convention](https://github.com/chetwerikoff/orchestrator-pack/blob/main/docs/pr-scope-declaration.md)
 (`chetwerikoff/orchestrator-pack`, not the reviewed target repository). Determine
