@@ -957,6 +957,53 @@ describe('state-light fresh conversation collision recovery', () => {
     }
   });
 
+  it.each(['foreign_draft', 'stop_visible'] as const)(
+    '#2888 lost original Page: exact-ID reattach on its own route shows %s, so no raw close is sent',
+    async (evidence) => {
+      const prompt = 'PROMPT-2888-DETACHED-' + evidence;
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      let lost = false;
+      // The exact-ID reattach finds the same target on the same project route,
+      // but someone else is using it now. It is queued only once the original
+      // Page is lost, so the turn's own attach never takes it.
+      const reattached = makeLoserPage('FOREIGN-USE', 'UNREACHED');
+      turn.sendButton.isEnabled.mockImplementation(async () => {
+        if (!lost) enqueueBrowserForTurn(mocks, reattached.page);
+        lost = true;
+        return false;
+      });
+      turn.page.isClosed = vi.fn(() => lost);
+      reattached.page.url = vi.fn(() => PROJECT_URL);
+      if (evidence === 'foreign_draft') await reattached.composer.fill('FOREIGN OPERATOR DRAFT');
+      else {
+        const locate = reattached.page.locator.getMockImplementation()!;
+        reattached.page.locator.mockImplementation((selector: string) => selector === RENDERED_STOP_BUTTON_SELECTOR
+          ? scalarLocator({ count: vi.fn(async () => 1), isVisible: vi.fn(async () => true) })
+          : locate(selector));
+      }
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const path = new URL(String(input)).pathname;
+        if (path !== '/json/list') throw new Error('unexpected_destructive_cdp_request:' + path);
+        return new Response(JSON.stringify([
+          { id: 'fixture-own-target', type: 'page', url: PROJECT_URL },
+          { id: 'foreign-survivor', type: 'page', url: 'https://chatgpt.com/c/foreign' },
+        ]), { status: 200 });
+      });
+      try {
+        const outcome = await runNewChatTurn(turn.page, join(stateDir, `detached-${evidence}.txt`), '120000');
+        expect(outcome.result.send_count).toBe(0);
+        expect(outcome.result.cleanup).not.toBe('confirmed');
+        const paths = fetchSpy.mock.calls.map(([input]) => new URL(String(input)).pathname);
+        expect(paths.filter((path) => path.startsWith('/json/close/'))).toEqual([]);
+        expect(reattached.page.close).not.toHaveBeenCalled();
+        expect(reattached.getSends()).toBe(0);
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    },
+  );
+
   it('AC12 closes only a freshly opened existing-chat Page after a witnessed pre-Send fetch 429', async () => {
     const fixture = makeLoserPage('NO-SEND-429', 'NEVER-SEND');
     proveCreatedPageCanClose(fixture.page);

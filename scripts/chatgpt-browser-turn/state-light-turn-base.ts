@@ -10046,6 +10046,11 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
     });
     cleanup = detached.status === 'confirmed' ? 'confirmed' : 'unconfirmed';
     detachedOriginalCleanupUnconfirmed = detached.status !== 'confirmed';
+    // #2888: the exact-ID reattach guard saw foreign use (Stop, generation, a
+    // different draft, foreign messages, route change): never raw-close it.
+    if (detached.status !== 'confirmed' && AFFIRMATIVE_FOREIGN_USE_CAUSES.has(detached.cause ?? '')) {
+      affirmativeForeignUse = true;
+    }
   }
   // #2888: the turn finally ends without a Send. The tab this invocation
   // created is its own: close that exact ID best-effort, never a foreign tab.
