@@ -13,6 +13,8 @@ export const PRE_SEND_CONTENTION_CAUSES: ReadonlySet<string> = new Set([
   'browser_operation_timeout:locator_count',
   'fresh_send_actionability_unknown_or_busy',
   'browser_operation_timeout:connect_over_cdp',
+  // A Send that never enabled within the bounded own-tab hydration wait.
+  'fresh_send_button_never_enabled',
 ]);
 
 export function isPreSendContentionCause(cause: string | undefined): boolean {

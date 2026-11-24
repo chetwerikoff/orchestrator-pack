@@ -34,7 +34,7 @@ import {
   countUninspectedRecoveryTargets,
   getOwnTargetInfo,
 } from './own-target-attach.ts';
-import { closeOwnCdpTarget, listCdpPageTargets, probeCdpSiblingEvaluations } from './own-target-cdp-proxy.ts';
+import { closeOwnCdpTarget, listCdpPageTargets } from './own-target-cdp-proxy.ts';
 import { isPreSendContentionCause, preSendPausedRetryDelayMs } from './pre-send-paused-retry.ts';
 import {
   turnExitCode,
@@ -510,23 +510,12 @@ export function classifyBrowserGptPageTurnStatus(
 export type PageLiveness = 'live' | 'lost' | 'unknown';
 
 
-type ExtendedReadinessOutcome = 'enabled' | 'still_frozen' | 'recovered_but_disabled'
-  | 'target_disappeared_or_changed' | 'terminal_unknown' | 'budget_exhausted';
-
-interface ExtendedReadinessDiagnostic {
-  readonly entryNonresponsiveCount: number;
-  readonly terminalNonresponsiveCount?: number;
-  readonly elapsedMs: number;
-  readonly outcome: ExtendedReadinessOutcome;
-}
-
 interface BrowserIncident {
   readonly eventClass: string;
   readonly symptom: string;
   readonly action?: string;
   readonly uncertaintyDiagnostics?: ObservationUncertaintyDiagnostics;
   readonly composerMutationDiagnostic?: ComposerMutationDiagnosticV1;
-  readonly extendedReadiness?: ExtendedReadinessDiagnostic;
   readonly retirementDetail?: string;
 }
 
@@ -2057,15 +2046,6 @@ function appendIncident(
         observation_uncertainty: incident.uncertaintyDiagnostics,
       } : {}),
       ...(incident.retirementDetail ? { retirement_detail: incident.retirementDetail } : {}),
-
-      ...(incident.extendedReadiness ? {
-        entry_nonresponsive_count: incident.extendedReadiness.entryNonresponsiveCount,
-        ...(incident.extendedReadiness.terminalNonresponsiveCount !== undefined ? {
-          terminal_nonresponsive_count: incident.extendedReadiness.terminalNonresponsiveCount,
-        } : {}),
-        extended_readiness_elapsed_ms: incident.extendedReadiness.elapsedMs,
-        outcome: incident.extendedReadiness.outcome,
-      } : {}),
       invocation: invocationId,
       agent_runtime: agent,
     })}\n`, 'utf8');
@@ -3415,6 +3395,7 @@ const FRESH_SEND_RESERVE_MS = 4 * FRESH_SEND_WINDOW_MS;
 const FRESH_SEND_PREPARE_RESERVE_MS = 3 * MAX_LOCAL_READ_WAIT_MS;
 
 const FRESH_SEND_EXTENDED_TOTAL_MS = 600_000;
+/** #2854 terminal reserve kept before the last safe dispatch time. */
 const FRESH_SEND_TERMINAL_PROBE_MS = 5_000;
 const FRESH_SEND_EXTENDED_POLL_MS = 2_000;
 
@@ -5616,110 +5597,17 @@ async function runTurnCore(
         page, sendButton, assertFreshOwner, readinessStartedAtMs, preDispatchCutoffMs,
       );
       assertFreshOwner();
-      let extendedEntryCount = 0;
-      let extendedRecorded = false;
-      const recordExtended = (
-        outcome: ExtendedReadinessOutcome, terminalNonresponsiveCount?: number,
-      ): void => {
-        if (!extendedEntryCount || extendedRecorded) return;
-        extendedRecorded = true;
-        const diagnostic: ExtendedReadinessDiagnostic = {
-          entryNonresponsiveCount: extendedEntryCount,
-          ...(terminalNonresponsiveCount !== undefined ? { terminalNonresponsiveCount } : {}),
-          elapsedMs: Math.max(0, Date.now() - readinessStartedAtMs),
-          outcome,
-        };
-        if (!recordIncident(incidents, {
-          eventClass: 'fresh_send_extended_readiness',
-          symptom: outcome,
-          action: outcome === 'enabled' ? 'dispatch_owned_send' : 'cleanup_own_unsent_payload',
-          extendedReadiness: diagnostic,
-        }, invocationId, navigation.snapshot())) journalWriteFailed = true;
-      };
-      const failExtended = (
-        cause: string, outcome: ExtendedReadinessOutcome, terminalNonresponsiveCount?: number,
-      ): TurnRunOutcome => {
-        recordExtended(outcome, terminalNonresponsiveCount);
-        return {
-          page, browser,
-          result: compactResult(
-            'send_failed', 'invocation', cause,
-            invocationId, profileKey, 0, pollCount, navigation, incidents, {}, journalWriteFailed,
-          ),
-        };
-      };
-      if (readiness === 'never_enabled') {
-        // A disabled own Send is not evidence about another renderer. Only a
-        // direct-target post-timeout *control-surviving* witness may extend.
-        const ownTargetId = getOwnTargetInfo(browser)?.targetId;
-        const entry = ownTargetId
-          ? await probeCdpSiblingEvaluations(config.cdp, ownTargetId) : undefined;
+      // #2854: a healthy owned composer may still hydrate after the first
+      // readiness window, but only before its last safe dispatch time. #2888:
+      // other tabs are never read; a Send that never enables ends this attempt.
+      if (readiness === 'never_enabled' && Date.now() < lastSafeDispatchMs) {
+        preDispatchCutoffMs = lastSafeDispatchMs;
+        readiness = await waitForExtendedFreshSendButton(
+          page, sendButton, assertFreshOwner, preDispatchCutoffMs,
+        );
         assertFreshOwner();
-        if (entry?.nonresponsive.length && ownTargetId) {
-          const originals = entry.nonresponsive;
-          extendedEntryCount = originals.length;
-          const readinessReturnByMs = Math.min(
-            readinessStartedAtMs + FRESH_SEND_EXTENDED_TOTAL_MS,
-            freshUnboundReturnByMs - DISPATCH_OBSERVATION_MS - 4 * MAX_LOCAL_READ_WAIT_MS,
-          );
-          preDispatchCutoffMs = readinessReturnByMs - FRESH_SEND_TERMINAL_PROBE_MS;
-          if (Date.now() >= preDispatchCutoffMs) {
-            return failExtended('fresh_send_readiness_budget_exhausted', 'budget_exhausted');
-          }
-          // Assert the original marker before extending, not just before Send.
-          if (!await composerPayloadMatchesBeforeSend(
-            composer, markedPayload, Math.min(invocationDeadlineMs, preDispatchCutoffMs),
-          )) {
-            if (Date.now() >= preDispatchCutoffMs) {
-              return failExtended('fresh_send_readiness_budget_exhausted', 'budget_exhausted');
-            }
-            recordExtended('terminal_unknown');
-            return returnComposerMutationFailure(composerPayloadFailureCause(preDispatchCutoffMs));
-          }
-          readiness = await waitForExtendedFreshSendButton(
-            page, sendButton, assertFreshOwner, preDispatchCutoffMs,
-          );
-          assertFreshOwner();
-          if (readiness === 'never_enabled' || Date.now() >= preDispatchCutoffMs) {
-            if (readinessReturnByMs <= Date.now()) {
-              return failExtended('fresh_send_readiness_budget_exhausted', 'budget_exhausted');
-            }
-            // Single fresh bounded re-probe of original positive ID/URL pairs.
-            // No new candidates, implicit recovery, retry or sibling mutation.
-            const terminal = await probeCdpSiblingEvaluations(
-              config.cdp, ownTargetId, originals,
-              Math.min(FRESH_SEND_TERMINAL_PROBE_MS, readinessReturnByMs - Date.now()),
-            );
-            if (Date.now() > readinessReturnByMs) {
-              return failExtended('fresh_send_readiness_budget_exhausted', 'budget_exhausted');
-            }
-            if (terminal.nonresponsive.length) {
-              return failExtended(
-                'fresh_send_blocked_by_frozen_sibling', 'still_frozen', terminal.nonresponsive.length,
-              );
-            }
-            if (terminal.responsive.length === originals.length) {
-              return failExtended('fresh_send_button_never_enabled', 'recovered_but_disabled');
-            }
-            if (terminal.disappearedOrChanged.length) {
-              return failExtended('fresh_send_button_never_enabled', 'target_disappeared_or_changed');
-            }
-            return failExtended('fresh_send_button_never_enabled', 'terminal_unknown');
-          }
-        } else {
-          // #2854: without qualified frozen-sibling evidence, a healthy owned composer may still
-          // hydrate after the first readiness window, but only before its last safe dispatch time.
-          if (Date.now() < lastSafeDispatchMs) {
-            preDispatchCutoffMs = lastSafeDispatchMs;
-            readiness = await waitForExtendedFreshSendButton(
-              page, sendButton, assertFreshOwner, preDispatchCutoffMs,
-            );
-            assertFreshOwner();
-          }
-        }
       }
       if (readiness === 'busy') {
-        recordExtended('terminal_unknown');
         incident('invocation_blocker', 'fresh_send_actionability_unknown_or_busy', 'retain_page');
         return {
           page, browser, cleanupAction: 'preserve',
@@ -5751,18 +5639,12 @@ async function runTurnCore(
         afterSend = true; // Dispatch was attempted even without positive delivery proof.
         held429Witness?.markDispatch(marker, markedPayload);
         if (freshCleanup) freshCleanup.sendAttempted = true;
-        recordExtended('enabled');
       };
       // The composer can change during Send readiness polling. Do not send a
       // different draft as though it were the invocation's marked payload.
       const finalPayloadMatches = await composerPayloadMatchesBeforeSend(
         composer, markedPayload, Math.min(invocationDeadlineMs, preDispatchCutoffMs),
       );
-      // A qualified extended wait may expire during its last awaited marker
-      // read. No dispatch callback or physical click has run yet.
-      if (extendedEntryCount && Date.now() >= preDispatchCutoffMs) {
-        return failExtended('fresh_send_readiness_budget_exhausted', 'budget_exhausted');
-      }
       if (!finalPayloadMatches) {
         return returnComposerMutationFailure(composerPayloadFailureCause(
           Math.min(invocationDeadlineMs, preDispatchCutoffMs),
@@ -5784,17 +5666,7 @@ async function runTurnCore(
       // Baseline = the final refreshed pre-SEND head (or Issue digest), at the actual dispatch boundary.
       await recordGithubEffectBaseline();
       assertFreshOwner();
-      try {
-        delivery = await sendAction();
-      } catch (error) {
-        // onDispatch rejects this deadline before Playwright can click. Only
-        // that exact zero-dispatch rejection is an extended budget terminal.
-        if (extendedEntryCount && !sendAttempted && Date.now() >= preDispatchCutoffMs
-          && error instanceof Error && error.message === 'fresh_send_readiness_deadline_exhausted') {
-          return failExtended('fresh_send_readiness_budget_exhausted', 'budget_exhausted');
-        }
-        throw error;
-      }
+      delivery = await sendAction();
       if (delivery.sendCount === 0
         && delivery.witness === 'unproven'
         && delivery.preDispatchTimeoutProven === true
@@ -10344,24 +10216,8 @@ export async function runGuardedOwnedTabRetirement(
       next_action: 'Continue existing owner recovery; original target ID is absent, no close was issued.',
     };
     if (found.length !== 1) return refused('target_census_failed', pin.id);
-    // #2682 is directional. When the original is unreadable, a healthy
-    // ChatGPT-origin sibling is only a read-only probe anchor, NOT an owner.
-    const anchor = census.find((target) => target.id !== pin.id && target.type === 'page'
-      && /^https:\/\/chatgpt\.com(?:\/|$)/iu.test(target.url));
-    if (anchor) {
-      const probe = await probeCdpSiblingEvaluations(
-        input.cdp, anchor.id, [{ id: pin.id, url: found[0]!.url }],
-        Math.min(MAX_LOCAL_READ_WAIT_MS, 3_000),
-      );
-      if (probe.nonresponsive.some((target) => target.id === pin.id)) {
-        return refused('frozen_ownership_unproven', pin.id);
-      }
-      if (probe.disappearedOrChanged.some((target) => target.id === pin.id)) {
-        return refused('route_changed', pin.id);
-      }
-      // Unknown/nonresponsive control is not proof of continuous ownership.
-      // Fresh *readable* ordinary DOM remains the only retirement path.
-    }
+    // #2888: no foreign tab is read as a probe anchor. An unreadable original
+    // fails the attach or the fresh DOM read below and is never closed.
     const deadlineMs = Date.now() + 20_000;
     const attached = await attachOwnTarget(loadChromium(), {
       mode: 'own-target', cdp: input.cdp, newChat: false,
