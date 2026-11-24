@@ -294,6 +294,22 @@ when known, delivery status, observed state/cause, and any legal same-invocation
 observation action. Never synthesize success from liveness, spinner state,
 timeout, or another workflow's artifact.
 
+### Weekly retrospective report
+
+`node scripts/browser-gpt-weekly-report.mjs --repo-root <pack-checkout> [--days 7]
+[--until <UTC ISO>] [--envelope-root <dir> ...]` prints, read-only, daily Browser-GPT
+terminal-attempt counts and incident shares, top incident cause keys, default-branch
+integration markers, and a 24h-before/24h-after comparison for each PR whose net
+first-parent diff touches turn production code. The primary root is
+`$HOME/.local/state/orchestrator-pack`; pass historical or OpenCode envelope roots
+with repeated `--envelope-root`. `--help` is the authority for options, time
+semantics, the cause-key rule and the exact path selector. Inputs are only terminal
+envelopes and local Git history: no fetch, checkout, browser, runtime call or write.
+Comparisons are correlation only: overlapping merges, bursts, small or zero
+denominators, clipped after-windows and skipped or missing files are limitations, not
+attributed effects or verdicts. For turning a recurrence into an Issue, follow the
+create-issue-draft skill "Recurrence regression fixture" section.
+
 ## One-shot diagnosis
 
 The page probe is read-only diagnostic evidence. It may inspect the exact owned
