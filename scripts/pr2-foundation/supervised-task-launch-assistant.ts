@@ -889,7 +889,8 @@ function canonicalClaudeCommand(profile: ExecutorProfile): string | null {
   if (profile.family !== 'claude' || !profile.model || !profile.effort) return null;
   // A closed direct grammar, not a shell-token substring or a wrapper forwarding guess.
   if (!((profile.model === 'claude-sonnet-5-5' && profile.effort === 'high')
-    || (profile.model === 'claude-opus-5-5' && profile.effort === 'medium'))) return null;
+    || (profile.model === 'claude-opus-5-5' && profile.effort === 'medium')
+    || (profile.model === 'claude-opus-5-5' && profile.effort === 'high'))) return null;
   // #2884: the flag is part of the closed grammar; a pane without it is not a match.
   return `claude --permission-mode bypassPermissions --model ${quote(profile.model)} --effort ${quote(profile.effort)}`;
 }

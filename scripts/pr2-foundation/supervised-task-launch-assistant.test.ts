@@ -7237,6 +7237,15 @@ describe('Issue #2716 Claude Code canonical executor and supervised readiness', 
     expect(starts).toBe(0);
   });
 
+  it('#2893 admits opus high with the exact canonical Claude command', async () => {
+    const profile = resolveExecutorProfile('manager', claudeEnv('claude-opus-5-5', 'high'), 'exact_terminal_worktree');
+    if (profile.status !== 'ok') throw new Error('Claude fixture profile refused');
+    const command = "claude --permission-mode bypassPermissions --model 'claude-opus-5-5' --effort 'high'";
+    expect(profile.value.launchCommand).toBe(command);
+    const native = observedClaudeAdapter(command, 'Opus', 'high', { commandObserved: true });
+    expect(await claudePaneProfileObserved(profile.value, worker, native)).toBe(true);
+  });
+
   it('#2847 admits the decorated Orca Claude splash only for selected Opus 5.5 / medium', async () => {
     const profile = resolveExecutorProfile('manager', claudeEnv('claude-opus-5-5', 'medium'), 'exact_terminal_worktree');
     if (profile.status !== 'ok') throw new Error('Claude fixture profile refused');
