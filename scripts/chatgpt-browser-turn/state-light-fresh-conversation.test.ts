@@ -80,11 +80,6 @@ vi.mock('./own-target-attach.ts', async (importOriginal) => {
 });
 
 
-vi.mock('./own-target-cdp-proxy.ts', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./own-target-cdp-proxy.ts')>();
-  return { ...actual, probeCdpSiblingEvaluations: vi.fn(actual.probeCdpSiblingEvaluations) };
-});
-
 vi.mock('./browser-session.ts', () => {
   const session = createBrowserSessionModuleMock(mocks);
   return Object.assign(session, {
@@ -145,7 +140,7 @@ import { admitStateLightTurnObservation, bindStateLightOwnedTarget, finalizeStat
 import { deriveDelivery, COMPLETION_MODE, HANDOFF_SCHEMA, RECEIPT_LOCATOR_SCHEMA, TERMINAL_SCHEMA } from '../flow-manager-long-running-child.ts';
 import { __testBrowserOrPageDefinitelyLost, __testComposerMutation, __testSendDelivery, deriveComposerInsertionBudgetMs, POST_SEND_OBSERVATION_POLL_MS, probePageLiveness } from './state-light-turn-base.ts';
 import { attachOwnTarget, __testAttachOwnTargetFixture } from './own-target-attach.ts';
-import { probeCdpSiblingEvaluations } from './own-target-cdp-proxy.ts';
+import { isPreSendContentionCause } from './pre-send-paused-retry.ts';
 import { currentOwnedPromptMarker, wrapOwnedPromptPayload } from './owned-prompt-marker.ts';
 import {
   EXPLICIT_CANCELLATION_AUTHORITY,
@@ -425,6 +420,27 @@ function proveCreatedPageRemainsVisibleToCdp(page: any): void {
   });
 }
 
+// #2888: CDP census where the exact own target disappears after its
+// browser-side /json/close. Foreign targets are never closable.
+function fakeOwnTabCloseCdp(ownId = 'fixture-own-target', url = 'about:blank'): { closed: string[] } {
+  const record = { closed: [] as string[] };
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const path = new URL(String(input)).pathname;
+    if (path.startsWith('/json/close/')) {
+      const id = decodeURIComponent(path.slice('/json/close/'.length));
+      if (id !== ownId) throw new Error('foreign_target_close_forbidden');
+      record.closed.push(id);
+      return new Response('Target is closing', { status: 200 });
+    }
+    if (path !== '/json/list') throw new Error('unexpected CDP operation in own-tab close fixture');
+    return new Response(JSON.stringify([
+      ...(record.closed.includes(ownId) ? [] : [{ id: ownId, type: 'page', url }]),
+      { id: 'foreign-frozen', type: 'page', url: 'https://chatgpt.com/c/foreign' },
+    ]), { status: 200 });
+  });
+  return record;
+}
+
 async function runNewChatTurn(
   page: any,
   outputPath: string,
@@ -487,7 +503,8 @@ describe('state-light fresh conversation collision recovery', () => {
     }
   });
 
-  it('preserves the original frozen pre-Send Page and names the refused owner check (#2685 r03 P1)', async () => {
+  it('closes its own frozen unsent tab by exact ID without reading the renderer (#2685 r03 P1, #2888)', async () => {
+    const cdp = fakeOwnTabCloseCdp();
     const prompt = 'PROMPT-FROZEN-OWNED-2685';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const turn = makeLoserPage(prompt, 'NEVER');
@@ -497,9 +514,11 @@ describe('state-light fresh conversation collision recovery', () => {
       turn.page, join(stateDir, 'original-frozen-2685.txt'), '90000', randomUUID(),
     );
     expect(outcome.result.send_count).toBe(0);
+    // The frozen draft is never modified; the exact own ID is closed browser-side.
     expect(turn.page.close).not.toHaveBeenCalled();
-    expect(outcome.result.cleanup).not.toBe('confirmed');
     expect(outcome.result.incidents).toContain('frozen_ownership_unproven');
+    expect(cdp.closed).toEqual(['fixture-own-target']);
+    expect(outcome.result.cleanup).toBe('confirmed');
   });
 
 
@@ -662,8 +681,6 @@ describe('state-light fresh conversation collision recovery', () => {
 
   it('Issue #2685: post-Send frozen original stays pinned beyond 20 minutes, including foreign edit/refreeze; thaw remains outcome-specific', async () => {
     const fixture = await deferredRetirementFixture('sent_unbound');
-    const probe = vi.mocked(probeCdpSiblingEvaluations);
-    const originalProbe = probe.getMockImplementation()!;
     let frozen = true;
     let foreignDraft = false;
     const originalEvaluate = fixture.turn.composer.evaluate.getMockImplementation()!;
@@ -681,16 +698,6 @@ describe('state-light fresh conversation collision recovery', () => {
       return foreignDraft ? cb(foreignElement, arg) : originalEvaluate(cb, arg, options);
     });
     fixture.setHealthyAnchor();
-    probe.mockImplementation(async (_cdp, anchorId, originalTargets) => {
-      expect(anchorId).toBe('healthy-owner-control');
-      expect(originalTargets).toEqual([{ id: fixture.targetId, url: SHARED_CONV }]);
-      const original = originalTargets![0]!;
-      return {
-        nonresponsive: frozen ? [original] : [],
-        responsive: frozen ? [] : [original],
-        disappearedOrChanged: [], unknown: [],
-      };
-    });
     try {
       mocks.nowMs += 21 * 60_000; // Past effect reconciliation window, not close authority.
       const frozenFirst = await fixture.invoke();
@@ -728,7 +735,6 @@ describe('state-light fresh conversation collision recovery', () => {
       expect(fixture.turn.page.close).toHaveBeenCalledTimes(1);
       expect(fixture.turn.getSends()).toBe(1);
     } finally {
-      probe.mockImplementation(originalProbe);
       fixture.fetchSpy.mockRestore();
     }
   });
@@ -878,6 +884,9 @@ describe('state-light fresh conversation collision recovery', () => {
     attach.mockRejectedValueOnce(new Error('injected_cleanup_reattach_failure'));
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = new URL(String(input));
+      // #2888: the only close ever sent is the exact own created ID; here it
+      // throws, which is logged only and leaves the outcome unchanged.
+      if (url.pathname === '/json/close/' + createdId) throw new Error('injected_own_tab_close_failure');
       if (url.pathname !== '/json/list') throw new Error('unexpected_destructive_cdp_request');
       return new Response(JSON.stringify([
         { id: createdId, type: 'page', url: 'about:blank', webSocketDebuggerUrl: 'ws://example/created-attach-failed' },
@@ -903,12 +912,97 @@ describe('state-light fresh conversation collision recovery', () => {
       });
       expect(fixture.getSends()).toBe(0);
       expect(fixture.page.close).not.toHaveBeenCalled();
-      expect(fetchSpy.mock.calls.every(([input]) => new URL(String(input)).pathname === '/json/list')).toBe(true);
+      const paths = fetchSpy.mock.calls.map(([input]) => new URL(String(input)).pathname);
+      expect(paths).toContain('/json/close/' + createdId);
+      expect(paths.every((path) => path === '/json/list' || path === '/json/close/' + createdId)).toBe(true);
     } finally {
       attach.mockImplementation(__testAttachOwnTargetFixture);
       fetchSpy.mockRestore();
     }
   });
+
+  it('#2888 keeps a created tab that moved to a foreign conversation after a failed attach', async () => {
+    const invocationId = randomUUID();
+    const createdId = 'created-then-moved-foreign';
+    const attach = vi.mocked(attachOwnTarget);
+    attach.mockRejectedValueOnce(Object.assign(new Error('injected_created_target_identity_changed'), {
+      attachAttempts: 1, createdTargetId: createdId,
+    }));
+    attach.mockRejectedValueOnce(new Error('injected_cleanup_reattach_failure'));
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname !== '/json/list') throw new Error('unexpected_destructive_cdp_request');
+      return new Response(JSON.stringify([
+        // No Page is held; the browser-side census shows the exact created ID
+        // on someone else's conversation now.
+        { id: createdId, type: 'page', url: 'https://chatgpt.com/c/28882888-2888-4888-8888-288828882888' },
+        { id: 'foreign-survivor', type: 'page', url: 'https://chatgpt.com/c/foreign' },
+      ]), { status: 200 });
+    });
+    try {
+      const fixture = makeLoserPage('NO-SEND-MOVED-FOREIGN', 'NEVER');
+      const outcome = await runNewChatTurn(
+        fixture.page, join(stateDir, 'attach-moved-foreign.txt'), '30000', invocationId,
+      );
+      expect(outcome.result).toMatchObject({
+        send_count: 0, owned_target_id: createdId, owned_target_created: true,
+        cleanup: 'unconfirmed', cleanup_status: 'cleanup_unconfirmed',
+      });
+      expect(outcome.result.incidents).toContain('own_unsent_tab_close_failed');
+      const paths = fetchSpy.mock.calls.map(([input]) => new URL(String(input)).pathname);
+      expect(paths.some((path) => path.startsWith('/json/close/'))).toBe(false);
+    } finally {
+      attach.mockImplementation(__testAttachOwnTargetFixture);
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it.each(['foreign_draft', 'stop_visible'] as const)(
+    '#2888 lost original Page: exact-ID reattach on its own route shows %s, so no raw close is sent',
+    async (evidence) => {
+      const prompt = 'PROMPT-2888-DETACHED-' + evidence;
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      let lost = false;
+      // The exact-ID reattach finds the same target on the same project route,
+      // but someone else is using it now. It is queued only once the original
+      // Page is lost, so the turn's own attach never takes it.
+      const reattached = makeLoserPage('FOREIGN-USE', 'UNREACHED');
+      turn.sendButton.isEnabled.mockImplementation(async () => {
+        if (!lost) enqueueBrowserForTurn(mocks, reattached.page);
+        lost = true;
+        return false;
+      });
+      turn.page.isClosed = vi.fn(() => lost);
+      reattached.page.url = vi.fn(() => PROJECT_URL);
+      if (evidence === 'foreign_draft') await reattached.composer.fill('FOREIGN OPERATOR DRAFT');
+      else {
+        const locate = reattached.page.locator.getMockImplementation()!;
+        reattached.page.locator.mockImplementation((selector: string) => selector === RENDERED_STOP_BUTTON_SELECTOR
+          ? scalarLocator({ count: vi.fn(async () => 1), isVisible: vi.fn(async () => true) })
+          : locate(selector));
+      }
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const path = new URL(String(input)).pathname;
+        if (path !== '/json/list') throw new Error('unexpected_destructive_cdp_request:' + path);
+        return new Response(JSON.stringify([
+          { id: 'fixture-own-target', type: 'page', url: PROJECT_URL },
+          { id: 'foreign-survivor', type: 'page', url: 'https://chatgpt.com/c/foreign' },
+        ]), { status: 200 });
+      });
+      try {
+        const outcome = await runNewChatTurn(turn.page, join(stateDir, `detached-${evidence}.txt`), '120000');
+        expect(outcome.result.send_count).toBe(0);
+        expect(outcome.result.cleanup).not.toBe('confirmed');
+        const paths = fetchSpy.mock.calls.map(([input]) => new URL(String(input)).pathname);
+        expect(paths.filter((path) => path.startsWith('/json/close/'))).toEqual([]);
+        expect(reattached.page.close).not.toHaveBeenCalled();
+        expect(reattached.getSends()).toBe(0);
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    },
+  );
 
   it('AC12 closes only a freshly opened existing-chat Page after a witnessed pre-Send fetch 429', async () => {
     const fixture = makeLoserPage('NO-SEND-429', 'NEVER-SEND');
@@ -1251,359 +1345,7 @@ describe('state-light fresh conversation collision recovery', () => {
   });
 
 
-  describe('Issue #2682 bounded frozen-sibling Send extension', () => {
-    const sibling = { id: 'qualified-sibling', url: 'https://chatgpt.com/c/26822682-2682-4682-8682-268226822682' };
-    const positive = () => ({
-      nonresponsive: [sibling], responsive: [], disappearedOrChanged: [], unknown: [],
-    });
-    const empty = () => ({
-      nonresponsive: [], responsive: [], disappearedOrChanged: [], unknown: [],
-    });
-    const journal = () => mocks.appendFileSync.mock.calls
-      .map((args) => {
-        try { return JSON.parse(String(args[1]).trim()) as Record<string, any>; }
-        catch { return {}; }
-      }).filter((row) => row.event_class === 'fresh_send_extended_readiness');
-
-    beforeEach(() => {
-      vi.mocked(probeCdpSiblingEvaluations).mockReset();
-      vi.mocked(probeCdpSiblingEvaluations).mockResolvedValue(empty());
-      mocks.appendFileSync.mockClear();
-    });
-
-    it('leaves the four incumbent 15s windows and zero-click never-enabled cause untouched without evidence', async () => {
-      const prompt = '2682-NEGATIVE-SEND';
-      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-      const turn = makeLoserPage(prompt, 'UNREACHED');
-      turn.sendButton.isEnabled.mockResolvedValue(false);
-      const started = mocks.nowMs;
-      // 137 s puts the last safe dispatch time exactly at the end of the fourth 15 s window.
-      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2682-negative.txt'), '137000');
-      expect(outcome.result).toMatchObject({
-        state: 'send_failed', cause: 'fresh_send_button_never_enabled', send_count: 0,
-      });
-      expect(mocks.nowMs - started).toBeGreaterThanOrEqual(60_000);
-      expect(mocks.nowMs - started).toBeLessThan(65_000);
-      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(1);
-      expect(turn.sendButton.click).not.toHaveBeenCalled();
-      expect(journal()).toHaveLength(0);
-    });
-
-    it('sends the originally marked owned payload once after the 180s recovery, not to the sibling', async () => {
-      const prompt = '2682-SEND-AT-180S';
-      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-      const turn = makeLoserPage(prompt, 'RECOVERED');
-      const base = mocks.nowMs;
-      turn.sendButton.isEnabled.mockImplementation(async () => mocks.nowMs >= base + 180_000);
-      vi.mocked(probeCdpSiblingEvaluations).mockResolvedValueOnce(positive());
-      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2682-enabled.txt'), '900000');
-      expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
-      expect(outcome.result.send_attempted).not.toBe(false);
-      expect(turn.getSends()).toBe(1);
-      expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
-      expect(mocks.nowMs - base).toBeGreaterThanOrEqual(180_000);
-      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(1);
-      expect(journal()).toEqual([expect.objectContaining({
-        entry_nonresponsive_count: 1, outcome: 'enabled',
-      })]);
-      expect(journal()[0]?.terminal_nonresponsive_count).toBeUndefined();
-      expect(JSON.stringify(journal())).not.toContain(sibling.id);
-      expect(JSON.stringify(journal())).not.toContain(sibling.url);
-      expect(JSON.stringify(journal())).not.toContain(prompt);
-    });
-
-    it.each([
-      { label: 'last eligible poll with action headroom', offsetMs: -10_000, state: 'ok', sends: 1, probes: 1 },
-      { label: 'at the cutoff', offsetMs: 0, state: 'send_failed', sends: 0, probes: 2 },
-      { label: 'after the cutoff', offsetMs: 1, state: 'send_failed', sends: 0, probes: 2 },
-    ])('applies the same extended cutoff at $label', async ({ offsetMs, state, sends, probes }) => {
-      const prompt = '2682-CUTOFF-' + offsetMs;
-      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-      const turn = makeLoserPage(prompt, 'UNREACHED');
-      const base = mocks.nowMs;
-      let entryProbeAt = 0;
-      let movedToCutoff = false;
-      vi.mocked(probeCdpSiblingEvaluations).mockImplementation(async () => {
-        if (!entryProbeAt) entryProbeAt = mocks.nowMs;
-        return positive();
-      });
-      turn.sendButton.isEnabled.mockImplementation(async () => {
-        if (!entryProbeAt || movedToCutoff) return false;
-        movedToCutoff = true;
-        const readinessStartedAt = entryProbeAt - 60_000;
-        // Mirror fresh-unbound return, 30s dispatch observation, two 5s actions,
-        // the final 5s probe and the 600s readiness-start cap from Issue #2682.
-        const cutoff = Math.min(
-          readinessStartedAt + 600_000,
-          base + 900_000 - 22_000 - 30_000 - 4 * 5_000,
-        ) - 5_000;
-        mocks.nowMs = cutoff + offsetMs;
-        return true;
-      });
-      const outcome = await runNewChatTurn(
-        turn.page, join(stateDir, '2682-cutoff-' + offsetMs + '.txt'), '900000',
-      );
-      expect(outcome.result.state).toBe(state);
-      expect(turn.getSends()).toBe(sends);
-      expect(turn.sendButton.click).toHaveBeenCalledTimes(sends);
-      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(probes);
-      if (sends === 0) {
-        expect(outcome.result).toMatchObject({
-          state: 'send_failed', cause: 'fresh_send_blocked_by_frozen_sibling', send_count: 0,
-        });
-        expect(outcome.result.send_attempted).not.toBe(true);
-        expect(journal()).toEqual([expect.objectContaining({ outcome: 'still_frozen' })]);
-      } else {
-        expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
-        expect(journal()).toEqual([expect.objectContaining({ outcome: 'enabled' })]);
-      }
-    });
-
-    it('classifies a last-moment enabled Send whose final marker read crosses the cutoff as not-sent budget exhaustion', async () => {
-      const prompt = '2682-LATE-MARKER';
-      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-      const turn = makeLoserPage(prompt, 'UNREACHED');
-      const base = mocks.nowMs;
-      let entryProbeAt = 0;
-      let lateEnabled = false;
-      const cutoff = () => Math.min(
-        entryProbeAt - 60_000 + 600_000,
-        base + 900_000 - 22_000 - 30_000 - 4 * 5_000,
-      ) - 5_000;
-      vi.mocked(probeCdpSiblingEvaluations).mockImplementation(async () => {
-        if (!entryProbeAt) entryProbeAt = mocks.nowMs;
-        return positive();
-      });
-      turn.sendButton.isEnabled.mockImplementation(async () => {
-        if (!entryProbeAt || lateEnabled) return false;
-        lateEnabled = true;
-        mocks.nowMs = cutoff() - 1;
-        return true;
-      });
-      const ordinaryInnerText = turn.composer.innerText.getMockImplementation()!;
-      turn.composer.innerText.mockImplementation(async () => {
-        const text = await ordinaryInnerText();
-        if (lateEnabled) mocks.nowMs += 2; // bounded final DOM read outlasts its cutoff
-        return text;
-      });
-      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2682-late-marker.txt'), '900000');
-      expect(lateEnabled).toBe(true);
-      expect(outcome.result).toMatchObject({
-        state: 'send_failed', scope: 'invocation',
-        cause: 'fresh_send_readiness_budget_exhausted', send_count: 0,
-      });
-      expect(outcome.result.send_attempted).not.toBe(true);
-      expect(turn.getSends()).toBe(0);
-      expect(turn.sendButton.click).not.toHaveBeenCalled();
-      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(1);
-      expect(journal()).toEqual([expect.objectContaining({
-        entry_nonresponsive_count: 1, outcome: 'budget_exhausted',
-      })]);
-      expect(journal()[0]?.terminal_nonresponsive_count).toBeUndefined();
-    });
-
-    it('routes a pre-click cutoff crossing through the same zero-dispatch budget terminal', async () => {
-      const prompt = '2682-BEFORE-CLICK-CUTOFF';
-      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-      const turn = makeLoserPage(prompt, 'UNREACHED');
-      const base = mocks.nowMs;
-      let entryProbeAt = 0;
-      let lateEnabled = false;
-      let crossedInBeforeClick = false;
-      const cutoff = () => Math.min(
-        entryProbeAt - 60_000 + 600_000,
-        base + 900_000 - 22_000 - 30_000 - 4 * 5_000,
-      ) - 5_000;
-      vi.mocked(probeCdpSiblingEvaluations).mockImplementation(async () => {
-        if (!entryProbeAt) entryProbeAt = mocks.nowMs;
-        return positive();
-      });
-      turn.sendButton.isEnabled.mockImplementation(async () => {
-        if (!entryProbeAt || lateEnabled) return false;
-        lateEnabled = true;
-        mocks.nowMs = cutoff() - 1;
-        return true;
-      });
-      // Cross the boundary *inside* onDispatch, after the last successful
-      // marked-payload recheck but before any physical Playwright click.
-      vi.spyOn(Date, 'now').mockImplementation(() => {
-        if (lateEnabled && new Error().stack?.includes('beforeClick')) {
-          crossedInBeforeClick = true;
-          mocks.nowMs = cutoff();
-        }
-        return mocks.nowMs;
-      });
-      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2682-before-click-cutoff.txt'), '900000');
-      expect(crossedInBeforeClick).toBe(true);
-      expect(outcome.result).toMatchObject({
-        state: 'send_failed', scope: 'invocation',
-        cause: 'fresh_send_readiness_budget_exhausted', send_count: 0,
-      });
-      expect(outcome.result.send_attempted).not.toBe(true);
-      expect(turn.getSends()).toBe(0);
-      expect(turn.sendButton.click).not.toHaveBeenCalled();
-      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(1);
-      expect(journal()).toEqual([expect.objectContaining({
-        entry_nonresponsive_count: 1, outcome: 'budget_exhausted',
-      })]);
-      expect(journal()[0]?.terminal_nonresponsive_count).toBeUndefined();
-    });
-
-    it('interleaves distinct own targets: B Sends and settles while A waits; A later Sends once', async () => {
-      const a = makeLoserPage('PROMPT', 'A-REPLY');
-      const b = makeLoserPage('PROMPT', 'B-REPLY');
-      b.page.url.mockImplementation(() => b.getSends() > 0 ? LOSER_CONV : PROJECT_URL);
-      const initialNow = mocks.nowMs;
-      let aQualified = false;
-      let bClicked = false;
-      let releaseB!: () => void;
-      let resolveAExtended!: () => void;
-      const bFinished = new Promise<void>((resolve) => { releaseB = resolve; });
-      const aExtendedWaiting = new Promise<void>((resolve) => { resolveAExtended = resolve; });
-      b.sendButton.isEnabled.mockResolvedValue(true);
-      a.sendButton.isEnabled.mockImplementation(async () => {
-        if (aQualified) resolveAExtended();
-        if (aQualified && !bClicked) await bFinished;
-        return bClicked && mocks.nowMs >= initialNow + 180_000;
-      });
-      vi.mocked(probeCdpSiblingEvaluations).mockImplementation(async (_endpoint, ownedId) => {
-        expect(ownedId).toBe('2682-owned-A');
-        aQualified = true;
-        return positive();
-      });
-      const attach = vi.mocked(attachOwnTarget);
-      attach.mockImplementationOnce(async (chromium, options) =>
-        __testAttachOwnTargetFixture(chromium, { ...options, pinnedTargetId: '2682-owned-A' }),
-      ).mockImplementationOnce(async (chromium, options) =>
-        __testAttachOwnTargetFixture(chromium, { ...options, pinnedTargetId: '2682-owned-B' }),
-      );
-      const originalBClick = b.sendButton.click.getMockImplementation()!;
-      b.sendButton.click.mockImplementation(async () => {
-        expect(aQualified).toBe(true);
-        bClicked = true;
-        await originalBClick();
-      });
-      enqueueBrowserForTurn(mocks, a.page);
-      enqueueBrowserForTurn(mocks, b.page);
-      const lastPage = (id: string) => id === '2682-owned-A' ? a.page : b.page;
-      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-        if (new URL(String(input)).pathname !== '/json/list') throw Error('unexpected fixture CDP URL');
-        const active = ['2682-owned-A', '2682-owned-B']
-          .filter((id) => !lastPage(id).close.mock.calls.length)
-          .map((id) => ({
-            id, type: 'page', url: String(lastPage(id).url()),
-            webSocketDebuggerUrl: 'ws://example/' + id,
-          }));
-        return new Response(JSON.stringify([
-          ...active, { id: 'keepalive-2682', type: 'page', url: 'about:blank' },
-        ]), { status: 200 });
-      });
-      const written: string[] = [];
-      const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
-        written.push(String(chunk));
-        return true;
-      }) as typeof process.stdout.write);
-      const runArgs = (id: string) => [
-        ...STATE_LIGHT_TURN_BASE_ARGV,
-        '--invocation-id', id,
-        '--output', join(stateDir, '2682-' + id + '.txt'),
-        '--new-chat', '--project-url', PROJECT_URL,
-        '--timeout-ms', '900000', '--poll-ms', '1',
-      ];
-      try {
-        const aId = randomUUID();
-        const bId = randomUUID();
-        const aRun = runStateLightTurn(runArgs(aId));
-        await aExtendedWaiting;
-        const bCode = await runStateLightTurn(runArgs(bId));
-        releaseB();
-        const aCode = await aRun;
-        const results = written.map((line) => {
-          try { return JSON.parse(line) as { schema?: string; state?: string; invocation_id?: string; send_count?: number }; }
-          catch { return {}; }
-        }).filter((row) => row.schema === 'turn-result/v1');
-        expect([aCode, bCode], JSON.stringify(written)).toEqual([0, 0]);
-        expect(aQualified).toBe(true);
-        expect(bClicked).toBe(true);
-        expect(a.getSends()).toBe(1);
-        expect(b.getSends()).toBe(1);
-        expect(results).toHaveLength(2);
-        expect(results).toEqual(expect.arrayContaining([
-          expect.objectContaining({ invocation_id: aId, state: 'ok', send_count: 1 }),
-          expect.objectContaining({ invocation_id: bId, state: 'ok', send_count: 1 }),
-        ]));
-        expect(journal()).toEqual([expect.objectContaining({
-          entry_nonresponsive_count: 1, outcome: 'enabled', invocation: aId,
-        })]);
-        expect(a.page.bringToFront).not.toHaveBeenCalled();
-        expect(b.page.bringToFront).not.toHaveBeenCalled();
-      } finally {
-        releaseB();
-        attach.mockImplementation(__testAttachOwnTargetFixture);
-        stdout.mockRestore();
-      }
-    });
-
-    it.each([
-      { result: positive(), cause: 'fresh_send_blocked_by_frozen_sibling', outcome: 'still_frozen', count: 1 },
-      { result: { ...empty(), responsive: [sibling] }, cause: 'fresh_send_button_never_enabled',
-        outcome: 'recovered_but_disabled', count: undefined },
-      { result: { ...empty(), disappearedOrChanged: [sibling] }, cause: 'fresh_send_button_never_enabled',
-        outcome: 'target_disappeared_or_changed', count: undefined },
-      { result: { ...empty(), unknown: [sibling] }, cause: 'fresh_send_button_never_enabled',
-        outcome: 'terminal_unknown', count: undefined },
-    ])('rechecks original ID/URL once and returns zero clicks for $outcome', async ({ result, cause, outcome, count }) => {
-      const prompt = '2682-NO-SEND-' + outcome;
-      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-      const turn = makeLoserPage(prompt, 'UNREACHED');
-      turn.sendButton.isEnabled.mockResolvedValue(false);
-      vi.mocked(probeCdpSiblingEvaluations).mockResolvedValueOnce(positive()).mockResolvedValueOnce(result);
-      const started = mocks.nowMs;
-      const resultTurn = await runNewChatTurn(turn.page, join(stateDir, '2682-' + outcome + '.txt'), '900000');
-      expect(resultTurn.result).toMatchObject({ state: 'send_failed', scope: 'invocation', cause, send_count: 0 });
-      expect(resultTurn.result.send_attempted).not.toBe(true);
-      expect(turn.getSends()).toBe(0);
-      expect(turn.sendButton.click).not.toHaveBeenCalled();
-      expect(mocks.nowMs - started).toBeLessThanOrEqual(600_000);
-      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(2);
-      expect(vi.mocked(probeCdpSiblingEvaluations).mock.calls[1]?.[2]).toEqual([sibling]);
-      expect(journal()).toEqual([expect.objectContaining({
-        entry_nonresponsive_count: 1, outcome,
-      })]);
-      expect(journal()[0]?.terminal_nonresponsive_count).toBe(count);
-      expect(JSON.stringify(journal())).not.toContain(prompt);
-      expect(deriveDelivery({ ...resultTurn.result,
-        resolved_send_count: resultTurn.result.send_count }, false)).toBe('not-sent');
-      expect(resultTurn.result.next_action).toBeUndefined();
-    });
-
-    it('rejects extension when protected dispatch and cleanup reserves leave no time', async () => {
-      const prompt = '2682-EARLY-BUDGET';
-      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
-      const turn = makeLoserPage(prompt, 'UNREACHED');
-      turn.sendButton.isEnabled.mockResolvedValue(false);
-      vi.mocked(probeCdpSiblingEvaluations).mockResolvedValueOnce(positive());
-      const outcome = await runNewChatTurn(turn.page, join(stateDir, '2682-budget.txt'), '90000');
-      expect(outcome.result).toMatchObject({
-        state: 'send_failed', cause: 'fresh_send_readiness_budget_exhausted', send_count: 0,
-      });
-      expect(outcome.result.send_attempted).not.toBe(true);
-      expect(turn.sendButton.click).not.toHaveBeenCalled();
-      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(1);
-      expect(journal()).toEqual([expect.objectContaining({
-        entry_nonresponsive_count: 1, outcome: 'budget_exhausted',
-      })]);
-      expect(journal()[0]?.terminal_nonresponsive_count).toBeUndefined();
-    });
-  });
-
   describe('Issue #2854 ordinary fresh readiness after the first 60 s window', () => {
-    const noSiblingEvidence = () => ({ nonresponsive: [], responsive: [], disappearedOrChanged: [], unknown: [] });
-    beforeEach(() => {
-      vi.mocked(probeCdpSiblingEvaluations).mockReset();
-      vi.mocked(probeCdpSiblingEvaluations).mockResolvedValue(noSiblingEvidence());
-    });
-
     it('sends once when a healthy owned composer hydrates after 60 s but before its safe cutoff', async () => {
       const prompt = '2854-LATE-HEALTHY-SEND';
       mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
@@ -1615,8 +1357,6 @@ describe('state-light fresh conversation collision recovery', () => {
       expect(mocks.nowMs - startedAt).toBeGreaterThanOrEqual(120_000);
       expect(turn.sendButton.click).toHaveBeenCalledTimes(1);
       expect(turn.getSends()).toBe(1);
-      // The #2682 read-only entry diagnostic still runs once at the end of the first window.
-      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(1);
       expect(turn.page.goto).toHaveBeenCalledTimes(1);
     });
 
@@ -1632,9 +1372,10 @@ describe('state-light fresh conversation collision recovery', () => {
       });
       expect(outcome.result.send_attempted).not.toBe(true);
       expect(mocks.nowMs - startedAt).toBeGreaterThan(65_000);
-      expect(mocks.nowMs - startedAt).toBeLessThanOrEqual(600_000 + 5_000);
+      // #2888: one paused retry may follow inside the same invocation budget.
+      expect(mocks.nowMs - startedAt).toBeLessThanOrEqual(900_000);
+      expect(outcome.result.incidents).toContain('pre_send_contention_paused_retry');
       expect(turn.sendButton.click).not.toHaveBeenCalled();
-      expect(probeCdpSiblingEvaluations).toHaveBeenCalledTimes(1);
       expect(deriveDelivery({ ...outcome.result, resolved_send_count: outcome.result.send_count }, false))
         .toBe('not-sent');
     });
@@ -1783,11 +1524,12 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
   });
 
-  it('preserves a never-clicked draft when atomic compare-and-clear cannot be verified', async () => {
+  it('closes its own never-clicked tab by exact ID at final exit without modifying an unverifiable draft', async () => {
     const invocationId = randomUUID();
     const prompt = 'PROMPT-FAILED-COMPOSER-CLEAR';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const turn = makeLoserPage(prompt, 'NOT-SENT');
+    const cdp = fakeOwnTabCloseCdp();
     turn.sendButton.isEnabled.mockResolvedValue(false);
     const evaluate = turn.composer.evaluate.getMockImplementation()!;
     turn.composer.evaluate.mockImplementation(async (
@@ -1808,7 +1550,9 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(turn.composer.evaluate).toHaveBeenCalled();
     expect(turn.composer.fill).not.toHaveBeenCalledWith('', expect.anything());
     expect(turn.getComposerText()).toContain(prompt);
-    expect(outcome.result.cleanup).not.toBe('confirmed');
+    expect(outcome.result.cleanup).toBe('confirmed');
+    expect(outcome.result).not.toHaveProperty('cleanup_status');
+    expect(cdp.closed).toEqual(['fixture-own-target']);
     expect(outcome.result.incidents).toContain('owned_composer_cleanup_unavailable');
     expect(outcome.result.send_attempted).not.toBe(true);
     expect(turn.getSends()).toBe(0);
@@ -1822,10 +1566,11 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(readStateLightTurnObservation('collision-profile', invocationId).phase).toBe('not_sent');
   });
 
-  it('preserves an edited shared draft when atomic comparison sees a concurrent mutation', async () => {
+  it('never edits a changed draft and keeps that foreign-edited tab at final exit (#2888)', async () => {
     const prompt = 'PROMPT-ATOMIC-COMPARE-EDIT';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const turn = makeLoserPage(prompt, 'UNREACHED');
+    const cdp = fakeOwnTabCloseCdp();
     turn.sendButton.isEnabled.mockResolvedValue(false);
     const evaluate = turn.composer.evaluate.getMockImplementation()!;
     let changed = false;
@@ -1844,7 +1589,10 @@ describe('state-light fresh conversation collision recovery', () => {
     const outcome = await runNewChatTurn(turn.page, join(stateDir, 'atomic-shared-edit-2651.txt'));
     expect(changed).toBe(true);
     expect(outcome.result.send_count).toBe(0);
+    // A positive foreign draft is foreign use: the created tab is kept, not closed.
+    expect(outcome.result.incidents).toContain('foreign_draft');
     expect(outcome.result.cleanup).not.toBe('confirmed');
+    expect(cdp.closed).toEqual([]);
     expect(turn.getComposerText()).toBe('FOREIGN-EDIT-BEFORE-ATOMIC-COMPARE');
     expect(turn.page.close).not.toHaveBeenCalled();
     expect(turn.sendButton.click).not.toHaveBeenCalled();
@@ -1854,6 +1602,7 @@ describe('state-light fresh conversation collision recovery', () => {
     const prompt = 'PROMPT-ATOMIC-NAVIGATION';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const turn = makeLoserPage(prompt, 'UNREACHED');
+    const cdp = fakeOwnTabCloseCdp();
     turn.sendButton.isEnabled.mockResolvedValue(false);
     const originalUrl = turn.page.url.getMockImplementation()!;
     let navigated = false;
@@ -1872,9 +1621,142 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(navigated).toBe(true);
     expect(outcome.result.send_count).toBe(0);
     expect(outcome.result.cleanup).not.toBe('confirmed');
+    // The tab left its own route for a foreign conversation: never closed.
+    expect(cdp.closed).toEqual([]);
     expect(turn.getComposerText()).toContain(prompt);
     expect(turn.page.close).not.toHaveBeenCalled();
     expect(turn.sendButton.click).not.toHaveBeenCalled();
+  });
+
+  describe('Issue #2888 shared Chrome burst: own-tab cleanup and paused retry', () => {
+    const PAUSE_MIN = 10_000;
+    const PAUSE_MAX = 15_000;
+    const pauses = (page: any): number[] => page.waitForTimeout.mock.calls
+      .map(([ms]: [number]) => ms).filter((ms: number) => ms >= PAUSE_MIN);
+
+    it('1-4 clean fresh sends land without any paused retry', async () => {
+      for (let index = 0; index < 4; index++) {
+        const prompt = `PROMPT-2888-CLEAN-${index}`;
+        mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+        const turn = makeLoserPage(prompt, `REPLY-2888-CLEAN-${index}`);
+        const outcome = await runNewChatTurn(turn.page, join(stateDir, `clean-2888-${index}.txt`));
+        expect(outcome.result.send_count).toBe(1);
+        expect(turn.getSends()).toBe(1);
+        expect(outcome.result.incidents).not.toContain('pre_send_contention_paused_retry');
+        expect(pauses(turn.page)).toEqual([]);
+      }
+    });
+
+    it('burst contention keeps the tab, pauses >=10 s plus spread, and lands in the same tab', async () => {
+      vi.spyOn(Math, 'random').mockReturnValue(0.25);
+      const prompt = 'PROMPT-2888-BURST';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'REPLY-2888-BURST');
+      // Real 2026-11-23 cause: fresh Send actionability unreadable under load.
+      turn.sendButton.count.mockImplementationOnce(() => new Promise<number>(() => {}));
+      const cdp = fakeOwnTabCloseCdp('fixture-own-target', PROJECT_URL);
+      const attachCalls = vi.mocked(attachOwnTarget).mock.calls.length;
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, 'burst-2888.txt'), '600000');
+      expect(outcome.result.send_count).toBe(1);
+      expect(turn.getSends()).toBe(1);
+      expect(outcome.result.incidents).toContain('pre_send_contention_paused_retry');
+      expect(pauses(turn.page)).toEqual([PAUSE_MIN + 1_250]);
+      // Same tab: one attach, no new tab, own tab never closed mid-turn.
+      expect(vi.mocked(attachOwnTarget).mock.calls.length - attachCalls).toBe(1);
+      expect(cdp.closed).toEqual([]);
+    });
+
+    it('a slow-loading tab is not closed and a later paused retry sends in it without reopening', async () => {
+      const prompt = 'PROMPT-2888-SLOW-LOAD';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'REPLY-2888-SLOW-LOAD');
+      const openedAt = mocks.nowMs;
+      // The page becomes actionable ~30 s after it opened.
+      turn.sendButton.count.mockImplementation(async () => mocks.nowMs - openedAt >= 30_000
+        ? 1 : await new Promise<number>(() => {}));
+      const cdp = fakeOwnTabCloseCdp('fixture-own-target', PROJECT_URL);
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, 'slow-load-2888.txt'), '600000');
+      expect(outcome.result.send_count).toBe(1);
+      expect(turn.getSends()).toBe(1);
+      const delays = pauses(turn.page);
+      expect(delays.length).toBeGreaterThanOrEqual(1);
+      expect(delays.every((ms) => ms >= PAUSE_MIN && ms < PAUSE_MAX)).toBe(true);
+      expect(turn.page.goto.mock.calls.filter(([url]: [string]) => url === PROJECT_URL).length).toBeLessThanOrEqual(1);
+      expect(cdp.closed).toEqual([]);
+      expect(turn.page.close).not.toHaveBeenCalled();
+    }, 90_000);
+
+    it('closes its own tab best-effort only when the turn finally ends without a send', { timeout: 60_000 }, async () => {
+      const prompt = 'PROMPT-2888-FINAL-EXIT';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      turn.sendButton.count.mockImplementation(() => new Promise<number>(() => {}));
+      const cdp = fakeOwnTabCloseCdp('fixture-own-target', PROJECT_URL);
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, 'final-exit-2888.txt'), '200000');
+      expect(outcome.result).toMatchObject({
+        state: 'ui_contract_mismatch', cause: 'fresh_send_actionability_unknown_or_busy', send_count: 0,
+      });
+      expect(turn.getSends()).toBe(0);
+      expect(outcome.result.incidents).toContain('pre_send_contention_paused_retry');
+      expect(cdp.closed).toEqual(['fixture-own-target']);
+      expect(outcome.result.cleanup).toBe('confirmed');
+      expect(outcome.result).not.toHaveProperty('cleanup_status');
+    });
+
+    it('a throwing own-tab close leaves the outcome unchanged and is only logged', { timeout: 60_000 }, async () => {
+      const prompt = 'PROMPT-2888-CLOSE-THROWS';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED');
+      turn.sendButton.count.mockImplementation(() => new Promise<number>(() => {}));
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const path = new URL(String(input)).pathname;
+        if (path.startsWith('/json/close/')) throw new Error('injected_own_tab_close_failure');
+        if (path !== '/json/list') throw new Error('unexpected CDP operation');
+        return new Response(JSON.stringify([
+          { id: 'fixture-own-target', type: 'page', url: PROJECT_URL },
+          { id: 'foreign-survivor', type: 'page', url: 'https://chatgpt.com/c/foreign' },
+        ]), { status: 200 });
+      });
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, 'close-throws-2888.txt'), '200000');
+      expect(outcome.result).toMatchObject({
+        state: 'ui_contract_mismatch', cause: 'fresh_send_actionability_unknown_or_busy', send_count: 0,
+        cleanup_status: 'cleanup_unconfirmed',
+      });
+      // Logged as a diagnostic incident only; state, cause and delivery are unchanged.
+      expect(outcome.result.incidents).toContain('own_unsent_tab_close_failed');
+      expect(outcome.result.incidents).toContain('pre_send_contention_paused_retry');
+    });
+
+    it('a post-send failure is never retried and never closes the own tab', async () => {
+      const prompt = 'PROMPT-2888-POST-SEND';
+      mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+      const turn = makeLoserPage(prompt, 'UNREACHED', () => {
+        throw new Error('browser_operation_timeout:locator_count');
+      });
+      const cdp = fakeOwnTabCloseCdp('fixture-own-target', PROJECT_URL);
+      const outcome = await runNewChatTurn(turn.page, join(stateDir, 'post-send-2888.txt'), '90000');
+      expect(turn.getSends()).toBe(1);
+      expect(outcome.result.incidents).not.toContain('pre_send_contention_paused_retry');
+      expect(pauses(turn.page)).toEqual([]);
+      expect(cdp.closed).toEqual([]);
+    });
+
+    it('classifies the real 2026-11-23 / 2026-11-24 envelopes', () => {
+      const fixture = JSON.parse(readFileSync(
+        new URL('./fixtures/issue-2888-burst-envelopes.json', import.meta.url), 'utf8',
+      )) as { envelopes: Array<{ turn_result_cause: string; delivery: string; send_count: number }> };
+      const byCause = Object.fromEntries(fixture.envelopes.map((envelope) => [
+        envelope.turn_result_cause,
+        isPreSendContentionCause(envelope.turn_result_cause) && envelope.delivery === 'not-sent'
+          && envelope.send_count === 0,
+      ]));
+      expect(byCause).toEqual({
+        'browser_operation_timeout:locator_count': true,
+        'fresh_send_actionability_unknown_or_busy': true,
+        // Possibly delivered: post-send recovery path, never a pre-send retry.
+        'owned_conversation_recovery_census_failed': false,
+      });
+    });
   });
 
   it('preserves a formerly owned tab that navigates during terminal composer cleanup (#2487)', async () => {
@@ -5325,6 +5207,37 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(navigation.snapshotGoto()).toBe(1);
   });
 
+  it('#2888 pauses >=10 s plus spread before re-opening the surface after a locator_count failure', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      vi.spyOn(Math, 'random').mockReturnValue(0);
+      const navigation = new StateLightNavigationCounter();
+      let url = 'about:blank';
+      const gotoTimes: number[] = [];
+      const page = {
+        goto: vi.fn(async (target: string) => {
+          gotoTimes.push(performance.now());
+          if (gotoTimes.length === 1) throw new Error('browser_operation_timeout:locator_count');
+          url = target;
+        }),
+        url: vi.fn(() => url),
+        locator: vi.fn(() => scalarLocator({ count: vi.fn(async () => 0) })),
+      };
+      const pending = prepareStateLightFreshConversation(page, {
+        cdp: 'http://127.0.0.1:9222', profile: '/tmp/profile',
+        newChat: true, projectUrl: PROJECT_URL, timeoutMs: 120_000,
+      }, 'collision-profile', 'prepare-2888', navigation);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(page.goto).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(await pending).toEqual({ state: 'ready' });
+      // Same Page, one re-open on it, no new tab.
+      expect(page.goto).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('prepareStateLightFreshConversation skips a second goto when already on a blank project surface', async () => {
     const navigation = new StateLightNavigationCounter();
     const page = {
@@ -5885,6 +5798,10 @@ describe('state-light fresh conversation collision recovery', () => {
       expect(turn.existing.sendButton.click).toHaveBeenCalledTimes(1);
       expect(turn.existing.getSends()).toBe(1);
       expect(result.incidents).toContain('pre_send_c4_recovery');
+      // #2888: the one reload waits >=10 s plus spread inside the same C4 budget.
+      expect(result.incidents).toContain('pre_send_contention_paused_retry');
+      const waits = turn.existing.page.waitForTimeout.mock.calls.map(([ms]: [number]) => ms);
+      expect(waits.some((ms: number) => ms >= 10_000 && ms < 15_000)).toBe(true);
       expect(readFileSync(turn.output, 'utf8')).toBe('C4-RECOVERED-OK');
       expect(turn.existing.page.close).not.toHaveBeenCalled();
     }, 30_000);
@@ -7349,7 +7266,8 @@ describe('Issue #1752 production liveness regressions', () => {
     const prompt = 'PROMPT-LIVENESS-LOCATOR-STALL';
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
     const fake = makeLoserPage(prompt, 'UNREACHABLE');
-    fake.sendButton.count.mockImplementationOnce(() => new Promise<number>(() => {}));
+    // #2888: busy persists across the turn's paused retries on the same tab.
+    fake.sendButton.count.mockImplementation(() => new Promise<number>(() => {}));
     enqueueBrowserForTurn(mocks, fake.page);
 
     const writes: string[] = [];
