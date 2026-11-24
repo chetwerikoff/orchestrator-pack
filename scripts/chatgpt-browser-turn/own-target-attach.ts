@@ -4,6 +4,7 @@ import {
   OwnTargetCdpProxy,
   type CdpPageTarget,
 } from './own-target-cdp-proxy.ts';
+import { preSendPausedRetryDelayMs } from './pre-send-paused-retry.ts';
 
 export interface CdpChromium {
   connectOverCDP(endpoint: string, options?: { timeout?: number }): Promise<any>;
@@ -53,6 +54,7 @@ const fixtureConnections = new WeakMap<object, {
 }>();
 const TRANSIENT = /timeout|timed out|ECONNRESET|ECONNREFUSED|EPIPE|socket hang up|connection closed|websocket|cdp_proxy_backend|cdp_proxy_disconnected/iu;
 const BACKOFF_MS = [150, 350] as const;
+const CONNECT_TIMEOUT = /timeout|timed out/iu;
 
 function deadlineRemaining(deadlineMs: number): number {
   return Math.max(0, deadlineMs - Date.now());
@@ -381,7 +383,11 @@ export async function attachOwnTarget(
       if (attempt === maxAttempts || !TRANSIENT.test(error instanceof Error ? error.message : String(error))) {
         throw asAttemptError(error, attempt, selected);
       }
-      const backoff = BACKOFF_MS[attempt - 1] ?? BACKOFF_MS[1];
+      // #2888: a connect timeout is shared-browser contention. Pause inside
+      // this turn with spread; other transient socket errors keep the short backoff.
+      const backoff = CONNECT_TIMEOUT.test(error instanceof Error ? error.message : String(error))
+        ? preSendPausedRetryDelayMs()
+        : BACKOFF_MS[attempt - 1] ?? BACKOFF_MS[1];
       if (deadlineRemaining(options.deadlineMs) <= backoff) {
         throw asAttemptError(new Error('browser_operation_timeout:connect_over_cdp'), attempt, selected);
       }

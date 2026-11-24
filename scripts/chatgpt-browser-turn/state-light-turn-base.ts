@@ -34,7 +34,8 @@ import {
   countUninspectedRecoveryTargets,
   getOwnTargetInfo,
 } from './own-target-attach.ts';
-import { listCdpPageTargets, probeCdpSiblingEvaluations } from './own-target-cdp-proxy.ts';
+import { closeOwnCdpTarget, listCdpPageTargets } from './own-target-cdp-proxy.ts';
+import { isPreSendContentionCause, preSendPausedRetryDelayMs } from './pre-send-paused-retry.ts';
 import {
   turnExitCode,
   type ComposerMutationDiagnosticV1,
@@ -509,23 +510,12 @@ export function classifyBrowserGptPageTurnStatus(
 export type PageLiveness = 'live' | 'lost' | 'unknown';
 
 
-type ExtendedReadinessOutcome = 'enabled' | 'still_frozen' | 'recovered_but_disabled'
-  | 'target_disappeared_or_changed' | 'terminal_unknown' | 'budget_exhausted';
-
-interface ExtendedReadinessDiagnostic {
-  readonly entryNonresponsiveCount: number;
-  readonly terminalNonresponsiveCount?: number;
-  readonly elapsedMs: number;
-  readonly outcome: ExtendedReadinessOutcome;
-}
-
 interface BrowserIncident {
   readonly eventClass: string;
   readonly symptom: string;
   readonly action?: string;
   readonly uncertaintyDiagnostics?: ObservationUncertaintyDiagnostics;
   readonly composerMutationDiagnostic?: ComposerMutationDiagnosticV1;
-  readonly extendedReadiness?: ExtendedReadinessDiagnostic;
   readonly retirementDetail?: string;
 }
 
@@ -2056,15 +2046,6 @@ function appendIncident(
         observation_uncertainty: incident.uncertaintyDiagnostics,
       } : {}),
       ...(incident.retirementDetail ? { retirement_detail: incident.retirementDetail } : {}),
-
-      ...(incident.extendedReadiness ? {
-        entry_nonresponsive_count: incident.extendedReadiness.entryNonresponsiveCount,
-        ...(incident.extendedReadiness.terminalNonresponsiveCount !== undefined ? {
-          terminal_nonresponsive_count: incident.extendedReadiness.terminalNonresponsiveCount,
-        } : {}),
-        extended_readiness_elapsed_ms: incident.extendedReadiness.elapsedMs,
-        outcome: incident.extendedReadiness.outcome,
-      } : {}),
       invocation: invocationId,
       agent_runtime: agent,
     })}\n`, 'utf8');
@@ -3414,6 +3395,7 @@ const FRESH_SEND_RESERVE_MS = 4 * FRESH_SEND_WINDOW_MS;
 const FRESH_SEND_PREPARE_RESERVE_MS = 3 * MAX_LOCAL_READ_WAIT_MS;
 
 const FRESH_SEND_EXTENDED_TOTAL_MS = 600_000;
+/** #2854 terminal reserve kept before the last safe dispatch time. */
 const FRESH_SEND_TERMINAL_PROBE_MS = 5_000;
 const FRESH_SEND_EXTENDED_POLL_MS = 2_000;
 
@@ -5615,110 +5597,17 @@ async function runTurnCore(
         page, sendButton, assertFreshOwner, readinessStartedAtMs, preDispatchCutoffMs,
       );
       assertFreshOwner();
-      let extendedEntryCount = 0;
-      let extendedRecorded = false;
-      const recordExtended = (
-        outcome: ExtendedReadinessOutcome, terminalNonresponsiveCount?: number,
-      ): void => {
-        if (!extendedEntryCount || extendedRecorded) return;
-        extendedRecorded = true;
-        const diagnostic: ExtendedReadinessDiagnostic = {
-          entryNonresponsiveCount: extendedEntryCount,
-          ...(terminalNonresponsiveCount !== undefined ? { terminalNonresponsiveCount } : {}),
-          elapsedMs: Math.max(0, Date.now() - readinessStartedAtMs),
-          outcome,
-        };
-        if (!recordIncident(incidents, {
-          eventClass: 'fresh_send_extended_readiness',
-          symptom: outcome,
-          action: outcome === 'enabled' ? 'dispatch_owned_send' : 'cleanup_own_unsent_payload',
-          extendedReadiness: diagnostic,
-        }, invocationId, navigation.snapshot())) journalWriteFailed = true;
-      };
-      const failExtended = (
-        cause: string, outcome: ExtendedReadinessOutcome, terminalNonresponsiveCount?: number,
-      ): TurnRunOutcome => {
-        recordExtended(outcome, terminalNonresponsiveCount);
-        return {
-          page, browser,
-          result: compactResult(
-            'send_failed', 'invocation', cause,
-            invocationId, profileKey, 0, pollCount, navigation, incidents, {}, journalWriteFailed,
-          ),
-        };
-      };
-      if (readiness === 'never_enabled') {
-        // A disabled own Send is not evidence about another renderer. Only a
-        // direct-target post-timeout *control-surviving* witness may extend.
-        const ownTargetId = getOwnTargetInfo(browser)?.targetId;
-        const entry = ownTargetId
-          ? await probeCdpSiblingEvaluations(config.cdp, ownTargetId) : undefined;
+      // #2854: a healthy owned composer may still hydrate after the first
+      // readiness window, but only before its last safe dispatch time. #2888:
+      // other tabs are never read; a Send that never enables ends this attempt.
+      if (readiness === 'never_enabled' && Date.now() < lastSafeDispatchMs) {
+        preDispatchCutoffMs = lastSafeDispatchMs;
+        readiness = await waitForExtendedFreshSendButton(
+          page, sendButton, assertFreshOwner, preDispatchCutoffMs,
+        );
         assertFreshOwner();
-        if (entry?.nonresponsive.length && ownTargetId) {
-          const originals = entry.nonresponsive;
-          extendedEntryCount = originals.length;
-          const readinessReturnByMs = Math.min(
-            readinessStartedAtMs + FRESH_SEND_EXTENDED_TOTAL_MS,
-            freshUnboundReturnByMs - DISPATCH_OBSERVATION_MS - 4 * MAX_LOCAL_READ_WAIT_MS,
-          );
-          preDispatchCutoffMs = readinessReturnByMs - FRESH_SEND_TERMINAL_PROBE_MS;
-          if (Date.now() >= preDispatchCutoffMs) {
-            return failExtended('fresh_send_readiness_budget_exhausted', 'budget_exhausted');
-          }
-          // Assert the original marker before extending, not just before Send.
-          if (!await composerPayloadMatchesBeforeSend(
-            composer, markedPayload, Math.min(invocationDeadlineMs, preDispatchCutoffMs),
-          )) {
-            if (Date.now() >= preDispatchCutoffMs) {
-              return failExtended('fresh_send_readiness_budget_exhausted', 'budget_exhausted');
-            }
-            recordExtended('terminal_unknown');
-            return returnComposerMutationFailure(composerPayloadFailureCause(preDispatchCutoffMs));
-          }
-          readiness = await waitForExtendedFreshSendButton(
-            page, sendButton, assertFreshOwner, preDispatchCutoffMs,
-          );
-          assertFreshOwner();
-          if (readiness === 'never_enabled' || Date.now() >= preDispatchCutoffMs) {
-            if (readinessReturnByMs <= Date.now()) {
-              return failExtended('fresh_send_readiness_budget_exhausted', 'budget_exhausted');
-            }
-            // Single fresh bounded re-probe of original positive ID/URL pairs.
-            // No new candidates, implicit recovery, retry or sibling mutation.
-            const terminal = await probeCdpSiblingEvaluations(
-              config.cdp, ownTargetId, originals,
-              Math.min(FRESH_SEND_TERMINAL_PROBE_MS, readinessReturnByMs - Date.now()),
-            );
-            if (Date.now() > readinessReturnByMs) {
-              return failExtended('fresh_send_readiness_budget_exhausted', 'budget_exhausted');
-            }
-            if (terminal.nonresponsive.length) {
-              return failExtended(
-                'fresh_send_blocked_by_frozen_sibling', 'still_frozen', terminal.nonresponsive.length,
-              );
-            }
-            if (terminal.responsive.length === originals.length) {
-              return failExtended('fresh_send_button_never_enabled', 'recovered_but_disabled');
-            }
-            if (terminal.disappearedOrChanged.length) {
-              return failExtended('fresh_send_button_never_enabled', 'target_disappeared_or_changed');
-            }
-            return failExtended('fresh_send_button_never_enabled', 'terminal_unknown');
-          }
-        } else {
-          // #2854: without qualified frozen-sibling evidence, a healthy owned composer may still
-          // hydrate after the first readiness window, but only before its last safe dispatch time.
-          if (Date.now() < lastSafeDispatchMs) {
-            preDispatchCutoffMs = lastSafeDispatchMs;
-            readiness = await waitForExtendedFreshSendButton(
-              page, sendButton, assertFreshOwner, preDispatchCutoffMs,
-            );
-            assertFreshOwner();
-          }
-        }
       }
       if (readiness === 'busy') {
-        recordExtended('terminal_unknown');
         incident('invocation_blocker', 'fresh_send_actionability_unknown_or_busy', 'retain_page');
         return {
           page, browser, cleanupAction: 'preserve',
@@ -5750,18 +5639,12 @@ async function runTurnCore(
         afterSend = true; // Dispatch was attempted even without positive delivery proof.
         held429Witness?.markDispatch(marker, markedPayload);
         if (freshCleanup) freshCleanup.sendAttempted = true;
-        recordExtended('enabled');
       };
       // The composer can change during Send readiness polling. Do not send a
       // different draft as though it were the invocation's marked payload.
       const finalPayloadMatches = await composerPayloadMatchesBeforeSend(
         composer, markedPayload, Math.min(invocationDeadlineMs, preDispatchCutoffMs),
       );
-      // A qualified extended wait may expire during its last awaited marker
-      // read. No dispatch callback or physical click has run yet.
-      if (extendedEntryCount && Date.now() >= preDispatchCutoffMs) {
-        return failExtended('fresh_send_readiness_budget_exhausted', 'budget_exhausted');
-      }
       if (!finalPayloadMatches) {
         return returnComposerMutationFailure(composerPayloadFailureCause(
           Math.min(invocationDeadlineMs, preDispatchCutoffMs),
@@ -5783,17 +5666,7 @@ async function runTurnCore(
       // Baseline = the final refreshed pre-SEND head (or Issue digest), at the actual dispatch boundary.
       await recordGithubEffectBaseline();
       assertFreshOwner();
-      try {
-        delivery = await sendAction();
-      } catch (error) {
-        // onDispatch rejects this deadline before Playwright can click. Only
-        // that exact zero-dispatch rejection is an extended budget terminal.
-        if (extendedEntryCount && !sendAttempted && Date.now() >= preDispatchCutoffMs
-          && error instanceof Error && error.message === 'fresh_send_readiness_deadline_exhausted') {
-          return failExtended('fresh_send_readiness_budget_exhausted', 'budget_exhausted');
-        }
-        throw error;
-      }
+      delivery = await sendAction();
       if (delivery.sendCount === 0
         && delivery.witness === 'unproven'
         && delivery.preDispatchTimeoutProven === true
@@ -5885,6 +5758,39 @@ async function runTurnCore(
         });
         if (!decision.reload) {
           incident('pre_send_c4_recovery', decision.refusal, 'preserve_original_cause');
+          throw error;
+        }
+        // #2888: locator_count is shared-browser contention. Pause inside this
+        // turn with spread before the one reload, within the same C4 budget,
+        // then repeat the owner, identity, idle and deadline checks.
+        const pauseMs = preSendPausedRetryDelayMs();
+        if (Date.now() + pauseMs >= lastSafeReloadMs) {
+          incident('pre_send_c4_recovery', 'budget_exhausted', 'preserve_original_cause');
+          throw error;
+        }
+        incident('pre_send_contention_paused_retry',
+          `browser_operation_timeout:locator_count;delay_ms=${pauseMs}`, 'pause_then_reload_same_owned_page');
+        await sleep(page, pauseMs);
+        let pausedIdle = false;
+        if (pageIsOriginalOwned() && !browserOrPageDefinitelyLost(page, browser)
+          && readOwnedConversationIdentity(page, chatUrlTarget).matched) {
+          try {
+            const observed = await observePreSendPagePredicate(page, lastSafeReloadMs, beforeBrowserAction);
+            pausedIdle = observed.verdict === 'idle';
+          } catch {
+            pausedIdle = false;
+          }
+        }
+        const pausedLost = browserOrPageDefinitelyLost(page, browser);
+        const recheck = preSendC4ReloadDecision({
+          error, readSettled, dispatchBoundaryEntered: dispatchBoundaryEntered(),
+          remedialNavigationUsed: remedialNavigationUsed(),
+          pageLost: pausedLost, pageIsOriginalOwned: pageIsOriginalOwned(),
+          identityMatched: !pausedLost && readOwnedConversationIdentity(page, chatUrlTarget).matched,
+          pageIdle: pausedIdle, nowMs: Date.now(), lastSafeReloadMs,
+        });
+        if (!recheck.reload) {
+          incident('pre_send_c4_recovery', recheck.refusal, 'preserve_original_cause');
           throw error;
         }
         remedialNavigation.c4 = true; // A failed attempt consumes the shared allowance.
@@ -6155,8 +6061,50 @@ async function runTurnCore(
       return null;
     };
 
+    // #2888: a pre-send contention failure (busy shared browser) is not a
+    // verdict on this invocation's own tab. Pause inside this turn, then rerun
+    // the fresh pre-send phase on the same owned Page. The existing invocation
+    // deadline is the only budget; once Send was attempted nothing is retried.
+    const withPausedPreSendRetry = async (
+      attempt: () => Promise<TurnRunOutcome | undefined>,
+    ): Promise<TurnRunOutcome | undefined> => {
+      let previous: { outcome?: TurnRunOutcome; failure?: unknown; failed: boolean } | undefined;
+      for (;;) {
+        let outcome: TurnRunOutcome | undefined;
+        let failure: unknown;
+        let failed = false;
+        try { outcome = await attempt(); } catch (error) { failure = error; failed = true; }
+        const cause = failed
+          ? (failure instanceof Error ? failure.message : String(failure))
+          : outcome?.result.cause;
+        // A retry that only ran out of the same invocation budget reports the
+        // contention it retried, not a new budget cause.
+        if (previous && !sendAttempted && !afterSend && sendCount === 0
+          && PAUSED_RETRY_BUDGET_CAUSES.has(cause ?? '')) {
+          if (previous.failed) throw previous.failure;
+          return previous.outcome;
+        }
+        const delayMs = preSendPausedRetryDelayMs();
+        const retry = (failed || outcome !== undefined) && isPreSendContentionCause(cause)
+          && !sendAttempted && !afterSend && sendCount === 0 && !ownershipForfeited
+          && (!outcome || (outcome.page === page && outcome.ownershipForfeited !== true
+            && outcome.result.send_count === 0 && outcome.result.send_attempted !== true))
+          && Boolean(page) && !browserOrPageDefinitelyLost(page, browser)
+          && Date.now() + delayMs + COMPOSER_READINESS_WAIT_MS + FRESH_SEND_RESERVE_MS
+            + FRESH_SEND_PREPARE_RESERVE_MS + deriveComposerInsertionBudgetMs(markedPayload)
+            < invocationDeadlineMs;
+        if (!retry) {
+          if (failed) throw failure;
+          return outcome;
+        }
+        previous = { outcome, failure, failed };
+        incident('pre_send_contention_paused_retry', `${cause};delay_ms=${delayMs}`,
+          'pause_then_retry_same_owned_page');
+        await sleep(page, delayMs);
+      }
+    };
     if (config.newChat) {
-      {
+      const freshOutcome = await withPausedPreSendRetry(async (): Promise<TurnRunOutcome | undefined> => {
         const entryAccountError = await checkAccountLoadError();
         if (entryAccountError && entryAccountError !== 'recovered') return entryAccountError;
         assertFreshOwner();
@@ -6603,7 +6551,8 @@ async function runTurnCore(
             ),
           };
         }
-      }
+      });
+      if (freshOutcome) return freshOutcome;
     } else {
       // #2854: the existing-chat pre-Send preparation reruns unchanged after one C4 reload.
       const runExistingPreSend = async (): Promise<TurnRunOutcome | null> => {
@@ -9863,6 +9812,24 @@ async function guardedOriginalTargetRetirement(input: {
   }
 }
 
+/** #2888: causes that only mean a paused retry ran out of the invocation budget. */
+const PAUSED_RETRY_BUDGET_CAUSES: ReadonlySet<string> = new Set([
+  'state_light_new_chat_send_budget_unavailable',
+  'state_light_new_chat_owner_pre_dispatch_deadline_exhausted',
+  'fresh_send_readiness_deadline_exhausted',
+  'fresh_send_readiness_budget_exhausted',
+]);
+
+/** #2888: guarded-retirement refusals that show foreign use or must keep the tab. */
+const AFFIRMATIVE_FOREIGN_USE_CAUSES: ReadonlySet<string> = new Set([
+  'foreign_draft', 'route_changed', 'stop_visible', 'generation_in_progress',
+  'foreign_user_message', 'foreign_assistant_turn', 'continuation_control_visible',
+  'last_page_guard',
+]);
+
+/** #2888: bound for the best-effort close of an own unsent tab at final exit. */
+const OWN_UNSENT_TAB_CLOSE_BUDGET_MS = 5_000;
+
 async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactTurnResult> {
   let cleanup: ResourceCleanupOutcome = outcome.createdAttachFailureCleanup ?? 'skipped';
   let journalWriteFailed = outcome.result.journal_write_failed === true;
@@ -9987,6 +9954,7 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
       || outcome.authorEffectSettleUntilMs !== undefined)
     && outcome.ownershipForfeited !== true && positivelyCreatedOriginal
     && outcomePageIsOriginal ? 'close' : 'skip';
+  let affirmativeForeignUse = false;
   if (pageAction === 'close' && outcome.result.send_count === 0
     && outcome.result.send_attempted !== true && outcome.ownedFreshProjectUrl) {
     const stillOwnedBlankSurface = (): boolean => {
@@ -10013,6 +9981,9 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
         ? 'frozen_ownership_unproven' : draft === 'foreign_draft'
           ? 'foreign_draft' : 'composer_unknown';
       incidents.push('owned_composer_cleanup_unavailable', refusal);
+      // #2888: a foreign draft or a Stop seen before any own Send is a positive
+      // sign of foreign use; the final-exit close must keep that tab.
+      if (draft === 'foreign_draft' || stop === true) affirmativeForeignUse = true;
       if (!appendIncident({
         eventClass: 'owned_composer_cleanup_unavailable',
         symptom: refusal,
@@ -10047,6 +10018,9 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
       retirement = await guard();
     }
     cleanup = retirement.status === 'confirmed' ? 'confirmed' : 'unconfirmed';
+    if (retirement.status !== 'confirmed' && AFFIRMATIVE_FOREIGN_USE_CAUSES.has(retirement.cause)) {
+      affirmativeForeignUse = true;
+    }
     if (retirement.status !== 'confirmed') {
       incidents.push(retirement.cause);
       if (!appendIncident({
@@ -10072,6 +10046,71 @@ async function finalizeTurn(outcome: TurnRunOutcome, cdp = ''): Promise<CompactT
     });
     cleanup = detached.status === 'confirmed' ? 'confirmed' : 'unconfirmed';
     detachedOriginalCleanupUnconfirmed = detached.status !== 'confirmed';
+    // #2888: the exact-ID reattach guard saw foreign use (Stop, generation, a
+    // different draft, foreign messages, route change): never raw-close it.
+    if (detached.status !== 'confirmed' && AFFIRMATIVE_FOREIGN_USE_CAUSES.has(detached.cause ?? '')) {
+      affirmativeForeignUse = true;
+    }
+  }
+  // #2888: the turn finally ends without a Send. The tab this invocation
+  // created is its own: close that exact ID best-effort, never a foreign tab.
+  // Creation proves which ID was allocated, not that it is still owned now:
+  // a positive foreign-use refusal keeps the tab, and a fresh browser-side
+  // census of the exact ID decides at the close boundary. A close failure is
+  // logged only; it never changes the turn's outcome.
+  if (positivelyCreatedOriginal && cleanup !== 'confirmed' && cdp && observedNotSent
+    && outcome.result.send_count === 0 && outcome.result.send_attempted !== true
+    && outcome.ownershipForfeited !== true && !affirmativeForeignUse) {
+    let ownTargetId: string | undefined;
+    let ownInitialRoute: string | undefined;
+    try {
+      const owned = readStateLightTurnObservation(
+        outcome.result.configured_profile_key, outcome.result.invocation_id,
+      ).owned_target;
+      if (owned?.created === true && owned.id) {
+        ownTargetId = owned.id;
+        ownInitialRoute = owned.initial_route;
+      }
+    } catch { /* fall back to the attach-failure creation witness */ }
+    ownTargetId ??= outcome.createdAttachFailureTargetId;
+    // Own route: blank, this invocation's blank project surface, or its exact
+    // bound conversation. Any other readable URL is someone else's tab.
+    const isOwnUnsentRoute = (url: string): boolean => {
+      if (!url || url === 'about:blank') return true;
+      try {
+        if (outcome.ownedFreshProjectUrl && isBlankProjectSurfaceUrl(url, outcome.ownedFreshProjectUrl)) return true;
+        return Boolean(ownInitialRoute) && normalizeConversationUrl(url) === ownInitialRoute;
+      } catch { return false; }
+    };
+    // A readable Page URL off the own route is a positive refusal as well.
+    const pageOnForeignRoute = ((): boolean => {
+      if (!outcome.page || typeof outcome.page !== 'object' || pageLost) return false;
+      try { return !isOwnUnsentRoute(String(outcome.page.url())); } catch { return false; }
+    })();
+    if (ownTargetId && !pageOnForeignRoute) {
+      let closeFailure: string | undefined;
+      try {
+        const closed = await closeOwnCdpTarget(
+          cdp, ownTargetId, OWN_UNSENT_TAB_CLOSE_BUDGET_MS, isOwnUnsentRoute,
+        );
+        if (closed === 'closed' || closed === 'absent') {
+          cleanup = 'confirmed';
+          detachedOriginalCleanupUnconfirmed = false;
+        } else {
+          closeFailure = closed === 'foreign_route' ? 'own_unsent_tab_on_foreign_route_kept'
+            : closed === 'last_page' ? 'own_unsent_tab_last_page_kept' : 'own_unsent_tab_still_present';
+        }
+      } catch (error) {
+        closeFailure = ('own_unsent_tab_close_error:'
+          + (error instanceof Error ? error.message : String(error))).slice(0, 128);
+      }
+      if (closeFailure) incidents.push('own_unsent_tab_close_failed');
+      if (closeFailure && !appendIncident({
+        eventClass: 'own_unsent_tab_close_failed',
+        symptom: closeFailure,
+        action: 'log_only_outcome_unchanged',
+      }, outcome.result.invocation_id)) journalWriteFailed = true;
+    }
   }
   if (positivelyCreatedOriginal && cleanup !== 'confirmed') {
     // Never report a close from an old marker, an old Page reference or a
@@ -10238,24 +10277,8 @@ export async function runGuardedOwnedTabRetirement(
       next_action: 'Continue existing owner recovery; original target ID is absent, no close was issued.',
     };
     if (found.length !== 1) return refused('target_census_failed', pin.id);
-    // #2682 is directional. When the original is unreadable, a healthy
-    // ChatGPT-origin sibling is only a read-only probe anchor, NOT an owner.
-    const anchor = census.find((target) => target.id !== pin.id && target.type === 'page'
-      && /^https:\/\/chatgpt\.com(?:\/|$)/iu.test(target.url));
-    if (anchor) {
-      const probe = await probeCdpSiblingEvaluations(
-        input.cdp, anchor.id, [{ id: pin.id, url: found[0]!.url }],
-        Math.min(MAX_LOCAL_READ_WAIT_MS, 3_000),
-      );
-      if (probe.nonresponsive.some((target) => target.id === pin.id)) {
-        return refused('frozen_ownership_unproven', pin.id);
-      }
-      if (probe.disappearedOrChanged.some((target) => target.id === pin.id)) {
-        return refused('route_changed', pin.id);
-      }
-      // Unknown/nonresponsive control is not proof of continuous ownership.
-      // Fresh *readable* ordinary DOM remains the only retirement path.
-    }
+    // #2888: no foreign tab is read as a probe anchor. An unreadable original
+    // fails the attach or the fresh DOM read below and is never closed.
     const deadlineMs = Date.now() + 20_000;
     const attached = await attachOwnTarget(loadChromium(), {
       mode: 'own-target', cdp: input.cdp, newChat: false,
