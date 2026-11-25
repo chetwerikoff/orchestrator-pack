@@ -572,7 +572,7 @@ export function evaluateWorkerSmokeCoverage(input: {
       commentId: latest?.commentId,
     };
     if (!latest) missing.push(diagnostic);
-    else if (latest.scenario.outcome === 'pass') covered.push(diagnostic);
+    else if (base.smokeRowSatisfiesPass(latest.scenario)) covered.push(diagnostic);
     else latestNonPass.push(diagnostic);
   }
 

@@ -1520,4 +1520,36 @@ describe('Issue #2897 post-merge and measurement smoke rows', () => {
     expect(smokeRowSatisfiesPass(row('[measurement] latency', 'skipped', { observed: 'n/a (target 1)', skipReason: 'post-merge-pending' }))).toBe(false);
     expect(smokeRowSatisfiesPass(row('ordinary', 'pass', { observed: 'anything' }))).toBe(true);
   });
+  it('counts a declared post-merge-pending row as covered in tuple coverage and the gate', () => {
+    const mixedBody = [
+      '```behavior-kind', 'action-producing', '```', '',
+      '```smoke-test-plan', 'scenarios:',
+      '  - action: run runtime lifecycle | expected: PASS',
+      '  - action: [post-merge] verify live deploy | expected: PASS',
+      '```',
+    ].join('\n');
+    const target = {
+      repositorySlug: REPOSITORY, issueNumber: 1343, prNumber: 2001, headSha: HEAD_ONE,
+      resolvedIssueNumber: 1343, resolvedPrNumber: 2001, liveHeadSha: HEAD_ONE,
+      issueBodyMatchesTarget: true, trustedPublisherLogin: TRUSTED_ACTOR,
+      commentCensusComplete: true, commentSnapshotStable: true,
+    };
+    const pending = { ...scenario('[post-merge] verify live deploy', 'PASS', 'skipped'), skipReason: 'post-merge-pending' };
+    const terminalOwned = (r: SmokeReport) => formatSmokeReportComment(r).replace(
+      'producer: ' + SMOKE_REPORT_PRODUCER + '\n',
+      'producer: ' + SMOKE_REPORT_PRODUCER
+        + '\nterminal-handle: smoke-terminal-1\norca-executable: runtime-adapter\nterminal-cleanup: closed_owned_handle\n',
+    );
+    const mixedReport = report('PASS', [scenario('run runtime lifecycle', 'PASS'), pending]);
+    const mixed = comment(1, mixedReport, { body: terminalOwned(mixedReport) });
+    const coverage = evaluateWorkerSmokeCoverage({ issueBody: mixedBody, comments: [mixed], target });
+    expect(coverage.accepting, JSON.stringify(coverage.diagnostics)).toBe(true);
+    expect(coverage.diagnostics.latestNonPass.total).toBe(0);
+    const ordinaryReport = report('PASS', [
+      scenario('run runtime lifecycle', 'PASS'),
+      { ...pending, skipReason: 'other' },
+    ]);
+    const ordinarySkip = comment(2, ordinaryReport, { body: terminalOwned(ordinaryReport) });
+    expect(evaluateWorkerSmokeCoverage({ issueBody: mixedBody, comments: [ordinarySkip], target }).accepting).toBe(false);
+  });
 });

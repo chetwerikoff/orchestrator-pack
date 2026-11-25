@@ -2663,7 +2663,7 @@ function scrubbedForeignOwner(marker: string): string {
  * Returns the slot id, or undefined when the shape does not match (including
  * after the single retry was used: the slot then carries attempt history).
  */
-function gptMissingResultRetrySlotId(run: PackReviewRunRecord): string | undefined {
+function gptMissingResultPartialSlot(run: PackReviewRunRecord): PackReviewSourceSlotRecord | undefined {
   const round = run.reviewRound;
   if (!round || round.reviewer !== 'gpt' || round.cardinality !== 2
       || round.settledSourceCount !== undefined || round.sourceSlots.length !== 2
@@ -2673,9 +2673,17 @@ function gptMissingResultRetrySlotId(run: PackReviewRunRecord): string | undefin
     && slot.payload !== undefined);
   const missing = round.sourceSlots.filter((slot) => slot.lifecycle === 'terminal'
     && slot.terminalClass === 'possible_delivery/missing_result');
-  if (complete.length !== 1 || missing.length !== 1) return undefined;
-  const slot = missing[0]!;
-  if (!slot.invocationId || slot.attemptOrdinal !== 1
+  return complete.length === 1 && missing.length === 1 ? missing[0] : undefined;
+}
+
+/**
+ * Recognition of the partial shape is separate from eligibility to spend its
+ * one retry: an exhausted partial keeps its valid source and stays on the
+ * incumbent recovery route; it is never whole-round replacement history.
+ */
+function gptMissingResultRetrySlotId(run: PackReviewRunRecord): string | undefined {
+  const slot = gptMissingResultPartialSlot(run);
+  if (!slot || !slot.invocationId || slot.attemptOrdinal !== 1
       || (slot.attemptHistory?.length ?? 0) !== 0) return undefined;
   return slot.slotId;
 }
@@ -4123,7 +4131,7 @@ function isTerminalFailedNoVerdictGptHistory(run: PackReviewRunRecord): boolean 
     && (run.githubReviewId === undefined || run.githubReviewId === '')
     // #2897: the narrow 1/2 missing-result partial is recovered in place, with
     // precedence over whole-round replacement, until its single retry is used.
-    && gptMissingResultRetrySlotId(run) === undefined;
+    && gptMissingResultPartialSlot(run) === undefined;
 }
 
 function hasFailedRateLimitSource(run: PackReviewRunRecord): boolean {
@@ -6676,19 +6684,36 @@ export async function finalCapPrPatchId(
  * cannot blindly resend a possibly dispatched message.
  */
 /**
- * Issue #2897: the ordered continuation after the final-cap delta findings
- * bound. No new review runs on the same head; the notification state of the
- * persisted delta findings is reported as-is and never invented.
+ * Issue #2897: the ordered continuation for final-cap delta findings. No new
+ * review runs on the same head; the notification state of the persisted delta
+ * findings is reported as-is and never invented.
  */
-export function finalCapBoundReachedNextAction(prNumber: number, handoffState?: string): string {
-  const notification = handoffState === 'submitted' || handoffState === 'already_attempted'
+function finalCapNotificationNote(handoffState?: string): string {
+  return handoffState === 'submitted' || handoffState === 'already_attempted'
     ? ''
     : ' (findings notification state: ' + (handoffState ?? 'none') + '; restore the bound worker route to deliver them)';
-  return 'final-cap delta findings bound reached for PR #' + prNumber + ': no further delta review on this head' + notification
-    + '. Continue in this order: (1) make one final fix commit for the last delta findings; '
+}
+
+const finalCapSmokeMergeSteps = (prNumber: number, first: number): string =>
+  '(' + first + ') on PASS run smoke; (' + (first + 1) + ') merge with "мерж ' + prNumber
+  + ' без ревью" via --merge-waiver-line';
+
+/** First persisted delta findings: the whole ordered route, starting at the fix. */
+export function finalCapFindingsNextAction(prNumber: number, handoffState?: string): string {
+  return 'final-cap delta findings persisted for PR #' + prNumber + finalCapNotificationNote(handoffState)
+    + '. Continue in this order, with no new review on the same head: '
+    + '(1) make one final fix commit for the persisted delta findings; '
     + '(2) obtain final_cap_delta_findings_bound_reached on that new head, which runs no review; '
     + '(3) get the architect diff check of that fix against the last delta findings (PROMPT order C); '
-    + '(4) on PASS run smoke; (5) merge with "мерж ' + prNumber + ' без ревью" via --merge-waiver-line';
+    + finalCapSmokeMergeSteps(prNumber, 4);
+}
+
+/** Bound reached on the fix head: the fix commit is done, continue at the architect check. */
+export function finalCapBoundReachedNextAction(prNumber: number, handoffState?: string): string {
+  return 'final-cap delta findings bound reached for PR #' + prNumber + ': no further delta review on this head'
+    + finalCapNotificationNote(handoffState)
+    + '. Continue in this order: (1) get the architect diff check of the fix against the last delta findings '
+    + '(PROMPT order C); ' + finalCapSmokeMergeSteps(prNumber, 2);
 }
 
 export async function handoffFinalCapDeltaFindings(input: {
@@ -7998,9 +8023,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
           nextAction: boundReached
             ? finalCapBoundReachedNextAction(prNumber, findingsHandoff?.state)
             : deltaOutcome.state === 'findings'
-            ? findingsHandoff?.state === 'submitted' || findingsHandoff?.state === 'already_attempted'
-              ? 'continue the existing fixer from the persisted delta REVIEW, then review only the next F..T'
-              : 'restore the bound worker notification route for persisted findings before fixer continuation'
+            ? finalCapFindingsNextAction(prNumber, findingsHandoff?.state)
             : 'reconcile the existing exact-head delta run/source census or use the PR-led claimed runner; never resend uncertain output',
         };
       }

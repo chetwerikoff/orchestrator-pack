@@ -52,6 +52,7 @@ import {
   finalCapPureSelectedBaseMerge,
   handoffFinalCapDeltaFindings,
   finalCapBoundReachedNextAction,
+  finalCapFindingsNextAction,
   startPackReview,
   PACK_REVIEW_REVIEWER_KILL_GRACE_MS,
 } from './pack-review-runner.ts';
@@ -4109,6 +4110,18 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
       settled: false, reason: 'final_cap_delta_exact_result_reused', findingsHandoff: expect.any(Object),
     }));
     expect(f.statuses.some((status) => status.state === 'success')).toBe(false);
+    // Issue #2897: the initial persisted-findings branch carries the full ordered route.
+    const row = result.results.find((entry) => entry.reason === 'final_cap_delta_exact_result_reused');
+    const next = String(row?.nextAction);
+    expect(next).toContain('(1) make one final fix commit');
+    expect(next).toContain('(2) obtain final_cap_delta_findings_bound_reached');
+    expect(next).toContain('(3) get the architect diff check');
+    expect(next).toContain('--merge-waiver-line');
+    expect(next).not.toContain('then review only the next F..T');
+    const handoffState = (row?.findingsHandoff as { state?: string } | undefined)?.state;
+    if (handoffState !== 'submitted' && handoffState !== 'already_attempted') {
+      expect(next).toContain('findings notification state: ' + (handoffState ?? 'none'));
+    }
   });
 
   // Real linear H1 -> H2 -> H3 lineage; the merge variant ends with a clean
@@ -4180,11 +4193,11 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     });
     expect(row?.nextAction).toContain('architect diff check');
     expect(row?.nextAction).toContain('--merge-waiver-line');
-    // Issue #2897: the full ordered continuation is named, with no same-head review.
+    // Issue #2897: the bound-reached head continues at the architect check, no fix and no same-head review.
     const next = String(row?.nextAction);
-    const order = ['(1) make one final fix commit', '(2) obtain final_cap_delta_findings_bound_reached',
-      '(3) get the architect diff check', '(4) on PASS run smoke', '(5) merge with'];
+    const order = ['(1) get the architect diff check', '(2) on PASS run smoke', '(3) merge with'];
     expect(order.map((step) => next.indexOf(step)).every((at, i, all) => at >= 0 && (i === 0 || at > all[i - 1]!))).toBe(true);
+    expect(next).not.toContain('make one final fix commit');
     expect(next).toContain('no further delta review on this head');
     expect(row).not.toHaveProperty('findingsHandoff');
     expect(row).not.toHaveProperty('deltaRunId');
@@ -4196,11 +4209,12 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     }));
   });
 
-  it('Issue #2897: bound-reached next action preserves the actual unbound notification state', () => {
-    const unbound = finalCapBoundReachedNextAction(2897, 'notification_unbound');
+  it('Issue #2897: next actions preserve the actual unbound notification state', () => {
+    const unbound = finalCapFindingsNextAction(2897, 'notification_unbound');
     expect(unbound).toContain('findings notification state: notification_unbound');
     expect(unbound).toContain('(5) merge with');
-    expect(finalCapBoundReachedNextAction(2897, 'submitted')).not.toContain('notification state');
+    expect(finalCapBoundReachedNextAction(2897, 'escalated_ambiguous')).toContain('notification state: escalated_ambiguous');
+    expect(finalCapFindingsNextAction(2897, 'submitted')).not.toContain('notification state');
   });
 
   it('PR 2852: a clean final-cap delta still admits the next ordinary delta on a new head', async () => {
@@ -6710,6 +6724,59 @@ describe('Issue #2576 owned worktree lifecycle with real disposable Git', () => 
     expect(replaced.attemptHistory).toEqual([{
       invocationId: lost!.invocationId, attemptOrdinal: 1, terminalClass: 'possible_delivery/missing_result',
     }]);
+  });
+
+  it('Issue #2897: an exhausted missing-result retry keeps the valid source and never starts a whole-round replacement', async () => {
+    const f = realGitFixture();
+    const prNumber = 289702;
+    process.env.PACK_REVIEWER = 'gpt';
+    process.env.PACK_REVIEW_BOUND_REVIEWER = 'gpt';
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    const sourceClean = (invocationId: string) => JSON.stringify({
+      schema: 'turn-result/v1', state: 'ok', scope: 'invocation',
+      cause: 'completed_page_only', invocation_id: invocationId, send_count: 1,
+    }) + '\n' + cleanPayload();
+    const first = await startPackReview({
+      ...input(f, prNumber),
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: sourceClean('inv-2897-x-source-01') }],
+        'source-02': [{ stdout: '', exitCode: 1 }],
+        'source-03': [{ stdout: sourceClean('inv-2897-x-source-03') }],
+      },
+    });
+    const runId = String(first.runId);
+    const lostSlot = getPackReviewRun(runId, { projectId, storeRoot: f.storeRoot })!.reviewRound!.sourceSlots
+      .find((slot) => slot.terminalClass === 'possible_delivery/missing_result')!.slotId;
+    const deadOwner = () => updatePackReviewRun(runId, { runnerPid: 99999999 }, {
+      projectId, storeRoot: f.storeRoot, now: new Date('2000-01-01T00:00:00.000Z'),
+    });
+    deadOwner();
+    const observer = async () => ({
+      state: 'replacement_eligible' as const, replacementEligible: true, slotId: lostSlot,
+      replacementEligibleSlotIds: [lostSlot],
+    });
+    const launched: string[] = [];
+    await startPackReview({
+      ...input(f, prNumber), claimMode: 'acquire', fixtureGptAttemptObserver: observer,
+      fixtureAfterGptInvocationBound: ({ slotId }) => { launched.push(slotId); },
+      fixtureReviewBySourceSlot: { [lostSlot]: [{ stdout: '', exitCode: 1 }] },
+    });
+    expect(launched).toEqual([lostSlot]);
+    const spent = getPackReviewRun(runId, { projectId, storeRoot: f.storeRoot })!;
+    const spentSlot = spent.reviewRound!.sourceSlots.find((slot) => slot.slotId === lostSlot)!;
+    expect(spentSlot.attemptOrdinal).toBe(2);
+    deadOwner();
+    const runsBefore = listPackReviewRuns({ projectId, storeRoot: f.storeRoot }).length;
+    const again = await startPackReview({
+      ...input(f, prNumber), claimMode: 'acquire', fixtureGptAttemptObserver: observer,
+      fixtureAfterGptInvocationBound: ({ slotId }) => { launched.push(slotId); },
+    });
+    expect(launched).toEqual([lostSlot]);
+    expect(again.created).not.toBe(true);
+    expect(listPackReviewRuns({ projectId, storeRoot: f.storeRoot })).toHaveLength(runsBefore);
+    const kept = getPackReviewRun(runId, { projectId, storeRoot: f.storeRoot })!;
+    expect(kept.reviewRound!.sourceSlots.filter((slot) => slot.slotId !== lostSlot).some((slot) => slot.payload !== undefined)).toBe(true);
   });
 
   it('preserves a terminal-status owner paused before finally and removes only after it exits', async () => {
