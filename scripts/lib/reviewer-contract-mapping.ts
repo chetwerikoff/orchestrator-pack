@@ -1406,6 +1406,19 @@ export function evaluateMappingPreflight(input: MappingPreflightInput): MappingP
     };
   }
 
+  // A PR body whose selected-kind references are ambiguous or invalid never selects a contract.
+  if (input.binding.prBody) {
+    const prBinding = resolvePrIssueBinding(input.binding.prBody);
+    if (!prBinding.ok && prBinding.reason !== 'missing') {
+      const status = resolveStatusPrecedence([...failureCandidates, 'ambiguous_spec']);
+      return {
+        status,
+        shouldInvokeCoworker: false,
+        contractSet: [],
+        statusRecord: buildStructuredStatusRecord({ status, prHeadSha }),
+      };
+    }
+  }
   const refs = collectAuthoritativeReferences(input.binding);
   const resolved = resolveContractSet(refs, input.specBodies);
   if (!resolved.ok) {

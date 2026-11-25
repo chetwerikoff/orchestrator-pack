@@ -2502,7 +2502,7 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
         },
         ...overrides,
       });
-      return { writes, request, getStatus: () => status };
+      return { writes, request, getStatus: () => status, fixtureRef: f };
     }
 
     it.each(['codex', 'gpt'] as const)('%s: a real Fix criteria amendment enters the ordinary amendment round with pending read-back', async (reviewer) => {
@@ -2604,12 +2604,6 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
         nextAction: expect.stringContaining('## Fix criteria'),
       });
       expect(h.getStatus()).toBe('error');
-      // Byte-identical body: B must be its own contract.
-      expect(await maybeAdmitPackReviewBodyAmendment(asB(bodyA), admitOptions(f)))
-        .toMatchObject({
-          amendmentAdmission: false, reason: 'amendment_rebind_body_identical',
-          nextAction: expect.stringContaining('its own contract text'),
-        });
       // Ambiguous binding: two closing references.
       const ambiguous = await maybeAdmitPackReviewBodyAmendment(
         asB(fixBody('B behavior'), { fixturePrBody: `Closes #${issueB}\nFixes #${issueB + 1}` }), admitOptions(f));
@@ -2627,6 +2621,23 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
       expect(h.getStatus()).toBe('pending');
     });
 
+    it('rebind to a byte-identical body replaces the old green with a read-back non-success and names the correction', async () => {
+      const bodyA = acceptanceBody('A behavior');
+      const f = fixture('gpt', bodyA, true);
+      const issueB = f.issueNumber + 3;
+      const h = harness(f);
+      expect(h.getStatus()).toBe('success');
+      const refused = await maybeAdmitPackReviewBodyAmendment(h.request(bodyA, {
+        fixturePrBody: `Closes #${issueB}`, fixtureIssueNumber: issueB, fixtureIssueTitle: '[T2] Rebound Issue',
+      }), admitOptions(f));
+      expect(refused).toMatchObject({
+        amendmentAdmission: false, reason: 'amendment_rebind_body_identical',
+        nextAction: expect.stringContaining('its own contract text'),
+      });
+      expect(h.getStatus()).toBe('error');
+      expect(h.writes).toEqual(['error']);
+    });
+
     it('rebind with a different authoritative tier names the correction and never claims success', async () => {
       const f = fixture('gpt', acceptanceBody('A behavior'), true);
       const issueB = f.issueNumber + 3;
@@ -2639,7 +2650,9 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
         amendmentAdmission: false, reason: 'amendment_rebind_tier_mismatch',
         nextAction: expect.stringContaining('set the authoritative tier of Issue #' + issueB),
       });
-      expect(h.writes).not.toContain('success');
+      // The prior green on the same head is replaced by an actual non-success read-back.
+      expect(h.getStatus()).toBe('error');
+      expect(h.writes).toEqual(['error']);
     });
 
     it('an unresolvable A snapshot still admits the rebind on the digest A recorded (fresh ordinary cycle for B)', async () => {

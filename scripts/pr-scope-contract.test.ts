@@ -11,7 +11,7 @@ import {
 import { evaluatePrScope } from './pr-scope-check.ts';
 import { exactClosingIssue } from './worker-smoke-run.ts';
 import { uniqueClosingIssue } from './fleet/fleet-wake.ts';
-import { extractContractSections, collectAuthoritativeReferences } from './lib/reviewer-contract-mapping.ts';
+import { evaluateMappingPreflight, extractContractSections, collectAuthoritativeReferences } from './lib/reviewer-contract-mapping.ts';
 
 const liveIssueBody = [
   '```denylist',
@@ -144,5 +144,23 @@ describe('Issue #2900 behavior-criteria reader on the review mapping', () => {
       expect(extracted.complete, label).toBe(false);
       expect(extracted.missing, label).toContain('Acceptance criteria');
     }
+  });
+});
+
+describe('Issue #2900 review mapping preflight fails closed on an unbound PR body', () => {
+  const spec = '## Goal\nG\n\n## Binding surface\nB\n\n## Fix criteria\n\n1. Works.\n\n## Verification\nV\n';
+  const preflight = (prBody: string) => evaluateMappingPreflight({
+    diffLineCount: 500, diffContent: '', changedPaths: ['scripts/a.ts'],
+    binding: { prBody } as Parameters<typeof collectAuthoritativeReferences>[0],
+    specBodies: [{ issueNumber: 8, body: spec }],
+  } as Parameters<typeof evaluateMappingPreflight>[0]);
+
+  it.each(['Closes #8\nCloses #8', 'Closes #8\nFixes #0', 'Part of #8\nPart of #8'])('%j never selects a contract', (body) => {
+    expect(preflight(body).status).toBe('ambiguous_spec');
+    expect(preflight(body).contractSet).toEqual([]);
+  });
+
+  it.each(['Closes #8', 'Part of #8'])('%j selects the Fix criteria contract of Issue 8', (body) => {
+    expect(preflight(body).status).not.toBe('ambiguous_spec');
   });
 });

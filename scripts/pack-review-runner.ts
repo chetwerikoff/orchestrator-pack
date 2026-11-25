@@ -6330,7 +6330,8 @@ export async function maybeAdmitPackReviewBodyAmendment(
   // prior success as the runner's asserted current authority. A non-behavior
   // mismatch has no new-review admission; deassert and read back only.
   const confirmUnreviewedBodyNonSuccess = async (reason: string,
-    cause?: { binding: PackReviewAmendmentBinding; detail: string }) => {
+    cause?: { binding: PackReviewAmendmentBinding; detail: string },
+    specificNextAction?: string) => {
     let operation: PackReviewAmendmentBinding = 'pr_head_lineage';
     try {
       const head = await readCheckedReviewPrHead(input, options.repoSlug, prNumber, livePr.headSha);
@@ -6358,7 +6359,9 @@ export async function maybeAdmitPackReviewBodyAmendment(
       if (observed !== 'pending' && observed !== 'error') {
         return failure('amendment_mismatch_non_success_unverified');
       }
-      return failure(reason, cause);
+      return specificNextAction
+        ? { ...failure(reason, cause), nextAction: specificNextAction }
+        : failure(reason, cause);
     } catch (error) {
       return failure(operation === 'pr_head_lineage'
         ? 'amendment_mismatch_current_binding_unverified' : 'amendment_mismatch_non_success_unverified',
@@ -6487,13 +6490,11 @@ export async function maybeAdmitPackReviewBodyAmendment(
     : (rebind && boundDigest && /^sha256:[0-9a-f]{64}$/.test(boundDigest) ? boundDigest : undefined);
   if (!originalDigest) {
     if (rebind) {
-      return {
-        ...failure('amendment_rebind_original_unverified'),
-        nextAction: 'the settled round of Issue #' + reviewedIssueNumber
+      return confirmUnreviewedBodyNonSuccess('amendment_rebind_original_unverified', undefined,
+'the settled round of Issue #' + reviewedIssueNumber
           + ' records no usable immutable body digest, so a rebind to Issue #' + issueNumber
           + ' cannot be admitted; this is a limitation of the stored review evidence, not of the new Issue: the architect decides an audited review-cycle reset for this PR, or the PR is re-bound to Issue #'
-          + reviewedIssueNumber + ' with its own criteria amendment',
-      };
+          + reviewedIssueNumber + ' with its own criteria amendment');
     }
     // The existing #2565 binding guard owns missing/corrupt originals; do not
     // pre-empt unrelated final-cap settlement with amendment-only requirements.
@@ -6502,21 +6503,17 @@ export async function maybeAdmitPackReviewBodyAmendment(
   const oldBody = frozenVerified && !rebind ? readFileSync(frozen.snapshotPath!, 'utf8') : '';
   if (rebind) {
     if (cycle.amendmentOrigin) {
-      return {
-        ...failure('amendment_rebind_after_amendment_unsupported'),
-        nextAction: 'the reviewed round already belongs to an amended continuation of Issue #'
+      return confirmUnreviewedBodyNonSuccess('amendment_rebind_after_amendment_unsupported', undefined,
+'the reviewed round already belongs to an amended continuation of Issue #'
           + cycle.amendmentOrigin.closingIssueNumber + '; either re-bind the PR to Issue #'
           + cycle.amendmentOrigin.closingIssueNumber
-          + ' or the architect decides an audited review-cycle reset to review Issue #' + issueNumber,
-      };
+          + ' or the architect decides an audited review-cycle reset to review Issue #' + issueNumber);
     }
     if (nextDigest === originalDigest) {
-      return {
-        ...failure('amendment_rebind_body_identical'),
-        nextAction: 'Issue #' + issueNumber + ' has exactly the body bytes already reviewed for Issue #'
+      return confirmUnreviewedBodyNonSuccess('amendment_rebind_body_identical', undefined,
+'Issue #' + issueNumber + ' has exactly the body bytes already reviewed for Issue #'
           + reviewedIssueNumber + '; give Issue #' + issueNumber
-          + ' its own contract text (its own Goal, Binding surface and criteria) so it is a distinct body, then rerun scoped reconcile',
-      };
+          + ' its own contract text (its own Goal, Binding surface and criteria) so it is a distinct body, then rerun scoped reconcile');
     }
     if (!reviewBehaviorCriteria(currentIssue.body)) {
       return confirmUnreviewedBodyNonSuccess('amendment_behavior_criteria_missing_or_invalid');
@@ -6586,13 +6583,11 @@ export async function maybeAdmitPackReviewBodyAmendment(
   catch { return failure('amendment_tier_invalid', { binding: 'issue_criteria', detail: 'issue_criteria:tier_invalid' }); }
   if (liveTier !== cycle.frozenTier) {
     if (!rebind) return null; // Existing upward-tier reconciliation owns that distinct case.
-    return {
-      ...failure('amendment_rebind_tier_mismatch'),
-      nextAction: 'Issue #' + issueNumber + ' declares tier ' + liveTier + ' but the settled review cycle of Issue #'
+    return confirmUnreviewedBodyNonSuccess('amendment_rebind_tier_mismatch', undefined,
+'Issue #' + issueNumber + ' declares tier ' + liveTier + ' but the settled review cycle of Issue #'
         + reviewedIssueNumber + ' is tier ' + cycle.frozenTier + '; set the authoritative tier of Issue #'
         + issueNumber + ' to ' + cycle.frozenTier + ' (or re-bind the PR to Issue #' + reviewedIssueNumber
-        + '), then rerun scoped reconcile; a different tier needs the architect to decide an audited review-cycle reset',
-    };
+        + '), then rerun scoped reconcile; a different tier needs the architect to decide an audited review-cycle reset');
   }
   const originalImmutable = listPackReviewImmutableRecords('terminal', { storeRoot: options.storeRoot })
     .filter((entry) => entry.digest === terminal.digest
@@ -7506,10 +7501,21 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       const issueNumber = extractClosingIssueNumber(livePr.body);
       if (!issueNumber || (reviewedIssue && reviewedIssue !== issueNumber)) {
         if (issueNumber && reviewedIssue) {
-          bindingNextAction = 'the PR is now bound to Issue #' + issueNumber + ' but its settled round reviewed Issue #'
-            + reviewedIssue + ': give Issue #' + issueNumber
-            + ' an authoritative tier equal to the reviewed cycle and exactly one nonempty Acceptance criteria or Fix criteria section, then rerun scoped reconcile to start one ordinary review of Issue #'
-            + issueNumber + '; or re-bind the PR to Issue #' + reviewedIssue;
+          // The amendment owner admits only non-T1 cycles whose settled run carries
+          // persisted journal and delivered GitHub comment evidence.
+          const rebindAdmissible = cycle.frozenTier !== 'T1'
+            && priorRun.journalOutcome?.state === 'persisted'
+            && priorRun.deliveryOutcomes.githubComment?.state === 'succeeded';
+          bindingNextAction = rebindAdmissible
+            ? 'the PR is now bound to Issue #' + issueNumber + ' but its settled round reviewed Issue #'
+              + reviewedIssue + ': give Issue #' + issueNumber
+              + ' an authoritative tier equal to the reviewed cycle and exactly one nonempty Acceptance criteria or Fix criteria section, then rerun scoped reconcile to start one ordinary review of Issue #'
+              + issueNumber + '; or re-bind the PR to Issue #' + reviewedIssue
+            : 'the PR is now bound to Issue #' + issueNumber + ' but the settled round of Issue #' + reviewedIssue
+              + ' is a ' + cycle.frozenTier + ' cycle whose '
+              + (cycle.frozenTier === 'T1' ? 'tier' : 'persisted journal and delivered GitHub review comment evidence')
+              + ' cannot admit a continuation for another Issue, so rerunning unchanged will not succeed: re-bind the PR to Issue #'
+              + reviewedIssue + ', or the architect decides an audited review-cycle reset to review Issue #' + issueNumber;
         } else {
           bindingNextAction = 'edit the PR body so it binds exactly one Issue (one Closes #N, or one Part of #N when there is no closing reference), then rerun scoped reconcile';
         }
