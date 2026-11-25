@@ -398,12 +398,14 @@ function findUniquePostedComment(
   reviews: GithubReviewSummary[],
   actorLogin: string,
   run: PackReviewRunRecord,
+  commentBody: string,
 ): GithubReviewSummary | null {
   const marker = reconciliationMarker(run.id);
   const candidates = reviews
     .filter((review) => review.userLogin.toLowerCase() === actorLogin.toLowerCase()
       && review.state === 'COMMENTED'
-      && review.body.includes(marker))
+      && review.body.includes(marker)
+      && review.body === commentBody)
     .sort(compareReviewOrder);
   if (candidates.length > 1) {
     throw new Error(`ambiguous GitHub COMMENT recovery found ${candidates.length} matching reviews for ${run.id}`);
@@ -437,6 +439,7 @@ function requireConfirmedCommentReview(
   if (review.userLogin.toLowerCase() !== state.actorLogin.toLowerCase()
     || review.state !== 'COMMENTED'
     || !review.body.includes(marker)
+    || review.body !== state.commentBody
     || review.commitId !== run.targetSha) {
     throw new Error(`GitHub COMMENT review ${commentReviewId} does not match reconciliation ${run.id}`);
   }
@@ -471,7 +474,7 @@ function normalizedState(run: PackReviewRunRecord): DurableGithubCommentReviewRe
 
 function persistState(
   runId: string, state: DurableGithubCommentReviewReconciliation,
-  options: PackReviewStoreOptions, electPost: true | 'loser',
+  options: PackReviewStoreOptions, electPost: true,
 ): DurableGithubCommentReviewReconciliation | null;
 function persistState(
   runId: string, state: DurableGithubCommentReviewReconciliation,
@@ -481,7 +484,7 @@ function persistState(
   runId: string,
   state: DurableGithubCommentReviewReconciliation,
   options: PackReviewStoreOptions,
-  electPost: boolean | 'loser' = false,
+  electPost = false,
 ): DurableGithubCommentReviewReconciliation | null {
   const next: DurableGithubCommentReviewReconciliation = {
     ...state,
@@ -492,10 +495,6 @@ function persistState(
       const stored = records.find((run) => run.id === runId);
       if (!stored) return false;
       const prior = normalizedState(stored);
-      if (electPost === 'loser') {
-        return !!prior && prior.commentBody === state.commentBody
-          && prior.postOutcome !== 'accepted' && prior.phase !== 'complete';
-      }
       return !prior || (prior.phase === 'prepared'
         && prior.commentBody === state.commentBody && prior.actorLogin === state.actorLogin
         && ['not_attempted', 'definitely_rejected'].includes(prior.postOutcome ?? ''));
@@ -505,6 +504,29 @@ function persistState(
     updatePackReviewRun(runId, { githubReviewReconciliation: next }, options);
   }
   return next;
+}
+
+// An election writes ambiguous before POST, without lastError. Only a
+// completed failed attempt can be released by a successful absence readback.
+// Fence the release to the attempt observed before the asynchronous lookup.
+function recordAbsentFailedComment(
+  runId: string,
+  state: DurableGithubCommentReviewReconciliation,
+  options: PackReviewStoreOptions,
+): boolean {
+  if (state.phase !== 'prepared' || state.postOutcome !== 'ambiguous' || !state.lastError) return false;
+  return updatePackReviewRunIf(runId, (records) => {
+    const stored = records.find((run) => run.id === runId);
+    const prior = stored && normalizedState(stored);
+    return !!prior && prior.phase === 'prepared' && prior.postOutcome === 'ambiguous'
+      && prior.actorLogin === state.actorLogin && prior.commentBody === state.commentBody
+      && prior.postAttemptedAtUtc === state.postAttemptedAtUtc
+      && prior.updatedAtUtc === state.updatedAtUtc && prior.lastError === state.lastError;
+  }, {
+    githubReviewReconciliation: {
+      ...state, postOutcome: 'definitely_rejected', updatedAtUtc: new Date().toISOString(),
+    } as DurableGithubCommentReviewReconciliation,
+  }, options) !== null;
 }
 
 function uniqueIds(values: Array<number | string>): Array<number | string> {
@@ -548,9 +570,13 @@ export async function reconcileGithubCommentReview(
       preparedAtUtc: now,
       updatedAtUtc: now,
     };
-  } else if (state.commentBody !== options.body) {
+  } else if (state.commentBody !== options.body
+    && !(state.phase === 'prepared' && (state.postOutcome === 'definitely_rejected'
+      || (state.postOutcome === 'ambiguous' && state.lastError)))) {
     throw new Error(`GitHub review reconciliation body changed for ${current.id}`);
   }
+  // Recovery uses the original elected bytes even if a resumed renderer differs.
+  const commentBody = state.commentBody;
 
   if (state.phase === 'prepared') {
     let posted: { id: number | string; url: string } | null = null;
@@ -564,8 +590,11 @@ export async function reconcileGithubCommentReview(
       elected = claimed !== null;
       lostElection = !elected;
       state = claimed ?? normalizedState(getPackReviewRun(current.id, storeOptions) ?? current)!;
-      if (!state || state.commentBody !== options.body) {
+      if (!state || state.commentBody !== commentBody) {
         throw new Error(`GitHub review reconciliation changed for ${current.id}; observe the original run`);
+      }
+      if (lostElection && state.commentBody !== options.body) {
+        throw new Error(`GitHub review reconciliation body changed for ${current.id}`);
       }
       if (lostElection && state.postOutcome === 'accepted' && state.commentReviewId !== undefined) {
         return { id: state.commentReviewId, url: trim(state.commentReviewUrl),
@@ -574,6 +603,7 @@ export async function reconcileGithubCommentReview(
     }
 
     if (!elected && state.phase === 'prepared') {
+      const beforeLookup = state;
       let reviews: GithubReviewSummary[] = [];
       let lookupError: unknown;
       try { reviews = await options.transport.listReviews(); }
@@ -581,27 +611,26 @@ export async function reconcileGithubCommentReview(
       // The lookup can yield to the incumbent's accepted/complete transition.
       // Never write the pre-lookup prepared snapshot back over that progress.
       state = normalizedState(getPackReviewRun(current.id, storeOptions) ?? current) ?? state;
-      if (state.commentBody !== options.body) {
+      if (state.commentBody !== commentBody) {
         throw new Error(`GitHub review reconciliation changed for ${current.id}; observe the original run`);
       }
       if (state.postOutcome === 'accepted' && state.commentReviewId !== undefined) {
         return { id: state.commentReviewId, url: trim(state.commentReviewUrl),
           dismissedReviewIds: [...state.dismissedReviewIds], reconciliation: state };
       }
-      const observed = lookupError ? null : findUniquePostedComment(reviews, state.actorLogin, current);
+      const observed = lookupError ? null : findUniquePostedComment(reviews, state.actorLogin, current, commentBody);
       if (lookupError || !observed) {
         const message = lookupError
           ? `ambiguous POST recovery lookup failed: ${describeError(lookupError)}; observe the original run ${current.id} and retry readback`
           : `GitHub COMMENT POST outcome remains ambiguous for ${current.id}; accepted review is not yet observable; observe the original run and retry readback without reposting`;
-        // Any non-elected caller can be racing the successful poster, even
-        // when it entered with an already ambiguous state rather than a CAS.
-        const recorded = persistState(current.id, { ...state, lastError: message }, storeOptions, 'loser');
-        if (!recorded) {
-          const latest = normalizedState(getPackReviewRun(current.id, storeOptions) ?? current);
-          if (latest?.postOutcome === 'accepted' && latest.commentReviewId !== undefined) {
-            return { id: latest.commentReviewId, url: trim(latest.commentReviewUrl),
-              dismissedReviewIds: [...latest.dismissedReviewIds], reconciliation: latest };
-          }
+        if (!lookupError && !lostElection
+          && recordAbsentFailedComment(current.id, beforeLookup, storeOptions)) {
+          throw new Error(`GitHub COMMENT POST was not observed for ${current.id}; resume the original run to post the stored body`);
+        }
+        const latest = normalizedState(getPackReviewRun(current.id, storeOptions) ?? current);
+        if (latest?.postOutcome === 'accepted' && latest.commentReviewId !== undefined) {
+          return { id: latest.commentReviewId, url: trim(latest.commentReviewUrl),
+            dismissedReviewIds: [...latest.dismissedReviewIds], reconciliation: latest };
         }
         throw new Error(message);
       }
@@ -639,7 +668,7 @@ export async function reconcileGithubCommentReview(
 
         let observed: GithubReviewSummary | null;
         try {
-          observed = findUniquePostedComment(reviews, state.actorLogin, current);
+          observed = findUniquePostedComment(reviews, state.actorLogin, current, commentBody);
         } catch (observationError) {
           state = persistState(current.id, {
             ...state,
@@ -647,7 +676,10 @@ export async function reconcileGithubCommentReview(
           }, storeOptions);
           throw observationError;
         }
-        if (!observed) throw postError;
+        if (!observed) {
+          recordAbsentFailedComment(current.id, state, storeOptions);
+          throw postError;
+        }
         posted = { id: observed.id, url: observed.url };
       }
     }
