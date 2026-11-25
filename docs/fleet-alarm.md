@@ -344,11 +344,11 @@ sent incident is kept until the pane positively reports a different state; only
 never-notified records expire after 7 days, and the record-count cap prunes
 those disposable records only. A positively observed state change is recorded
 even while no coordinator is valid. Opaque, empty or unreadable saved history is
-unknown, not new: the tick logs `alarm_history_unreadable`, persists an
-unknown-history fence, and a pane with no saved record stays unknown (never
-alarmed as new) on every later tick until its state changes. An absent history
-file is a fresh start. To clear the fence after reviewing the stops, remove
-`last-sent.signature` under the project's fleet-sweep state directory. A new
+unknown on that tick only: the tick logs `alarm_history_unreadable` and an
+observed pane without a saved record is not alarmed as new; later ticks treat
+the rewritten history normally. A pane omitted on that tick and returning
+unchanged can alarm once more, a harmless repeat. An absent history file is a
+fresh start. A new
 coordinator, a hot repin, a restart, elapsed time or an `attempted_unverified`
 timer never replays an unchanged incident: only a different pane state,
 incarnation or a new fact alarms. Marks with the prefixes `terminal-path:`,

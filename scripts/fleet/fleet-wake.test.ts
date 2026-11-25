@@ -7041,18 +7041,20 @@ describe('Issue #2896 state-change alarm dedup, independent of the coordinator',
     }
   });
 
-  it('keeps the unknown-history fence for an omitted pane across ticks and an outage', async () => {
-    for (const roster of [[coordinatorA], [stopped]]) {
+  it('treats opaque history as unknown on that tick only, then alarms a new stop normally', async () => {
+    const second: FleetTerminal = { ...terminals[2]!, incarnationId: 'worker-inc-2' };
+    const frames = { ...screens, two: 'done' };
+    for (const outage of [false, true]) {
       const store = new MemoryWakeStore();
       store.writeLastSentSignature('{not json');
-      // First tick after the opaque signature: the previously notified worker is not observed.
-      expect(sends((await run(store, roster, screens)).calls)).toHaveLength(0);
-      expect(JSON.parse(store.signature ?? '{}').fence).toBe(true);
-      // It returns unchanged: still unknown, never replayed as new.
-      expect(sends((await run(store, [coordinatorA, stopped])).calls)).toHaveLength(0);
-      // A positive state change then a new stop alarms once.
-      await run(store, [coordinatorA, stopped], { ...screens, one: 'working\nesc interrupt' });
-      expect(sendsTo((await run(store, [coordinatorA, stopped])).calls, 'coord-a')).toHaveLength(1);
+      const roster = outage ? [stopped] : [coordinatorA, stopped];
+      // The unknown tick: an observed pane without a saved record is not alarmed as new.
+      expect(sends((await run(store, roster, frames)).calls), `outage=${String(outage)}`).toHaveLength(0);
+      // Its state is unchanged on later ticks: still not replayed.
+      expect(sends((await run(store, [coordinatorA, stopped], frames)).calls)).toHaveLength(0);
+      // History is ordinary again: a pane first seen stopped on a later tick alarms once.
+      expect(sendsTo((await run(store, [coordinatorA, stopped, second], frames)).calls, 'coord-a')).toHaveLength(1);
+      expect(sends((await run(store, [coordinatorA, stopped, second], frames)).calls)).toHaveLength(0);
     }
   });
 

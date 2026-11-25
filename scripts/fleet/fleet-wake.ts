@@ -3061,7 +3061,7 @@ async function reconcileSelectedProjectStaleReviews(
 }
 
 type PaneState = { state: string; sent: boolean; attempted?: boolean; attemptedAt?: number; seenAt?: number };
-type PaneHistory = { panes: Record<string, PaneState>; routed: string; coordinator?: string; fence?: true };
+type PaneHistory = { panes: Record<string, PaneState>; routed: string; coordinator?: string };
 /** Hard bound on retained per-pane records; the oldest-seen unresolved records go first. */
 const PANE_HISTORY_MAX_ENTRIES = 500;
 
@@ -3082,7 +3082,7 @@ function readPaneHistory(store: FleetWakeStateStore): { readonly history: PaneHi
       && 'panes' in parsed && 'routed' in parsed) {
       const row = parsed as PaneHistory;
       if (row.panes && typeof row.panes === 'object' && !Array.isArray(row.panes)
-        && typeof row.routed === 'string') return { history: row, unknown: row.fence === true };
+        && typeof row.routed === 'string') return { history: row, unknown: false };
     }
   } catch { /* fall through: opaque history */ }
   return { history: empty, unknown: true };
@@ -3249,7 +3249,6 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
           bareShellHandles, (options.now ?? Date.now)());
         store.writeLastSentSignature(JSON.stringify({
           panes: outageStates, routed: outage.history.routed, coordinator: outage.history.coordinator,
-          ...(outage.unknown ? { fence: true } : {}),
         }));
       } catch { /* history is advisory; the next tick re-reads it */ }
       log('normal fleet result: no orchestrator pane found');
@@ -3328,7 +3327,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     const pendingPermission = observedPermissionWarnings(observations, config.projectId, store);
     const { history: previous, unknown: historyUnknown } = readPaneHistory(store);
     if (historyUnknown) {
-      log('DIAG reason=alarm_history_unreadable evidence=saved_history_opaque_or_fenced; unrecorded panes are unknown, not new; reconcile manually (remove last-sent.signature) once the stops are reviewed');
+      log('DIAG reason=alarm_history_unreadable evidence=saved_history_opaque; panes without a saved record are unknown on this tick only, not new');
     }
     const coordinatorKey = JSON.stringify([
       coordinator.handle, coordinator.incarnationId ?? '', coordinator.worktreePath,
@@ -3337,8 +3336,6 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     // An observation gap or an unreadable pane is not a resolution, and a coordinator replacement
     // never authorizes a replay: history is keyed by pane episode only.
     const paneStates = mergePaneHistory(previous, historyUnknown, observations, bareShellHandles, tickNow);
-    // The unknown-history fence persists across ticks until the operator reconciles the history.
-    const fence: { fence?: true } = historyUnknown ? { fence: true } : {};
     const now = (options.now ?? Date.now)();
     // Elapsed time never replays: a sent incident stays sent and an ambiguous attempt stays
     // unknown until the pane positively changes state (a new episode).
@@ -3349,13 +3346,13 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     const routedSignature = chatBannerSignature(routed);
     const pendingRouted = routedSignature !== previous.routed ? routed : [];
     const ordinaryDue = stopped.length > 0 || bareAlerts.length > 0 || pendingRouted.length > 0;
-    const nowSignature = JSON.stringify({ panes: paneStates, routed: routedSignature, coordinator: coordinatorKey, ...fence });
+    const nowSignature = JSON.stringify({ panes: paneStates, routed: routedSignature, coordinator: coordinatorKey });
     if (observations.some((pane) => pane.state === 'PERMISSION'
       && previous.panes[pane.handle]?.state !== paneStates[pane.handle]?.state)) {
       // Persist the intervening state even if the separate permission alert
       // fails. Keep unsent routed messages and coordinator transfer unacknowledged.
       store.writeLastSentSignature(JSON.stringify({
-        panes: paneStates, routed: previous.routed, coordinator: previous.coordinator, ...fence,
+        panes: paneStates, routed: previous.routed, coordinator: previous.coordinator
       }));
     }
     const signature = JSON.stringify({
@@ -3444,7 +3441,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
       }
       for (const handle of bareAlerts) paneStates[handle]!.attempted = true;
       if (ordinaryDue) store.writeLastSentSignature(JSON.stringify({
-        panes: paneStates, routed: routedSignature, coordinator: coordinatorKey, ...fence,
+        panes: paneStates, routed: routedSignature, coordinator: coordinatorKey
       }));
       const receipt = sendCoordinatorReceipt(executor, coordinator, message);
       if (receipt.status !== 'turn_started') {
@@ -3466,7 +3463,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     }
     for (const pane of stopped) { paneStates[pane.handle]!.sent = true; delete paneStates[pane.handle]!.attempted; delete paneStates[pane.handle]!.attemptedAt; }
     for (const handle of bareAlerts) { paneStates[handle]!.sent = true; delete paneStates[handle]!.attempted; }
-    store.writeLastSentSignature(JSON.stringify({ panes: paneStates, routed: routedSignature, coordinator: coordinatorKey, ...fence }));
+    store.writeLastSentSignature(JSON.stringify({ panes: paneStates, routed: routedSignature, coordinator: coordinatorKey }));
     if (ordinaryDue) store.writeLastSentAt?.(now);
     log(`sent to ${coordinator.handle} (${coordinatorState}): ${stopped.length} pane changes, ${bareAlerts.length} bare shells, ${pendingRouted.length} chat banner(s), ${deliverLocal.length} local warning(s), ${deliverPermission.length} permission warning(s)`);
     return {
