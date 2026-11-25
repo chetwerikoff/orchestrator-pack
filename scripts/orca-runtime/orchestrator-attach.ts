@@ -15,20 +15,13 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import {
-  bindOperatorPrimary,
-  listCurrentWorkerAssignmentRecords,
-  readOperatorPrimaryBinding,
-  resolveWorkerAssignmentStorePath,
-  type WorkerAssignmentRecord,
-} from '../lib/worker-assignment-store.ts';
-import { TERMINAL_DISPATCH_STATES, TERMINAL_WORKER_STATES } from './dispatch-terminal-mail.ts';
 import { orcaJsonArgv, resolveOrcaExecutable } from './native.ts';
 import { resolveTargetContext, TargetContextError, type TargetContext } from '../lib/target-context.ts';
 
 const USAGE = [
   'usage: scripts/opk-orch-start resume <existing-session-id>',
   '       scripts/opk-orch-start attach <terminal-handle> [project-id]',
+  '       scripts/opk-orch-start precheck [project-id]',
   '',
 ].join('\n');
 
@@ -38,7 +31,9 @@ const PROJECT_CORRECTION = 'correct the handle/project/Orca runtime and retry';
 const RUN_ID_CORRECTION = 'set OPK_RUN_ID to the existing Run and retry';
 const LIST_CORRECTION = 'restore Orca terminal visibility, inspect this Run and retry';
 const READBACK_CORRECTION = 'inspect the exact Run and retry the restore only after resolving its coordinator';
-const ASSIGNMENT_CORRECTION = 'reconcile the existing local WorkerAssignment/Dispatch and primary pointer, then retry';
+const SELECTION_CORRECTION = 'reconcile the exact existing project Run natively, put one literal OPK_RUN_ID=<run id> entry in the selected project file ~/.config/orchestrator-fleet/<projectId>.env, then retry';
+const CALLER_CORRECTION = 'invoke attach from the designated seat: its runtime-issued ORCA_TERMINAL_HANDLE must equal the requested handle';
+const PIN_CORRECTION = 'close that terminal or attach from it, or reconcile the selected project pin, then retry';
 
 export interface NativeCommandResult {
   readonly code: number;
@@ -55,11 +50,9 @@ export interface AttachReport {
   readonly runId?: string;
   readonly coordinatorHandle?: string | null;
   readonly runUseCount: number;
-  readonly primary: 'skipped' | 'bound' | 'replaced' | 'refused' | 'not-attempted';
   readonly pin: 'written' | 'unchanged' | 'refused' | 'not-attempted';
   readonly partial?: {
     readonly runRebound: boolean | 'unknown';
-    readonly primary: string;
     readonly pin: string;
   };
 }
@@ -131,6 +124,16 @@ export async function runOpkOrchStart(
       return 1;
     }
   }
+  if (command === 'precheck') {
+    const check = await checkOrchestratorPrelaunch({
+      argv,
+      env,
+      ...(dependencies.runNative ? { runNative: dependencies.runNative } : {}),
+    });
+    stdout(`${JSON.stringify(check)}\n`);
+    if (!check.ok) stderr(`${check.message}\n`);
+    return check.ok ? 0 : 1;
+  }
   if (command !== 'attach' || argv.length < 2 || argv.length > 3) {
     stderr(USAGE);
     return 2;
@@ -150,20 +153,14 @@ export async function attachOrchestratorSeat(input: AttachInput): Promise<Attach
   const base = {
     requestedHandle,
     runUseCount: 0,
-    primary: 'not-attempted' as const,
-    pin: 'not-attempted' as const,
   };
   if (!HANDLE_RE.test(requestedHandle) || input.argv.length > 3 || input.argv[0] !== 'attach') {
     return refuse({ ...base, message: USAGE.trim() });
   }
   const env = input.env ?? process.env;
-  const runId = (env.OPK_RUN_ID ?? '').trim();
-  if (!RUN_ID_RE.test(runId)) {
-    return refuse({ ...base, message: RUN_ID_CORRECTION });
-  }
   const projectArg = input.argv[2]?.trim() ?? '';
   if (projectArg.startsWith('-')) {
-    return refuse({ ...base, runId, message: PROJECT_CORRECTION });
+    return refuse({ ...base, message: PROJECT_CORRECTION });
   }
   let target: TargetContext;
   try {
@@ -173,7 +170,23 @@ export async function attachOrchestratorSeat(input: AttachInput): Promise<Attach
     });
   } catch (error) {
     const detail = error instanceof TargetContextError ? error.message : 'project selection failed';
-    return refuse({ ...base, runId, message: `${PROJECT_CORRECTION} (${detail})` });
+    return refuse({ ...base, message: `${PROJECT_CORRECTION} (${detail})` });
+  }
+
+  // The selected Run is the operator's literal OPK_RUN_ID in the selected project file;
+  // the caller's inherited OPK_RUN_ID must equal it. Never inferred from a handle or row.
+  const selection = readSelectedProjectFile(fleetEnvFile(env, target.projectId));
+  if (!selection.ok) {
+    return refuse({ ...base, message: `${selection.reason}. ${SELECTION_CORRECTION}` });
+  }
+  const runId = selection.runId;
+  const callerRun = (env.OPK_RUN_ID ?? '').trim();
+  if (callerRun !== runId) {
+    return refuse({ ...base, runId, message: `caller OPK_RUN_ID does not equal the selected project Run. ${RUN_ID_CORRECTION}` });
+  }
+  // Runtime-issued caller identity: native run-use binds the invoking terminal.
+  if ((env.ORCA_TERMINAL_HANDLE ?? '').trim() !== requestedHandle) {
+    return refuse({ ...base, runId, message: CALLER_CORRECTION });
   }
 
   const runNative = input.runNative ?? orcaCommand(env);
@@ -246,44 +259,19 @@ export async function attachOrchestratorSeat(input: AttachInput): Promise<Attach
         : `former coordinator ${currentRun.coordinatorHandle} is still listed. ${LIST_CORRECTION}`,
     });
   }
-
-  const selectedAssignment = await selectAssignment(target, runId, env, call);
-  if (selectedAssignment instanceof SelectionFailure) {
+  // A pin naming another still-listed terminal is a conflicting live seat; a pin
+  // absent from the complete census is stale and repairable.
+  if (selection.handle !== null && selection.handle !== requestedHandle
+    && census.rows.some((row) => row.handle === selection.handle)) {
     return refuse({
       ...base,
       runId,
       runUseCount,
       coordinatorHandle: currentRun.coordinatorHandle,
-      message: `${selectedAssignment.message} ${ASSIGNMENT_CORRECTION}`,
+      pin: 'refused',
+      message: `selected pin names ${selection.handle}, which is still listed. ${PIN_CORRECTION}`,
     });
   }
-  const pointer = readOperatorPrimaryBinding(
-    resolveWorkerAssignmentStorePath(target.projectId, env),
-    { projectId: target.projectId, repository: target.repository },
-  );
-  if (!pointer.ok) {
-    return refuse({
-      ...base,
-      runId,
-      runUseCount,
-      coordinatorHandle: currentRun.coordinatorHandle,
-      message: `operator-primary pointer is untrusted (${pointer.cause}). ${ASSIGNMENT_CORRECTION}`,
-    });
-  }
-  if (pointer.status === 'binding_stale') {
-    return refuse({
-      ...base,
-      runId,
-      runUseCount,
-      coordinatorHandle: currentRun.coordinatorHandle,
-      message: `operator-primary pointer is stale. ${ASSIGNMENT_CORRECTION}`,
-    });
-  }
-  const alreadyPrimary = pointer.status === 'binding_current'
-    && pointer.binding.taskId === selectedAssignment.taskId
-    && pointer.binding.bindingKey === selectedAssignment.bindingKey
-    && pointer.binding.assignmentId === selectedAssignment.assignmentId
-    && pointer.binding.assignmentGeneration === selectedAssignment.generation;
 
   let coordinatorHandle = currentRun.coordinatorHandle;
   let runRebound: boolean | 'unknown' = false;
@@ -307,7 +295,7 @@ export async function attachOrchestratorSeat(input: AttachInput): Promise<Attach
         runUseCount,
         coordinatorHandle,
         message: `run-use reported failure (${used.detail}); the Run coordinator is unverified. ${READBACK_CORRECTION}`,
-        partial: { runRebound: 'unknown', primary: 'not-attempted', pin: 'not-attempted' },
+        partial: { runRebound: 'unknown', pin: 'not-attempted' },
       });
     }
     const readback = await call(['orchestration', 'run-show', '--id', runId, '--full', '--json']);
@@ -325,7 +313,6 @@ export async function attachOrchestratorSeat(input: AttachInput): Promise<Attach
           : `run-use was invoked but run-show did not confirm the coordinator. ${READBACK_CORRECTION}`,
         partial: {
           runRebound: positivelyUnchanged ? false : 'unknown',
-          primary: 'not-attempted',
           pin: 'not-attempted',
         },
       });
@@ -334,36 +321,7 @@ export async function attachOrchestratorSeat(input: AttachInput): Promise<Attach
     runRebound = true;
   }
 
-  let primary: AttachReport['primary'] = 'skipped';
-  if (!alreadyPrimary) {
-    const file = resolveWorkerAssignmentStorePath(target.projectId, env);
-    const mutation = await bindOperatorPrimary({
-      file,
-      expectedProject: { projectId: target.projectId, repository: target.repository },
-      taskId: selectedAssignment.taskId,
-      bindingKey: selectedAssignment.bindingKey,
-      ...(pointer.status === 'binding_current' ? { expectedCurrent: pointer.binding } : {}),
-    });
-    if (!mutation.ok) {
-      return refuse({
-        ...base,
-        runId,
-        runUseCount,
-        coordinatorHandle,
-        primary: 'refused',
-        message: runRebound
-          ? `run ${runId} is bound to ${requestedHandle}; operator-primary replace/bind refused (${mutation.reason}). ${ASSIGNMENT_CORRECTION}`
-          : `operator-primary replace/bind refused (${mutation.reason}). ${ASSIGNMENT_CORRECTION}`,
-        partial: {
-          runRebound,
-          primary: mutation.reason,
-          pin: 'not-attempted',
-        },
-      });
-    }
-    primary = pointer.status === 'binding_absent' ? 'bound' : 'replaced';
-  }
-
+  // Only ORCH_HANDLE is written; the operator's OPK_RUN_ID and other entries are preserved.
   const pin = writeProjectPin(env, target.projectId, requestedHandle);
   if (!pin.ok) {
     return refuse({
@@ -371,10 +329,9 @@ export async function attachOrchestratorSeat(input: AttachInput): Promise<Attach
       runId,
       runUseCount,
       coordinatorHandle,
-      primary,
       pin: 'refused',
-      message: `${runRebound ? `run ${runId} is bound to ${requestedHandle}; ` : ''}primary ${primary}; pin not written (${pin.reason}). Repair the selected project pin and retry; do not repeat run-use.`,
-      partial: { runRebound, primary, pin: pin.reason },
+      message: `${runRebound ? `run ${runId} is bound to ${requestedHandle}; ` : ''}pin not written (${pin.reason}). Repair the selected project pin and retry; do not repeat run-use.`,
+      partial: { runRebound, pin: pin.reason },
     });
   }
   const pinState = pin.changed ? 'written' : 'unchanged';
@@ -384,11 +341,95 @@ export async function attachOrchestratorSeat(input: AttachInput): Promise<Attach
     runId,
     coordinatorHandle,
     runUseCount,
-    primary,
     pin: pinState,
     message: pin.changed
       ? `Run bound / pin written; fleet-wake adoption not verified`
       : `Run bound / pin unchanged; fleet-wake adoption not verified`,
+  };
+}
+
+export interface PrelaunchReport {
+  readonly ok: boolean;
+  readonly message: string;
+  readonly runId?: string;
+  readonly incumbentHandle?: string;
+}
+
+/**
+ * Read-only pre-launch check for the operator-local launcher: refuses before any seat/Run/unit
+ * is created when the operator-selected Run still has a live coordinator or the pin names one.
+ * It covers the configured Run and bound pin only, never other Runs or simultaneous starts.
+ */
+export async function checkOrchestratorPrelaunch(input: {
+  readonly argv: readonly string[];
+  readonly env?: NodeJS.ProcessEnv;
+  readonly runNative?: NativeCommand;
+}): Promise<PrelaunchReport> {
+  const env = input.env ?? process.env;
+  const projectArg = input.argv[1]?.trim() ?? '';
+  if (input.argv[0] !== 'precheck' || input.argv.length > 2 || projectArg.startsWith('-')) {
+    return { ok: false, message: USAGE.trim() };
+  }
+  let target: TargetContext;
+  try {
+    target = resolveTargetContext({ ...(projectArg ? { projectId: projectArg } : {}), env });
+  } catch (error) {
+    const detail = error instanceof TargetContextError ? error.message : 'project selection failed';
+    return { ok: false, message: `${PROJECT_CORRECTION} (${detail})` };
+  }
+  const selection = readSelectedProjectFile(fleetEnvFile(env, target.projectId));
+  if (!selection.ok) return { ok: false, message: `${selection.reason}. ${SELECTION_CORRECTION}` };
+  const runId = selection.runId;
+  const runNative = input.runNative ?? orcaCommand(env);
+  const read = async (logical: readonly string[]): Promise<unknown | null> => {
+    try {
+      const result = await runNative(orcaJsonArgv(logical));
+      if (result.code !== 0) return null;
+      const parsed = JSON.parse(result.stdout) as unknown;
+      const record = asRecord(parsed);
+      if (!record || record.ok === false) return null;
+      return record.result ?? record;
+    } catch {
+      return null;
+    }
+  };
+  const listed = await read(['terminal', 'list']);
+  const census = listed === null ? null : terminalCensus(listed);
+  if (!census) return { ok: false, runId, message: `terminal census is unreadable. ${LIST_CORRECTION}` };
+  const shownRun = await read(['orchestration', 'run-show', '--id', runId, '--full']);
+  const run = shownRun === null ? null : parseRun(shownRun, runId);
+  if (!run) return { ok: false, runId, message: `Run ${runId} is unreadable. ${READBACK_CORRECTION}` };
+  const live = (handle: string | null): boolean => handle !== null
+    && census.rows.some((row) => row.handle === handle && row.live);
+  const listedHandle = (handle: string | null): boolean => handle !== null
+    && census.rows.some((row) => row.handle === handle);
+  if (live(run.coordinatorHandle)) {
+    return {
+      ok: false,
+      runId,
+      incumbentHandle: run.coordinatorHandle ?? '',
+      message: `live incumbent coordinator ${String(run.coordinatorHandle)} for Run ${runId}; close it or attach from it`,
+    };
+  }
+  if (selection.handle !== null && listedHandle(selection.handle)) {
+    return {
+      ok: false,
+      runId,
+      incumbentHandle: selection.handle,
+      message: `selected pin names ${selection.handle}, which is still listed but is not the Run coordinator. ${PIN_CORRECTION}`,
+    };
+  }
+  if (listedHandle(run.coordinatorHandle)) {
+    return {
+      ok: false,
+      runId,
+      message: `former coordinator ${String(run.coordinatorHandle)} is still listed. ${LIST_CORRECTION}`,
+    };
+  }
+  return {
+    ok: true,
+    runId,
+    message: `no live configured incumbent for Run ${runId}; other Runs/seats of this project and simultaneous starts are not checked`,
   };
 }
 
@@ -403,20 +444,12 @@ function failNative(detail: string): NativeFailure {
   return new NativeFailure(detail);
 }
 
-class SelectionFailure {
-  readonly message: string;
-  constructor(message: string) {
-    this.message = message;
-  }
-}
-
 function refuse(input: {
   readonly message: string;
   readonly requestedHandle: string;
   readonly runId?: string;
   readonly coordinatorHandle?: string | null;
   readonly runUseCount: number;
-  readonly primary?: AttachReport['primary'];
   readonly pin?: AttachReport['pin'];
   readonly partial?: AttachReport['partial'];
 }): AttachReport {
@@ -425,7 +458,6 @@ function refuse(input: {
     message: input.message,
     requestedHandle: input.requestedHandle,
     runUseCount: input.runUseCount,
-    primary: input.primary ?? 'not-attempted',
     pin: input.pin ?? 'not-attempted',
     ...(input.runId ? { runId: input.runId } : {}),
     ...(input.coordinatorHandle !== undefined ? { coordinatorHandle: input.coordinatorHandle } : {}),
@@ -508,133 +540,8 @@ function parseRun(value: unknown, runId: string): ParsedRun | null {
   return { id: runId, coordinatorHandle: coordinator };
 }
 
-async function selectAssignment(
-  target: TargetContext,
-  runId: string,
-  env: NodeJS.ProcessEnv,
-  call: (args: readonly string[]) => Promise<unknown | NativeFailure>,
-): Promise<WorkerAssignmentRecord | SelectionFailure> {
-  const file = resolveWorkerAssignmentStorePath(target.projectId, env);
-  const census = listCurrentWorkerAssignmentRecords(file);
-  if (!census) return new SelectionFailure(`no trusted WorkerAssignment census for ${target.projectId} run ${runId}.`);
-  const local = census.filter((row) => row.projectId === target.projectId
-    && row.repository.toLowerCase() === target.repository
-    && row.kind === 'local'
-    && row.provider === 'orca'
-    && row.role === 'orchestrator'
-    && row.taskId.trim() !== ''
-    && row.bindingKey.trim() !== ''
-    && row.assignmentId.trim() !== ''
-    && Number.isInteger(row.generation)
-    && row.generation > 0);
-  const listed = await call(['orchestration', 'task-list', '--run', runId, '--json']);
-  if (listed instanceof NativeFailure) {
-    return new SelectionFailure(`task-list for run ${runId} is unavailable (${listed.detail}).`);
-  }
-  const taskIds = taskIdsOf(listed);
-  if (!taskIds) return new SelectionFailure(`task-list for run ${runId} is ambiguous.`);
-  const members = local.filter((row) => taskIds.includes(row.taskId));
-  const eligible: WorkerAssignmentRecord[] = [];
-  for (const row of members) {
-    const dispatch = await call(['orchestration', 'dispatch-show', '--task', row.taskId, '--json']);
-    if (dispatch instanceof NativeFailure) {
-      return new SelectionFailure(`native Dispatch evidence for ${row.taskId} is unavailable (${dispatch.detail}).`);
-    }
-    const dispatchKind = dispatchVerdict(dispatch, row.taskId, row.bindingKey, runId);
-    if (dispatchKind === 'unreadable') {
-      return new SelectionFailure(`native Dispatch evidence for ${row.taskId} is unreadable.`);
-    }
-    if (dispatchKind === 'inconsistent') continue;
-    const worker = await call(['orchestration', 'worker-show', '--dispatch', row.bindingKey, '--json']);
-    if (worker instanceof NativeFailure) {
-      return new SelectionFailure(`native worker evidence for ${row.bindingKey} is unavailable (${worker.detail}).`);
-    }
-    const workerKind = workerVerdict(worker, row.taskId, row.bindingKey, runId);
-    if (workerKind === 'unreadable') {
-      return new SelectionFailure(`native worker evidence for ${row.bindingKey} is unreadable.`);
-    }
-    if (workerKind === 'inconsistent') continue;
-    eligible.push(row);
-  }
-  if (eligible.length !== 1) {
-    return new SelectionFailure(eligible.length === 0
-      ? `no unique eligible local Orca orchestrator assignment for ${target.projectId} run ${runId}.`
-      : `${String(eligible.length)} eligible local Orca orchestrator assignments for ${target.projectId} run ${runId}.`);
-  }
-  return eligible[0]!;
-}
-
-function taskIdsOf(value: unknown): readonly string[] | null {
-  const result = asRecord(value);
-  const tasks = result?.tasks;
-  if (!Array.isArray(tasks)) return null;
-  const ids: string[] = [];
-  for (const task of tasks) {
-    if (typeof task === 'string' && task) {
-      ids.push(task);
-      continue;
-    }
-    const row = asRecord(task);
-    const id = typeof row?.id === 'string' ? row.id : typeof row?.taskId === 'string' ? row.taskId : '';
-    if (!id) return null;
-    ids.push(id);
-  }
-  return ids;
-}
-
-function idEquals(row: Record<string, unknown>, keys: readonly string[], expected: string): boolean {
-  for (const key of keys) {
-    if (key in row && row[key] !== expected) return false;
-  }
-  return keys.some((key) => row[key] === expected);
-}
-
-type NativeVerdict = 'match' | 'inconsistent' | 'unreadable';
-
-function dispatchVerdict(value: unknown, taskId: string, bindingKey: string, runId: string): NativeVerdict {
-  const result = asRecord(value);
-  const dispatch = asRecord(result?.dispatch);
-  if (!result || !dispatch) return 'unreadable';
-  if (typeof dispatch.id !== 'string' || dispatch.id === '') return 'unreadable';
-  if (dispatch.id !== bindingKey) return 'inconsistent';
-  const taskIdentity = ['taskId', 'task_id'].filter((key) => typeof dispatch[key] === 'string' && dispatch[key] !== '');
-  if (taskIdentity.length === 0) return 'unreadable';
-  if (!idEquals(dispatch, ['taskId', 'task_id'], taskId)) return 'inconsistent';
-  if (('runId' in dispatch && dispatch.runId !== runId) || ('run_id' in dispatch && dispatch.run_id !== runId)) return 'inconsistent';
-  return 'match';
-}
-
-function workerVerdict(value: unknown, taskId: string, bindingKey: string, runId: string): NativeVerdict {
-  const result = asRecord(value);
-  const worker = asRecord(result?.worker);
-  const observation = asRecord(result?.observation);
-  if (!result || !worker || !observation) return 'unreadable';
-  if (observation.exactWorker !== true) return 'unreadable';
-  const status = typeof observation.status === 'string' ? observation.status.toLowerCase() : '';
-  if (status === 'exited') return 'inconsistent';
-  if (status !== 'live' && status !== 'running') return 'unreadable';
-  const workerState = typeof worker.state === 'string' ? worker.state.toLowerCase() : '';
-  if (TERMINAL_WORKER_STATES.has(workerState)) return 'inconsistent';
-  const dispatch = asRecord(result.dispatch);
-  if (dispatch) {
-    const kind = dispatchVerdict(result, taskId, bindingKey, runId);
-    if (kind !== 'match') return kind;
-    const dispatchStatus = typeof dispatch.status === 'string' ? dispatch.status.toLowerCase() : '';
-    if (TERMINAL_DISPATCH_STATES.has(dispatchStatus)) return 'inconsistent';
-  }
-  const dispatchId = typeof worker.dispatchId === 'string'
-    ? worker.dispatchId
-    : typeof worker.dispatch_id === 'string' ? worker.dispatch_id : '';
-  if (dispatchId && dispatchId !== bindingKey) return 'inconsistent';
-  const workerTask = typeof worker.taskId === 'string'
-    ? worker.taskId
-    : typeof worker.task_id === 'string' ? worker.task_id : '';
-  if (workerTask && workerTask !== taskId) return 'inconsistent';
-  if (!dispatch && !dispatchId) return 'unreadable';
-  return 'match';
-}
-
-function fleetEnvFile(env: NodeJS.ProcessEnv, projectId: string): string {
+/** The selected project file (~/.config/orchestrator-fleet/<id>.env) that owns OPK_RUN_ID and ORCH_HANDLE. */
+export function fleetEnvFile(env: NodeJS.ProcessEnv, projectId: string): string {
   const home = (env.HOME ?? '').trim() || homedir();
   return path.join(home, '.config', 'orchestrator-fleet', `${projectId}.env`);
 }
@@ -747,3 +654,76 @@ function renderPin(
   return { ok: true, body, changed: previous !== handle };
 }
 
+
+export type SelectedProjectFile =
+  | { readonly ok: true; readonly runId: string; readonly handle: string | null }
+  | { readonly ok: false; readonly reason: string };
+
+type EntryRead = { readonly status: 'absent' } | { readonly status: 'bad'; readonly reason: string } | { readonly status: 'ok'; readonly value: string };
+
+function readEntry(lines: readonly string[], key: string): EntryRead {
+  const matching = lines.filter((line) => new RegExp(`^\\s*${key}\\b`, 'u').test(line));
+  if (matching.length === 0) return { status: 'absent' };
+  if (matching.length > 1) return { status: 'bad', reason: `duplicate ${key}` };
+  const match = new RegExp(`^\\s*${key}\\s*=\\s*(.*?)\\s*$`, 'u').exec(matching[0]!);
+  if (!match) return { status: 'bad', reason: `malformed ${key}` };
+  let value = match[1] ?? '';
+  if ((value.startsWith("'") && value.endsWith("'")) || (value.startsWith('"') && value.endsWith('"'))) {
+    value = value.slice(1, -1);
+  }
+  if (!value || /[\s'"\\\u0000-\u001f\u007f]/u.test(value)) return { status: 'bad', reason: `malformed ${key}` };
+  return { status: 'ok', value };
+}
+
+/**
+ * Strict read of the operator-selected pair in the selected project file: exactly one literal
+ * OPK_RUN_ID (required) and at most one ORCH_HANDLE. Redirected, duplicate, malformed, absent or
+ * unreadable input is a refusal, never a guess. Read fresh at each effect boundary.
+ */
+export function readSelectedProjectFile(file: string): SelectedProjectFile {
+  try {
+    let current = path.resolve(file);
+    const seen = new Set<string>();
+    while (!seen.has(current)) {
+      seen.add(current);
+      if (isSymlink(current)) return { ok: false, reason: 'selected project file path is redirected' };
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+    const info = lstatSync(file);
+    if (!info.isFile()) return { ok: false, reason: 'selected project file is not a regular file' };
+    const lines = readFileSync(file, 'utf8').replace(/\r\n/gu, '\n').split('\n');
+    const run = readEntry(lines, 'OPK_RUN_ID');
+    if (run.status === 'absent') return { ok: false, reason: 'selected project file has no OPK_RUN_ID' };
+    if (run.status === 'bad') return { ok: false, reason: `selected project file: ${run.reason}` };
+    if (!RUN_ID_RE.test(run.value)) return { ok: false, reason: 'selected project file: malformed OPK_RUN_ID' };
+    const pin = readEntry(lines, 'ORCH_HANDLE');
+    if (pin.status === 'bad') return { ok: false, reason: `selected project file: ${pin.reason}` };
+    if (pin.status === 'ok' && !HANDLE_RE.test(pin.value)) return { ok: false, reason: 'selected project file: malformed ORCH_HANDLE' };
+    return { ok: true, runId: run.value, handle: pin.status === 'ok' ? pin.value : null };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return { ok: false, reason: `selected project file is unreadable (${typeof code === 'string' ? code : 'error'})` };
+  }
+}
+
+/** Current Run coordinator from native `run-show --full`, or undefined when unreadable. */
+export function parseRunCoordinator(value: unknown, runId: string): string | null | undefined {
+  const record = asRecord(value);
+  const result = asRecord(record?.result) ?? record;
+  const parsed = parseRun(result, runId);
+  return parsed ? parsed.coordinatorHandle : undefined;
+}
+
+/** Synchronous native `run-show --full` read of the Run coordinator; undefined when unreadable. */
+export function readRunCoordinatorVia(
+  executor: (args: readonly string[]) => { readonly ok: boolean; readonly stdout: string },
+  runId: string,
+): string | null | undefined {
+  try {
+    const response = executor(['orchestration', 'run-show', '--id', runId, '--full', '--json']);
+    if (!response.ok) return undefined;
+    return parseRunCoordinator(JSON.parse(response.stdout) as unknown, runId);
+  } catch { return undefined; }
+}

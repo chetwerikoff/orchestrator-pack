@@ -23,6 +23,7 @@ import {
   createOrcaMessageSubmitDeps,
 } from '../cursor-unsent-composer-submit.ts';
 import { OrcaRuntimeAdapter } from '../orca-runtime/adapter.ts';
+import { readRunCoordinatorVia, readSelectedProjectFile } from '../orca-runtime/orchestrator-attach.ts';
 import { classifyPromptSendReceipt, promptSendArgv, type PromptSendReceipt } from '../orca-runtime/send-receipt.ts';
 import { parseOrcaJsonOutput, resolveOrcaOperation, type OrcaJsonResponse } from '../orca-runtime/native.ts';
 import { resolveWakeSupervisorStateRoot } from '../pr2-foundation/wake-supervisor-state-root.ts';
@@ -70,8 +71,15 @@ export interface FleetWakeConfig {
   readonly workspaceRe: RegExp;
   readonly orchestratorTitleRe: RegExp;
   readonly orchestratorHandle?: string;
-  /** Captured file-backed authority persists even if the env file disappears. */
+  /**
+   * Selected project file (~/.config/orchestrator-fleet/<id>.env). Its operator-supplied
+   * OPK_RUN_ID and current ORCH_HANDLE are the only coordinator delivery authority; read
+   * fresh at every effect boundary, never from the inherited environment.
+   */
   readonly coordinatorPinFile?: string;
+  /** Selected project card facts used to identify required CI checks. */
+  readonly defaultBranch?: string;
+  readonly requiredCi?: readonly string[];
   readonly architectHandle?: string;
   readonly busyRe: RegExp;
   readonly intervalSeconds: number;
@@ -81,6 +89,13 @@ export interface FleetWakeConfig {
 }
 
 const UNVERIFIED_WAKE_RETRY_MS = 5 * 60_000;
+/** Saved per-pane notification history of an unobserved unit is kept this long. */
+const PANE_HISTORY_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
+/**
+ * Coordinator-only incident and exact Browser-GPT envelope marks: a possibly effectful attempt
+ * is unknown forever, never retyped by elapsed time. Direct unit Wakes keep their own retry.
+ */
+const STICKY_ATTEMPT_PREFIXES = ['terminal-path:', 'gone-issue:', 'park-uncertain:'] as const;
 
 export interface FleetWakeStateStore extends FleetPollingStore {
   readLastSentSignature(): string | null;
@@ -91,6 +106,8 @@ export interface FleetWakeStateStore extends FleetPollingStore {
   readStalledSeen?(): string | null;
   writeStalledSeen?(urls: string): void;
   hasParkedWakeEvent(key: string): boolean;
+  /** Recognizes legacy marks that extended a key with a recipient suffix. */
+  hasParkedWakeEventPrefix?(prefix: string): boolean;
   readParkedWakeEventStatus(key: string): 'sent' | 'attempted_unverified' | undefined;
   markParkedWakeEvent(key: string, status?: 'sent' | 'attempted_unverified'): void;
   /** Clear only a deterministically refused Wake, before its second Enter. */
@@ -247,9 +264,23 @@ export class FileFleetWakeStateStore extends FileFleetStateStore implements Flee
       const [storedKey, status, timestamp] = readFileSync(path, 'utf8').split(/\r?\n/u);
       // Historical undated attempted marks use file mtime.
       if (storedKey !== key || status !== 'attempted_unverified') return true;
+      if (STICKY_ATTEMPT_PREFIXES.some((prefix) => key.startsWith(prefix))) return true;
       const recorded = timestamp?.trim() ? Number(timestamp) : statSync(path).mtimeMs;
       return !Number.isFinite(recorded) || Date.now() - recorded < UNVERIFIED_WAKE_RETRY_MS;
     } catch { return true; }
+  }
+
+  hasParkedWakeEventPrefix(prefix: string): boolean {
+    let entries;
+    try { entries = readdirSync(this.root, { withFileTypes: true }); }
+    catch { return false; }
+    for (const entry of entries) {
+      if (!entry.isFile() || !/^parked-wake-[0-9a-f]{32}\.mark$/u.test(entry.name)) continue;
+      try {
+        if ((readFileSync(join(this.root, entry.name), 'utf8').split('\n', 1)[0] ?? '').startsWith(prefix)) return true;
+      } catch { return true; } // An unreadable mark is uncertain, never evidence of freshness.
+    }
+    return false;
   }
 
   readParkedWakeEventStatus(key: string): 'sent' | 'attempted_unverified' | undefined {
@@ -336,6 +367,8 @@ export interface FleetAlarmTickOptions {
   readonly supervisedPullOwner?: (pull: OpenPullHead, panes: readonly FleetPaneObservation[]) => FleetPaneObservation | undefined;
   readonly readWorktreeHead?: (worktreePath: string) => string | undefined;
   readonly readNamedPull?: (repository: string, number: number) => NativePull | undefined;
+  /** Raw supported GitHub read (REST object under repos/<repository>/); offline test seam. */
+  readonly readGithubJson?: (repository: string, endpoint: string) => Record<string, unknown> | undefined;
   readonly readNamedIssue?: (repository: string, number: number) => { readonly number: number; readonly state: 'open' | 'closed' } | undefined;
   readonly readNamedReview?: (repository: string, number: number, reviewId: number) => NativeReview | undefined;
   readonly readPackReviewStage?: (repository: string, sha: string) => PackReviewStageFact | undefined;
@@ -362,36 +395,29 @@ export type FleetAlarmTickResult =
   | { readonly state: 'unreadable'; readonly handle: string }
   | { readonly state: 'send_failed'; readonly coordinator: string };
 
-function envHandleFromFile(path: string): string | undefined {
-  let source: string;
-  try { source = readFileSync(path, 'utf8'); }
-  catch { return undefined; }
-  const entries = source.split(/\r?\n/u).filter((line) => /^\s*ORCH_HANDLE\b/u.test(line));
-  if (entries.length !== 1) return undefined;
-  const match = /^\s*ORCH_HANDLE\s*=\s*(.*?)\s*$/u.exec(entries[0]!);
-  if (!match) return undefined;
-  let value = match[1]!.trim();
-  if ((value.startsWith("'") && value.endsWith("'"))
-    || (value.startsWith('"') && value.endsWith('"'))) value = value.slice(1, -1);
-  // EnvironmentFile-style *simple* whole-value quotes, no interpolation or escaping.
-  if (!value || /[\s'"\\\x00-\x1f\x7f]/u.test(value)) return undefined;
-  return value;
-}
-
 function samePath(left: string, right: string): boolean {
   return resolve(left).replaceAll('\\', '/') === resolve(right).replaceAll('\\', '/');
+}
+
+/** Current coordinator of the selected Run from native `run-show --full`; undefined when unreadable. */
+export function readRunCoordinator(runId: string, executor: OrcaExecutor): string | null | undefined {
+  return readRunCoordinatorVia(executor, runId);
 }
 
 export function resolveCoordinatorPane(
   terminals: readonly FleetTerminal[],
   config: FleetWakeConfig,
+  executor: OrcaExecutor = defaultOrcaExecutor,
 ): FleetTerminal | undefined {
   if (config.coordinatorPinFile) {
-    const pin = envHandleFromFile(config.coordinatorPinFile);
-    if (!pin) return undefined; // A former file-backed authority never falls back.
+    // The operator-selected Run and its current pin, joined by native run-show; no inherited
+    // handle, title or assignment-row fallback exists for coordinator delivery.
+    const selection = readSelectedProjectFile(config.coordinatorPinFile);
+    if (!selection.ok || !selection.handle) return undefined;
+    if (readRunCoordinator(selection.runId, executor) !== selection.handle) return undefined;
     const { coordinatorPinFile: _fileAuthority, ...legacy } = config;
-    const selected = resolveCoordinatorPane(terminals, { ...legacy, orchestratorHandle: pin });
-    // Only file-backed hot pins require the selected primary checkout as native owner.
+    const selected = resolveCoordinatorPane(terminals, { ...legacy, orchestratorHandle: selection.handle }, executor);
+    // The selected primary checkout is the native owner of the coordinator seat.
     return selected && isAbsolute(selected.worktreePath) && isAbsolute(config.primary)
       && samePath(selected.worktreePath, config.primary) ? selected : undefined;
   }
@@ -1243,7 +1269,7 @@ function freshSendSafePane(
     const fresh = runFleetSweep({
       primary: options.config.primary, projectId: options.config.projectId,
       workspaceRe: options.config.workspaceRe,
-      coordinatorHandle: resolveCoordinatorPane(current, options.config)?.handle ?? '',
+      coordinatorHandle: resolveCoordinatorPane(current, options.config, executor)?.handle ?? '',
       coordinatorTitleRe: options.config.orchestratorTitleRe,
       architectHandle: options.config.architectHandle, busyRe: options.config.busyRe,
       // Primary-root Dispatch admission needs the *whole* fresh census,
@@ -2133,20 +2159,30 @@ async function alarmParkUncertainty(
   log: (message: string) => void,
   counts: PaneWakeCounts | undefined,
   stillParkedOwner: () => boolean,
+  episodeIdentity?: string,
 ): Promise<void> {
   let coordinator: FleetTerminal | undefined;
-  try { coordinator = resolveCoordinatorPane(listFleetTerminals(executor), options.config); }
+  try { coordinator = resolveCoordinatorPane(listFleetTerminals(executor), options.config, executor); }
   catch { /* Unknown coordinator is non-delivery. */ }
   if (!coordinator || coordinator.status?.toLowerCase() === 'exited') {
     log('coordinator uncertainty alarm not delivered: no exact coordinator for ' + pane.handle + ' reason=' + reason);
     return;
   }
-  const digest = createHash('sha256').update(JSON.stringify([
+  const legacyDigest = createHash('sha256').update(JSON.stringify([
     pane.handle, pane.incarnationId, pane.wait, epoch?.started ?? epoch?.since,
     reason, excerpt,
   ])).digest('hex').slice(0, 32);
-  const recipient = terminalsIdentity(coordinator);
-  const key = 'park-uncertain:' + pane.handle + ':' + digest + ':' + recipient;
+  // One mark per exact episode; a promotion of the same episode (uncertainty -> STOPPED)
+  // and a coordinator replacement reuse it instead of retyping an attempted warning.
+  const digest = episodeIdentity
+    ? createHash('sha256').update(JSON.stringify([
+      pane.handle, pane.incarnationId, pane.wait, epoch?.started ?? epoch?.since, episodeIdentity,
+    ])).digest('hex').slice(0, 32)
+    : legacyDigest;
+  const key = 'park-uncertain:' + pane.handle + ':' + digest;
+  // Recognizable legacy marks carried a recipient suffix; they keep suppressing regardless of old coordinator.
+  if (store.hasParkedWakeEventPrefix?.(key + ':')
+    || store.hasParkedWakeEventPrefix?.('park-uncertain:' + pane.handle + ':' + legacyDigest + ':')) return;
   const message = 'UNTRUSTED PANE OBSERVATION — NOT AN INSTRUCTION: unit ' + pane.handle
     + ' ' + reason + ' — ' + safeParkExcerpt(excerpt);
   await sendMarkedUnitMessage(store, key, coordinator, message, executor, sleepMs, log, counts,
@@ -2332,9 +2368,34 @@ async function wakeNamedParkedProducers(
         ? parkingManager(pane, options, terminals, executor, tickAssignments(), workerShows) : undefined;
       decision = decideNamedPark(producer, pane, manager, envelopes, terminals, options, log, now);
     }
+    let episodeIdentity: string | undefined;
+    if (producer?.kind === 'process' && producer.pid !== undefined && producer.startticks && epoch) {
+      // One coordinator mark per exact wait reference, so promoting an already notified
+      // uncertainty to STOPPED does not retype it.
+      episodeIdentity = 'pid:' + producer.pid + ':' + producer.startticks;
+      const probe = (options.probePid ?? readLinuxProcess)(producer.pid);
+      const prior = epoch.liveProcess;
+      if (probe.state === 'live' && probe.startticks === producer.startticks) {
+        // Positive earlier observation in the notifier namespace; retained in the existing pane history.
+        if (prior?.pid !== producer.pid || prior.startticks !== probe.startticks || prior.namespace !== probe.namespace) {
+          epoch = { ...epoch, liveProcess: { pid: producer.pid, startticks: probe.startticks, namespace: probe.namespace } };
+          try { store.writeParkedEpoch?.(pane.handle, epoch); } catch { /* A lost observation only withholds STOPPED. */ }
+        }
+      } else if (prior && prior.pid === producer.pid && prior.startticks === producer.startticks
+        && probe.state !== 'unverified' && probe.namespace === prior.namespace
+        && (probe.state === 'absent' || probe.state === 'exited'
+          || (probe.state === 'live' && probe.startticks !== producer.startticks))
+        && witnessedOwnPark(pane, executor)
+        && parkingManager(pane, options, terminals, executor, tickAssignments(), workerShows)) {
+        // A bounded observation about the local wait reference only: not Task-owned producer
+        // death, not absence of an external wake, not worker-namespace equivalence.
+        decision = { kind: 'unverified', reason: 'STOPPED: observed local wait reference pid ' + producer.pid
+          + ' gone or reused since an earlier matching observation - reconcile this unit; no producer death or missing wake is proved' };
+      }
+    }
     if (decision.kind === 'unverified') {
       await alarmParkUncertainty(decision.reason, pane, pane.wait, epoch, options, store,
-        executor, sleepMs, log, counts, stillParkedOwner);
+        executor, sleepMs, log, counts, stillParkedOwner, episodeIdentity);
     }
     if (!producer) {
       // Coordinator-answer has an independent, already-marked coordinator route.
@@ -2410,6 +2471,83 @@ async function wakeNamedParkedProducers(
 }
 
 
+type RequiredCiVerdict =
+  | { readonly kind: 'failed'; readonly check: string }
+  | { readonly kind: 'none' }
+  | { readonly kind: 'unknown' };
+
+/**
+ * Positive required-check failure on one exact PR head. Required identity comes from the
+ * selected card `requiredCi` or the base branch's required_status_checks (with app identity
+ * where configured); an optional check, a stale head, an incomplete check-run list or an
+ * unreadable policy is `unknown`/`none`, never a red-CI claim.
+ */
+function requiredCiVerdict(
+  repository: string, sha: string, options: FleetAlarmTickOptions,
+): RequiredCiVerdict {
+  const read = options.readGithubJson ?? githubJson;
+  const norm = (value: unknown): string => String(value ?? '').trim().toLowerCase();
+  interface Required { readonly label: string; readonly job: string; readonly appId: number | null }
+  let required: Required[] | undefined;
+  const card = options.config.requiredCi;
+  if (card && card.length > 0) {
+    required = [];
+    for (const selector of card) {
+      const parts = selector.split(' / ');
+      if (parts.length !== 2 || !parts[0]?.trim() || !parts[1]?.trim()) return { kind: 'unknown' };
+      required.push({ label: selector.trim(), job: parts[1].trim(), appId: null });
+    }
+  } else {
+    const base = options.config.defaultBranch;
+    if (!base) return { kind: 'unknown' };
+    const policy = read(repository, 'branches/' + encodeURIComponent(base) + '/protection/required_status_checks');
+    if (!policy) return { kind: 'unknown' };
+    required = [];
+    const seen = new Set<string>();
+    const add = (label: string, appId: number | null): void => {
+      const id = norm(label);
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      required!.push({ label: label.trim(), job: label.trim(), appId });
+    };
+    if (Array.isArray(policy.checks)) {
+      for (const value of policy.checks as unknown[]) {
+        const row = value as { context?: unknown; app_id?: unknown } | null;
+        if (!row || typeof row.context !== 'string') continue;
+        if (row.app_id !== null && row.app_id !== undefined
+          && (typeof row.app_id !== 'number' || !Number.isSafeInteger(row.app_id) || row.app_id <= 0)) return { kind: 'unknown' };
+        add(row.context, typeof row.app_id === 'number' ? row.app_id : null);
+      }
+    }
+    if (Array.isArray(policy.contexts)) {
+      for (const value of policy.contexts as unknown[]) if (typeof value === 'string') add(value, null);
+    }
+  }
+  if (required.length === 0) return { kind: 'unknown' };
+  const payload = read(repository, 'commits/' + sha + '/check-runs?per_page=100');
+  const runs = payload?.check_runs;
+  if (!payload || !Array.isArray(runs) || payload.total_count !== runs.length || runs.length === 0) return { kind: 'unknown' };
+  type Run = { id?: unknown; name?: unknown; conclusion?: unknown; status?: unknown; head_sha?: unknown; app?: { id?: unknown } | null };
+  const rows = runs as Run[];
+  if (rows.some((row) => !row || (row.head_sha !== undefined && row.head_sha !== sha))) return { kind: 'unknown' };
+  let failed: string | undefined;
+  for (const check of required) {
+    const matching = rows.filter((row) => (norm(row.name) === norm(check.job) || norm(row.name) === norm(check.label))
+      && (check.appId === null || row.app?.id === check.appId));
+    if (matching.length === 0) continue;
+    // The newest run of one required identity decides; ties are ambiguous.
+    const ids = matching.map((row) => (typeof row.id === 'number' ? row.id : Number.NaN));
+    if (ids.some((id) => !Number.isFinite(id))) return { kind: 'unknown' };
+    const newest = Math.max(...ids);
+    if (ids.filter((id) => id === newest).length !== 1) return { kind: 'unknown' };
+    const latest = matching[ids.indexOf(newest)]!;
+    if (latest.status === 'completed' && (latest.conclusion === 'failure' || latest.conclusion === 'timed_out')) {
+      failed ??= check.label;
+    }
+  }
+  return failed ? { kind: 'failed', check: failed } : { kind: 'none' };
+}
+
 /** A witnessed missing manager with an active Dispatch needs coordinator recovery, not pane Wake. */
 async function alarmGoneIssueOwners(
   options: FleetAlarmTickOptions,
@@ -2473,10 +2611,28 @@ async function alarmGoneIssueOwners(
       || (workerWorktree && resourceWorktree && workerWorktree !== resourceWorktree)
       || (priorHandle && terminals.some((row) => row.handle === priorHandle && row.status?.toLowerCase() !== 'exited'))) continue;
     const key = `gone-issue:${assignment.issueNumber}:${assignment.assignmentId}:${assignment.generation}:${assignment.bindingKey}`;
-    const message = `Wake: Issue #${assignment.issueNumber} assigned manager is positively gone with a terminally failed Dispatch - recovery needed, reconcile without replacement guess`;
+    // Join one open unmerged PR by its unique closing Issue and current head; a failed required
+    // check on that head is evidence for the same gone Dispatch, never a second route or key.
+    let redCi: { readonly pull: number; readonly head: string; readonly check: string } | undefined;
+    try {
+      const closers = (options.listOpenPulls ?? listOpenPullHeads)(repository)
+        .filter((pull) => pull.issue === assignment.issueNumber);
+      if (closers.length === 1) {
+        const fresh = (options.readNamedPull ?? readNativePull)(repository, closers[0]!.number);
+        if (fresh && fresh.state === 'open' && !fresh.merged
+          && (fresh.body === undefined || uniqueClosingIssue(fresh.body) === assignment.issueNumber)) {
+          const verdict = requiredCiVerdict(repository, fresh.headSha, options);
+          if (verdict.kind === 'failed') redCi = { pull: fresh.number, head: fresh.headSha, check: verdict.check };
+        }
+      }
+    } catch { /* An unreadable PR or policy keeps only the exact gone-owner fact. */ }
+    const message = redCi
+      ? `STOPPED: Issue #${assignment.issueNumber} assigned manager is positively gone with a terminally failed Dispatch and its open PR #${redCi.pull} has required check ${safeUnitAtom(redCi.check) ?? 'unnamed'} failing on head ${redCi.head.slice(0, 12)} - recovery needed, reconcile without replacement guess`
+      : `Wake: Issue #${assignment.issueNumber} assigned manager is positively gone with a terminally failed Dispatch - recovery needed, reconcile without replacement guess`;
     await sendMarkedUnitMessage(store, key, coordinator, message, executor, sleepMs, log, counts,
       () => coordinatorStillSelected(coordinator, options.config, executor)
-        && freshSendSafePane(coordinator, listFleetTerminals(executor), options, executor));
+        && freshSendSafePane(coordinator, listFleetTerminals(executor), options, executor)
+        && (!redCi || (options.readNamedPull ?? readNativePull)(repository, redCi.pull)?.headSha === redCi.head));
   }
 }
 
@@ -2703,7 +2859,7 @@ function sendCoordinator(executor: OrcaExecutor, pane: FleetTerminal, message: s
 function coordinatorStillSelected(expected: FleetTerminal, config: FleetWakeConfig, executor: OrcaExecutor): boolean {
   try {
     const current = listFleetTerminals(executor);
-    const selected = resolveCoordinatorPane(current, config);
+    const selected = resolveCoordinatorPane(current, config, executor);
     return current.filter((pane) => pane.handle === expected.handle).length === 1
       && selected?.handle === expected.handle && selected.status !== 'exited'
       && samePath(selected.worktreePath, expected.worktreePath)
@@ -2737,7 +2893,7 @@ export async function runFleetDiagnosticTick(options: FleetDiagnosticTickOptions
     log('DIAG handle=none incarnation=unknown state=unverified reason=fleet_census_unreadable evidence=terminal list --json: incomplete_or_malformed');
     return;
   }
-  const resolvedCoordinator = resolveCoordinatorPane(terminals, config);
+  const resolvedCoordinator = resolveCoordinatorPane(terminals, config, executor);
   const rows = collectFleetDiagnostics({
     projectId: config.projectId, primary: config.primary, workspaceRe: config.workspaceRe,
     coordinatorHandle: resolvedCoordinator?.handle,
@@ -2755,11 +2911,14 @@ export async function runFleetDiagnosticTick(options: FleetDiagnosticTickOptions
     return Boolean(terminal.worktreePath) && samePath(terminal.worktreePath, config.primary)
       && config.orchestratorTitleRe.test(terminal.title);
   });
-  if (!config.orchestratorHandle && matches.length > 1) {
+  if (config.coordinatorPinFile) {
+    // File mode: only the selected Run's pin joined by native run-show selects; no title fallback.
+    log(`DIAG reason=coordinator_unverified selected=${resolvedCoordinator?.handle ?? 'none'} evidence=selected_project_file+run_show exact_selection_only; no_live_agent_witness`);
+  } else if (!config.orchestratorHandle && matches.length > 1) {
     log(`DIAG reason=coordinator_ambiguous candidates=${matches.map((pane) => pane.handle).join(',')} evidence=primary-title-matches; no_live_agent_witness`);
   } else {
     const selected = config.orchestratorHandle
-      ? resolveCoordinatorPane(terminals, config)
+      ? resolveCoordinatorPane(terminals, config, executor)
       : matches.length === 1 ? matches[0] : undefined;
     log(`DIAG reason=coordinator_unverified selected=${selected?.handle ?? 'none'} evidence=${config.orchestratorHandle ? 'ORCH_HANDLE exact_selection_only' : 'primary-title-predicate_only'}; no_live_agent_witness`);
   }
@@ -2888,7 +3047,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
   let operationalObservations: FleetPaneObservation[] | undefined;
   let activeChats: ProjectChat[] = [];
   try {
-    const coordinator = resolveCoordinatorPane(terminals, config);
+    const coordinator = resolveCoordinatorPane(terminals, config, executor);
     if (config.coordinatorPinFile && !coordinator) log('coordinator pin missing, malformed or not present; coordinator effects withheld');
     let observations: FleetPaneObservation[];
     // Selected non-primary panes whose screen cannot be read: diagnosed and excluded from effects,
@@ -3040,7 +3199,7 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     }
 
     // Persist one notification state per pane; one pane changing cannot re-alarm another.
-    type PaneState = { state: string; sent: boolean; attempted?: boolean; attemptedAt?: number };
+    type PaneState = { state: string; sent: boolean; attempted?: boolean; attemptedAt?: number; seenAt?: number };
     type History = { panes: Record<string, PaneState>; routed: string; coordinator?: string };
     let previous: History = { panes: {}, routed: '' };
     const pendingPermission = observedPermissionWarnings(observations, config.projectId, store);
@@ -3051,46 +3210,48 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
         const row = parsed as History;
         if (row.panes && typeof row.panes === 'object' && typeof row.routed === 'string') previous = row;
       }
-    } catch { /* An old whole-set digest is not a per-pane notification. */ }
+    } catch { /* An old whole-set digest is not a per-pane notification; it proves no freshness either. */ }
     const coordinatorKey = JSON.stringify([
       coordinator.handle, coordinator.incarnationId ?? '', coordinator.worktreePath,
     ]);
-    const sameCoordinator = previous.coordinator === coordinatorKey;
+    const tickNow = (options.now ?? Date.now)();
     const paneStates: Record<string, PaneState> = Object.create(null) as Record<string, PaneState>;
+    // An observation gap or an unreadable pane is not a resolution: the saved history of an
+    // omitted unit is carried (bounded) so STOPPED -> omitted -> the same STOPPED never replays.
+    for (const [handle, saved] of Object.entries(previous.panes)) {
+      if (!saved || typeof saved.state !== 'string') continue;
+      const seenAt = typeof saved.seenAt === 'number' ? saved.seenAt : tickNow;
+      if (tickNow - seenAt > PANE_HISTORY_RETENTION_MS) continue;
+      paneStates[handle] = { ...saved, seenAt };
+    }
     const paneStateKey = (pane: FleetPaneObservation): string =>
       JSON.stringify([pane.state, pane.incarnationId ?? '']);
+    // A coordinator replacement never authorizes a replay: history is keyed by pane episode only.
     for (const pane of observations) {
       // PERMISSION emits no ordinary alert, but its interval must be remembered:
       // STOPPED -> PERMISSION -> STOPPED is a new ordinary state transition.
       const state = paneStateKey(pane);
-      paneStates[pane.handle] = { state, sent: sameCoordinator
-        && previous.panes[pane.handle]?.state === state
-        && previous.panes[pane.handle]?.sent === true,
-        ...(sameCoordinator && previous.panes[pane.handle]?.state === state
-          && previous.panes[pane.handle]?.attempted ? { attempted: true,
-            ...(previous.panes[pane.handle]?.attemptedAt !== undefined
-              ? { attemptedAt: previous.panes[pane.handle]!.attemptedAt } : {}) } : {}) };
+      const saved = previous.panes[pane.handle];
+      paneStates[pane.handle] = { state, sent: saved?.state === state && saved?.sent === true,
+        seenAt: tickNow,
+        ...(saved?.state === state && saved?.attempted ? { attempted: true,
+          ...(saved?.attemptedAt !== undefined ? { attemptedAt: saved.attemptedAt } : {}) } : {}) };
     }
     for (const handle of bareShellHandles) {
-      paneStates[handle] = { state: 'suspected_bare_shell',
-          sent: sameCoordinator && previous.panes[handle]?.state === 'suspected_bare_shell'
-          && previous.panes[handle]?.sent === true,
-          ...(sameCoordinator && previous.panes[handle]?.state === 'suspected_bare_shell'
-            && previous.panes[handle]?.attempted ? { attempted: true } : {}) };
+      const saved = previous.panes[handle];
+      paneStates[handle] = { state: 'suspected_bare_shell', seenAt: tickNow,
+        sent: saved?.state === 'suspected_bare_shell' && saved?.sent === true,
+        ...(saved?.state === 'suspected_bare_shell' && saved?.attempted ? { attempted: true } : {}) };
     }
     const now = (options.now ?? Date.now)();
-    const lastAt = store.readLastSentAt?.();
-    const reminderDue = lastAt !== undefined && Number.isFinite(lastAt) && Number.isFinite(now)
-      && now >= lastAt + REMINDER_INTERVAL_MS;
+    // Elapsed time never replays: a sent incident stays sent and an ambiguous attempt stays
+    // unknown until the pane positively changes state (a new episode).
     const stopped = actionablePanes(observations)
       .filter((pane) => !bareShellHandles.has(pane.handle)
-        && (!paneStates[pane.handle]?.attempted
-          || (paneStates[pane.handle]?.attemptedAt !== undefined
-            && now - paneStates[pane.handle]!.attemptedAt! >= UNVERIFIED_WAKE_RETRY_MS))
-        && (!paneStates[pane.handle]?.sent || reminderDue));
+        && !paneStates[pane.handle]?.attempted && !paneStates[pane.handle]?.sent);
     const bareAlerts = [...bareShellHandles].filter((handle) => !paneStates[handle]?.sent && !paneStates[handle]?.attempted);
     const routedSignature = chatBannerSignature(routed);
-    const pendingRouted = !sameCoordinator || routedSignature !== previous.routed ? routed : [];
+    const pendingRouted = routedSignature !== previous.routed ? routed : [];
     const ordinaryDue = stopped.length > 0 || bareAlerts.length > 0 || pendingRouted.length > 0;
     const nowSignature = JSON.stringify({ panes: paneStates, routed: routedSignature, coordinator: coordinatorKey });
     if (observations.some((pane) => pane.state === 'PERMISSION'
@@ -3262,13 +3423,12 @@ export function fleetWakeConfigFromEnv(
     throw new Error(`unknown argument: ${token}`);
   }
   const target = resolveTargetContext({ projectId, env });
-  // Discover file backing once; loss of the file never restores inherited pin authority.
+  // The selected project file is the coordinator authority from cold start: neither an
+  // inherited ORCH_HANDLE nor the file's existence at construction time selects the recipient.
   const pinFile = /^[a-zA-Z0-9_.-]+$/u.test(target.projectId)
     ? join(env.HOME?.trim() || homedir(), '.config', 'orchestrator-fleet', target.projectId + '.env')
     : undefined;
-  const inheritedPin = env.ORCH_HANDLE?.trim();
-  const coordinatorPinFile = pinFile && inheritedPin && envHandleFromFile(pinFile) === inheritedPin
-    ? pinFile : undefined;
+  const coordinatorPinFile = pinFile;
   const intervalSeconds = env.FLEET_WAKE_INTERVAL?.trim() ? Number(env.FLEET_WAKE_INTERVAL) : 60;
   if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) {
     throw new Error('FLEET_WAKE_INTERVAL must be a positive number of seconds');
@@ -3278,8 +3438,9 @@ export function fleetWakeConfigFromEnv(
     primary: target.primaryRoot,
     workspaceRe: compileRegex(target.orcaWorkspacePattern, defaultWorkspaceRegex(target.primaryRoot)),
     orchestratorTitleRe: compileRegex(target.orchestratorTitlePattern, DEFAULT_ORCHESTRATOR_TITLE_RE),
-    ...(inheritedPin ? { orchestratorHandle: inheritedPin } : {}),
     ...(coordinatorPinFile ? { coordinatorPinFile } : {}),
+    defaultBranch: target.defaultBranch,
+    ...(target.requiredCi ? { requiredCi: target.requiredCi } : {}),
     ...(env.ARCHITECT_HANDLE?.trim() ? { architectHandle: env.ARCHITECT_HANDLE.trim() } : {}),
     busyRe: compileRegex(env.BUSY_RE, DEFAULT_BUSY_RE),
     intervalSeconds,
@@ -3306,7 +3467,7 @@ export async function runFleetWakeLoop(
     if (startupWakePending) {
       try {
         const executor = dependencies.executor ?? defaultOrcaExecutor;
-        const selected = resolveCoordinatorPane(listFleetTerminals(executor), config);
+        const selected = resolveCoordinatorPane(listFleetTerminals(executor), config, executor);
         if (selected && selected.status !== 'exited') {
           readFleetScreen(selected.handle, executor);
           const safeStartup = () => coordinatorStillSelected(selected, config, executor)

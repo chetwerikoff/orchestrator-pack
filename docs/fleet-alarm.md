@@ -251,21 +251,23 @@ park line are rechecked once immediately before that single call. No coordinator
 means an explicit logged non-delivery, not a claimed alarm. Native handle
 sends remain non-atomic and no evidence-only alert permits task continuation.
 
-**Hot coordinator pin.** For `--project <id>`, construction uses the
-inherited `ORCH_HANDLE` only to discover whether the existing readable
-`~/.config/orchestrator-fleet/<id>.env` has one matching key. Simple
-`ORCH_HANDLE=h`, `ORCH_HANDLE='h'`, and `ORCH_HANDLE="h"` are equivalent;
-no expansion, escape evaluation, multiline or duplicate value is permitted.
-Once recognized as file-backed, the authority persists through deletion:
-every tick, near coordinator effect and startup Wake rereads *only* this pin,
-targets its exact currently present, unique native handle **only** if that
-pane is rooted at the selected primary checkout, and **never** falls back to
-the old process pin or a title. A foreign project's path, duplicate handle
-or exited native terminal is not a valid coordinator. Missing, unreadable, duplicated, malformed,
-unbalanced quoted or non-present new pin means no coordinator effects
-and an explanatory diagnostic; independent safe unit Wakes remain.
-With no previously discovered matching file, the incumbent legacy selection
-still applies. Do not restart a service or edit a user env/drop-in.
+**Selected project file (Issue #2896).** For `--project <id>`, the single
+coordinator authority is `~/.config/orchestrator-fleet/<id>.env`: one
+operator-supplied literal `OPK_RUN_ID=<run id>` and one `ORCH_HANDLE` pin that
+attach writes. Simple `ORCH_HANDLE=h`, `ORCH_HANDLE='h'`, and `ORCH_HANDLE="h"`
+are equivalent; no expansion, escape evaluation, multiline or duplicate value
+is permitted. Every tick, near coordinator effect, startup Wake and scheduler
+escalation rereads the file fresh. The pin is a valid coordinator only when it
+equals native `orca orchestration run-show --id <run> --full`
+`run.coordinator_handle` **and** is one unique live native terminal rooted at
+the selected primary checkout. There is **no** inherited-`ORCH_HANDLE`, title
+or operator-primary/WorkerAssignment fallback for coordinator delivery; the
+path is the same with zero WorkerAssignment rows. A missing, unreadable,
+duplicated, malformed, mismatched or non-present pin means no coordinator
+effects and an explanatory diagnostic; independent safe unit Wakes remain.
+Adoption: the operator adds the literal `OPK_RUN_ID` once; attach and the
+launcher `precheck` are described in `docs/target_repo_setup.md`. Do not
+restart a service or edit a user env/drop-in.
 
 **F7 remains evidence-limited.** Existing
 `collectFleetDiagnostics`+`runFleetAlarmTick` already warns once
@@ -334,9 +336,18 @@ can still be attempted. The tick returns `no_orchestrator` with actual
 equal to confirmed plus not-confirmed); that state means **no coordinator
 advisory delivered**, not that no safe pane was reached.
 
-STOPPED/POLLING coordinator alarms retain per-pane state transitions, and
-the ordinary unresolved PARKED reminder remains on **30-minute due slots**,
-including 0/30/60-minute observational checks. A reminder is a re-check,
+STOPPED/POLLING coordinator alarms are **state-change only** (Issue #2896).
+Per-pane history is keyed by the pane's `[state, incarnationId]` episode,
+independent of which coordinator is current, is carried across observation
+gaps (bounded to 7 days) and is never rebuilt from the coordinator. A new
+coordinator, a hot repin, a restart, elapsed time or an `attempted_unverified`
+timer never replays an unchanged incident: only a different pane state,
+incarnation or a new fact alarms. Marks with the prefixes `terminal-path:`,
+`gone-issue:` and `park-uncertain:` are sticky, so an ambiguous possible
+effect is never timer-replayed; legacy recipient-suffixed `park-uncertain:`
+marks are recognized by prefix. Direct unit Wakes keep their own five-minute
+unverified retry. The 30-minute reminder is **removed** from the coordinator
+STOPPED alarm; a reminder is otherwise a re-check,
 not a forced continuation. New, attributable progress can wake early;
 unchanged busy/live state grants no completion, unknown liveness is
 unverified, and positively gone/incomplete work requires coordinator
@@ -345,11 +356,36 @@ Reminder (task-owned producers only for a verified own pending park, see
 Producer ownership); only positively owned unknown parks and positively associated
 landed-but-deficient producer artifacts raise immediate coordinator uncertainty
 alarms. Suspected bare shell never gets direct Wake text. Coordinator
-replacement (verified handle/incarnation) makes the new recipient eligible
-for unchanged actionable alarms. PERMISSION is a distinct intervening
+replacement does not make unchanged alarms eligible again (see above).
+PERMISSION is a distinct intervening
 pane state; one-shot permission warnings do not change STOPPED/POLLING
 throttle, ordinary reminders, producer wakes or the existing cooldown.
 Local ChatGPT banners and Run mail retain their independent rules.
+
+### STOPPED projections for gone owners, red required CI and lost wait processes (Issue #2896)
+
+All three are coordinator-only advisories on the same state-change dedup.
+
+- **Gone owner with a positively failed required check.** An existing
+  gone-owner Dispatch (`alarmGoneIssueOwners` evidence) is joined to exactly one
+  open PR by its unique closing Issue and the PR's current head. When a
+  required check on that exact head is positively failed, the message says so
+  (`STOPPED: Issue #N assigned manager is positively gone ... PR #X has
+  required check ... failing on head ...`) under the existing `gone-issue:` key.
+  Required identity comes from the card `requiredCi` selectors
+  (`workflow / job`) or branch-protection `required_status_checks`
+  (`checks[].context` with `app_id`, plus `contexts[]`); complete check-runs
+  on the exact head are required and the newest run per identity decides.
+  Optional, stale or unreadable data never produces a red-CI claim.
+- **Lost wait process.** An own `PARKED on <process pid>` wait whose earlier
+  matching live probe is retained in the parked epoch and whose later
+  same-namespace probe is absent, exited or has different start ticks raises
+  one coordinator STOPPED mark per exact pid episode. Promotion from the
+  uncertain advisory does not retype.
+
+Residuals: no atomic exactly-once native send, no process-liveness witness
+across PID namespaces, and an observation gap longer than seven days drops
+history.
 
 ## Visible OpenCode permission UI (Issue #2484)
 

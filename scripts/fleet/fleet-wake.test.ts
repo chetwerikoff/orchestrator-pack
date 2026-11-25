@@ -92,7 +92,11 @@ class MemoryWakeStore implements FleetWakeStateStore {
   }
   hasParkedWakeEvent(key: string): boolean {
     return this.parkedWakeEvents.has(key) && (this.eventStatus.get(key) !== 'attempted_unverified'
+      || ['terminal-path:', 'gone-issue:', 'park-uncertain:'].some((prefix) => key.startsWith(prefix))
       || (this.attemptedAt.has(key) && Date.now() - this.attemptedAt.get(key)! < 5 * 60_000));
+  }
+  hasParkedWakeEventPrefix(prefix: string): boolean {
+    return [...this.parkedWakeEvents].some((key) => key.startsWith(prefix));
   }
   readParkedWakeEventStatus(key: string): 'sent' | 'attempted_unverified' | undefined {
     return this.parkedWakeEvents.has(key) ? this.eventStatus.get(key) ?? 'sent' : undefined;
@@ -151,6 +155,9 @@ function config(overrides: Partial<FleetWakeConfig> = {}): FleetWakeConfig {
   };
 }
 
+/** Native `run-show --full` fixtures: Run id -> current coordinator handle (absent id = unreadable). */
+const fixtureRuns = new Map<string, string | null>();
+
 function fakeOrca(
   screens: Readonly<Record<string, string>>,
   calls: string[][],
@@ -163,6 +170,11 @@ function fakeOrca(
         ok: true,
         result: { terminals: customTerminals.map((pane) => ({ incarnationId: 'fixture-incarnation', ...pane })), totalCount: customTerminals.length, truncated: false },
       }));
+    }
+    if (args[0] === 'orchestration' && args[1] === 'run-show') {
+      const id = args[args.indexOf('--id') + 1] ?? '';
+      if (!fixtureRuns.has(id) || !args.includes('--full')) return commandResult('', false);
+      return commandResult(JSON.stringify({ ok: true, result: { run: { id, coordinator_handle: fixtureRuns.get(id) } } }));
     }
     if (args[0] === 'terminal' && args[1] === 'read') {
       const handle = args[args.indexOf('--terminal') + 1] ?? '';
@@ -527,7 +539,11 @@ describe('fleet alarm', () => {
     const docs = readFileSync(new URL('../../docs/fleet-alarm.md', import.meta.url), 'utf8');
     expect(docs).toContain('[Service]\nEnvironmentFile=%h/.config/orchestrator-fleet/%i.env');
     const publicTemplate = readFileSync(new URL('./fleet-wake.env.example', import.meta.url), 'utf8');
-    const env = parseEnv(`${publicTemplate}\nORCH_HANDLE=coord\n${exclude ? `ARCHITECT_HANDLE= ${architectHandle} ` : ''}\n`);
+    const home2422 = mkdtempSync(join(tmpdir(), 'fleet-2422-'));
+    mkdirSync(join(home2422, '.config', 'orchestrator-fleet'), { recursive: true });
+    writeFileSync(join(home2422, '.config', 'orchestrator-fleet', 'fixture.env'), 'OPK_RUN_ID=run_2422\nORCH_HANDLE=coord\n');
+    fixtureRuns.set('run_2422', 'coord');
+    const env = { ...parseEnv(`${publicTemplate}\nORCH_HANDLE=stale-inherited\n${exclude ? `ARCHITECT_HANDLE= ${architectHandle} ` : ''}\n`), HOME: home2422 };
     const target = vi.spyOn(targetContext, 'resolveTargetContext').mockReturnValue({
       projectId: 'fixture', repository: 'test/project', primaryRoot: primary, defaultBranch: 'main',
       orcaWorkspacePattern: '/home/user/', orchestratorTitlePattern: 'Cursor',
@@ -536,7 +552,9 @@ describe('fleet alarm', () => {
     try {
       const settings = fleetWakeConfigFromEnv(env, ['--project', 'fixture']);
       expect(settings.architectHandle).toBe(exclude ? architectHandle : undefined);
-      expect(settings.orchestratorHandle).toBe('coord');
+      // The operator-selected file, never the inherited handle, selects the coordinator.
+      expect(settings.orchestratorHandle).toBeUndefined();
+      expect(settings.coordinatorPinFile).toBe(join(home2422, '.config', 'orchestrator-fleet', 'fixture.env'));
       expect(settings.selectedRepository).toBe('test/project');
       expect(settings.chatScope?.repository).toBe('test/project');
       const calls: string[][] = [];
@@ -558,7 +576,7 @@ describe('fleet alarm', () => {
       expect(calls.some((call) => call[1] === 'read' && call.includes(architectHandle))).toBe(!exclude);
       expect(sendsTo(calls, architectHandle)).toHaveLength(exclude ? 0 : 1);
       if (!exclude) expect(sendsTo(calls, 'coord')[0]?.join(' ')).toContain(architectHandle);
-    } finally { target.mockRestore(); }
+    } finally { target.mockRestore(); fixtureRuns.delete('run_2422'); rmSync(home2422, { recursive: true, force: true }); }
   });
 
 
@@ -658,7 +676,7 @@ describe('fleet alarm', () => {
     expect(message).toContain('STOPPED two');
   });
 
-  it('does not suppress the same stopped set after the coordinator pane is replaced', async () => {
+  it('never replays the same stopped set after the coordinator pane is replaced', async () => {
     const store = new MemoryWakeStore();
     const workers = terminals.filter((terminal) => terminal.handle !== 'coord');
     const first = await tick({
@@ -673,8 +691,9 @@ describe('fleet alarm', () => {
       screens: { 'coord-b': 'working\nctrl+c to stop', one: 'done', two: 'working\nesc to interrupt' },
       store,
     });
-    expect(replacement.result).toMatchObject({ state: 'sent', coordinator: 'coord-b', count: 1 });
-    expect(sendsTo(replacement.calls, 'coord-b')).toHaveLength(1);
+    // A new coordinator never authorizes a replay of an unchanged attempted/sent incident.
+    expect(replacement.result.state).toBe('same_stopped_set');
+    expect(sends(replacement.calls)).toHaveLength(0);
     const stable = await tick({
       terminals: [{ handle: 'coord-b', title: 'Cursor coordinator', worktreePath: primary }, ...workers],
       screens: { 'coord-b': 'working\nctrl+c to stop', one: 'done', two: 'working\nesc to interrupt' },
@@ -684,15 +703,15 @@ describe('fleet alarm', () => {
     expect(sends(stable.calls)).toHaveLength(0);
   });
 
-  it('re-alarms a STOPPED pane on same-handle new-coordinator incarnation', async () => {
+  it('does not replay a STOPPED pane on same-handle new-coordinator incarnation', async () => {
     const store = new MemoryWakeStore();
     const coordinator = { ...terminals[0]!, incarnationId: 'coord-inc-a' };
     const shared = { store, screens: { coord: 'idle', one: 'done' } };
     expect((await tick({ ...shared, terminals: [coordinator, terminals[1]!] })).result.state).toBe('sent');
     const newer = { ...coordinator, incarnationId: 'coord-inc-b' };
     const replaced = await tick({ ...shared, terminals: [newer, terminals[1]!] });
-    expect(replaced.result).toMatchObject({ state: 'sent', count: 1 });
-    expect(sendsTo(replaced.calls, 'coord')).toHaveLength(1);
+    expect(replaced.result.state).toBe('same_stopped_set');
+    expect(sendsTo(replaced.calls, 'coord')).toHaveLength(0);
     expect(sendsTo((await tick({ ...shared, terminals: [newer, terminals[1]!] })).calls, 'coord')).toHaveLength(0);
   });
 
@@ -2785,7 +2804,7 @@ describe('Issue #2484 visible OpenCode permission (genuine capture; synthetic ne
     expect(sendsTo((await step('done')).calls, 'coord')).toHaveLength(0);
   });
 
-  it('keeps the STOPPED reminder at 30m after a permission-only send at 20m', async () => {
+  it('never replays a sent STOPPED pane at 30m after a permission-only send at 20m', async () => {
     const store = new MemoryWakeStore();
     const screens = { coord: 'busy\nctrl+c to stop', one: 'working\nesc interrupt',
       two: 'Assistant: completed ordinary task' };
@@ -2803,14 +2822,13 @@ describe('Issue #2484 visible OpenCode permission (genuine capture; synthetic ne
     expect(msg(permission.calls)).not.toContain('pane(s) need a step');
     const latest = JSON.parse(store.signature ?? '{}') as { panes: Record<string, { state: string; sent: boolean }> };
     const prior = JSON.parse(ordinarySignature ?? '{}') as { panes: Record<string, { state: string; sent: boolean }> };
-    expect(latest.panes.two).toEqual(prior.panes.two);
+    expect(latest.panes.two).toMatchObject({ state: prior.panes.two?.state, sent: prior.panes.two?.sent });
     expect(latest.panes.one?.state).toContain('PERMISSION');
     expect(store.sentAt).toBe(0);
+    // Elapsed time alone never replays an already sent incident (#2896).
     const reminder = await step(30 * 60_000);
-    expect(reminder.result.state).toBe('sent');
-    expect(msg(reminder.calls)).toContain('STOPPED two');
-    expect(msg(reminder.calls)).not.toContain('visible OpenCode permission UI');
-    expect(store.sentAt).toBe(30 * 60_000);
+    expect(sends(reminder.calls)).toHaveLength(0);
+    expect(store.sentAt).toBe(0);
   });
 
   it('a new native incarnation is eligible; unknown incarnation remains a stable conservative key', async () => {
@@ -4624,6 +4642,49 @@ describe('Issue #2687 r04: evidenced park vs pending vs coordinator uncertainty'
       expect(sendsTo(later.calls, coordinator.handle)).toHaveLength(0);
     }
   });
+
+  it.each([
+    ['absent', { state: 'absent' as const, namespace: 'pid:[12]' }],
+    ['exited', { state: 'exited' as const, startticks: '123456789', namespace: 'pid:[12]' }],
+    ['reused', { state: 'live' as const, startticks: '987654321', namespace: 'pid:[12]' }],
+  ])('#2896: an own PID wait lost after a retained live probe is one coordinator-only STOPPED per pid episode: %s', async (_name, later) => {
+    const wait = 'PARKED on process pid 2612721 startticks 123456789';
+    const screen = nativeManagerFinalPark(wait);
+    const live = { state: 'live' as const, startticks: '123456789', namespace: 'pid:[12]' };
+    const store = new MemoryWakeStore();
+    let seen: ReturnType<NonNullable<FleetAlarmTickOptions['probePid']>> = live;
+    const run = () => scenario(screen, { probePid: () => seen }, store);
+    const first = await run();
+    // The first (uncertain, no retained earlier observation) mark is the only message before the loss.
+    expect(texts(first.calls, coordinator.handle)).toHaveLength(1);
+    const before = store.epochs.get(manager.handle)?.liveProcess;
+    expect(before).toMatchObject({ pid: 2612721, startticks: '123456789', namespace: 'pid:[12]' });
+    seen = later;
+    const lost = await run();
+    expect(sendsTo(lost.calls, manager.handle)).toHaveLength(0);
+    // The exact pid episode already notified is never retyped by promotion.
+    expect(texts(lost.calls, coordinator.handle)).toHaveLength(0);
+    seen = live;
+    expect(sends((await run()).calls)).toHaveLength(0);
+  });
+
+  it('#2896: a lost PID wait without any prior notification promotes to one STOPPED coordinator message', async () => {
+    const wait = 'PARKED on process pid 2612721 startticks 123456789';
+    const screen = nativeManagerFinalPark(wait);
+    const live = { state: 'live' as const, startticks: '123456789', namespace: 'pid:[12]' };
+    const store = new MemoryWakeStore();
+    let seen: ReturnType<NonNullable<FleetAlarmTickOptions['probePid']>> = live;
+    const run = () => scenario(screen, { probePid: () => seen }, store);
+    await run();
+    for (const key of [...store.parkedWakeEvents]) store.clearParkedWakeEvent(key);
+    seen = { state: 'absent', namespace: 'pid:[12]' };
+    const lost = await run();
+    const text = texts(lost.calls, coordinator.handle);
+    expect(text).toHaveLength(1);
+    expect(decodeURIComponent(text[0]!)).toContain('gone or reused since an earlier matching observation');
+    expect(sendsTo(lost.calls, manager.handle)).toHaveLength(0);
+    expect(texts((await run()).calls, coordinator.handle)).toHaveLength(0);
+  });
 });
 
 
@@ -4633,6 +4694,12 @@ describe('Issue #2687 r04: file-backed coordinator pin, quotes and startup', () 
     const pinDirectory = join(home, '.config', 'orchestrator-fleet');
     const pinFile = join(pinDirectory, 'pin-fixture.env');
     mkdirSync(pinDirectory, { recursive: true });
+    // The selected file carries the operator Run; native run-show names the coordinator it must match.
+    const writePin = (_file: string, text: string): void => {
+      writeFileSync(pinFile, 'OPK_RUN_ID=run_2687\n' + text);
+      const last = [...text.matchAll(/ORCH_HANDLE=(?:'([^']*)'|"([^"]*)"|([^\s'"]+))/gu)].pop();
+      fixtureRuns.set('run_2687', last ? (last[1] ?? last[2] ?? last[3] ?? null) : null);
+    };
     const selected = vi.spyOn(targetContext, 'resolveTargetContext').mockReturnValue({
       projectId: 'pin-fixture', repository: 'test/project', primaryRoot: primary, defaultBranch: 'main',
       orcaWorkspacePattern: '/orca/workspaces/project/', orchestratorTitlePattern: 'Cursor',
@@ -4658,14 +4725,14 @@ describe('Issue #2687 r04: file-backed coordinator pin, quotes and startup', () 
         readPackReviewRuns: () => [], readChats: async () => [],
       });
       for (const pin of ['coord-old', "'coord-old'", '"coord-old"']) {
-        writeFileSync(pinFile, 'ORCH_HANDLE=' + pin + '\n');
+        writePin(pinFile, 'ORCH_HANDLE=' + pin + '\n');
         const cfg = makeConfig();
         expect(cfg.coordinatorPinFile).toBe(pinFile);
-        expect(cfg.orchestratorHandle).toBe('coord-old');
+        expect(cfg.orchestratorHandle).toBeUndefined();
         const first = await run(cfg);
         expect(sendsTo(first.calls, 'coord-old').filter((row) => row.includes('--text'))).toHaveLength(1);
       }
-      writeFileSync(pinFile, "ORCH_HANDLE='coord-old'\n");
+      writePin(pinFile, "ORCH_HANDLE='coord-old'\n");
       const settings = makeConfig();
       const diagnostic = async (rosterForRead: readonly FleetTerminal[]) => {
         const lines: string[] = [], calls: string[][] = [];
@@ -4683,10 +4750,13 @@ describe('Issue #2687 r04: file-backed coordinator pin, quotes and startup', () 
       const store = new MemoryWakeStore();
       const old = await run(settings, store);
       expect(sendsTo(old.calls, 'coord-old').filter((row) => row.includes('--text'))).toHaveLength(1);
-      writeFileSync(pinFile, 'ORCH_HANDLE="coord-new"\n');
+      writePin(pinFile, 'ORCH_HANDLE="coord-new"\n');
       const shifted = await run(settings, store);
       expect(sendsTo(shifted.calls, 'coord-old')).toHaveLength(0);
-      expect(sendsTo(shifted.calls, 'coord-new').filter((row) => row.includes('--text'))).toHaveLength(1);
+      // A hot repin never replays an already recorded episode on the new coordinator (#2896).
+      expect(sendsTo(shifted.calls, 'coord-new')).toHaveLength(0);
+      const repinned = await run(settings, new MemoryWakeStore());
+      expect(sendsTo(repinned.calls, 'coord-new').filter((row) => row.includes('--text'))).toHaveLength(1);
       const repurposedOld: FleetTerminal = { ...oldPane, title: 'OpenCode reused manager',
         worktreePath: workerBase + '/one', branch: 'refs/heads/reused-agent',
         incarnationId: 'pin-reused', agentIdentity: 'opencode', status: 'running' };
@@ -4710,7 +4780,7 @@ describe('Issue #2687 r04: file-backed coordinator pin, quotes and startup', () 
       // An attractive native handle from another repository is not a coordinator.
       const foreignPane: FleetTerminal = { ...newPane, handle: 'coord-foreign',
         worktreePath: '/other/foreign-repository', incarnationId: 'pin-foreign' };
-      writeFileSync(pinFile, 'ORCH_HANDLE=coord-foreign\n');
+      writePin(pinFile, 'ORCH_HANDLE=coord-foreign\n');
       const forbidden = await tick({
         config: settings, store: new MemoryWakeStore(),
         terminals: [...roster, foreignPane],
@@ -4725,7 +4795,7 @@ describe('Issue #2687 r04: file-backed coordinator pin, quotes and startup', () 
           screens: { 'coord-old': 'idle', 'coord-new': 'idle', 'coord-foreign': 'idle' } }],
       });
       expect(startupTextSends(foreignStartup.calls)).toHaveLength(0);
-      writeFileSync(pinFile, 'ORCH_HANDLE=coord-new\n');
+      writePin(pinFile, 'ORCH_HANDLE=coord-new\n');
       expect(resolveCoordinatorPane([...roster, { ...newPane, worktreePath: '/other/duplicate' }],
         settings)).toBeUndefined();
 
@@ -4753,7 +4823,7 @@ describe('Issue #2687 r04: file-backed coordinator pin, quotes and startup', () 
         'ORCH_HANDLE=coord\\-new\n',
         'ORCH_HANDLE=missing-coordinator\n',
       ]) {
-        writeFileSync(pinFile, invalid);
+        writePin(pinFile, invalid);
         const noPin = await run(settings);
         expect(sendsTo(noPin.calls, 'coord-old')).toHaveLength(0);
         expect(sendsTo(noPin.calls, 'coord-new')).toHaveLength(0);
@@ -4763,18 +4833,28 @@ describe('Issue #2687 r04: file-backed coordinator pin, quotes and startup', () 
         expect(invalidPinDiagnostic.some((line) => line.includes('reason=coordinator_unverified selected=none'))).toBe(true);
       }
       rmSync(pinFile);
+      // No inherited-handle fallback: an absent selected file never selects a coordinator.
       const noFileAtConstruction = makeConfig();
-      expect(noFileAtConstruction.coordinatorPinFile).toBeUndefined();
-      const legacy = await run(noFileAtConstruction);
-      expect(sendsTo(legacy.calls, 'coord-old').filter((row) => row.includes('--text'))).toHaveLength(1);
+      expect(noFileAtConstruction.coordinatorPinFile).toBe(pinFile);
+      const absent = await run(noFileAtConstruction);
+      expect(sendsTo(absent.calls, 'coord-old')).toHaveLength(0);
+      expect(sendsTo(absent.calls, 'coord-new')).toHaveLength(0);
 
-      writeFileSync(pinFile, 'ORCH_HANDLE=coord-old\n');
+      // Pin differing from the native Run coordinator is not a coordinator.
+      writePin(pinFile, 'ORCH_HANDLE=coord-old\n');
+      fixtureRuns.set('run_2687', 'coord-new');
+      const mismatched = await run(makeConfig());
+      expect(sendsTo(mismatched.calls, 'coord-old')).toHaveLength(0);
+      expect(sendsTo(mismatched.calls, 'coord-new')).toHaveLength(0);
+
+      writePin(pinFile, 'ORCH_HANDLE=coord-old\n');
       const deleteBeforeTick = makeConfig();
       rmSync(pinFile);
       const removedBeforeTick = await run(deleteBeforeTick);
       expect(sendsTo(removedBeforeTick.calls, 'coord-old')).toHaveLength(0);
       expect(sendsTo(removedBeforeTick.calls, 'coord-new')).toHaveLength(0);
     } finally {
+      fixtureRuns.delete('run_2687');
       selected.mockRestore();
       rmSync(home, { recursive: true, force: true });
     }
@@ -5798,7 +5878,7 @@ describe('Issue #2833 firefighter parked-producer and submit regressions', () =>
     } finally { clock.mockRestore(); }
   });
 
-  it('alerts the orchestrator once for an idle unit, retrying unsubmitted input only after five minutes', async () => {
+  it('alerts the orchestrator once for an idle unit and never timer-replays unsubmitted input', async () => {
     const clock = vi.spyOn(Date, 'now');
     let now = Date.parse('2026-11-13T10:00:00Z');
     clock.mockImplementation(() => now);
@@ -5820,10 +5900,11 @@ describe('Issue #2833 firefighter parked-producer and submit regressions', () =>
       expect(sentText(first.calls, 'coord')[0]).toContain('one');
       expect(first.logs.join(' ')).toContain('reason=turn_start_unverified');
       expect(sentText((await run()).calls, 'coord')).toHaveLength(0);
+      // An unverified coordinator alert never timer-replays (#2896); only a state change re-alarms.
       now += 5 * 60_000;
       submitted = true;
-      const second = await run();
-      expect(sentText(second.calls, 'coord')[0]).toContain('one');
+      expect(sentText((await run()).calls, 'coord')).toHaveLength(0);
+      now += 60 * 60_000;
       expect(sentText((await run()).calls, 'coord')).toHaveLength(0);
     } finally { clock.mockRestore(); }
   });
@@ -6862,6 +6943,239 @@ describe('Issue #2863 exact own-final operator-gate park stays silent', () => {
       const baseline = await ticks(screen.replaceAll(gate, control));
       expect(operator[0]!.coordText.join('\n')).toContain('need a step');
       expect(counts(operator)).toEqual(counts(baseline));
+    }
+  });
+});
+
+describe('Issue #2896 state-change alarm dedup, independent of the coordinator', () => {
+  const coordinatorA: FleetTerminal = { ...terminals[0]!, handle: 'coord-a', incarnationId: 'coord-inc-a' };
+  const coordinatorB: FleetTerminal = { ...terminals[0]!, handle: 'coord-b', incarnationId: 'coord-inc-b' };
+  const stopped: FleetTerminal = { ...terminals[1]!, incarnationId: 'worker-inc-1' };
+  const screens = { 'coord-a': 'working\nctrl+c to stop', 'coord-b': 'working\nctrl+c to stop', one: 'done' };
+  const run = (store: MemoryWakeStore, roster: readonly FleetTerminal[], frames: Record<string, string> = screens) =>
+    tick({ store, terminals: roster, screens: frames });
+
+  it('carries history across an observation gap, a coordinator switch and a new store view', async () => {
+    const store = new MemoryWakeStore();
+    expect(sendsTo((await run(store, [coordinatorA, stopped])).calls, 'coord-a')).toHaveLength(1);
+    // Gap: the worker pane is unobserved for a tick; nothing is sent and history is kept.
+    const gap = await run(store, [coordinatorA]);
+    expect(sends(gap.calls)).toHaveLength(0);
+    // Same pane episode returns under a different coordinator: no resend.
+    const returned = await run(store, [coordinatorB, stopped]);
+    expect(sends(returned.calls)).toHaveLength(0);
+    expect(returned.result.state).toBe('same_stopped_set');
+    // A new incarnation is a new episode and alarms exactly once.
+    const reborn = { ...stopped, incarnationId: 'worker-inc-2' };
+    expect(sendsTo((await run(store, [coordinatorB, reborn])).calls, 'coord-b')).toHaveLength(1);
+    expect(sends((await run(store, [coordinatorA, reborn])).calls)).toHaveLength(0);
+  });
+
+  it('alarms again only on a changed pane state and never on elapsed time', async () => {
+    const store = new MemoryWakeStore();
+    let at = 0;
+    const step = (frames: Record<string, string>) => tick({
+      store, terminals: [coordinatorA, stopped], screens: frames, now: () => at,
+    });
+    expect(sendsTo((await step(screens)).calls, 'coord-a')).toHaveLength(1);
+    for (const hours of [1, 6, 30, 24 * 6]) {
+      at = hours * 3_600_000;
+      expect(sends((await step(screens)).calls), `${hours}h`).toHaveLength(0);
+    }
+    // Resumes then stops again: a changed state, so one new alarm.
+    expect(sends((await step({ ...screens, one: 'working\nesc interrupt' })).calls)).toHaveLength(0);
+    expect(sendsTo((await step(screens)).calls, 'coord-a')).toHaveLength(1);
+  });
+
+  it('survives a real file-store reload with zero replay and keeps sticky attempted marks past five minutes', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'fleet-2896-'));
+    const clock = vi.spyOn(Date, 'now');
+    let now = Date.parse('2026-11-25T10:00:00Z');
+    clock.mockImplementation(() => now);
+    try {
+      const first = new FileFleetWakeStateStore('orchestrator-pack', { XDG_RUNTIME_DIR: root });
+      const sent = await tick({ store: first, terminals: [coordinatorA, stopped], screens, now: () => now });
+      expect(sendsTo(sent.calls, 'coord-a')).toHaveLength(1);
+      now += 24 * 3_600_000;
+      const reloaded = new FileFleetWakeStateStore('orchestrator-pack', { XDG_RUNTIME_DIR: root });
+      const later = await tick({ store: reloaded, terminals: [coordinatorB, stopped], screens, now: () => now });
+      expect(sends(later.calls)).toHaveLength(0);
+      for (const prefix of ['terminal-path:', 'gone-issue:', 'park-uncertain:']) {
+        reloaded.markParkedWakeEvent(`${prefix}x`, 'attempted_unverified');
+      }
+      reloaded.markParkedWakeEvent('event:x:y', 'attempted_unverified');
+      now += 30 * 60_000;
+      const restarted = new FileFleetWakeStateStore('orchestrator-pack', { XDG_RUNTIME_DIR: root });
+      for (const prefix of ['terminal-path:', 'gone-issue:', 'park-uncertain:']) {
+        expect(restarted.hasParkedWakeEvent(`${prefix}x`), prefix).toBe(true);
+      }
+      // Direct unit wakes keep their own bounded retry.
+      expect(restarted.hasParkedWakeEvent('event:x:y')).toBe(false);
+    } finally { clock.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('never retypes an ambiguous unverified coordinator mark on a later tick', async () => {
+    const store = new MemoryWakeStore();
+    const parked = { ...screens, one: 'work\nPARKED on GPT turn unknown-event' };
+    const rows = [coordinatorA, { ...stopped, incarnationId: undefined }];
+    const first = await run(store, rows, parked);
+    expect(sendsTo(first.calls, 'coord-a')).toHaveLength(1);
+    const key = [...store.parkedWakeEvents].find((candidate) => candidate.startsWith('park-uncertain:'));
+    expect(key).toBeDefined();
+    store.eventStatus.set(key!, 'attempted_unverified');
+    store.attemptedAt.set(key!, 0);
+    for (const roster of [[coordinatorA, rows[1]!], [coordinatorB, rows[1]!]]) {
+      expect(sends((await run(store, roster, parked)).calls)).toHaveLength(0);
+    }
+  });
+});
+
+describe('Issue #2896 STOPPED projections: gone owner with red required CI', () => {
+  const repository = 'example/repo';
+  const issue = 2896;
+  const head = 'a'.repeat(40);
+  const coordinator: FleetTerminal = {
+    handle: 'synthetic-coordinator', title: 'Cursor coordinator',
+    incarnationId: 'coordinator-incarnation', worktreePath: primary,
+  };
+  const assignment: WorkerAssignmentRecord = {
+    schema: 'orchestrator-pack/worker-assignment/v1', projectId: 'orchestrator-pack',
+    repository, issueNumber: issue, taskId: 'task-2896', assignmentId: 'assignment-2896',
+    generation: 1, kind: 'local', provider: 'orca', bindingKey: 'dispatch-2896',
+    role: 'orchestrator', createdAtUtc: '2026-11-25T08:00:00.000Z',
+  };
+  const gone = (args: readonly string[]): OrcaCommandResult | undefined => {
+    if (args[0] !== 'orchestration') return undefined;
+    if (args[1] === 'dispatch-show') return commandResult(JSON.stringify({
+      ok: true, result: { dispatch: { id: assignment.bindingKey, status: 'failed' } },
+    }));
+    if (args[1] === 'worker-show') return commandResult(JSON.stringify({
+      ok: true, result: {
+        dispatch: { status: 'failed' }, worker: null, terminal: null, terminalResource: null,
+        observation: { exactWorker: false, status: 'missing' },
+      },
+    }));
+    return undefined;
+  };
+  const checkRuns = (rows: readonly Record<string, unknown>[]) => ({
+    total_count: rows.length, check_runs: rows.map((row, index) => ({ id: index + 1, head_sha: head, status: 'completed', ...row })),
+  });
+  const observe = async (input: {
+    store?: MemoryWakeStore;
+    runs?: readonly Record<string, unknown>[] | undefined;
+    pulls?: readonly OpenPullHead[];
+    sha?: string;
+    requiredCi?: readonly string[];
+    /** `null` = unreadable branch-protection policy. */
+    policy?: Record<string, unknown> | null;
+  } = {}) => {
+    const native = fakeOrca({ [coordinator.handle]: 'working\nesc interrupt' }, [], [coordinator]);
+    const reads: string[] = [];
+    const result = await tick({
+      screens: {}, terminals: [coordinator], store: input.store ?? new MemoryWakeStore(),
+      executor: (args) => gone(args) ?? native(args),
+      config: config({ selectedRepository: repository, orchestratorHandle: coordinator.handle,
+        defaultBranch: 'main', ...(input.requiredCi ? { requiredCi: input.requiredCi } : {}) }),
+      readCurrentAssignments: () => [assignment],
+      readNamedIssue: () => ({ number: issue, state: 'open' }),
+      listPublishedIssueFacts: () => [],
+      listOpenPulls: () => input.pulls ?? [{ number: 77, ref: 'refs/heads/issue-2896', sha: head, issue }],
+      readNamedPull: () => ({ number: 77, headSha: input.sha ?? head, state: 'open', merged: false,
+        body: `Closes #${issue}\n\nSummary.` }),
+      listTerminalEnvelopes: () => [],
+      extra: {
+        readGithubJson: (_repo, endpoint) => {
+          reads.push(endpoint);
+          if (endpoint.includes('required_status_checks')) {
+            return input.policy === null ? undefined : input.policy ?? { checks: [{ context: 'ci / test', app_id: 15368 }] };
+          }
+          return input.runs === undefined ? undefined : checkRuns(input.runs);
+        },
+      },
+    });
+    return { ...result, reads };
+  };
+  const red = [{ name: 'ci / test', conclusion: 'failure', app: { id: 15368 } }];
+
+  it('adds the failing required check to the one gone-issue advisory, once per episode', async () => {
+    const store = new MemoryWakeStore();
+    const first = await observe({ store, runs: red });
+    const text = sendsTo(first.calls, coordinator.handle).filter((call) => call.includes('--text'));
+    expect(text).toHaveLength(1);
+    // The text is URL-encoded by the native send argv.
+    expect(decodeURIComponent(text[0]?.join(' ') ?? '')).toContain('has required check ci / test failing on head');
+    expect([...store.parkedWakeEvents].filter((key) => key.startsWith('gone-issue:'))).toHaveLength(1);
+    const again = await observe({ store, runs: red });
+    expect(sends(again.calls)).toHaveLength(0);
+  });
+
+  it('keeps the plain gone-owner advisory for optional, green, stale or unreadable CI', async () => {
+    const cases: { name: string; input: Parameters<typeof observe>[0] }[] = [
+      { name: 'optional check red', input: { runs: [{ name: 'lint / extra', conclusion: 'failure' }, { name: 'ci / test', conclusion: 'success', app: { id: 15368 } }] } },
+      { name: 'wrong app identity', input: { runs: [{ name: 'ci / test', conclusion: 'failure', app: { id: 1 } }] } },
+      { name: 'stale head', input: { runs: red, sha: 'b'.repeat(40) } },
+      { name: 'unreadable check-runs', input: { runs: undefined } },
+      { name: 'unreadable policy', input: { runs: red, policy: null } },
+      { name: 'two closing PRs', input: { runs: red, pulls: [
+        { number: 77, ref: 'a', sha: head, issue }, { number: 78, ref: 'b', sha: head, issue }] } },
+    ];
+    for (const row of cases) {
+      const outcome = await observe(row.input);
+      const text = sendsTo(outcome.calls, coordinator.handle).filter((call) => call.includes('--text'));
+      expect(text, row.name).toHaveLength(1);
+      const decoded = decodeURIComponent(text[0]?.join(' ') ?? '');
+      expect(decoded, row.name).not.toContain('has required check');
+      expect(decoded, row.name).toContain('positively gone');
+    }
+  });
+
+  it('resolves required identity from the card selector and lets the newest run decide', async () => {
+    const newest = await observe({
+      requiredCi: ['ci / test'],
+      runs: [{ id: 1, name: 'ci / test', conclusion: 'failure' }, { id: 2, name: 'ci / test', conclusion: 'success' }],
+    });
+    expect(decodeURIComponent(sendsTo(newest.calls, coordinator.handle).filter((call) => call.includes('--text'))[0]?.join(' ') ?? ''))
+      .not.toContain('has required check');
+    expect(newest.reads.some((endpoint) => endpoint.includes('required_status_checks'))).toBe(false);
+    const failing = await observe({ requiredCi: ['ci / test'], runs: [{ name: 'ci / test', conclusion: 'timed_out' }] });
+    expect(decodeURIComponent(sendsTo(failing.calls, coordinator.handle).filter((call) => call.includes('--text'))[0]?.join(' ') ?? ''))
+      .toContain('has required check ci / test failing');
+  });
+});
+
+describe('Issue #2896 STOPPED projection: lost own PARKED-on-process wait', () => {
+  const fixtureManager: FleetTerminal = { ...terminals[1]!, branch: 'refs/heads/issue-2896', incarnationId: 'pid-inc' };
+  const wait = 'PARKED on process pid 4242 startticks 77';
+  const live = { state: 'live' as const, startticks: '77', namespace: 'pid:[1]' };
+
+  it('sends no STOPPED claim without an earlier matching live observation', async () => {
+    const store = new MemoryWakeStore();
+    const owned = parkFixture([{ pane: fixtureManager }]);
+    const outcome = await tick({
+      terminals: [terminals[0]!, fixtureManager], screens: { coord: 'idle', one: wait },
+      store, extra: owned.options, probePid: () => ({ state: 'absent', namespace: 'pid:[1]' }),
+    });
+    expect(JSON.stringify(sendsTo(outcome.calls, 'coord'))).not.toContain('gone or reused since an earlier matching observation');
+  });
+
+  it('keeps a live pid silent and never wakes the pane on a later absent or reused observation', async () => {
+    const store = new MemoryWakeStore();
+    const owned = parkFixture([{ pane: fixtureManager }]);
+    let seen: ReturnType<NonNullable<FleetAlarmTickOptions['probePid']>> = live;
+    const run = () => tick({
+      terminals: [terminals[0]!, fixtureManager], screens: { coord: 'idle', one: wait },
+      store, extra: owned.options, probePid: () => seen,
+    });
+    const first = await run();
+    expect(sendsTo(first.calls, 'one')).toHaveLength(0);
+    expect(store.epochs.get('one')?.liveProcess).toEqual({ pid: 4242, startticks: '77', namespace: 'pid:[1]' });
+    for (const observation of [
+      { state: 'absent' as const, namespace: 'pid:[1]' },
+      { state: 'absent' as const, namespace: 'pid:[2]' },
+      { state: 'unverified' as const },
+    ]) {
+      seen = observation;
+      expect(sendsTo((await run()).calls, 'one'), JSON.stringify(observation)).toHaveLength(0);
     }
   });
 });
