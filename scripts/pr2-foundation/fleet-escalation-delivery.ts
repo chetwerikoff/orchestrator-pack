@@ -1,12 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import type { RuntimeAdapter } from '../runtime/contracts.ts';
+import { readSelectedProjectFile } from '../orca-runtime/orchestrator-attach.ts';
 import {
   publishOperatorMessageOnce,
   type OperatorPublicationOutcome,
 } from '../lib/operator-publication.ts';
 import {
-  operatorPrimarySyncResult,
-  withCurrentOperatorPrimaryTarget,
+  resolveCoordinatorSeatIdentity,
   type OperatorPrimaryPreActionFailure,
   type OperatorPrimaryTargetFenceResult,
 } from '../lib/operator-primary-target.ts';
@@ -132,7 +133,16 @@ export interface FleetEscalationInvocationInput {
   readonly evidence: FleetReconciliationHandoff | null;
   readonly committedReadBack: boolean;
   readonly expected: FleetEscalationSchedulerIdentityV1;
-  readonly assignmentStorePath: string;
+  /**
+   * Selected project file (~/.config/orchestrator-fleet/<id>.env): the operator-supplied
+   * OPK_RUN_ID and the current ORCH_HANDLE are the only recipient authority. No local
+   * orchestrator assignment row selects or attests the target.
+   */
+  readonly selectedProjectFile: string;
+  /** Selected project's primary checkout; the recipient terminal must live there. */
+  readonly primaryRoot: string;
+  /** Native `run-show --full` coordinator of the selected Run; undefined when unreadable. */
+  readonly readRunCoordinator: (runId: string) => string | null | undefined;
   readonly selectAdapter: () => Promise<RuntimeAdapter>;
   readonly invocationId?: string;
   readonly targetTimeoutMs?: number;
@@ -384,6 +394,62 @@ export function closeFleetEscalationTargetFence(
   });
 }
 
+/**
+ * Resolve the selected project's current coordinator seat and make one bounded publication.
+ * The pair (operator-selected Run, current pin) is re-read and re-joined with native run-show
+ * immediately before the single send; this is not an atomic guard inside the handle-only send.
+ */
+function resolveAndPublish(
+  input: FleetEscalationInvocationInput,
+  adapter: RuntimeAdapter,
+  canonical: CanonicalContent,
+  markPublicationThrew: () => void,
+): OperatorPrimaryTargetFenceResult<OperatorPublicationOutcome> {
+  const fail = (reason: OperatorPrimaryPreActionFailure): OperatorPrimaryTargetFenceResult<never> =>
+    ({ ok: false, actionEntered: false, reason });
+  const timeoutMs = input.targetTimeoutMs ?? DEFAULT_FLEET_ESCALATION_TARGET_TIMEOUT_MS;
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 5_000) return fail('deadline_invalid');
+  const deadlineMs = performance.now() + timeoutMs;
+  const remaining = (): number => Math.floor(deadlineMs - performance.now());
+
+  const selectCurrent = (): { readonly handle: string } | OperatorPrimaryPreActionFailure => {
+    const selection = readSelectedProjectFile(input.selectedProjectFile);
+    if (!selection.ok || !selection.handle) return 'target_unresolved';
+    let coordinator: string | null | undefined;
+    try { coordinator = input.readRunCoordinator(selection.runId); }
+    catch { return 'runtime_unavailable'; }
+    if (coordinator === undefined) return 'runtime_unavailable';
+    if (coordinator !== selection.handle) return 'target_not_current';
+    return { handle: selection.handle };
+  };
+  const first = selectCurrent();
+  if (typeof first === 'string') return fail(first);
+  const seat = resolveCoordinatorSeatIdentity({
+    adapter, handle: first.handle, primaryRoot: input.primaryRoot, remainingMs: remaining,
+  });
+  if (!seat.ok) return fail(seat.reason);
+  const identity = seat.identity;
+  // Recheck the selected pair after the identity reads and before the single effect.
+  const again = selectCurrent();
+  if (typeof again === 'string') return fail(again);
+  if (again.handle !== first.handle) return fail('target_not_current');
+  if (remaining() <= 0) return fail('deadline_exhausted');
+
+  let publication: OperatorPublicationOutcome;
+  try {
+    publication = publishOperatorMessageOnce(adapter, {
+      route: FLEET_ESCALATION_ROUTE,
+      target: identity,
+      text: canonical.text,
+      timeoutMs: input.publicationTimeoutMs ?? DEFAULT_FLEET_ESCALATION_PUBLICATION_TIMEOUT_MS,
+    });
+  } catch {
+    markPublicationThrew();
+    publication = 'ambiguous';
+  }
+  return { ok: true, actionEntered: true, value: publication };
+}
+
 export async function runFleetEscalationDelivery(
   input: FleetEscalationInvocationInput,
 ): Promise<FleetEscalationInvocationResultV1> {
@@ -432,29 +498,7 @@ export async function runFleetEscalationDelivery(
   }
 
   let publicationThrew = false;
-  const fenced = await withCurrentOperatorPrimaryTarget(
-    {
-      file: input.assignmentStorePath,
-      adapter,
-      expectedProject: input.expected,
-      timeoutMs: input.targetTimeoutMs ?? DEFAULT_FLEET_ESCALATION_TARGET_TIMEOUT_MS,
-    },
-    (target) => {
-      let publication: OperatorPublicationOutcome;
-      try {
-        publication = publishOperatorMessageOnce(adapter, {
-          route: FLEET_ESCALATION_ROUTE,
-          target,
-          text: canonical.text,
-          timeoutMs: input.publicationTimeoutMs ?? DEFAULT_FLEET_ESCALATION_PUBLICATION_TIMEOUT_MS,
-        });
-      } catch {
-        publicationThrew = true;
-        publication = 'ambiguous';
-      }
-      return operatorPrimarySyncResult(publication);
-    },
-  );
+  const fenced = resolveAndPublish(input, adapter, canonical, () => { publicationThrew = true; });
 
   return closeFleetEscalationTargetFence(
     input.expected,

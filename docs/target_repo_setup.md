@@ -177,16 +177,23 @@ green; the automation Chrome is logged into ChatGPT; and Orca is running.
    permission to reuse the state. #2186 owns removing scheduler target
    inference from cwd/`--repo-root`.
 9. **Fleet wake.** Keep `~/.config/orchestrator-fleet/<projectId>.env` as that
-   project's `ORCH_HANDLE` pin. It is not a retired file; do not delete it.
+   project's **selected project file**. It holds the operator-supplied literal
+   `OPK_RUN_ID=<run id>` (the only Run authority; never inferred from a handle,
+   title or assignment row) and the `ORCH_HANDLE` pin that attach writes. It is
+   not a retired file; do not delete it.
    The tracked `scripts/fleet/fleet-wake@.service` template has no
    `EnvironmentFile`. Before `systemctl --user restart "fleet-wake@<projectId>.service"`,
    update the existing per-project systemd user drop-in
    (`systemctl --user edit "fleet-wake@<projectId>.service"`) so `[Service]`
    contains `EnvironmentFile=%h/.config/orchestrator-fleet/%i.env`, or update
    an already-installed equivalent, and the restarted process inherits
-   `ORCH_HANDLE` equal to the new pin. Run `systemctl --user daemon-reload`
-   when the drop-in changes. After restart, read the unit's effective
-   EnvironmentFile and the process's selected `ORCH_HANDLE`, and observe
+   the selected `OPK_RUN_ID` and `ORCH_HANDLE`. Run `systemctl --user daemon-reload`
+   when the drop-in changes. The service re-reads the file at every effect
+   boundary and delivers only to the pin that equals native
+   `orca orchestration run-show --id <run> --full` `coordinator_handle` and is one
+   live terminal in the selected primary root; an inherited `ORCH_HANDLE`, a
+   title match and an operator-primary assignment never select a coordinator.
+   After restart, read the unit's effective EnvironmentFile and observe
    file-backed coordinator behavior. An active unit or the pin file alone is
    not adoption. When that readback is missing, record `Run bound / pin written; fleet-wake adoption not verified` and repair the drop-in, reload,
    and restart. Render/install
@@ -206,11 +213,13 @@ green; the automation Chrome is logged into ChatGPT; and Orca is running.
    `tail -3 ~/.local/state/orchestrator-fleet/<projectId>.fleet-wake.log`
    must show a normal result such as `orchestrator busy`, `nothing stopped`,
    or `woke`, not `no orchestrator pane found`.
-10. **Orchestrator.** Open the agent terminal in `<primaryRoot>` and run
-   `opk-orch-primary <projectId> <terminal-handle>`. Verify
-   `operator-primary-binding show --project <projectId>` names the intended
-   assignment and that
-   `operator-primary-binding show --project orchestrator-pack` is unchanged.
+10. **Orchestrator.** Add one literal `OPK_RUN_ID=<run id>` for the existing Run
+   to the selected project file (operator adoption; attach never invents it).
+   The operator-local launcher must run
+   `scripts/opk-orch-start precheck <projectId>` from `$PACK_ROOT` before it
+   creates any seat, Run or unit, and stop on a non-zero exit. Then open the
+   agent terminal in `<primaryRoot>` and run the attach command below from it.
+   No WorkerAssignment row or operator-primary pointer is needed for delivery.
 11. **Browser-GPT smoke.** Run one standalone
     `driver.mjs --project <projectId> --new-chat` pass on a trivial artifact.
     The chat must open under the selected card's ChatGPT project URL. Machine
@@ -498,9 +507,12 @@ scope job is not enforcement and a red one must not be overridden.
 ### Coordinator Run binding is independent of worker-start
 
 **Operator-attested seat restore.** The only exception to the general/manual
-`run-use` rule below is positional `scripts/opk-orch-start attach <terminal-handle> [project-id]`
-with the existing `OPK_RUN_ID`. From the trusted pack root, enter it with the
-declared Node major (`scripts/toolchain/node-version.json`, currently 24):
+`run-use` rule below is positional `scripts/opk-orch-start attach <terminal-handle> [project-id]`.
+The Run is the single literal `OPK_RUN_ID=<run id>` in the selected project file
+`~/.config/orchestrator-fleet/<projectId>.env`; the caller's inherited `OPK_RUN_ID`
+must equal it, and the runtime-issued `ORCA_TERMINAL_HANDLE` of the invoking
+terminal must equal the requested handle. From the trusted pack root, enter it
+with the declared Node major (`scripts/toolchain/node-version.json`, currently 24):
 
 ```bash
 cd "$PACK_ROOT" && mise exec node@24 -- node --experimental-strip-types scripts/opk-orch-start attach "$TERMINAL_HANDLE" "$PROJECT_ID"
@@ -510,13 +522,25 @@ The explicit handle is the authority. Attach reads a fresh same-runtime
 `orca terminal list --json`. When that list succeeds, the requested handle is
 live, and the Run's former `coordinator_handle` is absent, it issues exactly
 one `orca orchestration run-use --id "$OPK_RUN_ID"` from that seat and requires
-`run-show` to report the same Run and the new `coordinator_handle`. A
-still-live old handle is named and refused: close that handle or attach from
-it. Absence is this one-seat operational condition, not proof the old process
-died, and it does not authorize any other `run-use`. Attach does not call
-`worker-start`, does not create a Run, Task, or Dispatch, and does not restart
-fleet-wake. Run/pin success is not service adoption: update the per-project
-drop-in so the restarted unit inherits the new pin, then read it back.
+`run-show` to report the same Run and the new `coordinator_handle`. It then
+writes only `ORCH_HANDLE` in the selected project file, keeping `OPK_RUN_ID` and
+other entries. When the Run already names the requested handle, attach repairs
+the pin without `run-use`. A still-live old handle, or a pin naming another
+still-listed terminal, is named and refused before any effect: close that
+handle or attach from it. A pin absent from the complete census is stale and
+repairable. Absence is this one-seat operational condition, not proof the old
+process died, and it does not authorize any other `run-use`. Attach does not
+call `worker-start`, does not create a Run, Task, or Dispatch, does not read or
+write a WorkerAssignment or operator-primary pointer, and does not restart
+fleet-wake. Run/pin success is not service adoption: restart the unit and read
+back its behavior. Success reports `Run bound / pin written; fleet-wake adoption not verified`.
+
+`scripts/opk-orch-start precheck [project-id]` is the read-only pre-launch
+incumbent check for the operator-local launcher. It reads the terminal census and
+`run-show --full` for the configured Run and pin only, exits non-zero when a
+live incumbent coordinator or a pin naming another listed terminal exists, and
+never calls `run-use` or writes. It does not check other Runs or seats of the
+project, nor two simultaneous starts; those remain operator-owned residuals.
 
 **Never** recover a coordinator by calling `worker-start` against the
 coordinator terminal or by bypassing `terminal_is_coordinator`. An observed
@@ -550,7 +574,9 @@ observed current handle, not a guessed or stale one. Do not create a second Run.
 
 ### Logical operator-primary pointer is separate
 
-The tracked `scripts/operator-primary-binding.ts` changes only a
+Since #2896 the pointer is **not** a coordinator-delivery authority; fleet-wake,
+scheduler escalation and attach use only the selected project file and native
+`run-show`. The tracked `scripts/operator-primary-binding.ts` changes only a
 **project-scoped logical WorkerAssignment pointer**. It cannot perform native
 `run-use`, create a terminal or reclassify a gone predecessor. Read the
 current project card and the current, same-project/repository **local**

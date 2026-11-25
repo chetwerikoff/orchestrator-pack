@@ -8,10 +8,8 @@ import {
   FileEpochAuthority,
   buildEpochCommitCore,
 } from '../lib/cutover/activation-epoch-authority.ts';
-import {
-  bindOperatorPrimary,
-  publishCurrentWorkerAssignment,
-} from '../lib/worker-assignment-store.ts';
+import { publishCurrentWorkerAssignment } from '../lib/worker-assignment-store.ts';
+import { fleetEnvFile } from '../orca-runtime/orchestrator-attach.ts';
 import type {
   RuntimeAdapter,
   RuntimeWorker,
@@ -47,14 +45,14 @@ export interface FleetEscalationProofV1 {
   readonly retryAuthority: 'none';
 }
 
-function exactWorker(): RuntimeWorker {
+function exactWorker(workspacePath: string): RuntimeWorker {
   return {
     identity: {
       runtime: 'orca',
       id: 'proof-operator',
       generation: 'proof-generation',
     },
-    workspacePath: '/proof/operator',
+    workspacePath,
     title: null,
     provenance: 'internal',
   };
@@ -154,14 +152,13 @@ export async function runFleetEscalationProof(): Promise<FleetEscalationProofV1>
       now: () => new Date('2026-08-24T00:00:00.000Z'),
     });
     if (!assignment.ok) throw new Error(`proof_assignment_failed:${assignment.reason}`);
-    const bound = await bindOperatorPrimary({
-      file: assignmentStorePath,
-      taskId: assignment.assignment.taskId,
-      bindingKey: assignment.assignment.bindingKey,
-    });
-    if (!bound.ok) throw new Error(`proof_operator_binding_failed:${bound.reason}`);
+    // The operator-selected Run and current pin: the only recipient authority; no assignment row.
+    const proofRun = 'run_proof_1260';
+    const selectedProjectFile = fleetEnvFile(process.env, projectId);
+    mkdirSync(path.dirname(selectedProjectFile), { recursive: true });
+    writeFileSync(selectedProjectFile, `OPK_RUN_ID=${proofRun}\nORCH_HANDLE=proof-operator\n`, { mode: 0o600 });
 
-    const worker = exactWorker();
+    const worker = exactWorker(primaryRoot);
     const adapter: RuntimeAdapter = {
       id: 'orca',
       readiness: () => ({ status: 'ok', value: { ready: true, workspacePath: worker.workspacePath } }),
@@ -273,7 +270,9 @@ export async function runFleetEscalationProof(): Promise<FleetEscalationProofV1>
       },
       fleetEscalation: (invocation) => runFleetEscalationDelivery({
         ...invocation,
-        assignmentStorePath,
+        selectedProjectFile,
+        primaryRoot,
+        readRunCoordinator: (runId) => (runId === proofRun ? 'proof-operator' : undefined),
         selectAdapter: async () => adapter,
         invocationId: 'fleet-escalation-proof-invocation',
       }),

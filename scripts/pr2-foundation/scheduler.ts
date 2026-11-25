@@ -6,6 +6,8 @@ import type { FoundationConfig } from './config.ts';
 import { parseFoundationConfig } from './config.ts';
 import { FileEpochAuthority } from '../lib/cutover/activation-epoch-authority.ts';
 import { resolveTargetContext, type TargetContext } from '../lib/target-context.ts';
+import { fleetEnvFile, readRunCoordinatorVia } from '../orca-runtime/orchestrator-attach.ts';
+import { defaultOrcaExecutor } from '../fleet/fleet-sweep.ts';
 import {
   requiredStatusChecksEndpoint,
   resolveRequiredCi,
@@ -872,7 +874,10 @@ export async function loadProductionBoundary(): Promise<{ boundary: SchedulerBou
   };
   const fleetEscalation: SchedulerFleetEscalation = (invocation) => runFleetEscalationDelivery({
     ...invocation,
-    assignmentStorePath,
+    // The same operator-selected Run/pin file the fleet alarm path reads, never an assignment row.
+    selectedProjectFile: fleetEnvFile(env, projectId),
+    primaryRoot: sourceRepoRoot,
+    readRunCoordinator: (runId) => readRunCoordinatorVia(defaultOrcaExecutor, runId),
     selectAdapter: () => selectRuntimeAdapter({ env }),
   });
   const orchestrationMailReconcile: NonNullable<SchedulerBoundary['orchestrationMailReconcile']> = async () =>

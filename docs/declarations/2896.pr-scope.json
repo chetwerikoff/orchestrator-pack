@@ -1,0 +1,44 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2896,
+  "declared_paths": [
+    "docs/fleet-alarm.md",
+    "docs/fleet-escalation-delivery.md",
+    "docs/target_repo_setup.md",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts",
+    "scripts/lib/operator-primary-target.ts",
+    "scripts/opk-orch-start.test.ts",
+    "scripts/orca-runtime/orchestrator-attach.ts",
+    "scripts/pr2-foundation/fleet-escalation-delivery.test.ts",
+    "scripts/pr2-foundation/fleet-escalation-delivery.ts",
+    "scripts/pr2-foundation/fleet-escalation-proof.ts",
+    "scripts/pr2-foundation/scheduler.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/fleet-alarm.md",
+    "docs/fleet-escalation-delivery.md",
+    "docs/target_repo_setup.md",
+    "scripts/fleet/fleet-sweep.test.ts",
+    "scripts/fleet/fleet-sweep.ts",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts",
+    "scripts/lib/operator-primary-target.test.ts",
+    "scripts/lib/operator-primary-target.ts",
+    "scripts/opk-orch-start",
+    "scripts/opk-orch-start.test.ts",
+    "scripts/orca-runtime/orchestrator-attach.ts",
+    "scripts/pr2-foundation/fleet-escalation-delivery.test.ts",
+    "scripts/pr2-foundation/fleet-escalation-delivery.ts",
+    "scripts/pr2-foundation/fleet-escalation-proof.ts",
+    "scripts/pr2-foundation/scheduler-assignment-lifecycle.test.ts",
+    "scripts/pr2-foundation/scheduler.ts"
+  ],
+  "source_revision": "f5b35dd65a672c59a4fd5f66d0db63bac6b79236"
+}
