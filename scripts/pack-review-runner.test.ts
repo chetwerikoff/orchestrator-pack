@@ -2650,6 +2650,8 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
         amendmentAdmission: false, reason: 'amendment_rebind_tier_mismatch',
         nextAction: expect.stringContaining('set the authoritative tier of Issue #' + issueB),
       });
+      expect(refused.nextAction).toContain('open a new PR from the same head that references Issue #' + issueB);
+      expect(refused.nextAction).not.toContain('audited review-cycle reset');
       // The prior green on the same head is replaced by an actual non-success read-back.
       expect(h.getStatus()).toBe('error');
       expect(h.writes).toEqual(['error']);

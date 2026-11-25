@@ -6493,8 +6493,9 @@ export async function maybeAdmitPackReviewBodyAmendment(
       return confirmUnreviewedBodyNonSuccess('amendment_rebind_original_unverified', undefined,
 'the settled round of Issue #' + reviewedIssueNumber
           + ' records no usable immutable body digest, so a rebind to Issue #' + issueNumber
-          + ' cannot be admitted; this is a limitation of the stored review evidence, not of the new Issue: the architect decides an audited review-cycle reset for this PR, or the PR is re-bound to Issue #'
-          + reviewedIssueNumber + ' with its own criteria amendment');
+          + ' cannot be admitted; this is a limitation of the stored review evidence, not of the new Issue: '
+          + 'open a new PR from the same head that references Issue #' + issueNumber + '; it starts a fresh ordinary review cycle bound to Issue #' + issueNumber + ', and the Issue #' + reviewedIssueNumber + ' records of this PR stay historical'
+          + '; or re-bind the PR to Issue #' + reviewedIssueNumber + ' with its own criteria amendment');
     }
     // The existing #2565 binding guard owns missing/corrupt originals; do not
     // pre-empt unrelated final-cap settlement with amendment-only requirements.
@@ -6507,7 +6508,7 @@ export async function maybeAdmitPackReviewBodyAmendment(
 'the reviewed round already belongs to an amended continuation of Issue #'
           + cycle.amendmentOrigin.closingIssueNumber + '; either re-bind the PR to Issue #'
           + cycle.amendmentOrigin.closingIssueNumber
-          + ' or the architect decides an audited review-cycle reset to review Issue #' + issueNumber);
+          + ' or ' + 'open a new PR from the same head that references Issue #' + issueNumber + '; it starts a fresh ordinary review cycle bound to Issue #' + issueNumber + ', and the Issue #' + reviewedIssueNumber + ' records of this PR stay historical');
     }
     if (nextDigest === originalDigest) {
       return confirmUnreviewedBodyNonSuccess('amendment_rebind_body_identical', undefined,
@@ -6595,7 +6596,7 @@ export async function maybeAdmitPackReviewBodyAmendment(
 'Issue #' + issueNumber + ' declares tier ' + liveTier + ' but the settled review cycle of Issue #'
         + reviewedIssueNumber + ' is tier ' + cycle.frozenTier + '; set the authoritative tier of Issue #'
         + issueNumber + ' to ' + cycle.frozenTier + ' (or re-bind the PR to Issue #' + reviewedIssueNumber
-        + '), then rerun scoped reconcile; a different tier needs the architect to decide an audited review-cycle reset');
+        + '), then rerun scoped reconcile; to keep the different tier, ' + 'open a new PR from the same head that references Issue #' + issueNumber + '; it starts a fresh ordinary review cycle bound to Issue #' + issueNumber + ', and the Issue #' + reviewedIssueNumber + ' records of this PR stay historical');
   }
   const originalImmutable = listPackReviewImmutableRecords('terminal', { storeRoot: options.storeRoot })
     .filter((entry) => entry.digest === terminal.digest
@@ -7523,7 +7524,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
               + ' is a ' + cycle.frozenTier + ' cycle whose '
               + (cycle.frozenTier === 'T1' ? 'tier' : 'persisted journal and delivered GitHub review comment evidence')
               + ' cannot admit a continuation for another Issue, so rerunning unchanged will not succeed: re-bind the PR to Issue #'
-              + reviewedIssue + ', or the architect decides an audited review-cycle reset to review Issue #' + issueNumber;
+              + reviewedIssue + ', or ' + 'open a new PR from the same head that references Issue #' + issueNumber + '; it starts a fresh ordinary review cycle bound to Issue #' + issueNumber + ', and the Issue #' + reviewedIssue + ' records of this PR stay historical';
         } else {
           bindingNextAction = 'edit the PR body so it binds exactly one Issue (one Closes #N, or one Part of #N when there is no closing reference), then rerun scoped reconcile';
         }
