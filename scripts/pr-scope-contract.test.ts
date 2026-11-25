@@ -11,6 +11,7 @@ import {
 import { evaluatePrScope } from './pr-scope-check.ts';
 import { exactClosingIssue } from './worker-smoke-run.ts';
 import { uniqueClosingIssue } from './fleet/fleet-wake.ts';
+import { resolveLinkedIssueNumber } from './lib/contract-evidence-reverify.ts';
 import { evaluateMappingPreflight, extractContractSections, collectAuthoritativeReferences } from './lib/reviewer-contract-mapping.ts';
 
 const liveIssueBody = [
@@ -162,5 +163,15 @@ describe('Issue #2900 review mapping preflight fails closed on an unbound PR bod
 
   it.each(['Closes #8', 'Part of #8'])('%j selects the Fix criteria contract of Issue 8', (body) => {
     expect(preflight(body).status).not.toBe('ambiguous_spec');
+  });
+});
+
+describe('Issue #2900 contract-evidence reverify uses the shared binding rule', () => {
+  it.each(['Closes #8\nCloses #8', 'Closes #8\nFixes #0', 'Part of #8\nPart of #9'])('%j binds no Issue', (prBody) => {
+    expect(resolveLinkedIssueNumber({ prBody })).toMatchObject({ ok: false, runOutcome: 'multiple-linked-issues' });
+  });
+
+  it.each([['Closes #8', 8], ['Part of #9', 9]] as const)('%j binds Issue %i', (prBody, issueNumber) => {
+    expect(resolveLinkedIssueNumber({ prBody })).toEqual({ ok: true, issueNumber });
   });
 });

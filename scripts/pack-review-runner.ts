@@ -6580,7 +6580,15 @@ export async function maybeAdmitPackReviewBodyAmendment(
   }
   let liveTier: PackReviewTier;
   try { liveTier = parseAuthoritativeTier(currentIssue.body, currentIssue.title); }
-  catch { return failure('amendment_tier_invalid', { binding: 'issue_criteria', detail: 'issue_criteria:tier_invalid' }); }
+  catch {
+    const tierCause = { binding: 'issue_criteria' as const, detail: 'issue_criteria:tier_invalid' };
+    if (!rebind) return failure('amendment_tier_invalid', tierCause);
+    // Observed new binding: replace the old Issue's success with a read-back non-success.
+    return confirmUnreviewedBodyNonSuccess('amendment_tier_invalid', tierCause,
+      'Issue #' + issueNumber + ' has no valid authoritative complexity tier; give it exactly one valid tier equal to the settled cycle of Issue #'
+        + reviewedIssueNumber + ' (' + cycle.frozenTier + '), or re-bind the PR to Issue #' + reviewedIssueNumber
+        + ', then rerun scoped reconcile');
+  }
   if (liveTier !== cycle.frozenTier) {
     if (!rebind) return null; // Existing upward-tier reconciliation owns that distinct case.
     return confirmUnreviewedBodyNonSuccess('amendment_rebind_tier_mismatch', undefined,

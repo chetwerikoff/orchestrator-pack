@@ -2655,6 +2655,23 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
       expect(h.writes).toEqual(['error']);
     });
 
+    it('rebind to an Issue with an invalid authoritative tier replaces the old green with a read-back non-success', async () => {
+      const f = fixture('gpt', acceptanceBody('A behavior'), true);
+      const issueB = f.issueNumber + 3;
+      const h = harness(f);
+      expect(h.getStatus()).toBe('success');
+      const refused = await maybeAdmitPackReviewBodyAmendment(h.request(
+        '<!-- source-revision: r01 -->\n```complexity-tier\ntier: T9\n```\n## Fix criteria\n- B behavior\n',
+        { fixturePrBody: `Closes #${issueB}`, fixtureIssueNumber: issueB, fixtureIssueTitle: 'Rebound Issue' },
+      ), admitOptions(f));
+      expect(refused).toMatchObject({
+        amendmentAdmission: false, reason: 'amendment_tier_invalid',
+        nextAction: expect.stringContaining('valid authoritative complexity tier'),
+      });
+      expect(h.getStatus()).toBe('error');
+      expect(h.writes).toEqual(['error']);
+    });
+
     it('an unresolvable A snapshot still admits the rebind on the digest A recorded (fresh ordinary cycle for B)', async () => {
       const bodyA = acceptanceBody('A behavior');
       const f = fixture('gpt', bodyA, true);
