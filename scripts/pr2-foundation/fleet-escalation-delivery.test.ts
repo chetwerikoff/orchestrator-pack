@@ -9,10 +9,7 @@ import {
   type OperatorPrimaryTargetFenceResult,
 } from '../lib/operator-primary-target.ts';
 import type { OperatorPublicationOutcome } from '../lib/operator-publication.ts';
-import {
-  bindOperatorPrimary,
-  publishCurrentWorkerAssignment,
-} from '../lib/worker-assignment-store.ts';
+import { fleetEnvFile } from '../orca-runtime/orchestrator-attach.ts';
 import type {
   RuntimeAdapter,
   RuntimeDispatchResult,
@@ -189,10 +186,13 @@ function syntheticEscalation(
   };
 }
 
+/** Selected primary root of the current fixture; the coordinator terminal lives there. */
+let fixturePrimaryRoot = '/test/operator-1260';
+
 function worker(): RuntimeWorker {
   return {
     identity: { runtime: 'orca', id: 'operator-1260', generation: 'generation-1260' },
-    workspacePath: '/test/operator-1260',
+    workspacePath: fixturePrimaryRoot,
     title: null,
     provenance: 'internal',
   };
@@ -288,34 +288,32 @@ async function configureProjectContext(root: string): Promise<void> {
   }));
 }
 
-async function operatorAssignment(root: string): Promise<string> {
+/** Operator-selected Run + pin: the only recipient authority (no assignment row). */
+interface SelectedPair {
+  readonly selectedProjectFile: string;
+  readonly primaryRoot: string;
+  readonly readRunCoordinator: (runId: string) => string | null | undefined;
+}
+
+async function operatorAssignment(root: string, input: { pin?: string; runCoordinator?: string | null } = {}): Promise<SelectedPair> {
   await configureProjectContext(root);
-  const file = path.join(root, projectId, 'worker-assignments.json');
-  const published = await publishCurrentWorkerAssignment({
-    file,
-    projectId,
-    repository,
-    issueNumber: 1260,
-    taskId: 'operator-task-1260',
-    kind: 'local',
-    provider: 'orca',
-    bindingKey: 'binding-1260',
-    role: 'orchestrator',
-    now: () => new Date('2026-08-24T00:00:00.000Z'),
-  });
-  if (!published.ok) throw new Error(published.reason);
-  const bound = await bindOperatorPrimary({
-    file,
-    taskId: published.assignment.taskId,
-    bindingKey: published.assignment.bindingKey,
-  });
-  if (!bound.ok) throw new Error(bound.reason);
-  return file;
+  const primaryRoot = path.join(root, 'primary');
+  fixturePrimaryRoot = primaryRoot;
+  const selectedProjectFile = fleetEnvFile(process.env, projectId);
+  mkdirSync(path.dirname(selectedProjectFile), { recursive: true });
+  const pin = input.pin ?? 'operator-1260';
+  writeFileSync(selectedProjectFile, `OPK_RUN_ID=run_1260\nORCH_HANDLE=${pin}\n`, { mode: 0o600 });
+  const coordinator = input.runCoordinator === undefined ? pin : input.runCoordinator;
+  return {
+    selectedProjectFile,
+    primaryRoot,
+    readRunCoordinator: (runId) => (runId === 'run_1260' ? coordinator : undefined),
+  };
 }
 
 function invocation(
   evidence: FleetReconciliationHandoff | null,
-  assignmentStorePath: string,
+  pair: SelectedPair,
   adapter: RuntimeAdapter,
   tickSequence = 1,
   invocationId = 'invocation-1260',
@@ -324,7 +322,7 @@ function invocation(
     evidence,
     committedReadBack: evidence !== null,
     expected: expected(tickSequence),
-    assignmentStorePath,
+    ...pair,
     selectAdapter: async () => adapter,
     invocationId,
   } as const;
@@ -332,7 +330,7 @@ function invocation(
 
 function schedulerEscalationBoundary(
   root: string,
-  assignmentStorePath: string,
+  pair: SelectedPair,
   adapter: RuntimeAdapter,
   onEscalation?: () => void,
 ): SchedulerBoundary {
@@ -365,7 +363,7 @@ function schedulerEscalationBoundary(
       onEscalation?.();
       return runFleetEscalationDelivery({
         ...input,
-        assignmentStorePath,
+        ...pair,
         selectAdapter: async () => adapter,
       });
     },
@@ -457,7 +455,9 @@ describe('fleet escalation delivery', () => {
         evidence,
         committedReadBack: true,
         expected: expected(tickSequence),
-        assignmentStorePath: path.join(root, 'unused-assignments.json'),
+        selectedProjectFile: path.join(root, 'unused.env'),
+        primaryRoot: path.join(root, 'primary'),
+        readRunCoordinator: () => undefined,
         selectAdapter: async () => {
           adapterSelections += 1;
           return adapterFixture().adapter;
@@ -490,7 +490,9 @@ describe('fleet escalation delivery', () => {
     for (const row of cases) {
       const result = await runFleetEscalationDelivery({
         ...row,
-        assignmentStorePath: path.join(root, 'unused-assignments.json'),
+        selectedProjectFile: path.join(root, 'unused.env'),
+        primaryRoot: path.join(root, 'primary'),
+        readRunCoordinator: () => undefined,
         selectAdapter,
         invocationId: 'invalid-evidence',
       });
@@ -597,19 +599,37 @@ describe('fleet escalation delivery', () => {
     }
   });
 
-  it('uses the real target producer to refuse an absent binding before publication', async () => {
+  it('delivers with zero WorkerAssignment rows when the selected file, Run pin and terminal agree (#2896)', async () => {
     const root = tempRoot();
-    await configureProjectContext(root);
+    const pair = await operatorAssignment(root);
     const fixture = adapterFixture();
-    const result = await runFleetEscalationDelivery(invocation(
-      handoff(root),
-      path.join(root, projectId, 'absent-worker-assignments.json'),
-      fixture.adapter,
-    ));
+    const result = await runFleetEscalationDelivery(invocation(handoff(root), pair, fixture.adapter));
+    expect(result.publication).toBe('submitted');
+    expect(result.attemptCount).toBe(1);
+    expect(fixture.calls.dispatch).toBe(1);
+  });
+
+  it.each([
+    ['absent selected file', 'absent', 'target_unresolved'],
+    ['pin differs from the native Run coordinator', 'mismatch', 'target_not_current'],
+    ['native run-show unreadable', 'unreadable', 'runtime_unavailable'],
+    ['pin names a terminal outside the selected primary root', 'foreign', 'target_not_current'],
+    ['pin names no live terminal', 'gone', 'target_not_current'],
+  ] as const)('refuses before publication: %s', async (_name, mode, diagnostic) => {
+    const root = tempRoot();
+    const pair = await operatorAssignment(root, mode === 'mismatch' ? { runCoordinator: 'other-coordinator' } : {});
+    if (mode === 'foreign') fixturePrimaryRoot = path.join(root, 'elsewhere');
+    const fixture = adapterFixture();
+    const base = invocation(handoff(root), pair, fixture.adapter);
+    const input = mode === 'unreadable' ? { ...base, readRunCoordinator: () => undefined } : base;
+    let adapter = fixture.adapter;
+    if (mode === 'absent') rmSync(pair.selectedProjectFile);
+    if (mode === 'gone') adapter = { ...fixture.adapter, findWorkerById: () => ({ status: 'ok', value: null }) };
+    const result = await runFleetEscalationDelivery({ ...input, selectAdapter: async () => adapter });
     expect(result.decision).toBe('invalid_target');
     expect(result.publication).toBe('not_attempted');
     expect(result.attemptCount).toBe(0);
-    expect(result.diagnostics).toContain('binding_absent');
+    expect(result.diagnostics).toContain(diagnostic);
     expect(fixture.calls.dispatch).toBe(0);
   });
 

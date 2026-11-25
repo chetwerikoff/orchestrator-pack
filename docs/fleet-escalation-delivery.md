@@ -28,17 +28,17 @@ The canonical digest domain deliberately excludes the S3 invocation id, handoff 
 
 ## Exact operator target
 
-S3 does not choose a target. The sole target authority is the landed #1532 producer `withCurrentOperatorPrimaryTarget(...)` with `operatorPrimarySyncResult(...)`.
+S3 does not choose a target. Since #2896 the sole target authority is the operator-selected project file `~/.config/orchestrator-fleet/<projectId>.env` (literal `OPK_RUN_ID` plus the `ORCH_HANDLE` pin that attach writes), read fresh at the effect boundary. The pin is valid only when it equals native `run-show --id <run> --full` `run.coordinator_handle`. No WorkerAssignment row or operator-primary pointer is read.
 
-That producer performs the current logical `operator-primary` binding -> exact current local `WorkerAssignment` -> registered adapter `resolveAssignmentWorker(...)` -> immediate exact `findWorker(...)` / `sameRuntimeWorker(...)` snapshot proof while the PACK logical store lock is held. The runtime identity is available only inside the admitted synchronous action.
+S3 then resolves the pin to one real `RuntimeWorkerIdentity` through the registered adapter `findWorkerById(...)`, requires the worker's `workspacePath` to equal the selected primary root, exact-revalidates it with `findWorker(...)` / `sameRuntimeWorker(...)`, rechecks the selected pair, and makes exactly one `publishOperatorMessageOnce(...)` call. This is not an atomic guard: a remap between the final recheck and the native send is a residual.
 
-All closed pre-action producer failures remain zero-attempt `invalid_target` results:
+All closed pre-action failures remain zero-attempt `invalid_target` results (the legacy binding names stay reserved in the closed set):
 
-`binding_absent`, `binding_stale`, `assignment_untrusted`, `remote_not_applicable`, `runtime_unavailable`, `target_unresolved`, `target_not_current`, `binding_store_busy`, `binding_fence_failed`, `deadline_invalid`, and `deadline_exhausted`.
+`target_unresolved` (absent, unreadable or malformed selected file, or no pin), `target_not_current` (pin differs from the Run coordinator, no unique live terminal, or terminal outside the primary root), `runtime_unavailable` (adapter or `run-show` unreadable), and the retained `binding_absent`, `binding_stale`, `assignment_untrusted`, `remote_not_applicable`, `binding_store_busy`, `binding_fence_failed`, `deadline_invalid`, and `deadline_exhausted`.
 
 There is no fallback to the S2 worker, handoff metadata, first runtime match, title/path/PID/pane/session heuristics, cached runtime identity, or alternate route.
 
-The current machine-local `operator-primary` designation is runtime state, not repository history. Repository adoption of #1532 does not itself prove that a live designation is present on a particular host; each S3 invocation resolves the current state through the producer above.
+The selected project file and the native Run coordinator are machine-local runtime state, not repository history. The operator must add the literal `OPK_RUN_ID` once; each S3 invocation resolves the current state fresh as described above.
 
 ## Publication truth
 

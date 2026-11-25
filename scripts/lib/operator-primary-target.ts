@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import {
   sameRuntimeWorker,
@@ -58,6 +59,42 @@ export type OperatorPrimaryTargetFenceResult<T> =
     };
 
 type LockedTargetResult<T> = OperatorPrimaryTargetFenceResult<T>;
+
+/**
+ * Resolve a coordinator pin to one exact current runtime identity (Issue #2896): the adapter row
+ * for the handle must live at the selected primary root and survive an immediate exact re-find.
+ * No WorkerAssignment is read; the caller owns the selected-file/Run join and the single effect.
+ */
+export function resolveCoordinatorSeatIdentity(input: {
+  readonly adapter: RuntimeAdapter;
+  readonly handle: string;
+  readonly primaryRoot: string;
+  /** Milliseconds left in the caller's deadline; zero or less exhausts it. */
+  readonly remainingMs: () => number;
+}): { readonly ok: true; readonly identity: RuntimeWorkerIdentity }
+  | { readonly ok: false; readonly reason: OperatorPrimaryPreActionFailure } {
+  const fail = (reason: OperatorPrimaryPreActionFailure) => ({ ok: false as const, reason });
+  const samePrimaryRoot = (left: string, right: string): boolean => {
+    try { return realpathSync(left) === realpathSync(right); } catch { return false; }
+  };
+  if (input.remainingMs() <= 0) return fail('deadline_exhausted');
+  let found: ReturnType<RuntimeAdapter['findWorkerById']>;
+  try { found = input.adapter.findWorkerById(input.handle, { timeoutMs: input.remainingMs() }); }
+  catch { return fail('runtime_unavailable'); }
+  if (found.status !== 'ok') return fail('runtime_unavailable');
+  const worker = found.value;
+  const identity = worker?.identity;
+  if (!worker || !validRuntimeIdentity(identity) || identity.id !== input.handle
+    || !samePrimaryRoot(worker.workspacePath, input.primaryRoot)) return fail('target_not_current');
+  if (input.remainingMs() <= 0) return fail('deadline_exhausted');
+  let current: ReturnType<RuntimeAdapter['findWorker']>;
+  try { current = input.adapter.findWorker(identity, { timeoutMs: input.remainingMs() }); }
+  catch { return fail('runtime_unavailable'); }
+  if (current.status !== 'ok') return fail('runtime_unavailable');
+  if (!current.value || !validRuntimeIdentity(current.value.identity)
+    || !sameRuntimeWorker(current.value.identity, identity)) return fail('target_not_current');
+  return { ok: true, identity };
+}
 
 function remainingBudget(deadlineMs: number): number {
   return Math.floor(deadlineMs - performance.now());
