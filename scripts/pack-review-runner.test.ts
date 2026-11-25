@@ -4235,39 +4235,23 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(listPackReviewRuns(f.options)).toHaveLength(runsBefore);
   });
 
-  function recordPublishedSettlement(f: { options: { storeRoot: string }; run: { id: string } }, sha: string) {
+  it('Issue #2897: a legacy ancestry-only success receipt on a changed fix head is not clean-review proof', async () => {
+    const f = finalCapDeltaBoundCase('linear', 'clean');
+    for (const run of listPackReviewRuns(f.options)) {
+      if (run.finalCapDelta) rmSync(join(f.options.storeRoot, 'runs', `${run.id}.json`), { force: true });
+    }
     const file = join(f.options.storeRoot, 'authority', `pr-${prNumber}.json`);
     const doc = JSON.parse(readFileSync(file, 'utf8'));
-    doc.currentHeadSha = sha;
     doc.publication = {
-      headSha: sha, terminalRunId: f.run.id, status: 'succeeded',
+      headSha: f.g.h3, terminalRunId: f.run.id, status: 'succeeded',
       publicationDigest: 'a'.repeat(64), recordedAtUtc: new Date().toISOString(),
     };
     writeFileSync(file, JSON.stringify(doc));
-  }
-
-  it('Issue #2897: a pack-published settlement at the exact current head is reused without a delta record or review', async () => {
-    const f = finalCapDeltaBoundCase('linear', 'clean');
-    for (const run of listPackReviewRuns(f.options)) {
-      if (run.finalCapDelta) rmSync(join(f.options.storeRoot, 'runs', `${run.id}.json`), { force: true });
-    }
-    expect(listPackReviewRuns(f.options).some((run) => run.finalCapDelta)).toBe(false);
-    recordPublishedSettlement(f, f.g.h3);
-    const runsBefore = listPackReviewRuns(f.options).length;
     const result = await reconcileStalePackReviewRuns(f.input);
-    expect(result.results.find((entry) => entry.headSha === f.g.h3), JSON.stringify(result)).toMatchObject({ settled: true });
-    expect(f.claim).not.toHaveBeenCalled();
-    expect(listPackReviewRuns(f.options)).toHaveLength(runsBefore);
-  });
-
-  it('Issue #2897: without a published settlement the same graph with no delta record is not reused', async () => {
-    const f = finalCapDeltaBoundCase('linear', 'clean');
-    for (const run of listPackReviewRuns(f.options)) {
-      if (run.finalCapDelta) rmSync(join(f.options.storeRoot, 'runs', `${run.id}.json`), { force: true });
-    }
-    const result = await reconcileStalePackReviewRuns(f.input);
-    expect(result.results.find((entry) => entry.headSha === f.g.h3)?.reason).not.toBe('final_cap_settled_head_reused');
-    expect(result.results.find((entry) => entry.headSha === f.g.h3)?.settled).not.toBe(true);
+    const row = result.results.find((entry) => entry.headSha === f.g.h3);
+    expect(row?.reason).not.toBe('final_cap_settled_head_reused');
+    expect(row?.reason).not.toBe('final_cap_descendant_settled');
+    expect(row?.settled).not.toBe(true);
   });
 
   it('Issue #2897: a head that is not a descendant of the settled head still refuses with the frontier error', async () => {

@@ -6839,8 +6839,6 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
   issueDigest: string; targetSha: string;
   /** Already accepted, rechecked same-head Issue scope-only disposition. */
   verifiedScopeCorrection?: boolean;
-  /** Head of this original terminal's pack-published success, when it is the current head. */
-  settledHeadSha?: string;
 }): Promise<FinalCapDeltaOutcome> {
   const refused = (reason: string): FinalCapDeltaOutcome => ({ state: 'unverified', reason });
   const original = opts.original;
@@ -6942,23 +6940,10 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
   // delta (`lastComplete`), else the reviewed H1 itself. T === S needs no
   // ancestry proof; a different T carries only as a proven clean selected-base
   // merge descendant of S whose PR patch-id equals S's.
-  // S is the authenticated settled head: the last completed delta, else the head
-  // the pack itself published success for under this original terminal, else H1.
-  // A published settlement at exactly T has already resolved the original findings;
-  // the ordinary delta fallthrough below keeps the untouched frontier and context.
-  const publishedSettled = opts.settledHeadSha?.toLowerCase() === opts.targetSha.toLowerCase()
-    && !lastComplete;
-  const settledHead = publishedSettled ? opts.targetSha : frontier;
-  const carriedUnresolved = publishedSettled ? [] : unresolved;
-  if (settledHead.toLowerCase() === opts.targetSha.toLowerCase()) {
-    // No completed delta record can exist for T here (that case returned above).
-    if (carriedUnresolved.length && opts.verifiedScopeCorrection !== true) {
-      return { state: 'findings', reason: 'final_cap_pure_merge_original_findings_still_unresolved',
-        fromSha: settledHead, zeroCall: true };
-    }
-    return { state: 'clean', reason: 'final_cap_settled_head_reused',
-      fromSha: settledHead, zeroCall: true };
-  }
+  // S is the authenticated settled head: the last completed delta record, else
+  // the reviewed H1. A status publication alone never authenticates a clean S.
+  const settledHead = frontier;
+  const carriedUnresolved = unresolved;
   if (!await ancestry(settledHead, opts.targetSha)) {
     return refused('final_cap_delta_frontier_not_ancestor');
   }
@@ -8003,9 +7988,6 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         original: priorRun, originalCycleId: authority.cycle!.cycleId,
         issueNumber: verifiedFinalIssue.issueNumber, issueDigest: verifiedFinalIssue.digest,
         targetSha: authority.currentHeadSha,
-        settledHeadSha: authority.publication?.status === 'succeeded'
-          && authority.publication.terminalRunId === priorRun.id
-          ? authority.publication.headSha : undefined,
         verifiedScopeCorrection: verifiedScopeCorrection
           || (completedFinalFindings
             && authority.cycle?.settlementKind === 'same_head_issue_resolution'
