@@ -506,15 +506,16 @@ function persistState(
   return next;
 }
 
-// An election writes ambiguous before POST, without lastError. Only a
-// completed failed attempt can be released by a successful absence readback.
-// Fence the release to the attempt observed before the asynchronous lookup.
-function recordAbsentFailedComment(
+// Fence failure/absence writes to the election observed before readback.
+// A competing caller may have adopted the COMMENT or moved to a later attempt.
+function recordFailedCommentObservation(
   runId: string,
   state: DurableGithubCommentReviewReconciliation,
   options: PackReviewStoreOptions,
+  postOutcome: 'ambiguous' | 'definitely_rejected',
+  lastError: string,
 ): boolean {
-  if (state.phase !== 'prepared' || state.postOutcome !== 'ambiguous' || !state.lastError) return false;
+  if (state.phase !== 'prepared' || state.postOutcome !== 'ambiguous') return false;
   return updatePackReviewRunIf(runId, (records) => {
     const stored = records.find((run) => run.id === runId);
     const prior = stored && normalizedState(stored);
@@ -524,7 +525,7 @@ function recordAbsentFailedComment(
       && prior.updatedAtUtc === state.updatedAtUtc && prior.lastError === state.lastError;
   }, {
     githubReviewReconciliation: {
-      ...state, postOutcome: 'definitely_rejected', updatedAtUtc: new Date().toISOString(),
+      ...state, postOutcome, lastError, updatedAtUtc: new Date().toISOString(),
     } as DurableGithubCommentReviewReconciliation,
   }, options) !== null;
 }
@@ -623,8 +624,11 @@ export async function reconcileGithubCommentReview(
         const message = lookupError
           ? `ambiguous POST recovery lookup failed: ${describeError(lookupError)}; observe the original run ${current.id} and retry readback`
           : `GitHub COMMENT POST outcome remains ambiguous for ${current.id}; accepted review is not yet observable; observe the original run and retry readback without reposting`;
-        if (!lookupError && !lostElection
-          && recordAbsentFailedComment(current.id, beforeLookup, storeOptions)) {
+        // An election is ambiguous before POST completes. Without a persisted
+        // failure, an empty list cannot release another caller's in-flight POST.
+        if (!lookupError && !lostElection && beforeLookup.lastError
+          && recordFailedCommentObservation(current.id, beforeLookup, storeOptions,
+            'definitely_rejected', beforeLookup.lastError)) {
           throw new Error(`GitHub COMMENT POST was not observed for ${current.id}; resume the original run to post the stored body`);
         }
         const latest = normalizedState(getPackReviewRun(current.id, storeOptions) ?? current);
@@ -648,21 +652,20 @@ export async function reconcileGithubCommentReview(
         });
       } catch (postError) {
         const postOutcome = classifyPostError(postError);
-        state = persistState(current.id, {
-          ...state,
-          postOutcome,
-          lastError: describeError(postError),
-        }, storeOptions);
-        if (postOutcome === 'definitely_rejected') throw postError;
+        if (postOutcome === 'definitely_rejected') {
+          recordFailedCommentObservation(current.id, state, storeOptions, postOutcome, describeError(postError));
+          throw postError;
+        }
+        // Keep the election fenced until this POST's own readback settles.
+        // Publish failure evidence only when there is no remaining in-flight
+        // observation that could overwrite a later election.
 
         let reviews: GithubReviewSummary[];
         try {
           reviews = await options.transport.listReviews();
         } catch (listError) {
-          state = persistState(current.id, {
-            ...state,
-            lastError: `${describeError(postError)}; recovery lookup failed: ${describeError(listError)}`,
-          }, storeOptions);
+          recordFailedCommentObservation(current.id, state, storeOptions, 'ambiguous',
+            `${describeError(postError)}; recovery lookup failed: ${describeError(listError)}`);
           throw postError;
         }
 
@@ -670,14 +673,13 @@ export async function reconcileGithubCommentReview(
         try {
           observed = findUniquePostedComment(reviews, state.actorLogin, current, commentBody);
         } catch (observationError) {
-          state = persistState(current.id, {
-            ...state,
-            lastError: `${describeError(postError)}; ${describeError(observationError)}`,
-          }, storeOptions);
+          recordFailedCommentObservation(current.id, state, storeOptions, 'ambiguous',
+            `${describeError(postError)}; ${describeError(observationError)}`);
           throw observationError;
         }
         if (!observed) {
-          recordAbsentFailedComment(current.id, state, storeOptions);
+          recordFailedCommentObservation(current.id, state, storeOptions,
+            'definitely_rejected', describeError(postError));
           throw postError;
         }
         posted = { id: observed.id, url: observed.url };
