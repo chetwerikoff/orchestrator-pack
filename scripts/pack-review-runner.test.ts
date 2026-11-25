@@ -4235,6 +4235,41 @@ describe('Issue #2428 production scoped same-head Issue resolution', () => {
     expect(listPackReviewRuns(f.options)).toHaveLength(runsBefore);
   });
 
+  function recordPublishedSettlement(f: { options: { storeRoot: string }; run: { id: string } }, sha: string) {
+    const file = join(f.options.storeRoot, 'authority', `pr-${prNumber}.json`);
+    const doc = JSON.parse(readFileSync(file, 'utf8'));
+    doc.currentHeadSha = sha;
+    doc.publication = {
+      headSha: sha, terminalRunId: f.run.id, status: 'succeeded',
+      publicationDigest: 'a'.repeat(64), recordedAtUtc: new Date().toISOString(),
+    };
+    writeFileSync(file, JSON.stringify(doc));
+  }
+
+  it('Issue #2897: a pack-published settlement at the exact current head is reused without a delta record or review', async () => {
+    const f = finalCapDeltaBoundCase('linear', 'clean');
+    for (const run of listPackReviewRuns(f.options)) {
+      if (run.finalCapDelta) rmSync(join(f.options.storeRoot, 'runs', `${run.id}.json`), { force: true });
+    }
+    expect(listPackReviewRuns(f.options).some((run) => run.finalCapDelta)).toBe(false);
+    recordPublishedSettlement(f, f.g.h3);
+    const runsBefore = listPackReviewRuns(f.options).length;
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results.find((entry) => entry.headSha === f.g.h3), JSON.stringify(result)).toMatchObject({ settled: true });
+    expect(f.claim).not.toHaveBeenCalled();
+    expect(listPackReviewRuns(f.options)).toHaveLength(runsBefore);
+  });
+
+  it('Issue #2897: without a published settlement the same graph with no delta record is not reused', async () => {
+    const f = finalCapDeltaBoundCase('linear', 'clean');
+    for (const run of listPackReviewRuns(f.options)) {
+      if (run.finalCapDelta) rmSync(join(f.options.storeRoot, 'runs', `${run.id}.json`), { force: true });
+    }
+    const result = await reconcileStalePackReviewRuns(f.input);
+    expect(result.results.find((entry) => entry.headSha === f.g.h3)?.reason).not.toBe('final_cap_settled_head_reused');
+    expect(result.results.find((entry) => entry.headSha === f.g.h3)?.settled).not.toBe(true);
+  });
+
   it('Issue #2897: a head that is not a descendant of the settled head still refuses with the frontier error', async () => {
     const f = finalCapDeltaBoundCase('linear', 'clean');
     const g = f.g;
@@ -6726,9 +6761,11 @@ describe('Issue #2576 owned worktree lifecycle with real disposable Git', () => 
     }]);
   });
 
-  it('Issue #2897: an exhausted missing-result retry keeps the valid source and never starts a whole-round replacement', async () => {
+  it.each([
+    ['the same missing-result class', 289702, { stdout: '', exitCode: 1 }],
+    ['a different non-success terminal class', 289703, { stdout: 'not a verdict', exitCode: 0 }],
+  ] as const)('Issue #2897: an exhausted missing-result retry ending in %s keeps the valid source and never starts a whole-round replacement', async (_name, prNumber, replacement) => {
     const f = realGitFixture();
-    const prNumber = 289702;
     process.env.PACK_REVIEWER = 'gpt';
     process.env.PACK_REVIEW_BOUND_REVIEWER = 'gpt';
     process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
@@ -6760,12 +6797,14 @@ describe('Issue #2576 owned worktree lifecycle with real disposable Git', () => 
     await startPackReview({
       ...input(f, prNumber), claimMode: 'acquire', fixtureGptAttemptObserver: observer,
       fixtureAfterGptInvocationBound: ({ slotId }) => { launched.push(slotId); },
-      fixtureReviewBySourceSlot: { [lostSlot]: [{ stdout: '', exitCode: 1 }] },
+      fixtureReviewBySourceSlot: { [lostSlot]: [{ ...replacement }] },
     });
     expect(launched).toEqual([lostSlot]);
     const spent = getPackReviewRun(runId, { projectId, storeRoot: f.storeRoot })!;
     const spentSlot = spent.reviewRound!.sourceSlots.find((slot) => slot.slotId === lostSlot)!;
     expect(spentSlot.attemptOrdinal).toBe(2);
+    expect(spentSlot.attemptHistory?.[0]?.terminalClass).toBe('possible_delivery/missing_result');
+    if (_name.startsWith('a different')) expect(spentSlot.terminalClass).not.toBe('possible_delivery/missing_result');
     deadOwner();
     const runsBefore = listPackReviewRuns({ projectId, storeRoot: f.storeRoot }).length;
     const again = await startPackReview({

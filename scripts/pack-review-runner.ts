@@ -2663,27 +2663,40 @@ function scrubbedForeignOwner(marker: string): string {
  * Returns the slot id, or undefined when the shape does not match (including
  * after the single retry was used: the slot then carries attempt history).
  */
+const MISSING_RESULT_CLASS = 'possible_delivery/missing_result';
+
+/**
+ * Recognizes the retained partial from its shape: one valid source plus one
+ * other slot that is either a never-retried terminal missing_result slot or a
+ * slot whose attempt history already records the spent missing_result attempt,
+ * whatever its current lifecycle or terminal class.
+ */
 function gptMissingResultPartialSlot(run: PackReviewRunRecord): PackReviewSourceSlotRecord | undefined {
   const round = run.reviewRound;
   if (!round || round.reviewer !== 'gpt' || round.cardinality !== 2
       || round.settledSourceCount !== undefined || round.sourceSlots.length !== 2
       || hasPersistedPackReviewVerdict(run)) return undefined;
-  const complete = round.sourceSlots.filter((slot) => slot.lifecycle === 'terminal'
+  const isComplete = (slot: PackReviewSourceSlotRecord): boolean => slot.lifecycle === 'terminal'
     && (slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings')
-    && slot.payload !== undefined);
-  const missing = round.sourceSlots.filter((slot) => slot.lifecycle === 'terminal'
-    && slot.terminalClass === 'possible_delivery/missing_result');
-  return complete.length === 1 && missing.length === 1 ? missing[0] : undefined;
+    && slot.payload !== undefined;
+  const complete = round.sourceSlots.filter(isComplete);
+  const other = round.sourceSlots.filter((slot) => !isComplete(slot));
+  if (complete.length !== 1 || other.length !== 1) return undefined;
+  const slot = other[0]!;
+  const unspent = slot.lifecycle === 'terminal' && slot.terminalClass === MISSING_RESULT_CLASS;
+  const spent = (slot.attemptHistory ?? []).some((entry) => entry.terminalClass === MISSING_RESULT_CLASS);
+  return unspent || spent ? slot : undefined;
 }
 
 /**
- * Recognition of the partial shape is separate from eligibility to spend its
- * one retry: an exhausted partial keeps its valid source and stays on the
- * incumbent recovery route; it is never whole-round replacement history.
+ * Eligibility to spend the single retry is separate from recognition: an
+ * exhausted partial keeps its valid source, stays on the incumbent recovery
+ * route and never launches again or becomes whole-round replacement history.
  */
 function gptMissingResultRetrySlotId(run: PackReviewRunRecord): string | undefined {
   const slot = gptMissingResultPartialSlot(run);
-  if (!slot || !slot.invocationId || slot.attemptOrdinal !== 1
+  if (!slot || !slot.invocationId || slot.lifecycle !== 'terminal'
+      || slot.terminalClass !== MISSING_RESULT_CLASS || slot.attemptOrdinal !== 1
       || (slot.attemptHistory?.length ?? 0) !== 0) return undefined;
   return slot.slotId;
 }
@@ -2866,7 +2879,7 @@ export async function observeGptPackReviewAttempt(
         ...(elapsedMs >= GPT_REPLACEMENT_GENERATION_MAX_MS ? { generationAgeCeilingExceeded: true } : {}) });
       continue;
     }
-    if (generation !== false) { unavailable(elapsedMs); continue; }
+    if (generation !== false) { rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId, elapsedMs }); continue; }
     const nodes = Array.isArray(snapshot.nodes) ? snapshot.nodes : [];
     const hasReply = nodes.some((rawNode) => {
       if (!rawNode || typeof rawNode !== 'object' || Array.isArray(rawNode)) return false;
@@ -6826,6 +6839,8 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
   issueDigest: string; targetSha: string;
   /** Already accepted, rechecked same-head Issue scope-only disposition. */
   verifiedScopeCorrection?: boolean;
+  /** Head of this original terminal's pack-published success, when it is the current head. */
+  settledHeadSha?: string;
 }): Promise<FinalCapDeltaOutcome> {
   const refused = (reason: string): FinalCapDeltaOutcome => ({ state: 'unverified', reason });
   const original = opts.original;
@@ -6927,10 +6942,17 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
   // delta (`lastComplete`), else the reviewed H1 itself. T === S needs no
   // ancestry proof; a different T carries only as a proven clean selected-base
   // merge descendant of S whose PR patch-id equals S's.
-  const settledHead = frontier;
-  if (settledHead === opts.targetSha) {
+  // S is the authenticated settled head: the last completed delta, else the head
+  // the pack itself published success for under this original terminal, else H1.
+  // A published settlement at exactly T has already resolved the original findings;
+  // the ordinary delta fallthrough below keeps the untouched frontier and context.
+  const publishedSettled = opts.settledHeadSha?.toLowerCase() === opts.targetSha.toLowerCase()
+    && !lastComplete;
+  const settledHead = publishedSettled ? opts.targetSha : frontier;
+  const carriedUnresolved = publishedSettled ? [] : unresolved;
+  if (settledHead.toLowerCase() === opts.targetSha.toLowerCase()) {
     // No completed delta record can exist for T here (that case returned above).
-    if (unresolved.length && opts.verifiedScopeCorrection !== true) {
+    if (carriedUnresolved.length && opts.verifiedScopeCorrection !== true) {
       return { state: 'findings', reason: 'final_cap_pure_merge_original_findings_still_unresolved',
         fromSha: settledHead, zeroCall: true };
     }
@@ -6954,7 +6976,7 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
     // not dispose of findings from any subsequent completed delta reviewer.
     // Ordinary F..T reviews still receive original findings as context.
     const originalDispositionResolved = opts.verifiedScopeCorrection === true && !lastComplete;
-    if (unresolved.length && !originalDispositionResolved) {
+    if (carriedUnresolved.length && !originalDispositionResolved) {
       return { state: 'findings', reason: 'final_cap_pure_merge_original_findings_still_unresolved',
         fromSha: settledHead, zeroCall: true };
     }
@@ -7941,7 +7963,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       } catch (error) {
         return { prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true, settled: false,
           reason: 'same_head_resolution_unproven', detail: describeError(error),
-          nextAction: 'verify the original exact-run sources, canonical terminal REVIEW ID/timestamp, frozen Issue digest, corrected REST Issue scope, and one authorized post-terminal disposition COMMENT; recheck current-head CI and rerun scoped exact-head reconcile. Only a real code fix belongs on a strict descendant',
+          nextAction: 'verify the original exact-run sources, canonical terminal REVIEW, frozen Issue digest and the live Issue body (scope-only allowed-roots additions covering the actual PR paths); recheck current-head CI and rerun scoped exact-head reconcile. Only a real code fix belongs on a strict descendant',
           architectDeferRoute: architectDeferNextAction(prNumber, reviewedHeadSha,
             soleBlockingQualityFindingCode(priorRun.findings)) };
       }
@@ -7981,6 +8003,9 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
         original: priorRun, originalCycleId: authority.cycle!.cycleId,
         issueNumber: verifiedFinalIssue.issueNumber, issueDigest: verifiedFinalIssue.digest,
         targetSha: authority.currentHeadSha,
+        settledHeadSha: authority.publication?.status === 'succeeded'
+          && authority.publication.terminalRunId === priorRun.id
+          ? authority.publication.headSha : undefined,
         verifiedScopeCorrection: verifiedScopeCorrection
           || (completedFinalFindings
             && authority.cycle?.settlementKind === 'same_head_issue_resolution'
@@ -11345,8 +11370,13 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         // The browser observer's generating-timeout/empty-reply hint is not
         // evidence of zero delivery. Only an existing terminal pre-send class
         // can legally rotate the original invocation in this dead-partial path.
+        // A recognized missing-result partial may spend only its single retry;
+        // once spent, no other class or lifecycle of that slot may launch again.
+        const partialSlotId = gptMissingResultPartialSlot(priorSameRound)?.slotId;
+        const retrySlotId = gptMissingResultRetrySlotId(priorSameRound);
         const replacementSlotIds = (observation?.replacementEligibleSlotIds
           ?? (observation?.replacementEligible && observation.slotId ? [observation.slotId] : []))
+          .filter((slotId) => !(partialSlotId === slotId && retrySlotId !== slotId))
           .filter((slotId) => priorSameRound.reviewRound?.sourceSlots.some((slot) => (
             slot.slotId === slotId
             && (
