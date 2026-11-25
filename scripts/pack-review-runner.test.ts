@@ -29,6 +29,7 @@ async function cliAndBoundary(
 }
 import {
   GithubReviewPostError,
+  reconcileGithubCommentReview,
   type GithubReviewSummary,
   type GithubReviewTransport,
 } from './lib/github-review-reconciliation.ts';
@@ -7337,7 +7338,14 @@ describe('Issue #2607 first-round findings: exact-head CLI and COMMENT resume', 
     let permitPost = mode === 'success';
     const transport: GithubReviewTransport = {
       resolveActorLogin: async () => 'fixture-2607-reviewer',
-      listReviews: async () => visible ? [...reviews] : [],
+      listReviews: async () => {
+        // No authoritative absence was observed in these older acknowledgement
+        // fixtures; a successful empty read now authorizes a later retry.
+        if (!visible && (mode === 'confirmed' || mode === 'ambiguous')) {
+          throw new Error('synthetic review list unavailable');
+        }
+        return visible ? [...reviews] : [];
+      },
       postReview: async ({ body, commitId }) => {
         posts += 1;
         if (mode === 'missing' && !permitPost) {
@@ -7560,6 +7568,142 @@ describe('Issue #2607 first-round findings: exact-head CLI and COMMENT resume', 
       expect(f.getNotificationCount()).toBe(f.notificationCount);
     },
   );
+  it.each(['immediate-absence', 'later-absence', 'later-present'] as const)(
+    'Issue #2902 recovers the elected COMMENT after transport failure (%s)',
+    async (mode) => {
+      const prNumber = 290200 + ['immediate-absence', 'later-absence', 'later-present'].indexOf(mode);
+      const storeRoot = fixtureRoot2607('opk-2902-comment-');
+      setupHarness(storeRoot);
+      const options = { projectId: 'orchestrator-pack', storeRoot };
+      const run = createPackReviewRun({
+        ...options, prNumber, headSha: HEAD, sourceRepoRoot: process.cwd(),
+        trustedPackRoot: process.cwd(), canonicalRepository: repository,
+        resolvedReviewer: 'codex',
+      }).run;
+      const body = 'Run: `' + run.id + '`\nHead: `' + HEAD + '`\nOriginal review';
+      const changed = body + '\nReplacement rendering';
+      const error = 'GitHub PR review post failed: unexpected end of JSON input';
+      const reviews: GithubReviewSummary[] = [];
+      const posts: Array<{ event: string; body: string; commitId: string }> = [];
+      let readable = mode === 'immediate-absence';
+      const transport: GithubReviewTransport = {
+        resolveActorLogin: async () => 'fixture-2902-reviewer',
+        listReviews: async () => {
+          if (!readable) throw new Error('synthetic listReviews transport failure');
+          return [...reviews];
+        },
+        postReview: async (input) => {
+          posts.push(input);
+          if (posts.length === 1) {
+            // The in-flight election must not be released by a competing caller.
+            await expect(resume(changed)).rejects.toThrow('GitHub review reconciliation body changed');
+            if (readable) {
+              await expect(resume(body)).rejects.toThrow('outcome remains ambiguous');
+              expect(getPackReviewRun(run.id, options)?.githubReviewReconciliation)
+                .toMatchObject({ phase: 'prepared', postOutcome: 'ambiguous' });
+            }
+            if (mode !== 'later-present') throw new GithubReviewPostError('ambiguous', error);
+          }
+          const review: GithubReviewSummary = {
+            id: 2902000 + posts.length, body: input.body, commitId: input.commitId,
+            userLogin: 'fixture-2902-reviewer', state: 'COMMENTED',
+            submittedAt: new Date().toISOString(), url: 'fixture://2902/review/' + posts.length,
+          };
+          reviews.push(review);
+          if (posts.length === 1) throw new GithubReviewPostError('ambiguous', error);
+          return { id: review.id, url: review.url };
+        },
+        dismissReview: async () => undefined,
+      };
+      const resume = (renderedBody: string) => reconcileGithubCommentReview({
+        ...options, run, body: renderedBody, transport,
+      });
+      await expect(resume(body)).rejects.toThrow(error);
+      const state = () => getPackReviewRun(run.id, options)?.githubReviewReconciliation;
+      expect(state()).toMatchObject({
+        phase: 'prepared', commentBody: body,
+        postOutcome: mode === 'immediate-absence' ? 'definitely_rejected' : 'ambiguous',
+        lastError: expect.stringContaining(error),
+      });
+      expect(posts).toHaveLength(1);
+      readable = true;
+      if (mode === 'later-absence') {
+        await expect(resume(changed)).rejects.toThrow('resume the original run');
+        expect(state()).toMatchObject({ phase: 'prepared', postOutcome: 'definitely_rejected', commentBody: body });
+        expect(posts).toHaveLength(1);
+      }
+      const result = await resume(changed);
+      expect(result.id).toBe(mode === 'later-present' ? 2902001 : 2902002);
+      expect(state()).toMatchObject({
+        phase: 'complete', postOutcome: 'accepted', commentBody: body, commentReviewId: result.id,
+      });
+      expect(posts).toEqual(Array.from({ length: mode === 'later-present' ? 1 : 2 },
+        () => ({ event: 'COMMENT', body, commitId: HEAD })));
+      await expect(resume(body)).resolves.toMatchObject({ id: result.id });
+      await expect(resume(changed)).rejects.toThrow('GitHub review reconciliation body changed');
+      expect(posts).toHaveLength(mode === 'later-present' ? 1 : 2);
+      expect(listPackReviewRuns(options).map((record) => record.id)).toEqual([run.id]);
+    },
+  );
+
+  it('Issue #2902 resumes journaled GPT delivery without a new run or GPT source', async () => {
+    const prNumber = 290204;
+    const f = await completedRequiredStage(prNumber);
+    const source = originalSourceTransport(prNumber);
+    const reviews: GithubReviewSummary[] = [];
+    const posts: Array<{ event: string; body: string; commitId: string }> = [];
+    const transport: GithubReviewTransport = {
+      resolveActorLogin: async () => 'fixture-2902-reviewer',
+      listReviews: async () => [...reviews],
+      postReview: async (input) => {
+        posts.push(input);
+        if (posts.length === 1) {
+          throw new GithubReviewPostError('ambiguous', 'GitHub PR review post failed: unexpected end of JSON input');
+        }
+        const review: GithubReviewSummary = {
+          id: 2902042, state: 'COMMENTED', userLogin: 'fixture-2902-reviewer',
+          body: input.body, commitId: input.commitId, submittedAt: new Date().toISOString(),
+          url: 'https://github.com/' + repository + '/pull/' + prNumber + '#pullrequestreview-2902042',
+        };
+        reviews.push(review);
+        return { id: review.id, url: review.url };
+      },
+      dismissReview: async () => undefined,
+    };
+    const startReview = commandStart2607(f.storeRoot, {
+      ...f.fixture, fixtureGithubReviewTransport: transport,
+      fixtureGptSourceCommentTransport: source.transport,
+      fixtureBeforeGptSourceCommentCensus: source.publishOriginal,
+    });
+    const invoke = () => runPackGptReviewCommand({ prNumber, reviewer: 'gpt' }, {
+      env: process.env, stderr: { write: () => undefined }, startReview,
+    });
+    const first = await invoke();
+    expect(first.exitCode).toBe(1);
+    const runId = String(first.result.runId);
+    const options = { projectId: 'orchestrator-pack', storeRoot: f.storeRoot };
+    const stored = getPackReviewRun(runId, options);
+    expect(stored?.githubReviewReconciliation).toMatchObject({
+      phase: 'prepared', postOutcome: 'definitely_rejected', commentBody: posts[0]?.body,
+    });
+    expect(posts).toHaveLength(1);
+    const sourceCount = source.sent();
+    expect(sourceCount).toBeGreaterThan(0);
+    const second = await invoke();
+    expect(second, JSON.stringify(second.result)).toMatchObject({
+      exitCode: 0, result: { ok: true, created: false, recovered: true,
+        runId, targetSha: HEAD, githubReviewId: 2902042 },
+    });
+    expect(posts).toEqual([posts[0], posts[0]]);
+    expect(posts[0]).toMatchObject({ event: 'COMMENT', commitId: HEAD });
+    expect(source.sent()).toBe(sourceCount);
+    expect(listPackReviewRuns(options)).toHaveLength(2);
+    expect(getPackReviewRun(runId, options)?.githubReviewReconciliation).toMatchObject({
+      phase: 'complete', postOutcome: 'accepted', commentReviewId: 2902042,
+      commentBody: posts[0]?.body,
+    });
+  });
+
   it('executes explicit Codex on T3 conflict-free H2 without a synthetic carry-over terminal', async () => {
     const prNumber = 260717;
     const h1 = '1'.repeat(40);
