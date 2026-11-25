@@ -339,7 +339,13 @@ advisory delivered**, not that no safe pane was reached.
 STOPPED/POLLING coordinator alarms are **state-change only** (Issue #2896).
 Per-pane history is keyed by the pane's `[state, incarnationId]` episode,
 independent of which coordinator is current, is carried across observation
-gaps (bounded to 7 days) and is never rebuilt from the coordinator. A new
+gaps and is never rebuilt from the coordinator. A record of an attempted or
+sent incident is kept until the pane positively reports a different state (only
+never-notified records expire after 7 days, with a hard cap on record count); a
+positively observed state change is recorded even while no coordinator is valid.
+Opaque or unreadable saved history is unknown, not new: current incidents are
+not replayed and the tick logs `alarm_history_unreadable` for manual
+reconciliation. A new
 coordinator, a hot repin, a restart, elapsed time or an `attempted_unverified`
 timer never replays an unchanged incident: only a different pane state,
 incarnation or a new fact alarms. Marks with the prefixes `terminal-path:`,
@@ -375,7 +381,10 @@ All three are coordinator-only advisories on the same state-change dedup.
   Required identity comes from the card `requiredCi` selectors
   (`workflow / job`) or branch-protection `required_status_checks`
   (`checks[].context` with `app_id`, plus `contexts[]`); complete check-runs
-  on the exact head are required and the newest run per identity decides.
+  on the exact head are required and the newest run per identity decides. A
+  card `workflow / job` selector is matched to the job's check suite through the
+  head's workflow runs; a same-name job of another workflow, several suites for
+  one identity or unreadable workflow evidence yields no red-CI claim.
   Optional, stale or unreadable data never produces a red-CI claim.
 - **Lost wait process.** An own `PARKED on <process pid>` wait whose earlier
   matching live probe is retained in the parked epoch and whose later
@@ -384,8 +393,8 @@ All three are coordinator-only advisories on the same state-change dedup.
   uncertain advisory does not retype.
 
 Residuals: no atomic exactly-once native send, no process-liveness witness
-across PID namespaces, and an observation gap longer than seven days drops
-history.
+across PID namespaces, and history that is opaque or lost is reported as
+unknown rather than rebuilt.
 
 ## Visible OpenCode permission UI (Issue #2484)
 

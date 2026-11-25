@@ -7014,9 +7014,45 @@ describe('Issue #2896 state-change alarm dedup, independent of the coordinator',
     } finally { clock.mockRestore(); rmSync(root, { recursive: true, force: true }); }
   });
 
+  it('keeps an attempted incident past the seven-day gap and treats opaque history as unknown, not new', async () => {
+    const store = new MemoryWakeStore();
+    let at = Date.parse('2026-11-01T00:00:00Z');
+    const step = (roster: readonly FleetTerminal[], frames: Record<string, string> = screens) => tick({
+      store, terminals: roster, screens: frames, now: () => at,
+    });
+    expect(sendsTo((await step([coordinatorA, stopped])).calls, 'coord-a')).toHaveLength(1);
+    // The worker pane stays unobserved for eight days while other ticks continue.
+    for (const days of [2, 5, 8]) {
+      at += days * 24 * 3_600_000;
+      expect(sends((await step([coordinatorA])).calls), `${days}d gap`).toHaveLength(0);
+    }
+    expect(sends((await step([coordinatorA, stopped])).calls)).toHaveLength(0);
+    // Corrupt or legacy whole-set history is uncertainty: a current stop is not replayed as new.
+    for (const opaque of ['{not json', 'coord\nsame-screen-stopped']) {
+      const fresh = new MemoryWakeStore();
+      fresh.writeLastSentSignature(opaque);
+      const outcome = await tick({ store: fresh, terminals: [coordinatorA, stopped], screens });
+      expect(sends(outcome.calls), opaque).toHaveLength(0);
+      expect(outcome.logs.join('\n'), opaque).toContain('alarm_history_unreadable');
+      // A later genuine state change still alarms once.
+      await tick({ store: fresh, terminals: [coordinatorA, stopped], screens: { ...screens, one: 'working\nesc interrupt' } });
+      expect(sendsTo((await tick({ store: fresh, terminals: [coordinatorA, stopped], screens })).calls, 'coord-a'), opaque).toHaveLength(1);
+    }
+  });
+
+  it('records a STOPPED to resolved change observed while no coordinator is valid', async () => {
+    const store = new MemoryWakeStore();
+    expect(sendsTo((await run(store, [coordinatorA, stopped])).calls, 'coord-a')).toHaveLength(1);
+    // Coordinator outage: the worker resumes and is observed, but nothing is sent.
+    const outage = await run(store, [stopped], { one: 'working\nesc interrupt' });
+    expect(sends(outage.calls)).toHaveLength(0);
+    // The pane stops again after the coordinator returns: a new episode, one alarm.
+    expect(sendsTo((await run(store, [coordinatorA, stopped])).calls, 'coord-a')).toHaveLength(1);
+  });
+
   it('never retypes an ambiguous unverified coordinator mark on a later tick', async () => {
     const store = new MemoryWakeStore();
-    const parked = { ...screens, one: 'work\nPARKED on GPT turn unknown-event' };
+    const parked ={ ...screens, one: 'work\nPARKED on GPT turn unknown-event' };
     const rows = [coordinatorA, { ...stopped, incarnationId: undefined }];
     const first = await run(store, rows, parked);
     expect(sendsTo(first.calls, 'coord-a')).toHaveLength(1);
@@ -7068,6 +7104,8 @@ describe('Issue #2896 STOPPED projections: gone owner with red required CI', () 
     requiredCi?: readonly string[];
     /** `null` = unreadable branch-protection policy. */
     policy?: Record<string, unknown> | null;
+    /** check suite id -> workflow name for the head's workflow runs; undefined = unreadable. */
+    workflows?: Readonly<Record<number, string>>;
   } = {}) => {
     const native = fakeOrca({ [coordinator.handle]: 'working\nesc interrupt' }, [], [coordinator]);
     const reads: string[] = [];
@@ -7088,6 +7126,12 @@ describe('Issue #2896 STOPPED projections: gone owner with red required CI', () 
           reads.push(endpoint);
           if (endpoint.includes('required_status_checks')) {
             return input.policy === null ? undefined : input.policy ?? { checks: [{ context: 'ci / test', app_id: 15368 }] };
+          }
+          if (endpoint.startsWith('actions/runs')) {
+            if (input.workflows === undefined) return undefined;
+            const entries = Object.entries(input.workflows);
+            return { total_count: entries.length, workflow_runs: entries.map(([suite, name]) => (
+              { check_suite_id: Number(suite), name, head_sha: input.sha ?? head })) };
           }
           return input.runs === undefined ? undefined : checkRuns(input.runs);
         },
@@ -7130,16 +7174,47 @@ describe('Issue #2896 STOPPED projections: gone owner with red required CI', () 
   });
 
   it('resolves required identity from the card selector and lets the newest run decide', async () => {
+    const suite = { check_suite: { id: 10 } };
     const newest = await observe({
-      requiredCi: ['ci / test'],
-      runs: [{ id: 1, name: 'ci / test', conclusion: 'failure' }, { id: 2, name: 'ci / test', conclusion: 'success' }],
+      requiredCi: ['CI / test'], workflows: { 10: 'CI' },
+      runs: [{ id: 1, name: 'test', conclusion: 'failure', ...suite }, { id: 2, name: 'test', conclusion: 'success', ...suite }],
     });
     expect(decodeURIComponent(sendsTo(newest.calls, coordinator.handle).filter((call) => call.includes('--text'))[0]?.join(' ') ?? ''))
       .not.toContain('has required check');
     expect(newest.reads.some((endpoint) => endpoint.includes('required_status_checks'))).toBe(false);
-    const failing = await observe({ requiredCi: ['ci / test'], runs: [{ name: 'ci / test', conclusion: 'timed_out' }] });
+    const failing = await observe({
+      requiredCi: ['CI / test'], workflows: { 10: 'CI' },
+      runs: [{ name: 'test', conclusion: 'timed_out', ...suite }],
+    });
     expect(decodeURIComponent(sendsTo(failing.calls, coordinator.handle).filter((call) => call.includes('--text'))[0]?.join(' ') ?? ''))
-      .toContain('has required check ci / test failing');
+      .toContain('has required check CI / test failing');
+  });
+
+  it('does not blame the required workflow for a same-name job of another workflow', async () => {
+    const mixed = await observe({
+      requiredCi: ['CI / test'], workflows: { 10: 'CI', 20: 'Optional' },
+      runs: [
+        { id: 1, name: 'test', conclusion: 'success', check_suite: { id: 10 } },
+        { id: 2, name: 'test', conclusion: 'failure', check_suite: { id: 20 } },
+      ],
+    });
+    const decoded = decodeURIComponent(sendsTo(mixed.calls, coordinator.handle).filter((call) => call.includes('--text'))[0]?.join(' ') ?? '');
+    expect(decoded).not.toContain('has required check');
+    expect(decoded).toContain('positively gone');
+    // Only the optional workflow ran: still no red-CI claim for the required one.
+    const onlyOptional = await observe({
+      requiredCi: ['CI / test'], workflows: { 20: 'Optional' },
+      runs: [{ id: 2, name: 'test', conclusion: 'failure', check_suite: { id: 20 } }],
+    });
+    expect(decodeURIComponent(sendsTo(onlyOptional.calls, coordinator.handle).filter((call) => call.includes('--text'))[0]?.join(' ') ?? ''))
+      .not.toContain('has required check');
+    // Unreadable workflow evidence withholds the claim.
+    const noWorkflows = await observe({
+      requiredCi: ['CI / test'],
+      runs: [{ id: 2, name: 'test', conclusion: 'failure', check_suite: { id: 10 } }],
+    });
+    expect(decodeURIComponent(sendsTo(noWorkflows.calls, coordinator.handle).filter((call) => call.includes('--text'))[0]?.join(' ') ?? ''))
+      .not.toContain('has required check');
   });
 });
 

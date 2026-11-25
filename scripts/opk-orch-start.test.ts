@@ -217,6 +217,53 @@ describe('opk-orch-start attach', () => {
     expect(readFileSync(fx.otherPin, 'utf8')).toContain('term_other');
   });
 
+  it('refuses before run-use when the selected file changes during the native reads (#2896)', async () => {
+    for (const { mutate, remains } of [
+      { mutate: (file: string) => writeFileSync(file, 'OPK_RUN_ID=run_other_9\nORCH_HANDLE=term_elsewhere\n', { mode: 0o600 }), remains: true },
+      { mutate: (file: string) => rmSync(file), remains: false },
+    ]) {
+      const fx = fixture();
+      const state = world(OLD_HANDLE);
+      const inner = native(state, fx.primary);
+      const report = await attachOrchestratorSeat({
+        argv: ['attach', NEW_HANDLE],
+        env: fx.env,
+        runNative: async (args) => {
+          const result = await inner(args);
+          if (args[1] === 'run-show') mutate(pinPath(fx.env));
+          return result;
+        },
+      });
+      expect(report.ok).toBe(false);
+      expect(runUses(state)).toBe(0);
+      expect(report.pin).toBe('refused');
+      // The changed or removed file is never recreated or overwritten from the stale selection.
+      expect(existsSync(pinPath(fx.env))).toBe(remains);
+      if (remains) expect(readFileSync(pinPath(fx.env), 'utf8')).toBe('OPK_RUN_ID=run_other_9\nORCH_HANDLE=term_elsewhere\n');
+    }
+  });
+
+  it('reports a partial result and keeps the new selection when the file changes after run-use (#2896)', async () => {
+    const fx = fixture();
+    const state = world(OLD_HANDLE);
+    const inner = native(state, fx.primary);
+    const report = await attachOrchestratorSeat({
+      argv: ['attach', NEW_HANDLE],
+      env: fx.env,
+      runNative: async (args) => {
+        const result = await inner(args);
+        if (args[1] === 'run-use') {
+          writeFileSync(pinPath(fx.env), 'OPK_RUN_ID=run_other_9\nORCH_HANDLE=term_elsewhere\n', { mode: 0o600 });
+        }
+        return result;
+      },
+    });
+    expect(report.ok).toBe(false);
+    expect(runUses(state)).toBe(1);
+    expect(report.partial?.runRebound).toBe(true);
+    expect(readFileSync(pinPath(fx.env), 'utf8')).toBe('OPK_RUN_ID=run_other_9\nORCH_HANDLE=term_elsewhere\n');
+  });
+
   it('repairs a stale absent pin and binds a Run whose coordinator is null', async () => {
     const fx = fixture(`OPK_RUN_ID=${RUN}\nORCH_HANDLE=term_gone\n`);
     const state = world(null);

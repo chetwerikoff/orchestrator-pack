@@ -286,7 +286,21 @@ export async function attachOrchestratorSeat(input: AttachInput): Promise<Attach
       message: `selected pin path is redirected (${pinRedirect}). Repair the selected project pin and retry; do not repeat run-use.`,
     });
   }
+  // The selected pair can change while the awaited native reads run; recheck it before each effect.
+  const selectionChanged = (): string | null => {
+    const now = readSelectedProjectFile(fleetEnvFile(env, target.projectId));
+    if (!now.ok) return `selected project file changed or unreadable (${now.reason})`;
+    if (now.runId !== runId || now.handle !== selection.handle) return 'selected project file changed during attach';
+    return null;
+  };
   if (!sameHandle) {
+    const changedBeforeUse = selectionChanged();
+    if (changedBeforeUse) {
+      return refuse({
+        ...base, runId, runUseCount, coordinatorHandle, pin: 'refused',
+        message: `${changedBeforeUse}; nothing was changed. ${SELECTION_CORRECTION}`,
+      });
+    }
     const used = await call(['orchestration', 'run-use', '--id', runId, '--json']);
     if (used instanceof NativeFailure) {
       return refuse({
@@ -322,7 +336,15 @@ export async function attachOrchestratorSeat(input: AttachInput): Promise<Attach
   }
 
   // Only ORCH_HANDLE is written; the operator's OPK_RUN_ID and other entries are preserved.
-  const pin = writeProjectPin(env, target.projectId, requestedHandle);
+  const changedBeforePin = selectionChanged();
+  if (changedBeforePin) {
+    return refuse({
+      ...base, runId, runUseCount, coordinatorHandle, pin: 'refused',
+      message: `${runRebound ? `run ${runId} is bound to ${requestedHandle}; ` : ''}${changedBeforePin}; pin not written. Repair the selected project file and retry; do not repeat run-use.`,
+      partial: { runRebound, pin: 'selection-changed' },
+    });
+  }
+  const pin = writeProjectPin(env, target.projectId, requestedHandle, runId);
   if (!pin.ok) {
     return refuse({
       ...base,
@@ -550,9 +572,15 @@ function writeProjectPin(
   env: NodeJS.ProcessEnv,
   projectId: string,
   handle: string,
+  expectedRunId: string,
 ): { readonly ok: true; readonly changed: boolean } | { readonly ok: false; readonly reason: string } {
   if (!HANDLE_RE.test(handle)) return { ok: false, reason: 'handle is not a simple pin value' };
   const file = fleetEnvFile(env, projectId);
+  // The operator-selected Run must still be the one in the file; a missing or changed file is
+  // never recreated or overwritten from a stale selection.
+  const before = readSelectedProjectFile(file);
+  if (!before.ok) return { ok: false, reason: `selected project file changed during attach (${before.reason})` };
+  if (before.runId !== expectedRunId) return { ok: false, reason: 'selected project Run changed during attach' };
   const directory = path.dirname(file);
   try {
     const redirected = redirectedPinAncestor(env, projectId);
@@ -568,7 +596,7 @@ function writeProjectPin(
     const rendered = renderPin(current, handle);
     if (!rendered.ok) return rendered;
     if (!rendered.changed && exists(file) && (lstatSync(file).mode & 0o777) === 0o600) {
-      return { ok: true, changed: false };
+      return readBackPin(file, expectedRunId, handle, false);
     }
     const temporary = path.join(directory, `.${projectId}.env.${String(process.pid)}.${randomBytes(4).toString('hex')}`);
     const fd = openSync(temporary, 'wx', 0o600);
@@ -585,13 +613,24 @@ function writeProjectPin(
       throw error;
     }
     chmodSync(file, 0o600);
-    return { ok: true, changed: true };
+    return readBackPin(file, expectedRunId, handle, true);
   } catch (error) {
     const code = error && typeof error === 'object' && 'code' in error && typeof (error as { code?: unknown }).code === 'string'
       ? (error as { code: string }).code
       : 'pin write failed';
     return { ok: false, reason: code };
   }
+}
+
+/** After a pin write the file must still hold exactly the selected Run and the requested pin. */
+function readBackPin(
+  file: string, runId: string, handle: string, changed: boolean,
+): { readonly ok: true; readonly changed: boolean } | { readonly ok: false; readonly reason: string } {
+  const after = readSelectedProjectFile(file);
+  if (!after.ok || after.runId !== runId || after.handle !== handle) {
+    return { ok: false, reason: 'pin readback did not match the selected Run and requested handle' };
+  }
+  return { ok: true, changed };
 }
 
 function exists(file: string): boolean {

@@ -2487,7 +2487,7 @@ function requiredCiVerdict(
 ): RequiredCiVerdict {
   const read = options.readGithubJson ?? githubJson;
   const norm = (value: unknown): string => String(value ?? '').trim().toLowerCase();
-  interface Required { readonly label: string; readonly job: string; readonly appId: number | null }
+  interface Required { readonly label: string; readonly workflow: string | null; readonly job: string; readonly appId: number | null }
   let required: Required[] | undefined;
   const card = options.config.requiredCi;
   if (card && card.length > 0) {
@@ -2495,7 +2495,7 @@ function requiredCiVerdict(
     for (const selector of card) {
       const parts = selector.split(' / ');
       if (parts.length !== 2 || !parts[0]?.trim() || !parts[1]?.trim()) return { kind: 'unknown' };
-      required.push({ label: selector.trim(), job: parts[1].trim(), appId: null });
+      required.push({ label: selector.trim(), workflow: parts[0].trim(), job: parts[1].trim(), appId: null });
     }
   } else {
     const base = options.config.defaultBranch;
@@ -2508,7 +2508,7 @@ function requiredCiVerdict(
       const id = norm(label);
       if (!id || seen.has(id)) return;
       seen.add(id);
-      required!.push({ label: label.trim(), job: label.trim(), appId });
+      required!.push({ label: label.trim(), workflow: null, job: label.trim(), appId });
     };
     if (Array.isArray(policy.checks)) {
       for (const value of policy.checks as unknown[]) {
@@ -2527,14 +2527,41 @@ function requiredCiVerdict(
   const payload = read(repository, 'commits/' + sha + '/check-runs?per_page=100');
   const runs = payload?.check_runs;
   if (!payload || !Array.isArray(runs) || payload.total_count !== runs.length || runs.length === 0) return { kind: 'unknown' };
-  type Run = { id?: unknown; name?: unknown; conclusion?: unknown; status?: unknown; head_sha?: unknown; app?: { id?: unknown } | null };
+  type Run = {
+    id?: unknown; name?: unknown; conclusion?: unknown; status?: unknown; head_sha?: unknown;
+    app?: { id?: unknown } | null; check_suite?: { id?: unknown } | null;
+  };
   const rows = runs as Run[];
   if (rows.some((row) => !row || (row.head_sha !== undefined && row.head_sha !== sha))) return { kind: 'unknown' };
+  // A check run does not name its workflow; the workflow runs of the same head map check suite -> workflow.
+  let workflowBySuite: Map<number, string> | undefined;
+  if (required.some((check) => check.workflow !== null)) {
+    const wf = read(repository, 'actions/runs?head_sha=' + sha + '&per_page=100');
+    const wfRuns = wf?.workflow_runs;
+    if (!wf || !Array.isArray(wfRuns) || wf.total_count !== wfRuns.length) return { kind: 'unknown' };
+    workflowBySuite = new Map();
+    for (const value of wfRuns as Array<{ check_suite_id?: unknown; name?: unknown; head_sha?: unknown }>) {
+      if (!value || typeof value.check_suite_id !== 'number' || typeof value.name !== 'string'
+        || (value.head_sha !== undefined && value.head_sha !== sha)) return { kind: 'unknown' };
+      workflowBySuite.set(value.check_suite_id, norm(value.name));
+    }
+  }
   let failed: string | undefined;
   for (const check of required) {
-    const matching = rows.filter((row) => (norm(row.name) === norm(check.job) || norm(row.name) === norm(check.label))
+    let matching = rows.filter((row) => (norm(row.name) === norm(check.job) || norm(row.name) === norm(check.label))
       && (check.appId === null || row.app?.id === check.appId));
+    if (check.workflow !== null) {
+      // Same-name jobs of another (e.g. optional) workflow are not the required check.
+      const wanted = norm(check.workflow);
+      const suiteIds = matching.map((row) => row.check_suite?.id);
+      if (suiteIds.some((id) => typeof id !== 'number')) return { kind: 'unknown' };
+      matching = matching.filter((row) => workflowBySuite!.get(row.check_suite!.id as number) === wanted);
+    }
     if (matching.length === 0) continue;
+    // One required identity must come from one check suite; same-name checks of several
+    // suites cannot be attributed to the required workflow/app.
+    const suites = new Set(matching.map((row) => row.check_suite?.id ?? null));
+    if (suites.size > 1) return { kind: 'unknown' };
     // The newest run of one required identity decides; ties are ambiguous.
     const ids = matching.map((row) => (typeof row.id === 'number' ? row.id : Number.NaN));
     if (ids.some((id) => !Number.isFinite(id))) return { kind: 'unknown' };
@@ -3021,6 +3048,75 @@ async function reconcileSelectedProjectStaleReviews(
   }
 }
 
+type PaneState = { state: string; sent: boolean; attempted?: boolean; attemptedAt?: number; seenAt?: number };
+type PaneHistory = { panes: Record<string, PaneState>; routed: string; coordinator?: string };
+/** Hard bound on retained per-pane records; the oldest-seen unresolved records go first. */
+const PANE_HISTORY_MAX_ENTRIES = 500;
+
+/**
+ * Read the saved per-pane notification history. Absent history is a fresh start; present but
+ * unreadable/opaque history is UNKNOWN, which is uncertainty and never evidence of freshness.
+ */
+function readPaneHistory(store: FleetWakeStateStore): { readonly history: PaneHistory; readonly unknown: boolean } {
+  const empty: PaneHistory = { panes: {}, routed: '' };
+  const raw = store.readLastSentSignature();
+  if (raw === null || raw === undefined || raw === '') return { history: empty, unknown: false };
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      && 'panes' in parsed && 'routed' in parsed) {
+      const row = parsed as PaneHistory;
+      if (row.panes && typeof row.panes === 'object' && !Array.isArray(row.panes)
+        && typeof row.routed === 'string') return { history: row, unknown: false };
+    }
+  } catch { /* fall through: opaque history */ }
+  return { history: empty, unknown: true };
+}
+
+/**
+ * Carry the saved history across observation gaps and merge the current observations.
+ * An attempted/sent record is kept until the pane positively reports a different state;
+ * only never-notified records expire. Opaque history marks every observed pane attempted-unknown.
+ */
+function mergePaneHistory(
+  previous: PaneHistory,
+  unknown: boolean,
+  observations: readonly FleetPaneObservation[],
+  bareShellHandles: ReadonlySet<string>,
+  tickNow: number,
+): Record<string, PaneState> {
+  const paneStates: Record<string, PaneState> = Object.create(null) as Record<string, PaneState>;
+  for (const [handle, saved] of Object.entries(previous.panes)) {
+    if (!saved || typeof saved.state !== 'string') continue;
+    const seenAt = typeof saved.seenAt === 'number' ? saved.seenAt : tickNow;
+    const unresolved = saved.sent === true || saved.attempted === true;
+    if (!unresolved && tickNow - seenAt > PANE_HISTORY_RETENTION_MS) continue;
+    paneStates[handle] = { ...saved, seenAt };
+  }
+  const carryFlags = (saved: PaneState | undefined, state: string): Partial<PaneState> => ({
+    sent: saved?.state === state && saved?.sent === true,
+    ...(saved?.state === state && saved?.attempted ? { attempted: true,
+      ...(saved?.attemptedAt !== undefined ? { attemptedAt: saved.attemptedAt } : {}) } : {}),
+    ...(unknown ? { attempted: true } : {}),
+  });
+  for (const pane of observations) {
+    // PERMISSION emits no ordinary alert, but its interval must be remembered:
+    // STOPPED -> PERMISSION -> STOPPED is a new ordinary state transition.
+    const state = JSON.stringify([pane.state, pane.incarnationId ?? '']);
+    paneStates[pane.handle] = { state, seenAt: tickNow, ...carryFlags(previous.panes[pane.handle], state) } as PaneState;
+  }
+  for (const handle of bareShellHandles) {
+    const state = 'suspected_bare_shell';
+    paneStates[handle] = { state, seenAt: tickNow, ...carryFlags(previous.panes[handle], state) } as PaneState;
+  }
+  const handles = Object.keys(paneStates);
+  if (handles.length > PANE_HISTORY_MAX_ENTRIES) {
+    const oldestFirst = handles.sort((a, b) => (paneStates[a]!.seenAt ?? 0) - (paneStates[b]!.seenAt ?? 0));
+    for (const handle of oldestFirst.slice(0, handles.length - PANE_HISTORY_MAX_ENTRIES)) delete paneStates[handle];
+  }
+  return paneStates;
+}
+
 export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise<FleetAlarmTickResult> {
   const { config } = options;
   const executor = options.executor ?? defaultOrcaExecutor;
@@ -3126,6 +3222,16 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
               catch { return false; } });
         }
       }
+      // A positively observed state change during the outage must still be remembered, or a later
+      // genuine new stop would look like the unchanged old one. No alarm is sent here.
+      try {
+        const outage = readPaneHistory(store);
+        const outageStates = mergePaneHistory(outage.history, outage.unknown, observations,
+          bareShellHandles, (options.now ?? Date.now)());
+        store.writeLastSentSignature(JSON.stringify({
+          panes: outageStates, routed: outage.history.routed, coordinator: outage.history.coordinator,
+        }));
+      } catch { /* history is advisory; the next tick re-reads it */ }
       log('normal fleet result: no orchestrator pane found');
       return { state: 'no_orchestrator', paneWakeAttempts: wakeCounts.attempts,
         paneWakeConfirmed: wakeCounts.confirmed, paneWakeNotConfirmed: wakeCounts.attempts - wakeCounts.confirmed };
@@ -3199,50 +3305,18 @@ export async function runFleetAlarmTick(options: FleetAlarmTickOptions): Promise
     }
 
     // Persist one notification state per pane; one pane changing cannot re-alarm another.
-    type PaneState = { state: string; sent: boolean; attempted?: boolean; attemptedAt?: number; seenAt?: number };
-    type History = { panes: Record<string, PaneState>; routed: string; coordinator?: string };
-    let previous: History = { panes: {}, routed: '' };
     const pendingPermission = observedPermissionWarnings(observations, config.projectId, store);
-    try {
-      const parsed: unknown = JSON.parse(store.readLastSentSignature() ?? 'null');
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-        && 'panes' in parsed && 'routed' in parsed) {
-        const row = parsed as History;
-        if (row.panes && typeof row.panes === 'object' && typeof row.routed === 'string') previous = row;
-      }
-    } catch { /* An old whole-set digest is not a per-pane notification; it proves no freshness either. */ }
+    const { history: previous, unknown: historyUnknown } = readPaneHistory(store);
+    if (historyUnknown) {
+      log('DIAG reason=alarm_history_unreadable evidence=saved_history_opaque; current incidents treated as unknown, not new; reconcile manually if a stop needs attention');
+    }
     const coordinatorKey = JSON.stringify([
       coordinator.handle, coordinator.incarnationId ?? '', coordinator.worktreePath,
     ]);
     const tickNow = (options.now ?? Date.now)();
-    const paneStates: Record<string, PaneState> = Object.create(null) as Record<string, PaneState>;
-    // An observation gap or an unreadable pane is not a resolution: the saved history of an
-    // omitted unit is carried (bounded) so STOPPED -> omitted -> the same STOPPED never replays.
-    for (const [handle, saved] of Object.entries(previous.panes)) {
-      if (!saved || typeof saved.state !== 'string') continue;
-      const seenAt = typeof saved.seenAt === 'number' ? saved.seenAt : tickNow;
-      if (tickNow - seenAt > PANE_HISTORY_RETENTION_MS) continue;
-      paneStates[handle] = { ...saved, seenAt };
-    }
-    const paneStateKey = (pane: FleetPaneObservation): string =>
-      JSON.stringify([pane.state, pane.incarnationId ?? '']);
-    // A coordinator replacement never authorizes a replay: history is keyed by pane episode only.
-    for (const pane of observations) {
-      // PERMISSION emits no ordinary alert, but its interval must be remembered:
-      // STOPPED -> PERMISSION -> STOPPED is a new ordinary state transition.
-      const state = paneStateKey(pane);
-      const saved = previous.panes[pane.handle];
-      paneStates[pane.handle] = { state, sent: saved?.state === state && saved?.sent === true,
-        seenAt: tickNow,
-        ...(saved?.state === state && saved?.attempted ? { attempted: true,
-          ...(saved?.attemptedAt !== undefined ? { attemptedAt: saved.attemptedAt } : {}) } : {}) };
-    }
-    for (const handle of bareShellHandles) {
-      const saved = previous.panes[handle];
-      paneStates[handle] = { state: 'suspected_bare_shell', seenAt: tickNow,
-        sent: saved?.state === 'suspected_bare_shell' && saved?.sent === true,
-        ...(saved?.state === 'suspected_bare_shell' && saved?.attempted ? { attempted: true } : {}) };
-    }
+    // An observation gap or an unreadable pane is not a resolution, and a coordinator replacement
+    // never authorizes a replay: history is keyed by pane episode only.
+    const paneStates = mergePaneHistory(previous, historyUnknown, observations, bareShellHandles, tickNow);
     const now = (options.now ?? Date.now)();
     // Elapsed time never replays: a sent incident stays sent and an ambiguous attempt stays
     // unknown until the pane positively changes state (a new episode).
