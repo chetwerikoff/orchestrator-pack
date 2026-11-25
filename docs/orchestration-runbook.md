@@ -642,7 +642,7 @@ Local Codex PR review is active through the pack-owned review runner. GitHub PR
 review is the authoritative verdict; the pack run store is operational state.
 
 - the canonical prescriptive review entrypoint is `npm run --silent pack-gpt-review -- --project <PROJECT_ID> [--session-id <SESSION_ID>] --pr-number <PR_NUMBER>`; a supervised caller supplies its exact already-owned session id, while an unbound caller omits it; execute starts and resumes through the [Long-review recipe](#long-review-recipe); scheduler/internal starts remain implementation details;
-- the live PR supplies the current head and its closing reference supplies the Issue;
+- the live PR supplies the current head and its bound Issue (one closing reference, else one `Part of #N`; `scripts/pr-scope-contract.ts` owns the rule);
 - session-binding cache data is advisory correlation only and cannot veto a valid
   PR-led start or substitute a different repository, head, or Issue;
 - a missing exact bound Issue snapshot is captured only after the existing start
@@ -899,8 +899,12 @@ Issue body digest and the final findings round's immutable bound snapshot before
 unchanged-body strict-descendant settlement. A verified **behavior-criteria amendment**
 instead requires current-head non-success status write/read-back, then one ordinary
 digest-bound continuation cycle, without rewriting the original snapshot/terminal or
-resetting the cycle. A further distinct amendment waits for its predecessor's terminal
-and cannot reuse an admitted digest.
+resetting the cycle. The criteria section is one nonempty `## Acceptance criteria` or
+`## Fix criteria` section (counted together). A final-cap PR that now binds a different
+valid Issue B is admitted the same way: B's live body and tier are read, current-head
+non-success is verified, then one ordinary continuation reviews B against its own
+snapshot; the settled round of the original Issue A stays historical. A further distinct
+amendment waits for its predecessor's terminal and cannot reuse an admitted digest.
 
 The existing **scope-only lane** applies to the run's own Issue/PR on
 the reviewed head or a proven strict-descendant fix head. It requires complete

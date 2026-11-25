@@ -7,6 +7,7 @@ import { homedir } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveTargetContext, type TargetContext } from '../lib/target-context.ts';
+import { extractClosingIssueNumber } from '../pr-scope-contract.ts';
 import {
   PACK_REVIEW_ACTIVE_STATUSES,
   PACK_REVIEW_TERMINAL_STATUSES,
@@ -779,13 +780,9 @@ export interface OpenPullHead {
   readonly issue?: number;
 }
 
-/** A bare Refs #N is not a closing target; conflicting closers bind nobody. */
+/** PR-to-Issue attribution uses the shared binding rule: a bare Refs #N binds nobody; conflicting references bind nobody. */
 export function uniqueClosingIssue(body: string): number | undefined {
-  const visible = body.replace(/<!--[\s\S]*?-->/gu, '').replace(/^`{3}[^\n]*[\s\S]*?^`{3}\s*$/gmu, '');
-  const closing = [...visible.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#([1-9]\d*)\b/giu)]
-    .map((row) => Number(row[1]));
-  const targets = [...new Set(closing)].filter(Number.isSafeInteger);
-  return targets.length === 1 ? targets[0] : undefined;
+  return extractClosingIssueNumber(body) ?? undefined;
 }
 
 export function listOpenPullHeads(repository: string): OpenPullHead[] {

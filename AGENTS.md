@@ -115,7 +115,8 @@ Key rules (detail in the owning sections):
   alternative route; never turn an unavailable check into a claim that the code passed.
 - [`Task and scope authority`](docs/repository_policy.md#task-and-scope-authority): the live Issue
   carries a mandatory `denylist` and optional `allowed-roots`; an implementation PR links exactly
-  one Issue with `Closes #N` / `Fixes #N` / `Resolves #N` near the top. Produce and review the
+  one Issue with `Closes #N` / `Fixes #N` / `Resolves #N` near the top (the shared binding rule in
+  `scripts/pr-scope-contract.ts` also binds one `Part of #N` when no closing reference exists). Produce and review the
   generated `docs/declarations/<issue-number>.pr-scope.json` as scope authority only when the
   selected target's authoritative PR-base/default workflow enables the pack PR scope guard; a
   confirmed guard-free target uses the complete live Issue, and unresolved configuration stays

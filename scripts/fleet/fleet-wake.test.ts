@@ -3447,7 +3447,10 @@ describe('Issue #2661 r08 B4 exact published fact and original receipt wakes', (
     expect(uniqueClosingIssue('Refs #2661')).toBeUndefined();
     expect(uniqueClosingIssue('Closes #2661; Fixes #2662')).toBeUndefined();
     expect(uniqueClosingIssue('<!-- Closes #2661 --> Refs #2662')).toBeUndefined();
-    expect(uniqueClosingIssue('Closes #2661; Closes #2661')).toBe(2661);
+    expect(uniqueClosingIssue('Closes #2661; Closes #2661')).toBeUndefined();
+    expect(uniqueClosingIssue('Part of #2661')).toBe(2661);
+    expect(uniqueClosingIssue('Part of #2661\nPart of #2662')).toBeUndefined();
+    expect(uniqueClosingIssue('Part of #2661\nCloses #2662')).toBe(2662);
   });
 
   it('coalesces two published Issue facts, then admits only the distinct third fact on a later tick without a coordinator', async () => {

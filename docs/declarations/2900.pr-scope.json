@@ -1,0 +1,48 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2900,
+  "declared_paths": [
+    "AGENTS.md",
+    "docs/chat-executor-rules.md",
+    "docs/orchestration-runbook.md",
+    "docs/repository_policy.md",
+    "docs/worker-smoke-testing.md",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts",
+    "scripts/lib/reviewer-contract-mapping.ts",
+    "scripts/pack-gpt-review.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pr-scope-check.ts",
+    "scripts/pr-scope-contract.test.ts",
+    "scripts/pr-scope-contract.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "denylist": [
+    ".orchestrator-pack/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "AGENTS.md",
+    "docs/chat-executor-rules.md",
+    "docs/orchestration-runbook.md",
+    "docs/repository_policy.md",
+    "docs/worker-smoke-testing.md",
+    "scripts/fleet/fleet-wake.test.ts",
+    "scripts/fleet/fleet-wake.ts",
+    "scripts/lib/reviewer-contract-mapping.ts",
+    "scripts/pack-gpt-review.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/pr-scope-check.ts",
+    "scripts/pr-scope-contract.test.ts",
+    "scripts/pr-scope-contract.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "source_revision": "6ac4d533b0e76993b690cc24e6f0dc9ef39e8e12"
+}

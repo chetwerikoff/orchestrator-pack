@@ -33,12 +33,13 @@ import {
 } from '../plugins/task-declaration/lib/validate.ts';
 import {
   classifyNoCeremonyPaths,
-  extractClosingIssueNumber,
+  describePrIssueBindingCorrection,
   hasNoCeremonyIssueLink,
   isNoCeremonyPr,
-  ISSUE_LINK_PATTERN,
   NO_CEREMONY_MARKDOWN_GLOBS,
   resolveIssueNumberForFetch,
+  resolvePrIssueBinding,
+  type PrIssueBinding,
 } from './pr-scope-contract.ts';
 
 export { resolveIssueNumberForFetch } from './pr-scope-contract.ts';
@@ -668,14 +669,13 @@ function checkImplementationPrScope(
         };
       }
 
-      const closingIssueReferences = [
-        ...input.prBody.matchAll(
-          new RegExp(ISSUE_LINK_PATTERN.source, ISSUE_LINK_PATTERN.flags),
-        ),
-      ];
-      if (closingIssueReferences.length !== 1) {
+      const declarationFreeBinding = resolvePrIssueBinding(input.prBody);
+      if (!declarationFreeBinding.ok || declarationFreeBinding.issueNumber !== issueNumber) {
+        const correction = declarationFreeBinding.ok
+          ? `the PR binds Issue #${declarationFreeBinding.issueNumber}, not #${issueNumber}`
+          : describePrIssueBindingCorrection(declarationFreeBinding);
         const message =
-          'ambiguous Issue binding: declaration-free live-Issue scope requires exactly one closing Issue reference; FAIL/no-selection/fresh-declaration';
+          `ambiguous Issue binding: declaration-free live-Issue scope requires exactly one closing Issue reference (or exactly one Part of #N when no closing reference exists); ${correction}; FAIL/no-selection/fresh-declaration`;
         return {
           ok: false,
           reason: 'declaration-selection-failed',
@@ -981,7 +981,19 @@ export function evaluatePrScope(input: PrScopeCheckInput): PrScopeCheckResult {
     return checkNoCeremonyPrScope(input);
   }
 
-  const issueNumber = extractClosingIssueNumber(input.prBody);
+  const binding = resolvePrIssueBinding(input.prBody);
+  const issueNumber = binding.ok ? binding.issueNumber : null;
+  if (!binding.ok && (binding.reason === 'ambiguous-closing' || binding.reason === 'ambiguous-part-of')) {
+    // Several references of the selected kind never select the last or an arbitrary Issue.
+    const message =
+      `ambiguous Issue binding: scope validation requires exactly one closing Issue reference (or exactly one Part of #N when no closing reference exists); ${describePrIssueBindingCorrection(binding)}; FAIL/no-selection`;
+    return {
+      ok: false,
+      reason: 'declaration-selection-failed',
+      message,
+      violations: { outOfScope: [], denied: [], declarationErrors: [message], invalidPaths: [] },
+    };
+  }
   if (issueNumber === null) {
     const runtimeHistoryDeliveryResult = checkRuntimeHistoryDeliveryPrScope(input);
     if (runtimeHistoryDeliveryResult !== null) {
@@ -991,7 +1003,7 @@ export function evaluatePrScope(input: PrScopeCheckInput): PrScopeCheckResult {
       ok: false,
       reason: 'missing_issue_link',
       message:
-        'PR description must include a closing issue reference such as Closes #N, Fixes #N, or Resolves #N',
+        `PR description must bind exactly one Issue with Closes #N, Fixes #N, or Resolves #N (or one Part of #N when no closing reference exists): ${describePrIssueBindingCorrection(binding as Extract<PrIssueBinding, { ok: false }>)}`,
     };
   }
 
@@ -1073,7 +1085,7 @@ export function formatScopeCheckComment(result: PrScopeCheckResult): string {
   if (result.reason === 'missing_issue_link') {
     lines.push(
       '',
-      'Add a closing reference to the task issue in the PR description, for example:',
+      'Bind exactly one task Issue in the PR description with a closing reference (preferred), or one Part of #N reference when the PR must not auto-close it, for example:',
       '',
       '```',
       'Closes #123',

@@ -234,7 +234,8 @@ conflict-free carry-over from an authorized clean source head without another
 model invocation.
 
 For a pack-review start, the PR number is the canonical target. The live PR
-supplies the current head and its closing reference supplies the Issue.
+supplies the current head, and its bound Issue (one closing reference, else one
+`Part of #N`) is the Issue.
 Session-binding cache state is advisory correlation only; missing, corrupt,
 stale, or disagreeing cache data cannot veto a valid PR-led start or replace
 the linked Issue. If the exact bound Issue snapshot is missing, the runner

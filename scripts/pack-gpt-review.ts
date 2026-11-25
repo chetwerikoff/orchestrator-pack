@@ -293,11 +293,18 @@ export async function runPackGptReviewCommand(
         reason: describeError(error),
         runnerReason: describeError(error),
         prNumber: options.prNumber,
-        nextAction: `verify the arguments and selected PR #${options.prNumber}; if the remote target is unavailable, restore GitHub and inspect that PR before retrying`,
+        nextAction: prBindingCorrection(describeError(error))
+          ?? `verify the arguments and selected PR #${options.prNumber}; if the remote target is unavailable, restore GitHub and inspect that PR before retrying`,
         schema: PACK_GPT_REVIEW_RESULT_SCHEMA,
       },
     };
   }
+}
+
+/** A PR that binds no single Issue is corrected in the PR body, never by retrying unchanged. */
+function prBindingCorrection(reason: string): string | undefined {
+  const correction = /no resolvable closing Issue binding: ([\s\S]*?); then retry/.exec(reason)?.[1];
+  return correction ? `edit the PR body: ${correction}; then rerun this command` : undefined;
 }
 
 async function main(): Promise<void> {

@@ -39,7 +39,13 @@ content guards remain binding even when a path is not ignored.
 For new tasks, the published GitHub Issue is the sole live specification and queue
 entry. It must contain a mandatory `denylist` and may contain `allowed-roots`.
 Implementation PRs link exactly one Issue with `Closes #N`, `Fixes #N`, or
-`Resolves #N` near the top of the PR body.
+`Resolves #N` near the top of the PR body. Review, scope, smoke and fleet
+attribution resolve that Issue through one shared binding rule
+(`resolvePrIssueBinding` in `scripts/pr-scope-contract.ts`): exactly one closing
+reference wins; only when there is none, exactly one case-insensitive `Part of #N`
+binds. Several references of the selected kind, or none, fail closed. `Part of #N`
+is a binding reference only; it is not a GitHub auto-close and not a waiver, and
+the normal implementation convention stays `Closes #N`.
 
 The generated declaration at `docs/declarations/<issue-number>.pr-scope.json` is
 scope authority only when the selected target's authoritative PR-base/default
@@ -158,7 +164,8 @@ check into a claim that the code passed.
 ## Scope discipline
 
 - Link every branch and PR to its source Issue; PR bodies must include `Closes #N`,
-  `Fixes #N`, or `Resolves #N` in the first few lines.
+  `Fixes #N`, or `Resolves #N` in the first few lines (one `Part of #N` binds only when
+  no closing reference exists; see Task and scope authority).
 - In configured guard-enabled targets, constrain changes by the complete Issue and
   its applicable declaration; in confirmed guard-free targets, use the complete live Issue and actual changed paths. Unresolved configuration remains unverified.
 - Treat broad declarations such as `src/**` or `**/*` as suspicious; narrow them.
