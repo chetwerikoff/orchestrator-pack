@@ -32,7 +32,6 @@ import {
   resolveAllowlistedCommand,
   selectedCardProducerClosureIsTrusted,
 } from './reverify-command-resolution.ts';
-import { resolvePrIssueBinding } from '../pr-scope-contract.ts';
 import { loadReverifyAllowlistConfig } from './reverify-allowlist-config.ts';
 import { prHeadSnapshotBindingRefusal, runSandboxedAllowlistedCommand } from './reverify-sandbox.ts';
 import { runProcessSync } from '../kernel/subprocess.ts';
@@ -1000,13 +999,6 @@ export function resolveLinkedIssueNumber(input: {
     declarationIssueNumber: input.declarationIssueNumber ?? undefined,
   });
 
-  if (input.prBody) {
-    // Ambiguous or invalid selected-kind PR references never bind a single Issue.
-    const prBinding = resolvePrIssueBinding(input.prBody);
-    if (!prBinding.ok && prBinding.reason !== 'missing') {
-      return { ok: false, runOutcome: 'multiple-linked-issues' };
-    }
-  }
   if (refs.length === 0) {
     return { ok: false, runOutcome: 'no-linked-issue' };
   }

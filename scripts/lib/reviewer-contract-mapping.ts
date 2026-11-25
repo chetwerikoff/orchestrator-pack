@@ -388,6 +388,9 @@ export function collectAuthoritativeReferences(ctx: ReviewBindingContext): numbe
       refs.add(binding.issueNumber);
     } else {
       // Ambiguous or invalid PR references stay visible so the binding fails closed.
+      // Issue 0 marks the unresolved binding, so a caller that requires exactly one
+      // reference refuses even when the usable numbers collapse to one (duplicate or invalid refs).
+      if (binding.reason !== 'missing') refs.add(0);
       for (const ambiguous of binding.issueNumbers) {
         if (Number.isSafeInteger(ambiguous) && ambiguous > 0) {
           refs.add(ambiguous);

@@ -11,7 +11,6 @@ import {
 import { evaluatePrScope } from './pr-scope-check.ts';
 import { exactClosingIssue } from './worker-smoke-run.ts';
 import { uniqueClosingIssue } from './fleet/fleet-wake.ts';
-import { resolveLinkedIssueNumber } from './lib/contract-evidence-reverify.ts';
 import { evaluateMappingPreflight, extractContractSections, collectAuthoritativeReferences } from './lib/reviewer-contract-mapping.ts';
 
 const liveIssueBody = [
@@ -109,7 +108,7 @@ describe('Issue #2900 shared PR-to-Issue binding rule', () => {
       }
     }
     // Ambiguous references stay visible to the reviewer mapping so it cannot bind one silently.
-    expect(consumers('Closes #8\nFixes #9').review).toEqual([8, 9]);
+    expect(consumers('Closes #8\nFixes #9').review).toEqual([0, 8, 9]);
   });
 
   it('keeps explicit and declaration Issue mismatches visible to the reviewer mapping', () => {
@@ -166,12 +165,15 @@ describe('Issue #2900 review mapping preflight fails closed on an unbound PR bod
   });
 });
 
-describe('Issue #2900 contract-evidence reverify uses the shared binding rule', () => {
-  it.each(['Closes #8\nCloses #8', 'Closes #8\nFixes #0', 'Part of #8\nPart of #9'])('%j binds no Issue', (prBody) => {
-    expect(resolveLinkedIssueNumber({ prBody })).toMatchObject({ ok: false, runOutcome: 'multiple-linked-issues' });
+describe('Issue #2900 reviewer reference set never collapses an unresolved PR binding to one Issue', () => {
+  it.each(['Closes #8\nCloses #8', 'Closes #8\nFixes #0', 'Part of #8\nPart of #8'])('%j carries the unresolved marker', (prBody) => {
+    const refs = collectAuthoritativeReferences({ prBody } as Parameters<typeof collectAuthoritativeReferences>[0]);
+    expect(refs).toContain(0);
+    expect(refs.length).toBeGreaterThan(1);
   });
 
-  it.each([['Closes #8', 8], ['Part of #9', 9]] as const)('%j binds Issue %i', (prBody, issueNumber) => {
-    expect(resolveLinkedIssueNumber({ prBody })).toEqual({ ok: true, issueNumber });
+  it('a missing or valid binding carries no marker', () => {
+    expect(collectAuthoritativeReferences({ prBody: 'Closes #8' } as Parameters<typeof collectAuthoritativeReferences>[0])).toEqual([8]);
+    expect(collectAuthoritativeReferences({ prBody: 'no ref' } as Parameters<typeof collectAuthoritativeReferences>[0])).toEqual([]);
   });
 });
