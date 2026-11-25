@@ -31,6 +31,7 @@ import {
   scrubForwardedGhSecrets,
   scrubSmokeOutput,
   smokeResultForWorkerSmokeCauseFamily,
+  smokeRowSatisfiesPass,
   SMOKE_REPORT_PRODUCER,
   trackedPorcelainPaths,
   type SmokeReport,
@@ -949,8 +950,8 @@ function reportCorrespondenceReason(partial: Partial<SmokeReport>, plan: SmokeTe
       return `scenario_${index + 1}_identity_mismatch`;
     }
     if (!observed.observed?.trim()) return `scenario_${index + 1}_observed_missing`;
-    if (result === 'PASS' && observed.outcome !== 'pass') return `scenario_${index + 1}_pass_outcome_invalid`;
-    if (result !== 'PASS' && index < rows.length - 1 && observed.outcome !== 'pass') {
+    if (result === 'PASS' && !smokeRowSatisfiesPass(observed)) return `scenario_${index + 1}_pass_outcome_invalid`;
+    if (result !== 'PASS' && index < rows.length - 1 && !smokeRowSatisfiesPass(observed)) {
       return `scenario_${index + 1}_prefix_outcome_invalid`;
     }
   }

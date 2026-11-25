@@ -184,6 +184,14 @@ use `not-applicable: true` with a one-line `reason: <text>`.
 Put `entrypoint`, `environment`, and other scenario context in the scenario's
 `action` text, never as standalone lines inside the `smoke-test-plan` fence.
 
+Two explicit action prefixes exist for scenarios the ordinary rows cannot express.
+Start the `action` with `[post-merge]` when it can only run after merge: the PR owner
+reports it as `outcome: skipped` with `skip-reason: post-merge-pending`, which does
+not block PASS. Start it with `[measurement]` when it records a value rather than an
+assertion: the report row is `outcome: pass` with `observed: <value> (target <target>)`
+and a missed target is not a failure. Details:
+[`docs/worker-smoke-testing.md`](../../../docs/worker-smoke-testing.md#explicit-action-prefixes).
+
 When an Issue's goal includes proving that no stale terms, removed commands, or
 old paths remain, write that check as a numbered acceptance criterion containing
 the exact task-specific `rg` command with concrete search terms and repository

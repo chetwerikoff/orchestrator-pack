@@ -334,7 +334,7 @@ function strictReportReason(report: base.SmokeReport): string | undefined {
     const key = tupleKey(scenario.action, scenario.expected);
     if (seen.has(key)) return 'scenario_tuple_duplicate';
     seen.add(key);
-    if (report.result === 'PASS' && scenario.outcome !== 'pass') return 'pass_contains_non_pass_row';
+    if (report.result === 'PASS' && !base.smokeRowSatisfiesPass(scenario)) return 'pass_contains_non_pass_row';
   }
   return undefined;
 }

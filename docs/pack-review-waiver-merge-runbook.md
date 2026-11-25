@@ -1,8 +1,8 @@
 # Pack-review waiver merge (operator authorization)
 
-Operator runbook for merging a PR when **`orchestrator-pack/pack-review`** is either
-**FAILURE** or has no status for the current head, and the operator explicitly
-authorizes the merge.
+Operator runbook for merging a PR when **`orchestrator-pack/pack-review`** is
+**FAILURE**, **PENDING** or has no status for the current head, and the operator
+explicitly authorizes the merge.
 
 This is **not** a routine merge path. Default remains: fix the finding, re-run pack
 review, and merge on green. For a missing status, do not start pack-review-runner
@@ -25,6 +25,7 @@ merge/adoption flow.
 | Situation | Action |
 |-----------|--------|
 | `orchestrator-pack/pack-review` = **FAILURE**, all other required contexts **SUCCESS** (or SKIPPED where expected) | Failed-review waiver path **may** apply after explicit operator authorization |
+| `orchestrator-pack/pack-review` = **PENDING** on the exact current head, all other required contexts **SUCCESS** (or SKIPPED where expected) | Pending-review waiver path **may** apply after explicit operator authorization; the exact-head status POST and read-back are unchanged |
 | No `orchestrator-pack/pack-review` status for the current head, all other required contexts **SUCCESS** (or SKIPPED where expected) | Missing-status waiver path **may** apply after explicit operator authorization; missing status alone is not permission |
 | Any **other** required check red / pending / never reported | **No waiver** — fix CI or delegate to worker (`merge-with-local-adoption` Step 3b) |
 | `mergeable: CONFLICTING` | **No waiver** — resolve conflicts on the PR branch first |
@@ -83,8 +84,8 @@ Confirm:
 1. `state` = `OPEN`, `isDraft` = false, `mergeable` ≠ `CONFLICTING`.
 2. Every required context except `orchestrator-pack/pack-review` is green (or an
    expected skip).
-3. The `orchestrator-pack/pack-review` context is either **FAILURE** or has no
-   status for this exact `HEAD_SHA`.
+3. The `orchestrator-pack/pack-review` context is **FAILURE**, **PENDING** or has
+   no status for this exact `HEAD_SHA`.
 4. Operator has given **explicit written authorization** to merge (chat, issue
    comment, or ticket — not implied silence).
 
@@ -281,7 +282,7 @@ exact PR head. The description must state that the operator authorized merging
 without pack review and identify the non-private source of that direct authorization
 (for example, `source=operator-chat` or `source=issue-comment`; do not include names,
 handles, message contents, or other private data). For a failed review, identify the
-open finding; for a missing status, state that the review status was absent for this head. Posting this status
+open finding; for a missing status, state that the review status was absent for this head; for a pending status, state that it was pending for this head. Posting this status
 does not show that a review ran or was clean. Do not start `pack-review-runner` just
 to manufacture the status.
 
