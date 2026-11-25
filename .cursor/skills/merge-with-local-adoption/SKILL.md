@@ -462,7 +462,7 @@ procedure's sections 1–2):
 
 1. Confirm that the PR is open, non-draft, non-conflicting, and that every required context
    other than `orchestrator-pack/pack-review` is green or an expected skip.
-2. Confirm that `orchestrator-pack/pack-review` is **FAILURE** or absent for the exact current
+2. Confirm that `orchestrator-pack/pack-review` is **FAILURE**, **PENDING** or absent for the exact current
    head, and that the operator gave explicit written authorization for this merge. A qualifying
    orchestrator-issued Task spec is the authorization source in Task mode.
 3. Post and verify the operator-authorization `success` status on that exact head, with a
@@ -482,7 +482,7 @@ unrelated smoke exception.
 **Do not execute the runbook's merge or local-adoption steps from this branch** (including its
 sections 3–4); doing so would duplicate the merge/adoption work. After only the prerequisite
 and status POST/read-back work completes, return to the unchanged ordinary flow: finish Step 4,
-then continue with Step 5+ (merge, adoption, cleanup, and final read-back). A failed or missing
+then continue with Step 5+ (merge, adoption, cleanup, and final read-back). A failed, pending or missing
 pack-review status is not silently normalized when the required operator authorization, its
 non-private source, or the exact-head status evidence is absent.
 

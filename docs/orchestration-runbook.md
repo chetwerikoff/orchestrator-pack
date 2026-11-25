@@ -902,26 +902,24 @@ digest-bound continuation cycle, without rewriting the original snapshot/termina
 resetting the cycle. A further distinct amendment waits for its predecessor's terminal
 and cannot reuse an admitted digest.
 
-The existing **scope-only disposition lane** applies to the run's own Issue/PR on
+The existing **scope-only lane** applies to the run's own Issue/PR on
 the reviewed head or a proven strict-descendant fix head. It requires complete
 credentialed original GPT sources and their canonical findings REVIEW, the frozen
-Issue digest, unchanged behavioral criteria, and exactly one trusted author/architect
-disposition created strictly after the REVIEW. The disposition identifies the
-original run/head, terminal REVIEW, reviewed Issue digest, corrected REST Issue
-revision and every original typed blocking scope finding/signature/path. Only the
-disposition's exact `allowed-roots` additions are admitted; no other body edits,
-root removals or denylist weakening are accepted. On a strict descendant the same
-disposition also names `Fix head: <backtick-quoted exact SHA>` and
-`Fix diff: <backtick-quoted SHA-256>` of the complete PR files (canonical stable JSON
-of filename/sha/status/patch/previous_filename, sorted by filename). All changed
-paths must fit corrected scope, the PR/head/base must remain bound, and required
-current-head CI must be green. Reconciliation rechecks this evidence before status
-publication, retains original findings/source census/terminal, and consumes no new
-round. It never converts findings into a fabricated clean review. Missing authority,
-body drift or an unrelated fix remains non-success with a concrete recovery action.
-REST `updated_at` or Issue edit-history guesses cannot replace the post-REVIEW
-disposition. Comment-only changes remain undetected; unchanged-body findings-fix
-descendants and unrelated audited-reset uses remain unchanged. A cap never approves findings.
+Issue digest, unchanged behavioral criteria, and a live Issue body whose only
+difference from the reviewed body is added `allowed-roots` entries. The live body is
+the authority: no separate disposition comment is read or required. Every original
+blocking finding must be a typed scope finding whose path the corrected scope admits
+and the denylist does not block, and each added root must cover at least one such
+path. Root removals, other body edits and denylist weakening are refused. On a strict
+descendant the lane also binds the exact fix head and the SHA-256 of the complete PR
+files (canonical stable JSON of filename/sha/status/patch/previous_filename, sorted by
+filename). All changed paths must fit corrected scope, the PR/head/base must remain
+bound, and required current-head CI must be green. Reconciliation rechecks this
+evidence before status publication, retains original findings/source census/terminal,
+and consumes no new round. It never converts findings into a fabricated clean review.
+Missing credentialed sources, behavior-criteria drift or an unrelated fix remains
+non-success with a concrete recovery action. Unchanged-body findings-fix descendants
+and unrelated audited-reset uses remain unchanged. A cap never approves findings.
 
 Manual start, degraded-source settlement, and interrupted-review recovery follow
 `## Deterministic reconciliation`; do not duplicate those rules here.

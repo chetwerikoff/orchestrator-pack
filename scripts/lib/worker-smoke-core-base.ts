@@ -715,7 +715,7 @@ export function normalizeSmokeReport(
       if (!scenario.outcome) {
         return { ok: false, reason: `pass_scenario_${index + 1}_missing_outcome` };
       }
-      if (scenario.outcome !== 'pass') {
+      if (!smokeRowSatisfiesPass(scenario)) {
         return { ok: false, reason: `pass_scenario_${index + 1}_not_pass` };
       }
     }
@@ -928,7 +928,7 @@ export function smokeReportCoversPlan(report: SmokeReport, plan: SmokeTestPlan):
     const match = report.scenarios.find((scenario) => (
       scenario.action.trim() === required.action.trim()
       && scenario.expected.trim() === required.expected.trim()
-      && scenario.outcome === 'pass'
+      && smokeRowSatisfiesPass(scenario)
     ));
     if (!match) {
       return false;
@@ -1598,6 +1598,45 @@ export function workerSmokeManagerNonPassCauseForHarnessReason(
 
 export const SMOKE_HARNESS_TERMINAL_CLOSE_ACTION = 'close owned Orca terminal handle';
 
+export const SMOKE_POST_MERGE_ACTION_PREFIX = '[post-merge]';
+export const SMOKE_MEASUREMENT_ACTION_PREFIX = '[measurement]';
+export const SMOKE_POST_MERGE_PENDING_SKIP_REASON = 'post-merge-pending';
+
+/**
+ * Issue #2897: an explicit `[post-merge]` action row that was skipped with
+ * `post-merge-pending` cannot run before merge. It does not block PASS; any other
+ * skipped row stays a non-pass row.
+ */
+export function isPostMergePendingSmokeRow(
+  scenario: Pick<SmokeScenario, 'action' | 'outcome' | 'skipReason'>,
+): boolean {
+  return scenario.outcome === 'skipped'
+    && (scenario.action ?? '').trim().startsWith(SMOKE_POST_MERGE_ACTION_PREFIX)
+    && (scenario.skipReason ?? '').trim().toLowerCase() === SMOKE_POST_MERGE_PENDING_SKIP_REASON;
+}
+
+/**
+ * A `[measurement]` row records a value, not an assertion: it passes only when
+ * executed (`outcome: pass`) and reports `<value> (target <target>)`. A missed
+ * target is still a pass; a missing or failed execution never is.
+ */
+export function isMeasurementSmokeRow(scenario: Pick<SmokeScenario, 'action'>): boolean {
+  return (scenario.action ?? '').trim().startsWith(SMOKE_MEASUREMENT_ACTION_PREFIX);
+}
+
+export function measurementObservedFormatValid(observed: string | undefined): boolean {
+  return /^\S.*\(target\s+\S.*\)\s*$/u.test((observed ?? '').trim());
+}
+
+/** True when a row may sit in a PASS report. */
+export function smokeRowSatisfiesPass(
+  scenario: Pick<SmokeScenario, 'action' | 'observed' | 'outcome' | 'skipReason'>,
+): boolean {
+  if (isPostMergePendingSmokeRow(scenario)) return true;
+  if (scenario.outcome !== 'pass') return false;
+  return !isMeasurementSmokeRow(scenario) || measurementObservedFormatValid(scenario.observed);
+}
+
 export function declaredSmokeScenarios(
   partial: Partial<SmokeReport> | null | undefined,
 ): SmokeScenario[] {
@@ -1621,7 +1660,7 @@ export function classifySmokeNonPassCause(input: {
   }
   const scenarios = declaredSmokeScenarios(input.partial);
   const terminal = scenarios.at(-1);
-  if (!terminal || !scenarios.slice(0, -1).every((scenario) => scenario.outcome === 'pass')) {
+  if (!terminal || !scenarios.slice(0, -1).every((scenario) => smokeRowSatisfiesPass(scenario))) {
     return undefined;
   }
   if (

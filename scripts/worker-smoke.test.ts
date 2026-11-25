@@ -14,6 +14,7 @@ import {
   isSmokeNonPassCause,
   normalizeSmokeReport,
   parseSmokeAgentReport,
+  smokeRowSatisfiesPass,
   SMOKE_REPORT_PRODUCER,
   type SmokeReport,
   type SmokeScenario,
@@ -1476,5 +1477,79 @@ describe('Issue #2835 worker-smoke exact-head post-smoke status POST', () => {
       else process.env.PACK_REVIEW_RUN_STORE_ROOT = oldStore;
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('Issue #2897 post-merge and measurement smoke rows', () => {
+  const HEAD = 'a'.repeat(40);
+  const binding = { issueNumber: 2897, prNumber: 2898, headSha: HEAD };
+  const row = (action: string, outcome: SmokeScenario['outcome'], extra: Partial<SmokeScenario> = {}): SmokeScenario => ({
+    action, expected: 'ok', observed: 'seen', outcome, ...extra,
+  });
+  const pass = (scenarios: SmokeScenario[]) => normalizeSmokeReport({
+    result: 'PASS', trackedFilesUnmodified: true, scenarios,
+    producer: SMOKE_REPORT_PRODUCER, terminalCleanup: 'not_started_no_execution',
+  } as never, binding, { executionMode: 'carry-only' });
+
+  it('lets only an explicit [post-merge] row skipped as post-merge-pending sit in PASS', () => {
+    const pending = row('[post-merge] check live deploy', 'skipped', { skipReason: 'post-merge-pending' });
+    expect(smokeRowSatisfiesPass(pending)).toBe(true);
+    expect(smokeRowSatisfiesPass({ ...pending, skipReason: 'other' })).toBe(false);
+    expect(smokeRowSatisfiesPass({ ...pending, action: 'check live deploy' })).toBe(false);
+    expect(smokeRowSatisfiesPass(row('plain', 'skipped', { skipReason: 'post-merge-pending' }))).toBe(false);
+    expect(smokeRowSatisfiesPass(row('plain', 'fail'))).toBe(false);
+  });
+
+  it('keeps row identity and order and ordinary skipped rows non-passing in normalization', () => {
+    const rows = [
+      row('first', 'pass'),
+      row('[post-merge] live', 'skipped', { skipReason: 'post-merge-pending' }),
+      row('last', 'pass'),
+    ];
+    const ok = pass(rows);
+    expect(ok, JSON.stringify(ok)).toMatchObject({ ok: true });
+    if (ok.ok) expect(ok.report.scenarios.map((scenario) => scenario.action)).toEqual(['first', '[post-merge] live', 'last']);
+    expect(pass([row('first', 'pass'), row('ordinary', 'skipped', { skipReason: 'post-merge-pending' })]))
+      .toMatchObject({ ok: false, reason: 'pass_scenario_2_not_pass' });
+  });
+
+  it('accepts a measurement row only when executed with a value and target, and a miss still passes', () => {
+    expect(smokeRowSatisfiesPass(row('[measurement] latency', 'pass', { observed: '120 ms (target <= 100 ms)' }))).toBe(true);
+    expect(smokeRowSatisfiesPass(row('[measurement] latency', 'pass', { observed: '120 ms' }))).toBe(false);
+    expect(smokeRowSatisfiesPass(row('[measurement] latency', 'fail', { observed: '120 ms (target <= 100 ms)' }))).toBe(false);
+    expect(smokeRowSatisfiesPass(row('[measurement] latency', 'skipped', { observed: 'n/a (target 1)', skipReason: 'post-merge-pending' }))).toBe(false);
+    expect(smokeRowSatisfiesPass(row('ordinary', 'pass', { observed: 'anything' }))).toBe(true);
+  });
+  it('counts a declared post-merge-pending row as covered in tuple coverage and the gate', () => {
+    const mixedBody = [
+      '```behavior-kind', 'action-producing', '```', '',
+      '```smoke-test-plan', 'scenarios:',
+      '  - action: run runtime lifecycle | expected: PASS',
+      '  - action: [post-merge] verify live deploy | expected: PASS',
+      '```',
+    ].join('\n');
+    const target = {
+      repositorySlug: REPOSITORY, issueNumber: 1343, prNumber: 2001, headSha: HEAD_ONE,
+      resolvedIssueNumber: 1343, resolvedPrNumber: 2001, liveHeadSha: HEAD_ONE,
+      issueBodyMatchesTarget: true, trustedPublisherLogin: TRUSTED_ACTOR,
+      commentCensusComplete: true, commentSnapshotStable: true,
+    };
+    const pending = { ...scenario('[post-merge] verify live deploy', 'PASS', 'skipped'), skipReason: 'post-merge-pending' };
+    const terminalOwned = (r: SmokeReport) => formatSmokeReportComment(r).replace(
+      'producer: ' + SMOKE_REPORT_PRODUCER + '\n',
+      'producer: ' + SMOKE_REPORT_PRODUCER
+        + '\nterminal-handle: smoke-terminal-1\norca-executable: runtime-adapter\nterminal-cleanup: closed_owned_handle\n',
+    );
+    const mixedReport = report('PASS', [scenario('run runtime lifecycle', 'PASS'), pending]);
+    const mixed = comment(1, mixedReport, { body: terminalOwned(mixedReport) });
+    const coverage = evaluateWorkerSmokeCoverage({ issueBody: mixedBody, comments: [mixed], target });
+    expect(coverage.accepting, JSON.stringify(coverage.diagnostics)).toBe(true);
+    expect(coverage.diagnostics.latestNonPass.total).toBe(0);
+    const ordinaryReport = report('PASS', [
+      scenario('run runtime lifecycle', 'PASS'),
+      { ...pending, skipReason: 'other' },
+    ]);
+    const ordinarySkip = comment(2, ordinaryReport, { body: terminalOwned(ordinaryReport) });
+    expect(evaluateWorkerSmokeCoverage({ issueBody: mixedBody, comments: [ordinarySkip], target }).accepting).toBe(false);
   });
 });

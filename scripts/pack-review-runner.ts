@@ -2654,6 +2654,53 @@ function scrubbedForeignOwner(marker: string): string {
   return `foreign_owner:${sha256Bytes(marker).slice(0, 12)}`;
 }
 
+/**
+ * Narrow partial recovery (#2897): a terminal incomplete 1/2 GPT round with an
+ * unsettled source census holds exactly one valid source and one never-retried
+ * `possible_delivery/missing_result` slot. Only that slot may receive ONE new
+ * invocation in the same logical round, and only after the exact GitHub source
+ * census shows its result missing and the dead-owner check passes at the caller.
+ * Returns the slot id, or undefined when the shape does not match (including
+ * after the single retry was used: the slot then carries attempt history).
+ */
+const MISSING_RESULT_CLASS = 'possible_delivery/missing_result';
+
+/**
+ * Recognizes the retained partial from its shape: one valid source plus one
+ * other slot that is either a never-retried terminal missing_result slot or a
+ * slot whose attempt history already records the spent missing_result attempt,
+ * whatever its current lifecycle or terminal class.
+ */
+function gptMissingResultPartialSlot(run: PackReviewRunRecord): PackReviewSourceSlotRecord | undefined {
+  const round = run.reviewRound;
+  if (!round || round.reviewer !== 'gpt' || round.cardinality !== 2
+      || round.settledSourceCount !== undefined || round.sourceSlots.length !== 2
+      || hasPersistedPackReviewVerdict(run)) return undefined;
+  const isComplete = (slot: PackReviewSourceSlotRecord): boolean => slot.lifecycle === 'terminal'
+    && (slot.terminalClass === 'complete_clean' || slot.terminalClass === 'complete_findings')
+    && slot.payload !== undefined;
+  const complete = round.sourceSlots.filter(isComplete);
+  const other = round.sourceSlots.filter((slot) => !isComplete(slot));
+  if (complete.length !== 1 || other.length !== 1) return undefined;
+  const slot = other[0]!;
+  const unspent = slot.lifecycle === 'terminal' && slot.terminalClass === MISSING_RESULT_CLASS;
+  const spent = (slot.attemptHistory ?? []).some((entry) => entry.terminalClass === MISSING_RESULT_CLASS);
+  return unspent || spent ? slot : undefined;
+}
+
+/**
+ * Eligibility to spend the single retry is separate from recognition: an
+ * exhausted partial keeps its valid source, stays on the incumbent recovery
+ * route and never launches again or becomes whole-round replacement history.
+ */
+function gptMissingResultRetrySlotId(run: PackReviewRunRecord): string | undefined {
+  const slot = gptMissingResultPartialSlot(run);
+  if (!slot || !slot.invocationId || slot.lifecycle !== 'terminal'
+      || slot.terminalClass !== MISSING_RESULT_CLASS || slot.attemptOrdinal !== 1
+      || (slot.attemptHistory?.length ?? 0) !== 0) return undefined;
+  return slot.slotId;
+}
+
 export async function observeGptPackReviewAttempt(
   run: PackReviewRunRecord,
   nowMs = Date.now(),
@@ -2725,6 +2772,15 @@ export async function observeGptPackReviewAttempt(
       rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
       continue;
     }
+    // Census is exact-missing here. A dead source whose chat can no longer be
+    // observed is retryable once (see gptMissingResultRetrySlotId); a live,
+    // generating or replied chat stays blocked below.
+    const missingResultRetry = gptMissingResultRetrySlotId(run) === slot.slotId;
+    const unavailable = (elapsedMs?: number): void => {
+      if (missingResultRetry) replacementEligibleSlotIds.push(slot.slotId);
+      else rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId,
+        ...(elapsedMs === undefined ? {} : { elapsedMs }) });
+    };
     if (authoritativePreSend(slot)) {
       replacementEligibleSlotIds.push(slot.slotId);
       continue;
@@ -2733,16 +2789,16 @@ export async function observeGptPackReviewAttempt(
     const profileKey = trim(slot.launchProfileKey);
     const cdp = trim(slot.launchCdpUrl);
     if (!profileKey || !cdp) {
-      rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
+      unavailable();
       continue;
     }
     let observation: ReturnType<typeof readStateLightTurnObservation>;
     try { observation = readObservation(profileKey, slot.invocationId); } catch {
-      rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
+      unavailable();
       continue;
     }
     if (observation.profile_key !== profileKey || observation.invocation_id !== slot.invocationId) {
-      rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
+      unavailable();
       continue;
     }
     if (authoritativePreSend(slot, observation)) {
@@ -2751,12 +2807,12 @@ export async function observeGptPackReviewAttempt(
     }
     const marker = trim(observation.marker);
     if (!marker.startsWith('OPKTURNV1')) {
-      rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
+      unavailable();
       continue;
     }
     let targets: ReturnType<typeof toCompatibleTargets>;
     try { targets = toCompatibleTargets(await listTargets(cdp)); } catch {
-      rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
+      unavailable();
       continue;
     }
 
@@ -2793,7 +2849,7 @@ export async function observeGptPackReviewAttempt(
           const ordinal = Number(node.document_ordinal);
           if (!Number.isInteger(ordinal) || ordinal < 0) {
             addDiagnostic({ slotId: slot.slotId, invocationId: slot.invocationId, surfaceClass: 'ownership_unknown', title: target.title, cause: 'owned_marker_ordinal_invalid' });
-            rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
+            unavailable();
             continue sourceSlotLoop;
           }
           ownedMarkerFound = true;
@@ -2808,7 +2864,7 @@ export async function observeGptPackReviewAttempt(
     }
     if (owned.length > 1) { rememberBlocked({ state: 'ownership_ambiguous', replacementEligible: false, slotId: slot.slotId }); continue; }
     if (owned.length === 0) {
-      rememberBlocked({ state: 'observation_unavailable', replacementEligible: false, slotId: slot.slotId });
+      unavailable();
       continue;
     }
 
@@ -4085,7 +4141,10 @@ function isTerminalFailedNoVerdictGptHistory(run: PackReviewRunRecord): boolean 
   return run.status === 'failed'
     && run.reviewRound?.reviewer === 'gpt'
     && !hasPersistedPackReviewVerdict(run)
-    && (run.githubReviewId === undefined || run.githubReviewId === '');
+    && (run.githubReviewId === undefined || run.githubReviewId === '')
+    // #2897: the narrow 1/2 missing-result partial is recovered in place, with
+    // precedence over whole-round replacement, until its single retry is used.
+    && gptMissingResultPartialSlot(run) === undefined;
 }
 
 function hasFailedRateLimitSource(run: PackReviewRunRecord): boolean {
@@ -5404,17 +5463,9 @@ stage: { binding: PackReviewAmendmentBinding }, candidateHeadSha?: string) {
     stage.binding = 'issue_criteria';
     throw new Error('same-head corrected Issue acceptance criteria missing, invalid or changed');
   }
-  stage.binding = 'scope_proof_witness';
-  const principal = trim(githubEvidenceObject(await readFinalCapGithubJson(
-    input, ['api', 'user', '--jq', '.login'], runner,
-  )).login);
-  const censusValue = await readFinalCapGithubJson(input, [
-    'api', '--paginate', '--slurp', `repos/${options.repoSlug}/issues/${run.prNumber}/comments`,
-  ], runner);
-  if (!Array.isArray(censusValue) || !principal) {
-    throw new Error('trusted post-terminal author disposition census unavailable');
-  }
-  const census = censusValue.flat().map(githubEvidenceObject);
+  // The live linked Issue body (read twice by resolveFinalCapIssueBodyRevision)
+  // is the scope authority: no digest-bound disposition COMMENT is required.
+  stage.binding = 'issue_body_digest';
   const blockers = payload.findings.filter((finding) =>
     !['warning', 'info', 'non-blocking'].includes(trim(finding.severity).toLowerCase()));
   if (blockers.length === 0) throw new Error('terminal original blocking findings missing');
@@ -5469,77 +5520,30 @@ stage: { binding: PackReviewAmendmentBinding }, candidateHeadSha?: string) {
       patch: file.patch, previous_filename: file.previous_filename ?? null,
     })).sort((a, b) => String(a.filename).localeCompare(String(b.filename)))));
   }
-  const candidates = census.filter((comment) => {
-    const author = comment.user && typeof comment.user === 'object'
-      && !Array.isArray(comment.user) ? comment.user as Record<string, unknown> : {};
-    const createdAt = Date.parse(trim(comment.created_at));
-    if (trim(author.login).toLowerCase() !== principal.toLowerCase()
-        || trim(comment.issue_url).toLowerCase()
-          !== `https://api.github.com/repos/${options.repoSlug}/issues/${run.prNumber}`.toLowerCase()
-        || !['OWNER', 'MEMBER', 'COLLABORATOR'].includes(trim(comment.author_association))
-        || !Number.isInteger(comment.id) || typeof comment.body !== 'string'
-        || !Number.isFinite(createdAt) || createdAt <= latestTerminalFindingsCommentMs
-        || createdAt <= reviewedAt) return false;
-    const sections = comment.body.split(/(?=^##\s)/m).filter((section) => {
-      const heading = section.split('\n')[0] ?? '';
-      return heading.startsWith(`## R${round.roundOrdinal} dispositions`)
-        && heading.includes('`' + run.id + '`')
-        && heading.includes('`' + run.targetSha + '`');
-    });
-    if (sections.length !== 1) return false;
-    const section = sections[0]!;
-    if (descendantCorrection && (!section.includes('Fix head: `' + currentHead + '`')
-        || !section.includes('Fix diff: `' + fixDiffDigest + '`'))) return false;
-    if (!section.includes('Terminal REVIEW: `' + String(review.id) + '`')
-        || !section.includes('Reviewed Issue digest: `' + snapshot.snapshotHash + '`')
-        || !section.includes('Corrected Issue revision: `' + revision.revision + '`')) return false;
-    const bullets = section.split(/(?=^-\s)/m).slice(1);
-    return blockers.every((finding) => {
-      const code = finding.body?.match(/^type: [^\n]+\ncode: ([^\n]+)\nseverity:/)?.[1];
-      const signature = trim(finding.fingerprint);
-      if (!code || !/^[a-f0-9]{64}$/.test(signature)
-          || !['scope', 'scope-violation'].includes(trim(finding.category))) return false;
-      const matching = bullets.filter((bullet) =>
-        bullet.includes('`' + code + '`') && bullet.includes('`' + signature + '`'));
-      if (matching.length !== 1) return false;
-      const bullet = matching[0]!;
-      const path = normalizePath(finding.filePath ?? '');
-      if (!path.ok || pathMatchesAnyPattern(path.path, [...REPOSITORY_DENYLIST, ...scope.denylist])
-          || !pathMatchesAnyPattern(path.path, scope.allowed_roots ?? [])) return false;
-      return /^- \*\*FIXED — blocking scope finding /i.test(bullet)
-        && bullet.includes(`The live ${revision.revision} Issue now includes`)
-        && bullet.includes('No code or behavior change was made for this disposition.')
-        && !!finding.filePath && bullet.includes('`' + finding.filePath + '`')
-        && bullet.includes('`allowed-roots`');
-    });
-  });
-  if (candidates.length !== 1) {
-    throw new Error('missing exactly one authorized, post-terminal, fully bound scope disposition');
+  const reviewedScope = issueScopeFences(originalReviewedBody);
+  const introducedRoots = (scope.allowed_roots ?? [])
+    .filter((root) => !(reviewedScope.allowed_roots ?? []).includes(root));
+  // Complete frozen-vs-live comparison: only added allowed-roots may differ.
+  if (!snapshot.snapshotPath || !isOnlyDispositionScopeCorrection(
+    originalReviewedBody, revision.body, introducedRoots,
+  )) {
+    throw new Error('corrected Issue has unrelated changes beyond added scope roots');
   }
-  const comment = candidates[0]!;
-  const commentBody = typeof comment.body === 'string' ? comment.body : '';
-  const section = commentBody.split(/(?=^##\s)/m).find((part) =>
-    part.startsWith(`## R${round.roundOrdinal} dispositions`)
-      && part.includes('`' + run.id + '`') && part.includes('`' + run.targetSha + '`'));
-  const bullets = section?.split(/(?=^-\s)/m).slice(1) ?? [];
-  const dispositionRoots = blockers.map((finding) => {
-    const code = finding.body?.match(/^type: [^\n]+\ncode: ([^\n]+)\nseverity:/)?.[1];
-    const bullet = bullets.find((row) => row.includes('`' + code + '`')
-      && row.includes('`' + trim(finding.fingerprint) + '`'));
-    return bullet?.match(/The live r\d+ Issue now includes(?: only)? `([^`]+)` in `allowed-roots`/)?.[1] ?? '';
-  });
-  if (!snapshot.snapshotPath || dispositionRoots.some((root) => !root)
-      || !isOnlyDispositionScopeCorrection(
-        originalReviewedBody, revision.body, dispositionRoots,
-      )) {
-    stage.binding = 'issue_body_digest';
-    throw new Error('corrected Issue has unrelated changes beyond the exact disposition scope roots');
+  // Every original blocking finding must be a scope finding whose path the
+  // live scope now admits; any other blocker stays a substantive finding.
+  for (const finding of blockers) {
+    const path = normalizePath(finding.filePath ?? '');
+    if (!['scope', 'scope-violation'].includes(trim(finding.category))
+        || !path.ok || pathMatchesAnyPattern(path.path, [...REPOSITORY_DENYLIST, ...scope.denylist])
+        || !pathMatchesAnyPattern(path.path, scope.allowed_roots ?? [])) {
+      throw new Error('original blocking finding is not a scope finding admitted by the live Issue scope');
+    }
   }
-  const reread = githubEvidenceObject(await readFinalCapGithubJson(input, [
-    'api', `repos/${options.repoSlug}/issues/comments/${String(comment.id)}`,
-  ], runner));
-  if (stableJson(reread) !== stableJson(comment)) {
-    throw new Error('author disposition changed during exact-comment reread');
+  // Each added root must exist to admit an affected blocking-finding path.
+  const findingPaths = blockers.map((finding) => normalizePath(finding.filePath ?? ''))
+    .flatMap((path) => path.ok ? [path.path] : []);
+  if (introducedRoots.some((root) => !findingPaths.some((path) => pathMatchesAnyPattern(path, [root])))) {
+    throw new Error('corrected Issue has unrelated changes beyond added scope roots');
   }
   stage.binding = 'issue_body_digest';
   const liveIssue = githubEvidenceObject(await readFinalCapGithubJson(input, [
@@ -5560,13 +5564,10 @@ stage: { binding: PackReviewAmendmentBinding }, candidateHeadSha?: string) {
     runId: run.id, cycleId: cycle.cycleId, logicalRoundOrdinal: round.roundOrdinal,
     correctedBodyDigest: computeBoundIssueSnapshotHash(revision.body),
     publicationDigest: sha256Bytes(stableJson({
-      // Do not bind publication to mutable REST reactions/metadata.
-      comment: {
-        id: comment.id, issueUrl: comment.issue_url,
-        authorLogin: trim(githubEvidenceObject(comment.user).login).toLowerCase(),
-        authorAssociation: comment.author_association,
-        createdAt: comment.created_at, body: comment.body,
-      },
+      // Bound to the live Issue bytes, frozen digest, terminal REVIEW and fix diff.
+      correctedBodyDigest: computeBoundIssueSnapshotHash(revision.body),
+      reviewedBodyDigest: snapshot.snapshotHash, introducedRoots,
+      fixDiffDigest: fixDiffDigest ?? null,
       revision, reviewId: review.id, reviewedAt: review.submittedAt, terminalDigest: terminal.digest,
     })),
   };
@@ -6213,10 +6214,10 @@ type PackReviewAmendmentBinding = 'issue_criteria' | 'issue_body_digest' | 'immu
 
 const AMENDMENT_BINDING_NEXT_ACTION: Record<PackReviewAmendmentBinding, string> = {
   issue_criteria: 'restore the reviewed Issue behavior criteria (or publish one genuine behavior amendment), then rerun scoped reconcile; do not reset the cycle or send a new review',
-  issue_body_digest: 'restore the linked Issue body to the reviewed immutable bytes or publish one authorized scope-only disposition, then rerun scoped reconcile; do not reset the cycle or send a new review',
+  issue_body_digest: 'restore the linked Issue body to the reviewed immutable bytes or amend only its allowed-roots scope on the live Issue, then rerun scoped reconcile; do not reset the cycle or send a new review',
   immutable_terminal: 'reconcile the original exact-head terminal and its immutable record, then rerun scoped reconcile; do not reset the cycle or send a new review',
   pr_head_lineage: 'observe the open PR head and its closing Issue (a strict descendant of the reviewed head), then rerun scoped reconcile; do not reset the cycle or send a new review',
-  scope_proof_witness: 'restore the original credentialed sources, canonical terminal REVIEW and one authorized post-terminal scope disposition COMMENT, then rerun scoped reconcile; do not send a new review',
+  scope_proof_witness: 'restore the original credentialed sources and canonical terminal REVIEW, and keep the live Issue scope-only amended (actual PR paths admitted, behavior criteria unchanged), then rerun scoped reconcile; do not send a new review',
   required_status: 'repair and read back the exact-head pack-review status, then rerun scoped reconcile; do not reset the cycle or send a new review',
 };
 
@@ -6665,10 +6666,69 @@ export async function finalCapPureSelectedBaseMerge(
   } catch { return false; }
 }
 
+/** Stable `git patch-id` of the PR's own net change: selected-base merge base
+ * of `sha` up to `sha`. Returns undefined when the id cannot be proven.
+ * Patch-id equality is only an additional veto next to the clean-merge proof,
+ * never semantic equivalence on its own.
+ */
+export async function finalCapPrPatchId(
+  root: string, sha: string, selectedBaseRef: string,
+): Promise<string | undefined> {
+  try {
+    await ensureCommitAvailable(root, sha);
+    const mergeBase = await rebaseUniqueMergeBase(root, sha, selectedBaseRef);
+    const diff = await runProcess({
+      command: 'git', args: ['diff', '--binary', mergeBase, sha],
+      cwd: root, inheritParentEnv: true, allowEmptyStdout: true, timeoutMs: 60000,
+    });
+    if (!diff.ok) return undefined;
+    if (!diff.stdout.trim()) return 'empty-patch';
+    const id = await runProcess({
+      command: 'git', args: ['patch-id', '--stable'], input: diff.stdout,
+      cwd: root, inheritParentEnv: true, allowEmptyStdout: true, timeoutMs: 60000,
+    });
+    const first = id.ok ? id.stdout.trim().split(/\s+/)[0] : undefined;
+    return first && /^[0-9a-f]{40}$/.test(first) ? first : undefined;
+  } catch { return undefined; }
+}
+
 /** The original run-store worker-notification channel is claimed BEFORE
  * sending a persisted non-consuming F..T findings verdict. Reconciliation
  * cannot blindly resend a possibly dispatched message.
  */
+/**
+ * Issue #2897: the ordered continuation for final-cap delta findings. No new
+ * review runs on the same head; the notification state of the persisted delta
+ * findings is reported as-is and never invented.
+ */
+function finalCapNotificationNote(handoffState?: string): string {
+  return handoffState === 'submitted' || handoffState === 'already_attempted'
+    ? ''
+    : ' (findings notification state: ' + (handoffState ?? 'none') + '; restore the bound worker route to deliver them)';
+}
+
+const finalCapSmokeMergeSteps = (prNumber: number, first: number): string =>
+  '(' + first + ') on PASS run smoke; (' + (first + 1) + ') merge with "мерж ' + prNumber
+  + ' без ревью" via --merge-waiver-line';
+
+/** First persisted delta findings: the whole ordered route, starting at the fix. */
+export function finalCapFindingsNextAction(prNumber: number, handoffState?: string): string {
+  return 'final-cap delta findings persisted for PR #' + prNumber + finalCapNotificationNote(handoffState)
+    + '. Continue in this order, with no new review on the same head: '
+    + '(1) make one final fix commit for the persisted delta findings; '
+    + '(2) obtain final_cap_delta_findings_bound_reached on that new head, which runs no review; '
+    + '(3) get the architect diff check of that fix against the last delta findings (PROMPT order C); '
+    + finalCapSmokeMergeSteps(prNumber, 4);
+}
+
+/** Bound reached on the fix head: the fix commit is done, continue at the architect check. */
+export function finalCapBoundReachedNextAction(prNumber: number, handoffState?: string): string {
+  return 'final-cap delta findings bound reached for PR #' + prNumber + ': no further delta review on this head'
+    + finalCapNotificationNote(handoffState)
+    + '. Continue in this order: (1) get the architect diff check of the fix against the last delta findings '
+    + '(PROMPT order C); ' + finalCapSmokeMergeSteps(prNumber, 2);
+}
+
 export async function handoffFinalCapDeltaFindings(input: {
   runId: string; originalRunId: string; projectId: string; storeRoot: string;
   notifier?: PackReviewWorkerNotifier;
@@ -6814,7 +6874,15 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
     return refused('final_cap_gpt_original_slots_unverified');
   }
   const ancestry = async (fromSha: string, toSha: string): Promise<boolean> => {
-    try { return await rebaseAncestor(input.sourceRepoRoot, fromSha, toSha); }
+    try { if (await rebaseAncestor(input.sourceRepoRoot, fromSha, toSha)) return true; }
+    catch { /* retry once below after making the objects available */ }
+    try {
+      // A reviewed head that is only missing from the local object store is
+      // not evidence of divergent history; fetch it before judging ancestry.
+      await ensureCommitAvailable(input.sourceRepoRoot, fromSha);
+      await ensureCommitAvailable(input.sourceRepoRoot, toSha);
+      return await rebaseAncestor(input.sourceRepoRoot, fromSha, toSha);
+    }
     catch { return false; } // Missing Git proof is non-success, not an uncaught exception.
   };
   const previous = listPackReviewRuns({ projectId: opts.projectId, storeRoot: opts.storeRoot })
@@ -6868,22 +6936,37 @@ async function runFinalCapOrdinaryDelta(input: ReconcileStalePackReviewRunsInput
       reason: 'final_cap_delta_exact_result_reused', runId: lastComplete.id,
       fromSha: lastComplete.finalCapDelta!.fromSha };
   }
-  if (!await ancestry(frontier, opts.targetSha)
-      || frontier === opts.targetSha) return refused('final_cap_delta_frontier_not_ancestor');
+  // S is the exact authenticated settled head: the last completed clean
+  // delta (`lastComplete`), else the reviewed H1 itself. T === S needs no
+  // ancestry proof; a different T carries only as a proven clean selected-base
+  // merge descendant of S whose PR patch-id equals S's.
+  // S is the authenticated settled head: the last completed delta record, else
+  // the reviewed H1. A status publication alone never authenticates a clean S.
+  const settledHead = frontier;
+  const carriedUnresolved = unresolved;
+  if (!await ancestry(settledHead, opts.targetSha)) {
+    return refused('final_cap_delta_frontier_not_ancestor');
+  }
   const pureMerge = await finalCapPureSelectedBaseMerge(
-    input.sourceRepoRoot, frontier, opts.targetSha, selectedBaseRef);
-  if (pureMerge) {
-    // The existing authenticated same-head Issue scope-only disposition is
-    // independently sufficient to resolve the ORIGINAL H1 blockers. It does
+    input.sourceRepoRoot, settledHead, opts.targetSha, selectedBaseRef);
+  // Patch-id equality is an extra veto: a changed PR patch is the substantive
+  // route (ordinary delta review below), never a zero-call carry.
+  const equalPatch = pureMerge
+    && await finalCapPrPatchId(input.sourceRepoRoot, settledHead, selectedBaseRef) !== undefined
+    && await finalCapPrPatchId(input.sourceRepoRoot, settledHead, selectedBaseRef)
+      === await finalCapPrPatchId(input.sourceRepoRoot, opts.targetSha, selectedBaseRef);
+  if (pureMerge && equalPatch) {
+    // The Issue scope-only correction proved from the live linked Issue body
+    // is independently sufficient to resolve the ORIGINAL H1 blockers. It does
     // not dispose of findings from any subsequent completed delta reviewer.
     // Ordinary F..T reviews still receive original findings as context.
     const originalDispositionResolved = opts.verifiedScopeCorrection === true && !lastComplete;
-    if (unresolved.length && !originalDispositionResolved) {
+    if (carriedUnresolved.length && !originalDispositionResolved) {
       return { state: 'findings', reason: 'final_cap_pure_merge_original_findings_still_unresolved',
-        fromSha: frontier, zeroCall: true };
+        fromSha: settledHead, zeroCall: true };
     }
     return { state: 'clean', reason: 'final_cap_pure_base_merge_verified',
-      fromSha: frontier, zeroCall: true };
+      fromSha: settledHead, zeroCall: true };
   }
   // At most one final-cap delta per original cycle may end with findings; the
   // fix of those findings goes to the architect diff check, not another delta.
@@ -7865,7 +7948,7 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
       } catch (error) {
         return { prNumber, headSha: authority.currentHeadSha, finalCapSettlement: true, settled: false,
           reason: 'same_head_resolution_unproven', detail: describeError(error),
-          nextAction: 'verify the original exact-run sources, canonical terminal REVIEW ID/timestamp, frozen Issue digest, corrected REST Issue scope, and one authorized post-terminal disposition COMMENT; recheck current-head CI and rerun scoped exact-head reconcile. Only a real code fix belongs on a strict descendant',
+          nextAction: 'verify the original exact-run sources, canonical terminal REVIEW, frozen Issue digest and the live Issue body (scope-only allowed-roots additions covering the actual PR paths); recheck current-head CI and rerun scoped exact-head reconcile. Only a real code fix belongs on a strict descendant',
           architectDeferRoute: architectDeferNextAction(prNumber, reviewedHeadSha,
             soleBlockingQualityFindingCode(priorRun.findings)) };
       }
@@ -7945,13 +8028,9 @@ async function reconcileFinalCapSettlement(input: ReconcileStalePackReviewRunsIn
           ...(deltaOutcome.runId ? { deltaRunId: deltaOutcome.runId } : {}),
           ...(findingsHandoff ? { findingsHandoff } : {}),
           nextAction: boundReached
-            ? 'final-cap delta findings bound reached for PR #' + prNumber + ': no further delta review; '
-              + 'get the architect diff check of the fix against the last delta findings (PROMPT order C); '
-              + 'on PASS run smoke, then merge with "мерж ' + prNumber + ' без ревью" via --merge-waiver-line'
+            ? finalCapBoundReachedNextAction(prNumber, findingsHandoff?.state)
             : deltaOutcome.state === 'findings'
-            ? findingsHandoff?.state === 'submitted' || findingsHandoff?.state === 'already_attempted'
-              ? 'continue the existing fixer from the persisted delta REVIEW, then review only the next F..T'
-              : 'restore the bound worker notification route for persisted findings before fixer continuation'
+            ? finalCapFindingsNextAction(prNumber, findingsHandoff?.state)
             : 'reconcile the existing exact-head delta run/source census or use the PR-led claimed runner; never resend uncertain output',
         };
       }
@@ -11273,8 +11352,13 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
         // The browser observer's generating-timeout/empty-reply hint is not
         // evidence of zero delivery. Only an existing terminal pre-send class
         // can legally rotate the original invocation in this dead-partial path.
+        // A recognized missing-result partial may spend only its single retry;
+        // once spent, no other class or lifecycle of that slot may launch again.
+        const partialSlotId = gptMissingResultPartialSlot(priorSameRound)?.slotId;
+        const retrySlotId = gptMissingResultRetrySlotId(priorSameRound);
         const replacementSlotIds = (observation?.replacementEligibleSlotIds
           ?? (observation?.replacementEligible && observation.slotId ? [observation.slotId] : []))
+          .filter((slotId) => !(partialSlotId === slotId && retrySlotId !== slotId))
           .filter((slotId) => priorSameRound.reviewRound?.sourceSlots.some((slot) => (
             slot.slotId === slotId
             && (
@@ -11288,7 +11372,7 @@ async function startPackReviewBody(input: StartInput): Promise<Record<string, un
                   Boolean(slot.terminalClass)
                   && (slot.terminalResult as Record<string, unknown> | undefined)?.send_count === 0
                   && !terminalHasPossibleDelivery(slot.terminalResult as Record<string, unknown>)
-                )))
+                ) || gptMissingResultRetrySlotId(priorSameRound) === slot.slotId))
             )
           )));
         const eligibleSlotIds = [...new Set([...replacementSlotIds, ...initialLaunchSlotIds])];

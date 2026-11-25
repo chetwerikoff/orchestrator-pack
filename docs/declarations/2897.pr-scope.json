@@ -1,0 +1,40 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 2897,
+  "declared_paths": [
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "docs/chat-executor-rules.md",
+    "docs/orchestration-runbook.md",
+    "docs/pack-review-waiver-merge-runbook.md",
+    "docs/worker-smoke-testing.md",
+    "scripts/lib/worker-smoke-core-base.ts",
+    "scripts/lib/worker-smoke-core.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "denylist": [
+    ".orchestrator-pack/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "docs/chat-executor-rules.md",
+    "docs/orchestration-runbook.md",
+    "docs/pack-review-waiver-merge-runbook.md",
+    "docs/worker-smoke-testing.md",
+    "scripts/lib/worker-smoke-core-base.ts",
+    "scripts/lib/worker-smoke-core.ts",
+    "scripts/pack-review-runner.test.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "source_revision": "c5b1791bf1b830d0fa12712649505241029bf322"
+}

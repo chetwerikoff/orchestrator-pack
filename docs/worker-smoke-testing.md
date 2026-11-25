@@ -78,6 +78,20 @@ ordered prefix and end on the terminal non-PASS row. That terminal row carries
 the existing closed `cause-family`; the report also carries the existing
 closed top-level `non-pass-cause`.
 
+### Explicit action prefixes
+
+Two action prefixes keep the v1 report and its four outcomes unchanged:
+
+- `[post-merge]` marks a scenario that can only run after merge. Report it with
+  `outcome: skipped` and `skip-reason: post-merge-pending`; such a row does not
+  block PASS. Any other skipped row still blocks PASS. Row identity and order are
+  unchanged, and a FAIL/BLOCKED prefix after a post-merge-pending row is still
+  published truthfully.
+- `[measurement]` records a value, not an assertion. Report it with
+  `outcome: pass` and `observed: <value> (target <target>)`. Missing the target is
+  not a failure; a missing or failed execution is never a pass. Ordinary rows stay
+  strict.
+
 Report authors must not place secrets or third-party private data in scenario
 text, environment notes, or limitations.
 
