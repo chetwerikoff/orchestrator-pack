@@ -75,6 +75,7 @@ class MemoryWakeStore implements FleetWakeStateStore {
   hasPollingMark(handle: string): boolean { return this.marks.has(handle); }
   setPollingMark(handle: string): void { this.marks.add(handle); }
   clearPollingMark(handle: string): void { this.marks.delete(handle); }
+  lastSentSignatureStatus?: () => 'absent' | 'present' | 'unreadable';
   readLastSentSignature(): string | null { return this.signature; }
   writeLastSentSignature(signature: string): void { this.signature = signature; }
   clearLastSentSignature(): void { this.signature = null; }
@@ -7038,6 +7039,59 @@ describe('Issue #2896 state-change alarm dedup, independent of the coordinator',
       await tick({ store: fresh, terminals: [coordinatorA, stopped], screens: { ...screens, one: 'working\nesc interrupt' } });
       expect(sendsTo((await tick({ store: fresh, terminals: [coordinatorA, stopped], screens })).calls, 'coord-a'), opaque).toHaveLength(1);
     }
+  });
+
+  it('keeps the unknown-history fence for an omitted pane across ticks and an outage', async () => {
+    for (const roster of [[coordinatorA], [stopped]]) {
+      const store = new MemoryWakeStore();
+      store.writeLastSentSignature('{not json');
+      // First tick after the opaque signature: the previously notified worker is not observed.
+      expect(sends((await run(store, roster, screens)).calls)).toHaveLength(0);
+      expect(JSON.parse(store.signature ?? '{}').fence).toBe(true);
+      // It returns unchanged: still unknown, never replayed as new.
+      expect(sends((await run(store, [coordinatorA, stopped])).calls)).toHaveLength(0);
+      // A positive state change then a new stop alarms once.
+      await run(store, [coordinatorA, stopped], { ...screens, one: 'working\nesc interrupt' });
+      expect(sendsTo((await run(store, [coordinatorA, stopped])).calls, 'coord-a')).toHaveLength(1);
+    }
+  });
+
+  it('treats an unreadable or emptied file-backed signature as unknown, not as a fresh start', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'fleet-2896-sig-'));
+    try {
+      const first = new FileFleetWakeStateStore('orchestrator-pack', { XDG_RUNTIME_DIR: root });
+      expect(sendsTo((await tick({ store: first, terminals: [coordinatorA, stopped], screens })).calls, 'coord-a')).toHaveLength(1);
+      writeFileSync(join(first.root, 'last-sent.signature'), '');
+      const reread = new FileFleetWakeStateStore('orchestrator-pack', { XDG_RUNTIME_DIR: root });
+      expect(reread.lastSentSignatureStatus()).toBe('present');
+      expect(sends((await tick({ store: reread, terminals: [coordinatorA, stopped], screens })).calls)).toHaveLength(0);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+    // A failed read of the carrier is likewise unknown history.
+    const unreadable = new MemoryWakeStore();
+    unreadable.lastSentSignatureStatus = () => 'unreadable';
+    expect(sends((await tick({ store: unreadable, terminals: [coordinatorA, stopped], screens })).calls)).toHaveLength(0);
+    // A truly absent carrier is a fresh start.
+    const fresh = mkdtempSync(join(tmpdir(), 'fleet-2896-fresh-'));
+    try {
+      const store = new FileFleetWakeStateStore('orchestrator-pack', { XDG_RUNTIME_DIR: fresh });
+      expect(store.lastSentSignatureStatus()).toBe('absent');
+      expect(sendsTo((await tick({ store, terminals: [coordinatorA, stopped], screens })).calls, 'coord-a')).toHaveLength(1);
+    } finally { rmSync(fresh, { recursive: true, force: true }); }
+  });
+
+  it('never evicts an attempted episode under record-count pressure', async () => {
+    const store = new MemoryWakeStore();
+    expect(sendsTo((await run(store, [coordinatorA, stopped])).calls, 'coord-a')).toHaveLength(1);
+    const saved = JSON.parse(store.signature ?? '{}') as { panes: Record<string, unknown> };
+    for (let index = 0; index < 700; index += 1) {
+      saved.panes[`filler-${String(index)}`] = { state: 'RUNNING', sent: false, seenAt: Date.now() + index };
+    }
+    store.writeLastSentSignature(JSON.stringify(saved));
+    // The notified worker is omitted for a tick while the capped history is rewritten.
+    expect(sends((await run(store, [coordinatorA])).calls)).toHaveLength(0);
+    const rewritten = JSON.parse(store.signature ?? '{}') as { panes: Record<string, unknown> };
+    expect(Object.keys(rewritten.panes).length).toBeLessThanOrEqual(501);
+    expect(sends((await run(store, [coordinatorA, stopped])).calls)).toHaveLength(0);
   });
 
   it('records a STOPPED to resolved change observed while no coordinator is valid', async () => {
