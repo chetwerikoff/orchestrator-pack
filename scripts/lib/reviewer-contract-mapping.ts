@@ -9,7 +9,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, relative, resolve, sep } from 'node:path';
-import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from '../pr-scope-contract.ts';
+import { resolvePrIssueBinding } from '../pr-scope-contract.ts';
 
 /** Fixed review-status vocabulary (Issue #362). */
 export const CONTRACT_MAPPING_STATUSES = [
@@ -365,19 +365,6 @@ export interface MappingLedger {
 
 
 
-function extractClosingIssueNumbers(prBody: string): number[] {
-  const scannable = prBodyScannableForIssueLinks(prBody);
-  ISSUE_LINK_PATTERN.lastIndex = 0;
-  const numbers: number[] = [];
-  for (const match of scannable.matchAll(ISSUE_LINK_PATTERN)) {
-    const issueNumber = Number(match[1]);
-    if (Number.isInteger(issueNumber) && issueNumber > 0) {
-      numbers.push(issueNumber);
-    }
-  }
-  return numbers;
-}
-
 export function normalizeIssueBodyForHash(body: string): string {
   return body.replace(/\r\n/g, '\n').replace(/\n+$/, '');
 }
@@ -396,14 +383,47 @@ export function collectAuthoritativeReferences(ctx: ReviewBindingContext): numbe
     refs.add(ctx.explicitIssueNumber);
   }
   if (ctx.prBody) {
-    for (const closing of extractClosingIssueNumbers(ctx.prBody)) {
-      refs.add(closing);
+    const binding = resolvePrIssueBinding(ctx.prBody);
+    if (binding.ok) {
+      refs.add(binding.issueNumber);
+    } else {
+      // Ambiguous or invalid PR references stay visible so the binding fails closed.
+      for (const ambiguous of binding.issueNumbers) {
+        if (Number.isSafeInteger(ambiguous) && ambiguous > 0) {
+          refs.add(ambiguous);
+        }
+      }
     }
   }
   if (ctx.declarationIssueNumber && ctx.declarationIssueNumber > 0) {
     refs.add(ctx.declarationIssueNumber);
   }
   return [...refs].sort((a, b) => a - b);
+}
+
+const BEHAVIOR_CRITERIA_HEADING = /^##\s+(?:acceptance criteria|fix criteria)(?:\s|$)/i;
+
+/**
+ * The single behavior-criteria reader for review mapping and amendment admission:
+ * exactly one nonempty level-two section headed `Acceptance criteria` or
+ * `Fix criteria` (case-insensitive, counted together). Zero, duplicate, mixed
+ * or empty sections are invalid.
+ */
+export function readBehaviorCriteriaSection(issueBody: string):
+  | { ok: true; text: string }
+  | { ok: false; reason: 'missing' | 'duplicate' | 'empty' } {
+  const lines = issueBody.replace(/\r\n/g, '\n').split('\n');
+  const starts = lines.flatMap((line, index) => (BEHAVIOR_CRITERIA_HEADING.test(line) ? [index] : []));
+  if (starts.length === 0) {
+    return { ok: false, reason: 'missing' };
+  }
+  if (starts.length > 1) {
+    return { ok: false, reason: 'duplicate' };
+  }
+  const begin = starts[0]!;
+  const tail = lines.findIndex((line, index) => index > begin && /^##\s/.test(line));
+  const text = lines.slice(begin + 1, tail >= 0 ? tail : undefined).join('\n').trim();
+  return text ? { ok: true, text } : { ok: false, reason: 'empty' };
 }
 
 export function extractContractSections(issueBody: string): {
@@ -416,6 +436,16 @@ export function extractContractSections(issueBody: string): {
   const parts = issueBody.split(/\r?\n(?=##\s+)/);
 
   for (const heading of CONTRACT_SECTION_HEADINGS) {
+    if (heading === 'Acceptance criteria') {
+      // One slot, two supported spellings (Acceptance criteria or Fix criteria), counted together.
+      const criteria = readBehaviorCriteriaSection(issueBody);
+      if (criteria.ok) {
+        sections[heading] = criteria.text;
+      } else {
+        missing.push(heading);
+      }
+      continue;
+    }
     const part = parts.find((block) =>
       new RegExp(`^##\\s+${escapeRegExp(heading)}\\b`).test(block.trimStart()),
     );

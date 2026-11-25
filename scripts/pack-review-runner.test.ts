@@ -2484,6 +2484,270 @@ describe('Issue #2565 strict-descendant final-cap body binding', () => {
   );
 
 
+  describe('Issue #2900 Fix criteria amendments and changed bound Issue', () => {
+    const tierT2 = '<!-- source-revision: r01 -->\n```complexity-tier\ntier: T2\n```\n';
+    const acceptanceBody = (text: string) => `${tierT2}## Acceptance criteria\n- ${text}\n`;
+    const fixBody = (text: string) => `${tierT2}## Fix criteria\n- ${text}\n`;
+    const admitOptions = (f: { projectId: string; storeRoot: string; repository: string }) =>
+      ({ projectId: f.projectId, storeRoot: f.storeRoot, repoSlug: f.repository });
+    function harness(f: ReturnType<typeof fixture>, head = f.reviewed) {
+      const writes: string[] = [];
+      let status = 'success';
+      const request = (body: string, overrides: Record<string, unknown> = {}) => ({
+        ...f.request(body), fixtureCurrentPrHeadSha: head,
+        fixtureRequiredStatusReader: async () => status,
+        fixtureRequiredStatusWriter: async (value: { state: string }) => {
+          writes.push(value.state);
+          status = value.state;
+        },
+        ...overrides,
+      });
+      return { writes, request, getStatus: () => status };
+    }
+
+    it.each(['codex', 'gpt'] as const)('%s: a real Fix criteria amendment enters the ordinary amendment round with pending read-back', async (reviewer) => {
+      const f = fixture(reviewer, fixBody('original'), true);
+      const h = harness(f);
+      const admitted = await maybeAdmitPackReviewBodyAmendment(h.request(fixBody('amended')), admitOptions(f));
+      expect(admitted).toMatchObject({
+        amendmentAdmission: true, reason: 'body_amendment_admitted', requiredStatusState: 'pending',
+      });
+      expect(h.writes).toEqual(['pending']);
+      expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle?.amendmentOrigin)
+        .toMatchObject({
+          closingIssueNumber: f.issueNumber,
+          reviewedBodyDigest: computeBoundIssueSnapshotHash(fixBody('original')),
+          amendedBodyDigest: computeBoundIssueSnapshotHash(fixBody('amended')),
+        });
+    });
+
+    it('heading spelling alone is not a behavior change and keeps non-success; mixed, duplicate and empty criteria name the accepted headings and recover', async () => {
+      const f = fixture('codex', acceptanceBody('original'), true);
+      const h = harness(f);
+      // Same criteria text under the other heading spelling: no fabricated change.
+      expect(await maybeAdmitPackReviewBodyAmendment(h.request(fixBody('original')), admitOptions(f)))
+        .toMatchObject({ amendmentAdmission: false, reason: 'amendment_unverified_body_mismatch' });
+      expect(h.getStatus()).toBe('error');
+      for (const bad of [
+        `${fixBody('amended')}\n## Acceptance criteria\n- both\n`,
+        `${fixBody('amended')}\n## Fix criteria\n- twice\n`,
+        `${tierT2}## Fix criteria\n\n`,
+      ]) {
+        const refused = await maybeAdmitPackReviewBodyAmendment(h.request(bad), admitOptions(f));
+        expect(refused).toMatchObject({
+          amendmentAdmission: false, reason: 'amendment_behavior_criteria_missing_or_invalid',
+          nextAction: expect.stringContaining('## Fix criteria'),
+        });
+        expect(h.getStatus()).toBe('error');
+      }
+      // The advertised recovery (one valid section with a real change) progresses through the same route.
+      expect(await maybeAdmitPackReviewBodyAmendment(h.request(fixBody('amended')), admitOptions(f)))
+        .toMatchObject({ amendmentAdmission: true, reason: 'body_amendment_admitted' });
+      expect(h.getStatus()).toBe('pending');
+    });
+
+    describe.each([
+      ['same head', 'reviewed'],
+      ['descendant head', 'current'],
+    ] as const)('rebind to a different valid Issue on %s', (_label, which) => {
+      it('admits exactly one ordinary continuation for Issue B even when its criteria text equals A', async () => {
+        const bodyA = acceptanceBody('shared behavior');
+        const bodyB = fixBody('shared behavior');
+        const f = fixture('gpt', bodyA, true);
+        const issueB = f.issueNumber + 7;
+        const h = harness(f, which === 'reviewed' ? f.reviewed : f.current);
+        const request = () => h.request(bodyB, {
+          fixturePrBody: `Part of #${issueB}`, fixtureIssueNumber: issueB,
+          fixtureIssueTitle: '[T2] Rebound Issue',
+        });
+        const original = resolveBoundIssueSnapshot({
+          projectId: f.projectId, prNumber: f.prNumber, prHeadSha: f.reviewed,
+          issueNumber: f.issueNumber, snapshotDigest: computeBoundIssueSnapshotHash(bodyA),
+        });
+        const admitted = await maybeAdmitPackReviewBodyAmendment(request(), admitOptions(f));
+        expect(admitted, JSON.stringify(admitted)).toMatchObject({
+          amendmentAdmission: true, reason: 'body_amendment_admitted',
+          requiredStatusState: 'pending', reboundFromIssue: f.issueNumber, reboundToIssue: issueB,
+        });
+        expect(h.writes).toEqual(['pending']);
+        const cycle = readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle;
+        expect(cycle).toMatchObject({
+          frozenCap: 1, consumedRoundOrdinals: [],
+          amendmentOrigin: {
+            closingIssueNumber: issueB,
+            reviewedBodyDigest: computeBoundIssueSnapshotHash(bodyA),
+            amendedBodyDigest: computeBoundIssueSnapshotHash(bodyB),
+          },
+        });
+        // Repeated reconcile for the same admitted binding consumes nothing and writes nothing.
+        expect(await maybeAdmitPackReviewBodyAmendment(request(), admitOptions(f))).toBeNull();
+        expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle?.cycleId).toBe(cycle?.cycleId);
+        expect(h.writes).toEqual(['pending']);
+        // A's historical snapshot is untouched.
+        expect(readFileSync(original.snapshotPath!, 'utf8')).toBe(bodyA);
+      });
+    });
+
+    it('rebind refusals name a concrete correction and the recovery progresses through the same route', async () => {
+      const bodyA = acceptanceBody('A behavior');
+      const f = fixture('gpt', bodyA, true);
+      const issueB = f.issueNumber + 3;
+      const h = harness(f);
+      const asB = (body: string, overrides: Record<string, unknown> = {}) => h.request(body, {
+        fixturePrBody: `Closes #${issueB}`, fixtureIssueNumber: issueB,
+        fixtureIssueTitle: '[T2] Rebound Issue', ...overrides,
+      });
+      // Invalid B contract: no criteria section.
+      const noCriteria = await maybeAdmitPackReviewBodyAmendment(asB(`${tierT2}No criteria here\n`), admitOptions(f));
+      expect(noCriteria).toMatchObject({
+        amendmentAdmission: false, reason: 'amendment_behavior_criteria_missing_or_invalid',
+        nextAction: expect.stringContaining('## Fix criteria'),
+      });
+      expect(h.getStatus()).toBe('error');
+      // Byte-identical body: B must be its own contract.
+      expect(await maybeAdmitPackReviewBodyAmendment(asB(bodyA), admitOptions(f)))
+        .toMatchObject({
+          amendmentAdmission: false, reason: 'amendment_rebind_body_identical',
+          nextAction: expect.stringContaining('its own contract text'),
+        });
+      // Ambiguous binding: two closing references.
+      const ambiguous = await maybeAdmitPackReviewBodyAmendment(
+        asB(fixBody('B behavior'), { fixturePrBody: `Closes #${issueB}\nFixes #${issueB + 1}` }), admitOptions(f));
+      expect(ambiguous).toMatchObject({
+        amendmentAdmission: false, reason: 'amendment_closing_issue_unverified',
+        nextAction: expect.stringContaining('exactly one Issue'),
+      });
+      expect(h.writes).not.toContain('success');
+      // None of the refusals consumed a round or changed the settled cycle.
+      expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle)
+        .toMatchObject({ consumedRoundOrdinals: [1] });
+      // Corrected input through the same public route admits ordinary review of B.
+      expect(await maybeAdmitPackReviewBodyAmendment(asB(fixBody('B behavior')), admitOptions(f)))
+        .toMatchObject({ amendmentAdmission: true, reason: 'body_amendment_admitted' });
+      expect(h.getStatus()).toBe('pending');
+    });
+
+    it('rebind with a different authoritative tier names the correction and never claims success', async () => {
+      const f = fixture('gpt', acceptanceBody('A behavior'), true);
+      const issueB = f.issueNumber + 3;
+      const h = harness(f);
+      const refused = await maybeAdmitPackReviewBodyAmendment(h.request(
+        '<!-- source-revision: r01 -->\n```complexity-tier\ntier: T3\n```\n## Fix criteria\n- B behavior\n',
+        { fixturePrBody: `Closes #${issueB}`, fixtureIssueNumber: issueB, fixtureIssueTitle: '[T3] Rebound Issue' },
+      ), admitOptions(f));
+      expect(refused).toMatchObject({
+        amendmentAdmission: false, reason: 'amendment_rebind_tier_mismatch',
+        nextAction: expect.stringContaining('set the authoritative tier of Issue #' + issueB),
+      });
+      expect(h.writes).not.toContain('success');
+    });
+
+    it('an unresolvable A snapshot still admits the rebind on the digest A recorded (fresh ordinary cycle for B)', async () => {
+      const bodyA = acceptanceBody('A behavior');
+      const f = fixture('gpt', bodyA, true);
+      const issueB = f.issueNumber + 5;
+      const original = resolveBoundIssueSnapshot({
+        projectId: f.projectId, prNumber: f.prNumber, prHeadSha: f.reviewed,
+        issueNumber: f.issueNumber, snapshotDigest: computeBoundIssueSnapshotHash(bodyA),
+      });
+      rmSync(original.snapshotPath!, { force: true });
+      const h = harness(f);
+      const admitted = await maybeAdmitPackReviewBodyAmendment(h.request(fixBody('B behavior'), {
+        fixturePrBody: `Part of #${issueB}`, fixtureIssueNumber: issueB, fixtureIssueTitle: '[T2] Rebound Issue',
+      }), admitOptions(f));
+      expect(admitted).toMatchObject({ amendmentAdmission: true, reboundToIssue: issueB });
+      expect(h.getStatus()).toBe('pending');
+    });
+
+    it('PR-led start after a rebind reviews Issue B once with its own snapshot and does not reuse the old green', async () => {
+      const bodyA = acceptanceBody('A behavior');
+      const bodyB = fixBody('B behavior');
+      const f = fixture('gpt', bodyA, true);
+      const issueB = f.issueNumber + 9;
+      const h = harness(f, f.current);
+      const request = () => h.request(bodyB, {
+        fixturePrBody: `Part of #${issueB}`, fixtureIssueNumber: issueB,
+        fixtureIssueTitle: '[T2] Rebound Issue',
+      });
+      expect(await maybeAdmitPackReviewBodyAmendment(request(), admitOptions(f)))
+        .toMatchObject({ amendmentAdmission: true });
+      expect(h.getStatus()).toBe('pending');
+      const started = await startPackReview({
+        ...request(), headSha: f.current, immediate: undefined,
+        claimMode: 'preacquired' as const, surface: 'pack-gpt-review' as const,
+        reviewerOverride: 'codex' as const, fixtureReviewCompareStatus: 'ahead',
+        fixturePostReviewHeadSha: f.current, fixturePostReviewPrBody: `Part of #${issueB}`,
+        fixtureReviewStdout: JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] }),
+        fixtureGithubReviewId: 29000001,
+        fixtureRequiredCiPolicy: { contexts: ['CI'], checks: [] },
+        fixtureRequiredCiChecks: [{ name: 'CI', state: 'SUCCESS' }],
+        fixtureRequiredCiHeadAfterGate: f.current,
+        fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+      });
+      expect(started, JSON.stringify(started)).toMatchObject({ ok: true, created: true, headSha: f.current });
+      expect(resolveBoundIssueSnapshot({
+        projectId: f.projectId, prNumber: f.prNumber, prHeadSha: f.current,
+        issueNumber: issueB, snapshotDigest: computeBoundIssueSnapshotHash(bodyB),
+      }).status).toBe('found');
+      expect(readPackReviewAuthority(f.prNumber, { storeRoot: f.storeRoot })?.cycle)
+        .toMatchObject({ consumedRoundOrdinals: [1], amendmentOrigin: { closingIssueNumber: issueB } });
+    });
+
+    describe('production review command target binding', () => {
+      const HEAD = 'a'.repeat(40);
+      const reviewCommand = async (prBody: string) => {
+        const storeRoot = mkdtempSync(join(tmpdir(), 'pack-review-2900-cmd-'));
+        roots.push(storeRoot);
+        setupHarness(storeRoot);
+        return runPackGptReviewCommand({ prNumber: 29001 }, {
+          env: {}, stderr: { write: () => undefined },
+          startReview: (input) => startPackReview({
+            ...input, projectId: 'orchestrator-pack', storeRoot, sourceRepoRoot: process.cwd(),
+            headSha: HEAD, fixtureCurrentPrHeadSha: HEAD, fixturePrState: 'OPEN',
+            fixturePrBody: prBody, fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+            fixturePostReviewHeadSha: HEAD, fixturePostReviewPrBody: prBody,
+            fixtureIssueTitle: '[T2] Bound Issue', fixtureIssueBody: acceptanceBody('x'),
+            fixtureReviewStdout: JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] }),
+            fixtureGithubReviewId: 29001, fixtureRequiredStatusWriter: async () => {},
+            fixtureWorkerNotifier: async () => ({ state: 'delivered' as const, reason: 'fixture' }),
+          }),
+        });
+      };
+
+      it('a Part of only PR binds Issue 2900 for the review start', async () => {
+        const execution = await reviewCommand('Part of #2900');
+        expect(execution.result, JSON.stringify(execution.result)).toMatchObject({ ok: true });
+      });
+
+      it.each([
+        ['Closes #2900\nFixes #2901', /several closing references/],
+        ['Part of #2900\nPart of #2901', /several Part of references/],
+        ['Refs #2900', /names no Issue/],
+      ])('%j is refused with a concrete PR-body correction, not a retry', async (body, correction) => {
+        const execution = await reviewCommand(body);
+        expect(execution.exitCode).toBe(1);
+        expect(execution.result, JSON.stringify(execution.result)).toMatchObject({ outcome: "review_target_unavailable" });
+        expect(String(execution.result.reason)).toMatch(correction);
+        expect(String(execution.result.nextAction)).toMatch(/^edit the PR body: /);
+        expect(String(execution.result.nextAction)).not.toMatch(/before retrying/);
+      });
+    });
+
+    it('a native terminal that records no reviewed Issue keeps the final-cap refusal and names a concrete next step', async () => {
+      const f = fixture('codex');
+      const issueB = f.issueNumber + 1;
+      const refused = await reconcileStalePackReviewRuns({
+        ...f.request(fixBody('B behavior')),
+        fixturePrBody: `Closes #${issueB}`, fixtureIssueNumber: issueB, fixtureIssueTitle: '[T2] Second Issue',
+      });
+      expect(refused.results).toContainEqual(expect.objectContaining({
+        settled: false, reason: 'final_cap_review_binding_unverified',
+        nextAction: expect.stringContaining('audited review-cycle reset'),
+      }));
+      expect(f.statusWrites).not.toContain('success');
+    });
+  });
+
   it('Issue #2659: B1 terminal cannot publish success if B2 arrives after native invocation', async () => {
     const B0 = '<!-- source-revision: r01 -->\n```complexity-tier\ntier: T2\n```\n## Acceptance criteria\n- original behavior\n';
     const B1 = B0.replace('original behavior', 'first amended behavior');

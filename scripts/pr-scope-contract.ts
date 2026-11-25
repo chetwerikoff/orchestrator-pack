@@ -79,20 +79,63 @@ export function hasClosingIssueReference(prBody: string): boolean {
   return found;
 }
 
+/** Non-closing binding reference, a fallback only when no closing reference exists. */
+export const PART_OF_ISSUE_REF_PATTERN = /\bpart\s+of\s+#(\d+)\b/gi;
+
+export type PrIssueBindingKind = 'closing' | 'part-of';
+
+export type PrIssueBindingFailureReason =
+  | 'missing'
+  | 'ambiguous-closing'
+  | 'ambiguous-part-of'
+  | 'invalid-reference';
+
+export type PrIssueBinding =
+  | { ok: true; issueNumber: number; kind: PrIssueBindingKind }
+  | { ok: false; reason: PrIssueBindingFailureReason; issueNumbers: number[] };
+
+/** Concrete correction for a failed binding (never "retry unchanged"). */
+export function describePrIssueBindingCorrection(binding: Extract<PrIssueBinding, { ok: false }>): string {
+  switch (binding.reason) {
+    case 'ambiguous-closing':
+      return `the PR body has several closing references (${binding.issueNumbers.map((n) => `#${n}`).join(', ')}); keep exactly one closing reference (Closes #N) for the implemented Issue and remove the others`;
+    case 'ambiguous-part-of':
+      return `the PR body has several Part of references (${binding.issueNumbers.map((n) => `#${n}`).join(', ')}) and no closing reference; keep exactly one Part of #N (or one Closes #N) for the implemented Issue`;
+    case 'invalid-reference':
+      return 'a PR-to-Issue reference is not a positive safe-integer Issue number; write it as Closes #N or Part of #N with the real Issue number';
+    default:
+      return 'the PR body names no Issue; add exactly one Closes #N (preferred) or one Part of #N line for the implemented same-repository Issue outside fenced code';
+  }
+}
+
+/**
+ * The one PR-to-Issue binding rule shared by review, scope, smoke and fleet attribution.
+ * Exactly one closing reference wins; with zero closing references exactly one
+ * `Part of #N` binds. More than one reference of the selected kind (even repeating one Issue),
+ * or an invalid number, fails closed. This binds a PR to an Issue; it is not a GitHub auto-close
+ * operation or a waiver. Fenced examples and HTML comments are not scanned.
+ */
+export function resolvePrIssueBinding(prBody: string): PrIssueBinding {
+  const text = prBodyScannableForIssueLinks(prBody).replace(/<!--[\s\S]*?-->/g, '');
+  const collect = (pattern: RegExp): number[] =>
+    [...text.matchAll(new RegExp(pattern.source, pattern.flags))].map((match) => Number(match[1]));
+  const usable = (n: number): boolean => Number.isSafeInteger(n) && n > 0;
+  for (const [pattern, kind] of [[ISSUE_LINK_PATTERN, 'closing'], [PART_OF_ISSUE_REF_PATTERN, 'part-of']] as const) {
+    const numbers = collect(pattern);
+    if (numbers.length === 0) continue;
+    if (!numbers.every(usable)) return { ok: false, reason: 'invalid-reference', issueNumbers: numbers };
+    if (numbers.length > 1) {
+      return { ok: false, reason: kind === 'closing' ? 'ambiguous-closing' : 'ambiguous-part-of', issueNumbers: numbers };
+    }
+    return { ok: true, issueNumber: numbers[0]!, kind };
+  }
+  return { ok: false, reason: 'missing', issueNumbers: [] };
+}
+
+/** Bound Issue number from the shared PR-to-Issue binding rule, or null when unbound/ambiguous. */
 export function extractClosingIssueNumber(prBody: string): number | null {
-  const normalized = normalizePrBody(prBody);
-  ISSUE_LINK_PATTERN.lastIndex = 0;
-  const matches = [...normalized.matchAll(ISSUE_LINK_PATTERN)];
-  if (matches.length === 0) {
-    return null;
-  }
-
-  const issueNumber = Number(matches[matches.length - 1]![1]);
-  if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
-    return null;
-  }
-
-  return issueNumber;
+  const binding = resolvePrIssueBinding(prBody);
+  return binding.ok ? binding.issueNumber : null;
 }
 
 
@@ -211,7 +254,7 @@ export function classifySkillDocPaths(prPaths: string[]): {
 }
 
 
-/** @deprecated Use extractClosingIssueNumber — kept for callers that mean closing refs only. */
+/** @deprecated Use extractClosingIssueNumber (the shared PR-to-Issue binding rule). */
 export const extractLinkedIssueNumber = extractClosingIssueNumber;
 
 /** Issue number to load for implementation scope validation (null when not yet resolved). */

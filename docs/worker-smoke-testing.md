@@ -107,6 +107,11 @@ worker-smoke-run publish \
   --repo-root "$PWD"
 ```
 
+The PR-to-Issue resolution used by `publish` is the shared binding rule in
+`scripts/pr-scope-contract.ts`: one closing reference, else exactly one
+`Part of #N`. A missing, ambiguous or mismatched binding is refused with the
+permitted PR-body (or `--issue`) correction.
+
 `publish` refuses modified tracked files but ignores untracked files,
 including an untracked report file. Before its single comment POST it preserves
 only the existing target-identity checks: the checkout origin must resolve to

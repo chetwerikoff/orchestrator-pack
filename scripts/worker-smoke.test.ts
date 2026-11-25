@@ -42,8 +42,18 @@ import {
   runDelegatedReadiness,
   runSmokeGhProcess,
   type CliOptions,
+  resolvePublishSmokeTarget,
   type ResolvedSmokeTarget,
 } from './worker-smoke-run.ts';
+
+vi.mock('./lib/gh-resolve-real-binary.mjs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/gh-resolve-real-binary.mjs')>();
+  return {
+    ...actual,
+    resolveTrackedGhWrapper: (...args: Parameters<typeof actual.resolveTrackedGhWrapper>) =>
+      process.env.OPK_TEST_FAKE_TRACKED_GH ?? actual.resolveTrackedGhWrapper(...args),
+  };
+});
 
 const issueBody = `
 \`\`\`behavior-kind
@@ -1551,5 +1561,46 @@ describe('Issue #2897 post-merge and measurement smoke rows', () => {
     ]);
     const ordinarySkip = comment(2, ordinaryReport, { body: terminalOwned(ordinaryReport) });
     expect(evaluateWorkerSmokeCoverage({ issueBody: mixedBody, comments: [ordinarySkip], target }).accepting).toBe(false);
+  });
+});
+
+describe('Issue #2900 smoke target binding uses the shared PR-to-Issue rule', () => {
+  function bindingRepo(prBody: string) {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-2900-'));
+    const issue = { number: 2900, html_url: `https://github.com/${REPOSITORY}/issues/2900`, body: issueBody };
+    const pr = { number: 2901, html_url: `https://github.com/${REPOSITORY}/pull/2901`, body: prBody };
+    const gh = join(root, 'gh');
+    writeFileSync(gh, `#!${process.execPath}\nconst endpoint = process.argv[3] ?? '';\nprocess.stdout.write(JSON.stringify(endpoint.includes('/pulls/') ? ${JSON.stringify(pr)} : ${JSON.stringify(issue)}));\n`);
+    chmodSync(gh, 0o755);
+    const git = (...args: string[]) => runProcessSync({ command: 'git', args, cwd: root });
+    git('init', '-q');
+    git('remote', 'add', 'origin', `https://github.com/${REPOSITORY}.git`);
+    return { root, gh };
+  }
+  function resolveFor(prBody: string, issueNumber = 2900): () => unknown {
+    const { root, gh } = bindingRepo(prBody);
+    return () => {
+      process.env.OPK_TEST_FAKE_TRACKED_GH = gh;
+      try {
+        return resolvePublishSmokeTarget({ issueNumber, prNumber: 2901, repoRoot: root } as CliOptions);
+      } finally {
+        delete process.env.OPK_TEST_FAKE_TRACKED_GH;
+        rmSync(root, { recursive: true, force: true });
+      }
+    };
+  }
+
+  it.each(['Closes #2900', 'Part of #2900', 'Part of #2899\nCloses #2900'])('%j binds Issue 2900', (prBody) => {
+    expect(resolveFor(prBody)()).toMatchObject({ issueNumber: 2900, prNumber: 2901, repositorySlug: REPOSITORY });
+  });
+
+  it.each([
+    ['Closes #2900\nFixes #2901', /several closing references/],
+    ['Part of #2900\nPart of #2901', /several Part of references/],
+    ['Refs #2900', /names no Issue/],
+    ['Part of #2899', /binds Issue #2899, not #2900; pass --issue 2899/],
+  ])('%j is refused with the permitted correction', (prBody, correction) => {
+    expect(resolveFor(prBody)).toThrow(correction);
+    expect(resolveFor(prBody)).toThrow(/PR-to-Issue resolution is missing, multiple, or mismatched/);
   });
 });

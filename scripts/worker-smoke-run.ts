@@ -12,7 +12,7 @@ import {
 } from './lib/required-ci.ts';
 export { reviewIndependentRequiredCiContexts } from './lib/required-ci.ts';
 import { resolveTrackedGhWrapper } from './lib/gh-resolve-real-binary.mjs';
-import { ISSUE_LINK_PATTERN, prBodyScannableForIssueLinks } from './pr-scope-contract.ts';
+import { describePrIssueBindingCorrection, resolvePrIssueBinding } from './pr-scope-contract.ts';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -302,13 +302,19 @@ function githubApiPaginatedArray(label: string, endpoint: string, cwd: string): 
   return parsed.flatMap((page) => Array.isArray(page) ? page : [page]);
 }
 
+/** Smoke target binding: the shared PR-to-Issue rule (closing reference, else one `Part of #N`). */
 export function exactClosingIssue(body: string): number | undefined {
-  const scannable = prBodyScannableForIssueLinks(body);
-  const pattern = new RegExp(ISSUE_LINK_PATTERN.source, ISSUE_LINK_PATTERN.flags);
-  const matches = [...scannable.matchAll(pattern)];
-  if (matches.length !== 1) return undefined;
-  const issueNumber = Number(matches[0]?.[1]);
-  return Number.isSafeInteger(issueNumber) && issueNumber > 0 ? issueNumber : undefined;
+  const binding = resolvePrIssueBinding(body);
+  return binding.ok ? binding.issueNumber : undefined;
+}
+
+/** Actionable smoke refusal naming the actual PR binding and the permitted correction. */
+function smokeBindingRefusal(prBody: string, issueNumber: number): string {
+  const binding = resolvePrIssueBinding(prBody);
+  const detail = binding.ok
+    ? `the PR binds Issue #${binding.issueNumber}, not #${issueNumber}; pass --issue ${binding.issueNumber} or correct the PR body to bind #${issueNumber}`
+    : describePrIssueBindingCorrection(binding);
+  return `trusted_target: PR-to-Issue resolution is missing, multiple, or mismatched: ${detail}`;
 }
 
 function suppliedIssueBodyMatches(fetched: string, supplied: string): boolean {
@@ -352,7 +358,7 @@ export function resolveSmokeTarget(options: CliOptions, suppliedIssueBody: strin
   const issueBody = String(issue.body ?? '');
   const prBody = String(pr.body ?? '');
   if (!suppliedIssueBodyMatches(issueBody, suppliedIssueBody)) throw new Error('trusted_target: Issue body file does not match the fetched Issue body');
-  if (exactClosingIssue(prBody) !== issueNumber) throw new Error('trusted_target: PR-to-Issue resolution is missing, multiple, or mismatched');
+  if (exactClosingIssue(prBody) !== issueNumber) throw new Error(smokeBindingRefusal(prBody, issueNumber));
 
   return {
     projectId: selected.projectId,
@@ -912,7 +918,7 @@ export function resolvePublishSmokeTarget(options: CliOptions): PublishSmokeTarg
   }
   const issueBody = String(issue.body ?? '');
   if (exactClosingIssue(String(pr.body ?? '')) !== options.issueNumber) {
-    throw new Error('trusted_target: PR-to-Issue resolution is missing, multiple, or mismatched');
+    throw new Error(smokeBindingRefusal(String(pr.body ?? ''), options.issueNumber));
   }
   return { repositorySlug, issueNumber: options.issueNumber, prNumber: options.prNumber, issueBody };
 }
